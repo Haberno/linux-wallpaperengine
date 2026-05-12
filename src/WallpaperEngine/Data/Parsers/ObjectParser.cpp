@@ -93,6 +93,8 @@ ObjectUniquePtr ObjectParser::parse (const JSON& it, const Project& project) {
     const auto particleIt = it.find ("particle");
     const auto textIt = it.find ("text");
     const auto lightIt = it.find ("light");
+    // use shape to refer to VolumeLight
+    const auto shapeIt = it.find ("shape");
 
     // Parse base object data
     // Some particle objects have numeric 'name' fields, so handle type mismatches gracefully
@@ -131,6 +133,8 @@ ObjectUniquePtr ObjectParser::parse (const JSON& it, const Project& project) {
 	return parseText (it, project, std::move (basedata));
     } else if (lightIt != it.end ()) {
 	sLog.error ("Light objects are not supported yet");
+    } else if (shapeIt != it.end ()) {
+	sLog.error ("VolumeLight objects are not supported yet");
     } else {
 	// dump the object for now, might want to change later
 	// TODO: RE-EVALUATE IF THIS MAKES SENSE, THERE'S OBJECTS THAT CONTAIN OTHER OBJECTS AND THUS AREN'T REALLY
@@ -238,8 +242,8 @@ ObjectParser::parseImage (const JSON& it, const Project& project, ObjectData bas
 	    .alignment = it.optional ("horizontalalign", it.optional ("alignment", std::string ("center"))),
 	    .size = it.optional ("size", glm::vec2 (0.0f)),
 	    .parallaxDepth = it.user ("parallaxDepth", properties, glm::vec2 (0.0f)),
-	    .colorBlendMode = it.optional ("colorBlendMode", 0),
-	    .brightness = it.optional ("brightness", 1.0f),
+	    .colorBlendMode = it.user ("colorBlendMode", properties, 0),
+	    .brightness = it.user ("brightness", properties, 1.0f),
 	    .model = ModelParser::load (project, image),
 	    .effects = effects.has_value () ? parseEffects (*effects, project) : std::vector<ImageEffectUniquePtr> {},
 	    .animationLayers = animationLayers.has_value () ? parseAnimationLayers (*animationLayers, project)
@@ -365,12 +369,14 @@ std::vector<ImageAnimationLayerUniquePtr> ObjectParser::parseAnimationLayers (co
 }
 
 ImageAnimationLayerUniquePtr ObjectParser::parseAnimationLayer (const JSON& it, const Project& project) {
+    const auto& properties = project.properties;
+
     return std::make_unique<ImageAnimationLayer> (ImageAnimationLayer {
-	.id = it.require ("id", "Animation layer must have an id"),
-	.rate = it.require ("rate", "Animation layer must have a rate"),
-	.visible = it.user ("visible", project.properties, false),
-	.blend = it.require ("blend", "Animation layer must include blend"),
-	.animation = it.require ("animation", "Animation layer must include an animation"),
+	.id = it.require<int> ("id", "Animation layer must have an id"),
+	.rate = it.user ("rate", properties, 1.0f),
+	.visible = it.user ("visible", properties, false),
+	.blend = it.user ("blend", properties, 1.0f),
+	.animation = it.user ("animation", properties, 0),
     });
 }
 
