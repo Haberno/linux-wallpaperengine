@@ -305,14 +305,14 @@ void CScene::renderFrame (const glm::ivec4& viewport) {
     if (this->getScene ().camera.parallax.enabled->value->getBool ()
 	&& !this->getContext ().getApp ().getContext ().settings.mouse.disableparallax) {
 	const float influence = this->getScene ().camera.parallax.mouseInfluence->value->getFloat ();
-	const float amount = this->getScene ().camera.parallax.amount->value->getFloat ();
 	const float delay = glm::clamp (
 	    this->getScene ().camera.parallax.delay->value->getFloat () * (g_Time - g_TimeLast), 0.0f, 1.0f
 	);
 
+	// per-object depth and the global parallax amount are applied by each renderable,
+	// this only tracks the smoothed mouse offset scaled by the mouse influence
 	const glm::vec2 centeredMouse = this->m_mousePosition - glm::vec2 (0.5f, 0.5f);
-	this->m_parallaxDisplacement
-	    = glm::mix (this->m_parallaxDisplacement, (centeredMouse * amount) * influence, delay);
+	this->m_parallaxDisplacement = glm::mix (this->m_parallaxDisplacement, centeredMouse * influence, delay);
     }
 
     // run a tick in the javascript logic
