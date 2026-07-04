@@ -1860,15 +1860,7 @@ void CParticle::applyParallaxToModelMatrix () {
     }
 
     const float parallaxAmount = getScene ().getScene ().camera.parallax.amount->value->getFloat ();
-    glm::vec2 depth = m_particle.parallaxDepth->value->getVec2 ();
-    constexpr float minimumParticleDepth = 0.65f;
-    if (std::abs (depth.x) < minimumParticleDepth) {
-	depth.x = depth.x < 0.0f ? -minimumParticleDepth : minimumParticleDepth;
-    }
-    if (std::abs (depth.y) < minimumParticleDepth) {
-	depth.y = depth.y < 0.0f ? -minimumParticleDepth : minimumParticleDepth;
-    }
-
+    const glm::vec2 depth = m_particle.parallaxDepth->value->getVec2 ();
     const glm::vec2* displacement = getScene ().getParallaxDisplacement ();
     const float referenceSize = static_cast<float> (getScene ().getWidth ());
     const glm::vec3 parallaxOffset {
