@@ -41,6 +41,7 @@ public:
     const glm::vec2* getMousePositionLast () const;
     const glm::vec2* getMousePositionNormalized () const;
     const glm::vec2* getParallaxDisplacement () const;
+    const glm::vec2* getParallaxPosition () const;
 
     [[nodiscard]] const std::vector<CObject*>& getObjectsByRenderOrder () const;
     [[nodiscard]] const CObject* getObject (int id) const;
@@ -67,6 +68,8 @@ private:
     glm::vec2 m_mousePositionLast = {};
     glm::vec2 m_mousePositionNormalized = {};
     glm::vec2 m_parallaxDisplacement = {};
+    /** Parallax position fed to shaders via g_ParallaxPosition, 0.5,0.5 = centered */
+    glm::vec2 m_parallaxPosition = {0.5f, 0.5f};
     std::shared_ptr<const CFBO> _rt_4FrameBuffer = nullptr;
     std::shared_ptr<const CFBO> _rt_8FrameBuffer = nullptr;
     std::shared_ptr<const CFBO> _rt_Bloom = nullptr;

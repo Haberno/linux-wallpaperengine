@@ -305,6 +305,7 @@ void CScene::renderFrame (const glm::ivec4& viewport) {
     if (this->getScene ().camera.parallax.enabled->value->getBool ()
 	&& !this->getContext ().getApp ().getContext ().settings.mouse.disableparallax) {
 	const float influence = this->getScene ().camera.parallax.mouseInfluence->value->getFloat ();
+	const float amount = this->getScene ().camera.parallax.amount->value->getFloat ();
 	const float delay = glm::clamp (
 	    this->getScene ().camera.parallax.delay->value->getFloat () * (g_Time - g_TimeLast), 0.0f, 1.0f
 	);
@@ -313,6 +314,8 @@ void CScene::renderFrame (const glm::ivec4& viewport) {
 	// this only tracks the smoothed mouse offset scaled by the mouse influence
 	const glm::vec2 centeredMouse = this->m_mousePosition - glm::vec2 (0.5f, 0.5f);
 	this->m_parallaxDisplacement = glm::mix (this->m_parallaxDisplacement, centeredMouse * influence, delay);
+	// shader-driven parallax effects (e.g. depthparallax) expect a 0-1 position centered at 0.5
+	this->m_parallaxPosition = glm::vec2 (0.5f, 0.5f) + this->m_parallaxDisplacement * amount;
     }
 
     // run a tick in the javascript logic
@@ -417,6 +420,8 @@ const glm::vec2* CScene::getMousePositionLast () const { return &this->m_mousePo
 const glm::vec2* CScene::getMousePositionNormalized () const { return &this->m_mousePositionNormalized; }
 
 const glm::vec2* CScene::getParallaxDisplacement () const { return &this->m_parallaxDisplacement; }
+
+const glm::vec2* CScene::getParallaxPosition () const { return &this->m_parallaxPosition; }
 
 const std::vector<CObject*>& CScene::getObjectsByRenderOrder () const { return this->m_objectsByRenderOrder; }
 
