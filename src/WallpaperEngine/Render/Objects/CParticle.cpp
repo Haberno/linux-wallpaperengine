@@ -1872,8 +1872,8 @@ void CParticle::applyParallaxToModelMatrix () {
     const glm::vec2* displacement = getScene ().getParallaxDisplacement ();
     const float referenceSize = static_cast<float> (getScene ().getWidth ());
     const glm::vec3 parallaxOffset {
-	(depth.x + parallaxAmount) * displacement->x * referenceSize,
-	(depth.y + parallaxAmount) * displacement->y * referenceSize,
+	depth.x * parallaxAmount * displacement->x * referenceSize,
+	depth.y * parallaxAmount * displacement->y * referenceSize,
 	0.0f,
     };
     m_modelMatrix = glm::translate (m_modelMatrix, parallaxOffset);
