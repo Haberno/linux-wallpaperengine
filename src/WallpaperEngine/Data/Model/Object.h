@@ -611,6 +611,8 @@ struct TextData {
     UserSettingUniquePtr color;
     /** Alpha multiplier */
     UserSettingUniquePtr alpha;
+    /** Parallax depth used for parallax scrolling */
+    UserSettingUniquePtr parallaxDepth;
     /** Whether the text is visible */
     UserSettingUniquePtr visible;
     /** Horizontal alignment: "left", "center", "right" */
