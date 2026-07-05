@@ -415,11 +415,25 @@ void CText::render () {
     // CText renders with direct vflip-aware coordinates.
     const float scene_w = getScene ().getCamera ().getWidth ();
     const float scene_h = getScene ().getCamera ().getHeight ();
-    const glm::vec3 gl_origin = {
+    glm::vec3 gl_origin = {
 	origin.x - scene_w * 0.5f,
 	origin.y - scene_h * 0.5f,
 	origin.z,
     };
+
+    // camera parallax translation, same convention as CImage but with y following
+    // this renderer's vflip-aware coordinates; locked transforms opt out entirely
+    if (getScene ().getScene ().camera.parallax.enabled->value->getBool () && !m_text.locktransforms
+	&& !getScene ().getContext ().getApp ().getContext ().settings.mouse.disableparallax) {
+	const float amount = getScene ().getScene ().camera.parallax.amount->value->getFloat ();
+	const glm::vec2 depth = m_text.parallaxDepth->value->getVec2 ();
+	const glm::vec2* displacement = getScene ().getParallaxDisplacement ();
+	const float referenceSize
+	    = static_cast<float> (getScene ().getWidth ()) * Wallpapers::CScene::PARALLAX_TRANSLATION_SPAN;
+
+	gl_origin.x += -depth.x * amount * displacement->x * referenceSize;
+	gl_origin.y -= depth.y * amount * displacement->y * referenceSize;
+    }
 
     glm::mat4 model = glm::translate (glm::mat4 (1.0f), gl_origin);
     model = glm::scale (model, scale);
