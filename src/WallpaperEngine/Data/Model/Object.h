@@ -27,6 +27,8 @@ struct ObjectData {
     std::optional<int> parent;
     /** The point of origin of the object */
     UserSettingUniquePtr origin;
+    /** Whether the object's transform is locked, which also excludes it from camera parallax */
+    bool locktransforms;
     /** Transform fields for generic scene/group objects. Typed objects keep their own transform fields. */
     UserSettingUniquePtr groupScale;
     UserSettingUniquePtr groupAngles;
@@ -149,6 +151,9 @@ public:
 /**
  * Particle control points for forces and positions
  */
+/** Number of control points a particle system exposes (controlpoint0..7 in the assets) */
+constexpr int PARTICLE_CONTROL_POINT_COUNT = 8;
+
 struct ParticleControlPoint {
     int id;
     uint32_t flags;
@@ -541,6 +546,8 @@ struct ParticleInstanceOverride {
     UserSettingUniquePtr count;
     UserSettingUniquePtr color; // Replaces particle color
     UserSettingUniquePtr colorn; // Multiplies particle color
+    /** Scene-space control point overrides (controlpoint0..7 keys), indexed by id */
+    std::map<int, glm::vec3> controlPointOffsets;
 };
 
 struct ParticleData {
@@ -604,6 +611,8 @@ struct TextData {
     UserSettingUniquePtr color;
     /** Alpha multiplier */
     UserSettingUniquePtr alpha;
+    /** Parallax depth used for parallax scrolling */
+    UserSettingUniquePtr parallaxDepth;
     /** Whether the text is visible */
     UserSettingUniquePtr visible;
     /** Horizontal alignment: "left", "center", "right" */

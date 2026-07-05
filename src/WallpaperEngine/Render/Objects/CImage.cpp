@@ -37,6 +37,22 @@ glm::vec2 rotateVec2 (const glm::vec2& value, float angle) {
     return { value.x * cosAngle - value.y * sinAngle, value.x * sinAngle + value.y * cosAngle };
 }
 
+// rotate a scene-space vector by unflipped scene angles (z, then y, then x applied to the
+// vector) — reduces to rotateVec2 when only z is set, which keeps z-only parent chains
+// byte-identical to the previous behaviour
+glm::vec3 rotateVec3 (const glm::vec3& value, const glm::vec3& angles) {
+    if (angles.x == 0.0f && angles.y == 0.0f) {
+	const glm::vec2 rotated = rotateVec2 ({ value.x, value.y }, angles.z);
+	return { rotated.x, rotated.y, value.z };
+    }
+
+    glm::mat4 rotation = glm::mat4 (1.0f);
+    rotation = glm::rotate (rotation, angles.z, glm::vec3 (0.0f, 0.0f, 1.0f));
+    rotation = glm::rotate (rotation, angles.y, glm::vec3 (0.0f, 1.0f, 0.0f));
+    rotation = glm::rotate (rotation, angles.x, glm::vec3 (1.0f, 0.0f, 0.0f));
+    return { rotation * glm::vec4 (value, 0.0f) };
+}
+
 bool isMagentaNeonTint (const glm::vec3& color) { return color.r > 0.55f && color.g < 0.25f && color.b > 0.45f; }
 
 std::optional<glm::vec3> findMagentaCompositeTint (const Image& image, const std::vector<int>& skippedEffectIds) {
@@ -111,21 +127,21 @@ std::optional<PuppetMeshBlock> findPuppetMeshBlock (
 CImage::ResolvedTransform CImage::localTransform (const Object& object) {
     glm::vec3 origin = object.origin->value->getVec3 ();
     glm::vec3 scale = glm::vec3 (1.0f);
-    float angle = 0.0f;
+    glm::vec3 angles = glm::vec3 (0.0f);
 
     if (object.is<Image> ()) {
 	const auto* image = object.as<Image> ();
 	scale = image->scale->value->getVec3 ();
-	angle = image->angles->value->getVec3 ().z;
+	angles = image->angles->value->getVec3 ();
     } else if (object.is<Text> ()) {
 	const auto* text = object.as<Text> ();
 	scale = text->scale->value->getVec3 ();
     } else {
 	scale = object.groupScale->value->getVec3 ();
-	angle = object.groupAngles->value->getVec3 ().z;
+	angles = object.groupAngles->value->getVec3 ();
     }
 
-    return { origin, scale, angle };
+    return { origin, scale, angles };
 }
 
 CImage::ResolvedTransform CImage::resolveTransform (const Object& object) const {
@@ -156,12 +172,11 @@ CImage::ResolvedTransform CImage::resolveTransform (const Object& object) const 
     ResolvedTransform resolved = localTransform (*chain[count - 1]);
     for (int i = count - 2; i >= 0; --i) {
 	ResolvedTransform local = localTransform (*chain[i]);
-	const glm::vec2 offset
-	    = rotateVec2 ({ local.origin.x * resolved.scale.x, local.origin.y * resolved.scale.y }, resolved.angle);
-	local.origin.x = resolved.origin.x + offset.x;
-	local.origin.y = resolved.origin.y + offset.y;
-	local.origin.z = resolved.origin.z + local.origin.z * resolved.scale.z;
-	resolved = { local.origin, local.scale * resolved.scale, local.angle + resolved.angle };
+	const glm::vec3 offset = rotateVec3 ({ local.origin.x * resolved.scale.x, local.origin.y * resolved.scale.y,
+					       local.origin.z * resolved.scale.z },
+					     resolved.angles);
+	local.origin = resolved.origin + offset;
+	resolved = { local.origin, local.scale * resolved.scale, local.angles + resolved.angles };
     }
 
     return resolved;
@@ -918,7 +933,8 @@ void CImage::render () {
 
     glColorMask (true, true, true, true);
 
-    // Always update screen transform (handles rotation + parallax dynamically)
+    // Always update screen transform (handles rotation + parallax dynamically);
+    // fullscreen/autosize/locked layers are excluded from parallax inside
     this->updateScreenSpacePosition ();
 
 #if !NDEBUG
@@ -1096,28 +1112,44 @@ void CImage::updateScreenSpacePosition () {
 
     // Build rotation from angles (already in radians from scene.json — see CParticle.cpp:2119)
     // Negate X and Z rotations to account for Y-flipped coordinate system (CParticle.cpp:2120)
-    const float angle = transform.angle;
+    // all three axes are resolved through the parent chain by resolveTransform (PR #479)
+    const glm::vec3 angles = transform.angles;
     glm::mat4 rotModel = glm::mat4 (1.0f);
-    if (angle != 0.0f) {
+    if (glm::dot (angles, angles) > 0.0f) {
 	rotModel = glm::translate (rotModel, this->m_sceneCenter);
-	rotModel = glm::rotate (rotModel, -angle, glm::vec3 (0.0f, 0.0f, 1.0f));
+	rotModel = glm::rotate (rotModel, -angles.z, glm::vec3 (0.0f, 0.0f, 1.0f));
+	rotModel = glm::rotate (rotModel, angles.y, glm::vec3 (0.0f, 1.0f, 0.0f));
+	rotModel = glm::rotate (rotModel, angles.x, glm::vec3 (-1.0f, 0.0f, 0.0f));
 	rotModel = glm::translate (rotModel, -this->m_sceneCenter);
     }
 
-    glm::mat4 mvp
-	= this->getScene ().getCamera ().getProjection () * this->getScene ().getCamera ().getLookAt () * rotModel;
+    glm::mat4 mvp = this->getScene ().getCamera ().getProjection () * this->getScene ().getCamera ().getLookAt ();
 
-    // Apply parallax displacement if enabled
-    if (this->getScene ().getScene ().camera.parallax.enabled
+    // Apply parallax displacement if enabled — folded into the matrix before the rotation,
+    // so the offset stays in scene space instead of being rotated with the object (PR #479)
+    // fullscreen layers always cover the projection, so parallax never moves them
+    // (PR #479 TODO), same as locked-transform objects. autosize does NOT belong here:
+    // virtually every workshop image layer is autosize (it only means "size from texture")
+    const bool excludedFromParallax = this->getImage ().locktransforms || this->getImage ().model->fullscreen;
+    if (this->getScene ().getScene ().camera.parallax.enabled->value->getBool ()
 	&& !this->getScene ().getContext ().getApp ().getContext ().settings.mouse.disableparallax) {
-	const double parallaxAmount = this->getScene ().getScene ().camera.parallax.amount->value->getFloat ();
+	const float parallaxAmount = this->getScene ().getScene ().camera.parallax.amount->value->getFloat ();
 	const glm::vec2 depth = this->getImage ().parallaxDepth->value->getVec2 ();
 	const glm::vec2* displacement = this->getScene ().getParallaxDisplacement ();
-	const float referenceSize = static_cast<float> (this->getScene ().getWidth ());
-	float x = (depth.x + parallaxAmount) * displacement->x * referenceSize;
-	float y = (depth.y + parallaxAmount) * displacement->y * referenceSize;
+	// objects with locked transforms are excluded from parallax entirely (like the
+	// pinned character layer in workshop scene 2665939987), matching Wallpaper Engine
+	const float referenceSize = excludedFromParallax
+	    ? 0.0f
+	    : static_cast<float> (this->getScene ().getWidth ()) * Wallpapers::CScene::PARALLAX_TRANSLATION_SPAN;
+	// x is negated: panning the camera towards the cursor shifts positive-depth
+	// layers the opposite way on screen; the y displacement already accounts for
+	// this through the viewport UV flip
+	float x = -depth.x * parallaxAmount * displacement->x * referenceSize;
+	float y = depth.y * parallaxAmount * displacement->y * referenceSize;
 	mvp = glm::translate (mvp, { x, y, 0.0f });
     }
+
+    mvp *= rotModel;
 
     this->m_modelViewProjectionScreen = mvp;
     this->m_modelViewProjectionScreenInverse = glm::inverse (mvp);
@@ -1130,6 +1162,9 @@ void CImage::updateScreenSpacePosition () {
 const Image& CImage::getImage () const { return this->m_image; }
 
 glm::vec2 CImage::getSize () const {
+    if (this->m_size.x > 0.0f && this->m_size.y > 0.0f) {
+	    return this->m_size;
+    }
     if (this->m_texture == nullptr) {
 	return this->getImage ().size;
     }
