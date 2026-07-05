@@ -12,6 +12,7 @@ class Scene;
 class Web;
 class Video;
 struct UserSetting;
+struct PropertyAnimation;
 struct ImageAnimationLayer;
 class Object;
 class Sound;
@@ -38,6 +39,7 @@ using PropertySharedPtr = std::shared_ptr<Property>;
 using Properties = std::map<std::string, PropertySharedPtr>;
 using DynamicValueUniquePtr = std::unique_ptr<DynamicValue>;
 using UserSettingUniquePtr = std::unique_ptr<UserSetting>;
+using PropertyAnimationUniquePtr = std::unique_ptr<PropertyAnimation>;
 
 using ShaderConstantMap = std::map<std::string, UserSettingUniquePtr>;
 
