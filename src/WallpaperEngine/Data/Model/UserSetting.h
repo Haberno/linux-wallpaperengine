@@ -4,6 +4,7 @@
 #include <optional>
 
 #include "DynamicValue.h"
+#include "PropertyAnimation.h"
 #include "Types.h"
 
 namespace WallpaperEngine::Data::Model {
@@ -19,6 +20,8 @@ struct UserSetting {
     PropertySharedPtr property;
     /** Condition required for this setting, this should be possible to run in JS' V8 */
     std::optional<ConditionInfo> condition;
+    /** Keyframed animation for this setting (e.g. an origin moving across the scene), if any */
+    PropertyAnimationUniquePtr animation;
     /** TODO: Value might come from a script and not have conditions, implement this later */
 };
 } // namespace WallpaperEngine::Data::Model
