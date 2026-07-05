@@ -124,8 +124,13 @@ std::optional<PuppetMeshBlock> findPuppetMeshBlock (
 }
 }
 
-CImage::ResolvedTransform CImage::localTransform (const Object& object) {
+CImage::ResolvedTransform CImage::localTransform (const Object& object, float time) {
     glm::vec3 origin = object.origin->value->getVec3 ();
+
+    // keyframed origin animations (e.g. the train moving across workshop scene 2488626583)
+    if (object.origin->animation != nullptr) {
+	origin = object.origin->animation->evaluateVec3 (origin, time);
+    }
     glm::vec3 scale = glm::vec3 (1.0f);
     glm::vec3 angles = glm::vec3 (0.0f);
 
@@ -169,9 +174,10 @@ CImage::ResolvedTransform CImage::resolveTransform (const Object& object) const 
 
     // Accumulate top-down: the root's local transform is already its resolved
     // transform, then fold each child onto its already-resolved parent.
-    ResolvedTransform resolved = localTransform (*chain[count - 1]);
+    const float time = this->getScene ().getTime ();
+    ResolvedTransform resolved = localTransform (*chain[count - 1], time);
     for (int i = count - 2; i >= 0; --i) {
-	ResolvedTransform local = localTransform (*chain[i]);
+	ResolvedTransform local = localTransform (*chain[i], time);
 	const glm::vec3 offset = rotateVec3 ({ local.origin.x * resolved.scale.x, local.origin.y * resolved.scale.y,
 					       local.origin.z * resolved.scale.z },
 					     resolved.angles);
