@@ -151,6 +151,9 @@ public:
 /**
  * Particle control points for forces and positions
  */
+/** Number of control points a particle system exposes (controlpoint0..7 in the assets) */
+constexpr int PARTICLE_CONTROL_POINT_COUNT = 8;
+
 struct ParticleControlPoint {
     int id;
     uint32_t flags;

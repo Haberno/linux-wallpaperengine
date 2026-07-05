@@ -1108,17 +1108,16 @@ void CImage::updateScreenSpacePosition () {
 	= this->getScene ().getCamera ().getProjection () * this->getScene ().getCamera ().getLookAt () * rotModel;
 
     // Apply parallax displacement if enabled
-    if (this->getScene ().getScene ().camera.parallax.enabled
+    if (this->getScene ().getScene ().camera.parallax.enabled->value->getBool ()
 	&& !this->getScene ().getContext ().getApp ().getContext ().settings.mouse.disableparallax) {
 	const float parallaxAmount = this->getScene ().getScene ().camera.parallax.amount->value->getFloat ();
 	const glm::vec2 depth = this->getImage ().parallaxDepth->value->getVec2 ();
 	const glm::vec2* displacement = this->getScene ().getParallaxDisplacement ();
-	// a full mouse swing pans a unit-depth layer by half the scene width; objects with
-	// locked transforms are excluded from parallax entirely (like the pinned character
-	// layer in workshop scene 2665939987), matching Wallpaper Engine behavior
+	// objects with locked transforms are excluded from parallax entirely (like the
+	// pinned character layer in workshop scene 2665939987), matching Wallpaper Engine
 	const float referenceSize = this->getImage ().locktransforms
 	    ? 0.0f
-	    : static_cast<float> (this->getScene ().getWidth ()) * 0.5f;
+	    : static_cast<float> (this->getScene ().getWidth ()) * Wallpapers::CScene::PARALLAX_TRANSLATION_SPAN;
 	// x is negated: panning the camera towards the cursor shifts positive-depth
 	// layers the opposite way on screen; the y displacement already accounts for
 	// this through the viewport UV flip
