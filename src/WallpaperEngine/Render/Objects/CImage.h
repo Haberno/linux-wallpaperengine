@@ -75,7 +75,7 @@ protected:
      * Computes the object's own transform (origin/scale/angle) without walking the
      * parent chain. Used as the per-node step of resolveTransform.
      */
-    [[nodiscard]] static ResolvedTransform localTransform (const WallpaperEngine::Data::Model::Object& object);
+    [[nodiscard]] static ResolvedTransform localTransform (const WallpaperEngine::Data::Model::Object& object, float time);
 
 private:
     bool loadPuppetMesh (const glm::vec2& size);

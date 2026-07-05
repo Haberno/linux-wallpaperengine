@@ -472,6 +472,8 @@ set(COMMON_SOURCES
     src/WallpaperEngine/Data/Model/Effect.h
     src/WallpaperEngine/Data/Model/Model.h
     src/WallpaperEngine/Data/Model/UserSetting.h
+    src/WallpaperEngine/Data/Model/PropertyAnimation.h
+    src/WallpaperEngine/Data/Model/PropertyAnimation.cpp
     src/WallpaperEngine/Data/Model/DynamicValue.h
     src/WallpaperEngine/Data/Model/DynamicValue.cpp
     src/WallpaperEngine/Data/Model/Property.h
