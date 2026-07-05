@@ -144,9 +144,9 @@ void CParticle::setup () {
     setupPass ();
 
     // Setup control points (max 8)
-    m_controlPoints.resize (8);
+    m_controlPoints.resize (PARTICLE_CONTROL_POINT_COUNT);
     for (const auto& cp : m_particle.controlPoints) {
-	if (cp.id >= 0 && cp.id < 8) {
+	if (cp.id >= 0 && cp.id < PARTICLE_CONTROL_POINT_COUNT) {
 	    m_controlPoints[cp.id].offset = cp.offset;
 	    // Link to mouse if either flags bit 0 is set
 	    m_controlPoints[cp.id].linkMouse = (cp.flags & 1) != 0;
@@ -171,7 +171,7 @@ void CParticle::setup () {
     // over the particle defaults; convert to the centered y-up space the sim runs in,
     // mirroring the origin conversion above
     for (const auto& [id, offset] : m_particle.instanceOverride.controlPointOffsets) {
-	if (id >= 0 && id < 8) {
+	if (id >= 0 && id < PARTICLE_CONTROL_POINT_COUNT) {
 	    const glm::vec3 centered {
 		offset.x - m_lastScreenWidth / 2.0f,
 		m_lastScreenHeight / 2.0f - offset.y,
@@ -1882,7 +1882,7 @@ void CParticle::updateMatrices () {
 }
 
 void CParticle::applyParallaxToModelMatrix () {
-    if (!getScene ().getScene ().camera.parallax.enabled
+    if (!getScene ().getScene ().camera.parallax.enabled->value->getBool ()
 	|| getScene ().getContext ().getApp ().getContext ().settings.mouse.disableparallax) {
 	return;
     }
@@ -1890,9 +1890,10 @@ void CParticle::applyParallaxToModelMatrix () {
     const float parallaxAmount = getScene ().getScene ().camera.parallax.amount->value->getFloat ();
     const glm::vec2 depth = m_particle.parallaxDepth->value->getVec2 ();
     const glm::vec2* displacement = getScene ().getParallaxDisplacement ();
-    // same half-scene-width full-swing convention and locktransforms exclusion as CImage
-    const float referenceSize
-	= m_particle.locktransforms ? 0.0f : static_cast<float> (getScene ().getWidth ()) * 0.5f;
+    // same full-swing translation convention and locktransforms exclusion as CImage
+    const float referenceSize = m_particle.locktransforms
+	? 0.0f
+	: static_cast<float> (getScene ().getWidth ()) * Wallpapers::CScene::PARALLAX_TRANSLATION_SPAN;
     const glm::vec3 parallaxOffset {
 	// x negated to match the screen-space pan direction, see CImage
 	-depth.x * parallaxAmount * displacement->x * referenceSize,

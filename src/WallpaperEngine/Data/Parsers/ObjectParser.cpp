@@ -879,7 +879,7 @@ ParticleInstanceOverride ObjectParser::parseParticleInstanceOverride (const JSON
 	.colorn = it.user ("colorn", properties, glm::vec3 (1.0f)),
     };
 
-    for (int i = 0; i < 8; i++) {
+    for (int i = 0; i < PARTICLE_CONTROL_POINT_COUNT; i++) {
 	const auto offset = it.optional<glm::vec3> ("controlpoint" + std::to_string (i));
 
 	if (offset.has_value ()) {

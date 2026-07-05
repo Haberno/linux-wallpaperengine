@@ -308,7 +308,8 @@ void CScene::renderFrame (const glm::ivec4& viewport) {
 	const float amount = this->getScene ().camera.parallax.amount->value->getFloat ();
 	// delay is the smoothing lag: 0 snaps instantly, larger values follow the mouse slower,
 	// framerate-independent so the feel doesn't change with fps
-	const float timeConstant = this->getScene ().camera.parallax.delay->value->getFloat () * 0.1f;
+	const float timeConstant
+	    = this->getScene ().camera.parallax.delay->value->getFloat () * PARALLAX_DELAY_TO_SECONDS;
 	const float alpha = timeConstant > 0.0f
 	    ? 1.0f - std::exp (-(g_Time - g_TimeLast) / timeConstant)
 	    : 1.0f;
