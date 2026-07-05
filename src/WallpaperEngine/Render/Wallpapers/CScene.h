@@ -37,6 +37,16 @@ public:
     [[nodiscard]] float getDeltaTime () const;
     [[nodiscard]] float getFps () const;
 
+    /**
+     * Wallpaper Engine conventions for camera parallax that are not encoded in wallpaper
+     * assets; everything else (amount, delay, influence, per-object depth, locktransforms)
+     * comes from scene.json.
+     */
+    /** Converts the authored cameraparallaxdelay value into the smoothing time constant in seconds */
+    static constexpr float PARALLAX_DELAY_TO_SECONDS = 0.1f;
+    /** Fraction of the scene size a unit-depth layer travels over a full mouse swing */
+    static constexpr float PARALLAX_TRANSLATION_SPAN = 0.5f;
+
     const glm::vec2* getMousePosition () const;
     const glm::vec2* getMousePositionLast () const;
     const glm::vec2* getMousePositionNormalized () const;
