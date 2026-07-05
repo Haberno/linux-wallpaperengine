@@ -37,10 +37,21 @@ public:
     [[nodiscard]] float getDeltaTime () const;
     [[nodiscard]] float getFps () const;
 
+    /**
+     * Wallpaper Engine conventions for camera parallax that are not encoded in wallpaper
+     * assets; everything else (amount, delay, influence, per-object depth, locktransforms)
+     * comes from scene.json.
+     */
+    /** Converts the authored cameraparallaxdelay value into the smoothing time constant in seconds */
+    static constexpr float PARALLAX_DELAY_TO_SECONDS = 0.1f;
+    /** Fraction of the scene size a unit-depth layer travels over a full mouse swing */
+    static constexpr float PARALLAX_TRANSLATION_SPAN = 0.5f;
+
     const glm::vec2* getMousePosition () const;
     const glm::vec2* getMousePositionLast () const;
     const glm::vec2* getMousePositionNormalized () const;
     const glm::vec2* getParallaxDisplacement () const;
+    const glm::vec2* getParallaxPosition () const;
 
     [[nodiscard]] const std::vector<CObject*>& getObjectsByRenderOrder () const;
     [[nodiscard]] const CObject* getObject (int id) const;
@@ -67,6 +78,8 @@ private:
     glm::vec2 m_mousePositionLast = {};
     glm::vec2 m_mousePositionNormalized = {};
     glm::vec2 m_parallaxDisplacement = {};
+    /** Parallax position fed to shaders via g_ParallaxPosition, 0.5,0.5 = centered */
+    glm::vec2 m_parallaxPosition = {0.5f, 0.5f};
     std::shared_ptr<const CFBO> _rt_4FrameBuffer = nullptr;
     std::shared_ptr<const CFBO> _rt_8FrameBuffer = nullptr;
     std::shared_ptr<const CFBO> _rt_Bloom = nullptr;

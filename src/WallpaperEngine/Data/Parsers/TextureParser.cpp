@@ -60,6 +60,16 @@ MipmapSharedPtr TextureParser::parseMipmap (const BinaryReader& file, const Text
 	|| header.containerVersion == ContainerVersion_TEXB0002) {
 	result->compression = file.nextUInt32 ();
 	result->uncompressedSize = file.nextInt ();
+
+    if (header.flags & TextureFlags_Video) {
+            result->uncompressedSize = result->compressedSize;
+            result->compression = 0;
+            result->uncompressedData = std::unique_ptr<char[]> (new char[result->uncompressedSize]);
+            file.next (result->uncompressedData.get (), result->uncompressedSize);
+
+            return result;
+        }
+    
     }
 
     result->compressedSize = file.nextInt ();

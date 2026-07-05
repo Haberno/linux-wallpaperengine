@@ -36,6 +36,7 @@ ObjectUniquePtr ObjectParser::parse (const JSON& it, const Project& project) {
 	    .dependencies = parseDependencies (it),
 	    .parent = it.optional<int> ("parent"),
 	    .origin = it.user ("origin", project.properties, glm::vec3 (0.0f)),
+	    .locktransforms = it.optional ("locktransforms", false),
 	    .groupScale = it.user ("scale", project.properties, glm::vec3 (1.0f)),
 	    .groupAngles = it.user ("angles", project.properties, glm::vec3 (0.0f)),
 	    .groupVisible = it.user ("visible", project.properties, true),
@@ -59,6 +60,7 @@ ObjectUniquePtr ObjectParser::parse (const JSON& it, const Project& project) {
 	    .dependencies = parseDependencies (it),
 	    .parent = it.optional<int> ("parent"),
 	    .origin = it.user ("origin", project.properties, glm::vec3 (0.0f)),
+	    .locktransforms = it.optional ("locktransforms", false),
 	    .groupScale = it.user ("scale", project.properties, glm::vec3 (1.0f)),
 	    .groupAngles = it.user ("angles", project.properties, glm::vec3 (0.0f)),
 	    .groupVisible = it.user ("visible", project.properties, true),
@@ -133,6 +135,7 @@ TextUniquePtr ObjectParser::parseText (const JSON& it, const Project& project, O
 	    .scale = it.user ("scale", project.properties, glm::vec3 (1.0f)),
 	    .color = it.color ("color", project.properties, Builders::ColorBuilder::White),
 	    .alpha = it.user ("alpha", project.properties, 1.0f),
+	    .parallaxDepth = it.user ("parallaxDepth", project.properties, glm::vec2 (0.0f)),
 	    .visible = it.user ("visible", project.properties, true),
 	    .alignment = it.optional ("horizontalalign", it.optional ("alignment", std::string ("center"))),
 	    .verticalalign = it.optional ("verticalalign", std::string ("center")),
@@ -865,7 +868,7 @@ ParticleChild ObjectParser::parseParticleChild (const JSON& it, const Project& p
 }
 
 ParticleInstanceOverride ObjectParser::parseParticleInstanceOverride (const JSON& it, const Properties& properties) {
-    return ParticleInstanceOverride {
+    ParticleInstanceOverride override {
 	.enabled = it.user ("enabled", properties, true),
 	.alpha = it.user ("alpha", properties, 1.0f),
 	.size = it.user ("size", properties, 1.0f),
@@ -876,4 +879,14 @@ ParticleInstanceOverride ObjectParser::parseParticleInstanceOverride (const JSON
 	.color = it.user ("color", properties, glm::vec3 (1.0f)),
 	.colorn = it.user ("colorn", properties, glm::vec3 (1.0f)),
     };
+
+    for (int i = 0; i < PARTICLE_CONTROL_POINT_COUNT; i++) {
+	const auto offset = it.optional<glm::vec3> ("controlpoint" + std::to_string (i));
+
+	if (offset.has_value ()) {
+	    override.controlPointOffsets.emplace (i, *offset);
+	}
+    }
+
+    return override;
 }
