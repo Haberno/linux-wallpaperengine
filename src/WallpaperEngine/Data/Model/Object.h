@@ -27,6 +27,8 @@ struct ObjectData {
     std::optional<int> parent;
     /** The point of origin of the object */
     UserSettingUniquePtr origin;
+    /** Whether the object's transform is locked, which also excludes it from camera parallax */
+    bool locktransforms;
     /** Transform fields for generic scene/group objects. Typed objects keep their own transform fields. */
     UserSettingUniquePtr groupScale;
     UserSettingUniquePtr groupAngles;

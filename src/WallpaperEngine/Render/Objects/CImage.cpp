@@ -1113,10 +1113,12 @@ void CImage::updateScreenSpacePosition () {
 	const float parallaxAmount = this->getScene ().getScene ().camera.parallax.amount->value->getFloat ();
 	const glm::vec2 depth = this->getImage ().parallaxDepth->value->getVec2 ();
 	const glm::vec2* displacement = this->getScene ().getParallaxDisplacement ();
-	// full mouse swing moves a unit-depth layer by 4% of the scene width, matching the
-	// UV-shift convention of Wallpaper Engine's own depthparallax shaders; offset scales
-	// with the object's depth so depth-0 objects stay pinned in place
-	const float referenceSize = static_cast<float> (this->getScene ().getWidth ()) * 0.04f;
+	// a full mouse swing pans a unit-depth layer by half the scene width; objects with
+	// locked transforms are excluded from parallax entirely (like the pinned character
+	// layer in workshop scene 2665939987), matching Wallpaper Engine behavior
+	const float referenceSize = this->getImage ().locktransforms
+	    ? 0.0f
+	    : static_cast<float> (this->getScene ().getWidth ()) * 0.5f;
 	float x = depth.x * parallaxAmount * displacement->x * referenceSize;
 	float y = depth.y * parallaxAmount * displacement->y * referenceSize;
 	mvp = glm::translate (mvp, { x, y, 0.0f });
