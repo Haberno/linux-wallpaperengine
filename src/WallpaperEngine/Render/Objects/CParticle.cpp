@@ -166,6 +166,18 @@ void CParticle::setup () {
 	}
     }
 
+    // scene objects can reposition control points through their instanceoverride block,
+    // those offsets are in scene coordinates and take priority over the particle defaults
+    for (const auto& [id, offset] : m_particle.instanceOverride.controlPointOffsets) {
+	if (id >= 0 && id < 8) {
+	    m_controlPoints[id].offset = offset;
+
+	    if (!m_controlPoints[id].linkMouse) {
+		m_controlPoints[id].position = offset - m_transformedOrigin;
+	    }
+	}
+    }
+
     m_initialized = true;
 }
 
@@ -1866,7 +1878,8 @@ void CParticle::applyParallaxToModelMatrix () {
     const float referenceSize
 	= m_particle.locktransforms ? 0.0f : static_cast<float> (getScene ().getWidth ()) * 0.5f;
     const glm::vec3 parallaxOffset {
-	depth.x * parallaxAmount * displacement->x * referenceSize,
+	// x negated to match the screen-space pan direction, see CImage
+	-depth.x * parallaxAmount * displacement->x * referenceSize,
 	depth.y * parallaxAmount * displacement->y * referenceSize,
 	0.0f,
     };

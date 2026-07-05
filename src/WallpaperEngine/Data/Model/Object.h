@@ -543,6 +543,8 @@ struct ParticleInstanceOverride {
     UserSettingUniquePtr count;
     UserSettingUniquePtr color; // Replaces particle color
     UserSettingUniquePtr colorn; // Multiplies particle color
+    /** Scene-space control point overrides (controlpoint0..7 keys), indexed by id */
+    std::map<int, glm::vec3> controlPointOffsets;
 };
 
 struct ParticleData {
