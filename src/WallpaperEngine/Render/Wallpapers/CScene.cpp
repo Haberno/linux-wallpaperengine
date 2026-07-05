@@ -315,8 +315,12 @@ void CScene::renderFrame (const glm::ivec4& viewport) {
 
 	// per-object depth and the global parallax amount are applied by each renderable,
 	// this only tracks the smoothed mouse offset (-1 to 1 across the screen) scaled by
-	// influence, negated so the scene reacts like a camera panning towards the cursor
-	const glm::vec2 centeredMouse = glm::vec2 (1.0f, 1.0f) - this->m_mousePosition * 2.0f;
+	// influence; only y is negated because m_mousePosition already has y flipped
+	// relative to x by the viewport UV mapping in updateMouse
+	const glm::vec2 centeredMouse = {
+	    this->m_mousePosition.x * 2.0f - 1.0f,
+	    1.0f - this->m_mousePosition.y * 2.0f,
+	};
 	this->m_parallaxDisplacement = glm::mix (this->m_parallaxDisplacement, centeredMouse * influence, alpha);
 	// shader-driven parallax effects (e.g. depthparallax) expect a 0-1 position centered at 0.5
 	this->m_parallaxPosition = glm::vec2 (0.5f, 0.5f) + this->m_parallaxDisplacement * amount;
