@@ -135,6 +135,7 @@ TextUniquePtr ObjectParser::parseText (const JSON& it, const Project& project, O
 	    .scale = it.user ("scale", project.properties, glm::vec3 (1.0f)),
 	    .color = it.color ("color", project.properties, Builders::ColorBuilder::White),
 	    .alpha = it.user ("alpha", project.properties, 1.0f),
+	    .parallaxDepth = it.user ("parallaxDepth", project.properties, glm::vec2 (0.0f)),
 	    .visible = it.user ("visible", project.properties, true),
 	    .alignment = it.optional ("horizontalalign", it.optional ("alignment", std::string ("center"))),
 	    .verticalalign = it.optional ("verticalalign", std::string ("center")),
