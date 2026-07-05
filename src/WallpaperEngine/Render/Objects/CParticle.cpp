@@ -167,13 +167,21 @@ void CParticle::setup () {
     }
 
     // scene objects can reposition control points through their instanceoverride block,
-    // those offsets are in scene coordinates and take priority over the particle defaults
+    // those offsets are in scene coordinates (top-left origin, y-down) and take priority
+    // over the particle defaults; convert to the centered y-up space the sim runs in,
+    // mirroring the origin conversion above
     for (const auto& [id, offset] : m_particle.instanceOverride.controlPointOffsets) {
 	if (id >= 0 && id < 8) {
-	    m_controlPoints[id].offset = offset;
+	    const glm::vec3 centered {
+		offset.x - m_lastScreenWidth / 2.0f,
+		m_lastScreenHeight / 2.0f - offset.y,
+		offset.z,
+	    };
+
+	    m_controlPoints[id].offset = centered;
 
 	    if (!m_controlPoints[id].linkMouse) {
-		m_controlPoints[id].position = offset - m_transformedOrigin;
+		m_controlPoints[id].position = centered - m_transformedOrigin;
 	    }
 	}
     }
