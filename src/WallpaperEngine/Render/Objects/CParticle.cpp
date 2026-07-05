@@ -249,6 +249,25 @@ void CParticle::update (float dt) {
 	    }
 	}
 
+	// Instance override offsets are stored raw in scene coordinates; the centered
+	// values cached in m_controlPoints depend on the screen size, so redo the
+	// scene-to-centered conversion from setup() with the new dimensions
+	for (const auto& [id, offset] : m_particle.instanceOverride.controlPointOffsets) {
+	    if (id >= 0 && id < PARTICLE_CONTROL_POINT_COUNT) {
+		const glm::vec3 centered {
+		    offset.x - screenWidth / 2.0f,
+		    screenHeight / 2.0f - offset.y,
+		    offset.z,
+		};
+
+		m_controlPoints[id].offset = centered;
+
+		if (!m_controlPoints[id].linkMouse) {
+		    m_controlPoints[id].position = centered - m_transformedOrigin;
+		}
+	    }
+	}
+
 	m_lastScreenWidth = screenWidth;
 	m_lastScreenHeight = screenHeight;
     }
