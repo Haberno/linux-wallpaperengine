@@ -1862,8 +1862,9 @@ void CParticle::applyParallaxToModelMatrix () {
     const float parallaxAmount = getScene ().getScene ().camera.parallax.amount->value->getFloat ();
     const glm::vec2 depth = m_particle.parallaxDepth->value->getVec2 ();
     const glm::vec2* displacement = getScene ().getParallaxDisplacement ();
-    // same 4%-of-scene-width full-swing convention as image layers, see CImage
-    const float referenceSize = static_cast<float> (getScene ().getWidth ()) * 0.04f;
+    // same half-scene-width full-swing convention and locktransforms exclusion as CImage
+    const float referenceSize
+	= m_particle.locktransforms ? 0.0f : static_cast<float> (getScene ().getWidth ()) * 0.5f;
     const glm::vec3 parallaxOffset {
 	depth.x * parallaxAmount * displacement->x * referenceSize,
 	depth.y * parallaxAmount * displacement->y * referenceSize,
