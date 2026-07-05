@@ -1113,8 +1113,10 @@ void CImage::updateScreenSpacePosition () {
 	const float parallaxAmount = this->getScene ().getScene ().camera.parallax.amount->value->getFloat ();
 	const glm::vec2 depth = this->getImage ().parallaxDepth->value->getVec2 ();
 	const glm::vec2* displacement = this->getScene ().getParallaxDisplacement ();
-	const float referenceSize = static_cast<float> (this->getScene ().getWidth ());
-	// offset scales with the object's depth so depth-0 objects stay pinned in place
+	// full mouse swing moves a unit-depth layer by 4% of the scene width, matching the
+	// UV-shift convention of Wallpaper Engine's own depthparallax shaders; offset scales
+	// with the object's depth so depth-0 objects stay pinned in place
+	const float referenceSize = static_cast<float> (this->getScene ().getWidth ()) * 0.04f;
 	float x = depth.x * parallaxAmount * displacement->x * referenceSize;
 	float y = depth.y * parallaxAmount * displacement->y * referenceSize;
 	mvp = glm::translate (mvp, { x, y, 0.0f });

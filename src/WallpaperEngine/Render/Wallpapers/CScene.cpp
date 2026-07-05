@@ -306,14 +306,17 @@ void CScene::renderFrame (const glm::ivec4& viewport) {
 	&& !this->getContext ().getApp ().getContext ().settings.mouse.disableparallax) {
 	const float influence = this->getScene ().camera.parallax.mouseInfluence->value->getFloat ();
 	const float amount = this->getScene ().camera.parallax.amount->value->getFloat ();
-	const float delay = glm::clamp (
-	    this->getScene ().camera.parallax.delay->value->getFloat () * (g_Time - g_TimeLast), 0.0f, 1.0f
-	);
+	// delay is the smoothing lag: 0 snaps instantly, larger values follow the mouse slower,
+	// framerate-independent so the feel doesn't change with fps
+	const float timeConstant = this->getScene ().camera.parallax.delay->value->getFloat () * 0.1f;
+	const float alpha = timeConstant > 0.0f
+	    ? 1.0f - std::exp (-(g_Time - g_TimeLast) / timeConstant)
+	    : 1.0f;
 
 	// per-object depth and the global parallax amount are applied by each renderable,
-	// this only tracks the smoothed mouse offset scaled by the mouse influence
-	const glm::vec2 centeredMouse = this->m_mousePosition - glm::vec2 (0.5f, 0.5f);
-	this->m_parallaxDisplacement = glm::mix (this->m_parallaxDisplacement, centeredMouse * influence, delay);
+	// this only tracks the smoothed mouse offset (-1 to 1 across the screen) scaled by influence
+	const glm::vec2 centeredMouse = this->m_mousePosition * 2.0f - glm::vec2 (1.0f, 1.0f);
+	this->m_parallaxDisplacement = glm::mix (this->m_parallaxDisplacement, centeredMouse * influence, alpha);
 	// shader-driven parallax effects (e.g. depthparallax) expect a 0-1 position centered at 0.5
 	this->m_parallaxPosition = glm::vec2 (0.5f, 0.5f) + this->m_parallaxDisplacement * amount;
     }
