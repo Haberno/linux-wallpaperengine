@@ -919,6 +919,7 @@ void CImage::render () {
     glColorMask (true, true, true, true);
 
     // Always update screen transform (handles rotation + parallax dynamically)
+    // TODO: There's more images that are not affected by parallax, autosize or fullscreen are not affected
     this->updateScreenSpacePosition ();
 
 #if !NDEBUG
@@ -1096,18 +1097,24 @@ void CImage::updateScreenSpacePosition () {
 
     // Build rotation from angles (already in radians from scene.json — see CParticle.cpp:2119)
     // Negate X and Z rotations to account for Y-flipped coordinate system (CParticle.cpp:2120)
+    // transform.angle carries the z rotation resolved through the parent chain; the x/y
+    // tilt comes from the object's own angles (PR #479)
+    // TODO: ALSO APPLY PARENT'S X/Y ROTATION? NEED TO BUILD SOME EXAMPLE BACKGROUNDS TO PROPERLY TRY THIS
     const float angle = transform.angle;
+    const glm::vec3 angles = this->m_image.angles->value->getVec3 ();
     glm::mat4 rotModel = glm::mat4 (1.0f);
-    if (angle != 0.0f) {
+    if (angle != 0.0f || angles.x != 0.0f || angles.y != 0.0f) {
 	rotModel = glm::translate (rotModel, this->m_sceneCenter);
 	rotModel = glm::rotate (rotModel, -angle, glm::vec3 (0.0f, 0.0f, 1.0f));
+	rotModel = glm::rotate (rotModel, angles.y, glm::vec3 (0.0f, 1.0f, 0.0f));
+	rotModel = glm::rotate (rotModel, angles.x, glm::vec3 (-1.0f, 0.0f, 0.0f));
 	rotModel = glm::translate (rotModel, -this->m_sceneCenter);
     }
 
-    glm::mat4 mvp
-	= this->getScene ().getCamera ().getProjection () * this->getScene ().getCamera ().getLookAt () * rotModel;
+    glm::mat4 mvp = this->getScene ().getCamera ().getProjection () * this->getScene ().getCamera ().getLookAt ();
 
-    // Apply parallax displacement if enabled
+    // Apply parallax displacement if enabled — folded into the matrix before the rotation,
+    // so the offset stays in scene space instead of being rotated with the object (PR #479)
     if (this->getScene ().getScene ().camera.parallax.enabled->value->getBool ()
 	&& !this->getScene ().getContext ().getApp ().getContext ().settings.mouse.disableparallax) {
 	const float parallaxAmount = this->getScene ().getScene ().camera.parallax.amount->value->getFloat ();
@@ -1125,6 +1132,8 @@ void CImage::updateScreenSpacePosition () {
 	float y = depth.y * parallaxAmount * displacement->y * referenceSize;
 	mvp = glm::translate (mvp, { x, y, 0.0f });
     }
+
+    mvp *= rotModel;
 
     this->m_modelViewProjectionScreen = mvp;
     this->m_modelViewProjectionScreenInverse = glm::inverse (mvp);
