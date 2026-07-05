@@ -303,13 +303,21 @@ void CParticle::update (float dt) {
 		    lifetimePos * m_spritesheetFrames * animSpeed, static_cast<float> (m_spritesheetFrames - 1)
 		);
 	    } else {
-		if (m_spritesheetDuration > 0.0f) {
-		    float timeInCycle = std::fmod (p.age * animSpeed, m_spritesheetDuration);
+		if (m_particle.sequenceMultiplier > 0.0f) {
+		    // sequencemultiplier is relative to the particle's lifetime: the sequence
+		    // plays that many times over the particle's life, regardless of the
+		    // texture's own frame timings
+		    p.frame = std::fmod (
+			lifetimePos * m_spritesheetFrames * animSpeed, static_cast<float> (m_spritesheetFrames)
+		    );
+		} else if (m_spritesheetDuration > 0.0f) {
+		    // no multiplier authored: play at the texture's own animation speed
+		    float timeInCycle = std::fmod (p.age, m_spritesheetDuration);
 		    float cyclePos = timeInCycle / m_spritesheetDuration;
 		    p.frame = std::fmod (cyclePos * m_spritesheetFrames, static_cast<float> (m_spritesheetFrames));
 		} else {
 		    p.frame = std::fmod (
-			lifetimePos * m_spritesheetFrames * animSpeed, static_cast<float> (m_spritesheetFrames)
+			lifetimePos * m_spritesheetFrames, static_cast<float> (m_spritesheetFrames)
 		    );
 		}
 	    }
