@@ -1127,10 +1127,10 @@ void CImage::updateScreenSpacePosition () {
 
     // Apply parallax displacement if enabled — folded into the matrix before the rotation,
     // so the offset stays in scene space instead of being rotated with the object (PR #479)
-    // fullscreen and autosize layers always cover the projection, so parallax never moves
-    // them (PR #479 TODO), same as locked-transform objects
-    const bool excludedFromParallax = this->getImage ().locktransforms || this->getImage ().model->fullscreen
-	|| this->getImage ().model->autosize;
+    // fullscreen layers always cover the projection, so parallax never moves them
+    // (PR #479 TODO), same as locked-transform objects. autosize does NOT belong here:
+    // virtually every workshop image layer is autosize (it only means "size from texture")
+    const bool excludedFromParallax = this->getImage ().locktransforms || this->getImage ().model->fullscreen;
     if (this->getScene ().getScene ().camera.parallax.enabled->value->getBool ()
 	&& !this->getScene ().getContext ().getApp ().getContext ().settings.mouse.disableparallax) {
 	const float parallaxAmount = this->getScene ().getScene ().camera.parallax.amount->value->getFloat ();
