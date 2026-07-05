@@ -1119,7 +1119,10 @@ void CImage::updateScreenSpacePosition () {
 	const float referenceSize = this->getImage ().locktransforms
 	    ? 0.0f
 	    : static_cast<float> (this->getScene ().getWidth ()) * 0.5f;
-	float x = depth.x * parallaxAmount * displacement->x * referenceSize;
+	// x is negated: panning the camera towards the cursor shifts positive-depth
+	// layers the opposite way on screen; the y displacement already accounts for
+	// this through the viewport UV flip
+	float x = -depth.x * parallaxAmount * displacement->x * referenceSize;
 	float y = depth.y * parallaxAmount * displacement->y * referenceSize;
 	mvp = glm::translate (mvp, { x, y, 0.0f });
     }
