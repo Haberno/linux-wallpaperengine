@@ -64,7 +64,9 @@ protected:
     struct ResolvedTransform {
 	glm::vec3 origin;
 	glm::vec3 scale;
-	float angle;
+	// raw scene angles in radians, accumulated through the parent chain;
+	// the render path negates x/z to account for the y-flipped coordinate system
+	glm::vec3 angles;
     };
 
     [[nodiscard]] ResolvedTransform resolveTransform (const WallpaperEngine::Data::Model::Object& object) const;
