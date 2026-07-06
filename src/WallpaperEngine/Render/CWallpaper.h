@@ -7,6 +7,7 @@
 #include "WallpaperEngine/Audio/AudioContext.h"
 
 #include "WallpaperEngine/Render/CFBO.h"
+#include "WallpaperEngine/Render/TransitionMode.h"
 #include "WallpaperEngine/Render/Helpers/ContextAware.h"
 #include "WallpaperEngine/Render/RenderContext.h"
 
@@ -108,6 +109,12 @@ public:
     void setDestinationFramebuffer (GLuint framebuffer);
 
     /**
+     * Transition state for the final on-screen composite; while progress < 1.0 the
+     * composite shader reveals this wallpaper over the outgoing one using the given mode
+     */
+    void setTransition (TransitionMode mode, float progress);
+
+    /**
      * Sets span info for this wallpaper, enabling span-mode rendering
      */
     void setSpanInfo (const SpanInfo& spanInfo);
@@ -175,10 +182,16 @@ private:
     GLuint m_shader = GL_NONE;
     // shader variables
     GLint g_Texture0 = GL_NONE;
+    GLint g_TransitionMode = GL_NONE;
+    GLint g_TransitionProgress = GL_NONE;
     GLint a_Position = GL_NONE;
     GLint a_TexCoord = GL_NONE;
     /** The framebuffer to draw the background to */
     GLuint m_destFramebuffer = GL_NONE;
+    /** Reveal animation used while compositing the scene FBO to the screen */
+    TransitionMode m_transitionMode = TransitionMode_None;
+    /** Progress of the reveal animation, 0..1 */
+    float m_transitionProgress = 1.0f;
     /** Setups OpenGL's shaders for this wallpaper backbuffer */
     void setupShaders ();
     /** List of FBOs registered for this wallpaper */

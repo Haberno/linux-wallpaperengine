@@ -74,9 +74,12 @@ void CWallpaper::setupShaders () {
 				"in vec3 a_Position;\n"
 				"in vec2 a_TexCoord;\n"
 				"out vec2 v_TexCoord;\n"
+				"out vec2 v_ScreenPos;\n"
 				"void main () {\n"
 				"gl_Position = vec4 (a_Position, 1.0);\n"
 				"v_TexCoord = a_TexCoord;\n"
+				// normalized 0..1 position across the output, used by transitions
+				"v_ScreenPos = a_Position.xy * 0.5 + 0.5;\n"
 				"}";
 
     glShaderSource (vertexShaderID, 1, &sourcePointer, nullptr);
@@ -107,13 +110,54 @@ void CWallpaper::setupShaders () {
     const GLuint fragmentShaderID = glCreateShader (GL_FRAGMENT_SHADER);
 
     // give shader's source code to OpenGL to be compiled
+    // transitions compute a per-pixel reveal alpha; blending is only enabled while
+    // a wallpaper switch is animating, so the alpha is ignored the rest of the time
     sourcePointer = "#version 330\n"
 		    "precision highp float;\n"
 		    "uniform sampler2D g_Texture0;\n"
+		    "uniform int g_TransitionMode;\n"
+		    "uniform float g_TransitionProgress;\n"
 		    "in vec2 v_TexCoord;\n"
+		    "in vec2 v_ScreenPos;\n"
 		    "out vec4 out_FragColor;\n"
+		    "float transitionAlpha () {\n"
+		    "const float edge = 0.05;\n"
+		    "float p = g_TransitionProgress;\n"
+		    "if (g_TransitionMode == 1) return p;\n" // fade
+		    "if (g_TransitionMode == 2) return clamp ((p * (1.0 + edge) - v_ScreenPos.x) / edge, 0.0, 1.0);\n"
+		    "if (g_TransitionMode == 3) return clamp ((p * (1.0 + edge) - (1.0 - v_ScreenPos.x)) / edge, 0.0, 1.0);\n"
+		    "if (g_TransitionMode == 4) return clamp ((p * (1.0 + edge) - v_ScreenPos.y) / edge, 0.0, 1.0);\n"
+		    "if (g_TransitionMode == 5) return clamp ((p * (1.0 + edge) - (1.0 - v_ScreenPos.y)) / edge, 0.0, 1.0);\n"
+		    "if (g_TransitionMode == 6) {\n" // disc growing from the center
+		    "float radius = distance (v_ScreenPos, vec2 (0.5));\n"
+		    "return clamp ((p * (0.7072 + edge) - radius) / edge, 0.0, 1.0);\n"
+		    "}\n"
+		    "if (g_TransitionMode == 7) {\n" // vertical stripes sweeping in alternating directions
+		    "float stripe = floor (v_ScreenPos.x * 12.0);\n"
+		    "float y = mod (stripe, 2.0) < 1.0 ? v_ScreenPos.y : 1.0 - v_ScreenPos.y;\n"
+		    "return clamp ((p * (1.0 + edge) - y) / edge, 0.0, 1.0);\n"
+		    "}\n"
+		    "if (g_TransitionMode == 8) {\n" // pixelate: grid cells dissolve in pseudo-random order
+		    "vec2 cell = floor (v_ScreenPos * vec2 (48.0, 27.0));\n"
+		    "float order = fract (sin (dot (cell, vec2 (12.9898, 78.233))) * 43758.5453);\n"
+		    "return clamp ((p * (1.0 + edge) - order) / edge, 0.0, 1.0);\n"
+		    "}\n"
+		    "if (g_TransitionMode == 9) {\n" // honeycomb: hexagonal cells pop in, ordered by a hash
+		    "vec2 uv = v_ScreenPos * vec2 (16.0, 9.0);\n"
+		    "vec2 r = vec2 (1.0, 1.7320508);\n"
+		    "vec2 a = mod (uv, r) - r * 0.5;\n"
+		    "vec2 b = mod (uv - r * 0.5, r) - r * 0.5;\n"
+		    "vec2 offset = dot (a, a) < dot (b, b) ? a : b;\n"
+		    "vec2 id = uv - offset;\n"
+		    "float order = fract (sin (dot (id, vec2 (12.9898, 78.233))) * 43758.5453);\n"
+		    // cells grow from their center: inner distance delays the reveal slightly
+		    "float inner = length (offset) * 0.35;\n"
+		    "return clamp ((p * (1.35 + edge) - order - inner) / edge, 0.0, 1.0);\n"
+		    "}\n"
+		    "return 1.0;\n"
+		    "}\n"
 		    "void main () {\n"
-		    "out_FragColor = texture (g_Texture0, v_TexCoord);\n"
+		    "out_FragColor = vec4 (texture (g_Texture0, v_TexCoord).rgb, transitionAlpha ());\n"
 		    "}";
 
     glShaderSource (fragmentShaderID, 1, &sourcePointer, nullptr);
@@ -176,11 +220,18 @@ void CWallpaper::setupShaders () {
 
     // get textures
     this->g_Texture0 = glGetUniformLocation (this->m_shader, "g_Texture0");
+    this->g_TransitionMode = glGetUniformLocation (this->m_shader, "g_TransitionMode");
+    this->g_TransitionProgress = glGetUniformLocation (this->m_shader, "g_TransitionProgress");
     this->a_Position = glGetAttribLocation (this->m_shader, "a_Position");
     this->a_TexCoord = glGetAttribLocation (this->m_shader, "a_TexCoord");
 }
 
 void CWallpaper::setDestinationFramebuffer (GLuint framebuffer) { this->m_destFramebuffer = framebuffer; }
+
+void CWallpaper::setTransition (const TransitionMode mode, const float progress) {
+    this->m_transitionMode = mode;
+    this->m_transitionProgress = progress;
+}
 
 void CWallpaper::setSpanInfo (const SpanInfo& spanInfo) { this->m_spanInfo = spanInfo; }
 
@@ -279,7 +330,17 @@ void CWallpaper::render (
 
     glBindVertexArray (this->m_vaoBuffer);
 
-    glDisable (GL_BLEND);
+    // while a switch is animating, the composite shader emits a per-pixel reveal alpha
+    // that blends this wallpaper over the outgoing one drawn just before it
+    const bool transitionActive
+	= this->m_transitionMode != TransitionMode_None && this->m_transitionProgress < 1.0f;
+
+    if (transitionActive) {
+	glEnable (GL_BLEND);
+	glBlendFunc (GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+    } else {
+	glDisable (GL_BLEND);
+    }
     glDisable (GL_DEPTH_TEST);
     glDisable (GL_CULL_FACE);
     // do not use any shader
@@ -298,6 +359,8 @@ void CWallpaper::render (
     glVertexAttribPointer (this->a_Position, 3, GL_FLOAT, GL_FALSE, 0, nullptr);
 
     glUniform1i (this->g_Texture0, 0);
+    glUniform1i (this->g_TransitionMode, transitionActive ? this->m_transitionMode : TransitionMode_None);
+    glUniform1f (this->g_TransitionProgress, this->m_transitionProgress);
     // write the framebuffer as is to the screen
     glBindBuffer (GL_ARRAY_BUFFER, this->m_texCoordBuffer);
     glDrawArrays (GL_TRIANGLES, 0, 6);

@@ -150,6 +150,25 @@ private:
 	std::set<std::size_t> failedIndices;
     };
 
+    /**
+     * Loads a new background for the given screen and animates into it.
+     * Shared by playlists and the IPC control socket.
+     *
+     * @return whether the switch succeeded
+     */
+    bool switchBackground (
+	const std::string& screen, const std::string& path,
+	Render::TransitionMode transition = Render::TransitionMode_Fade
+    );
+    /**
+     * Creates the unix control socket used to switch wallpapers at runtime
+     */
+    void setupControlSocket ();
+    /**
+     * Accepts and executes pending commands on the control socket
+     */
+    void processControlSocket ();
+
     void initializePlaylists ();
     void updatePlaylists ();
     void advancePlaylist (
@@ -163,6 +182,10 @@ private:
 
     /** The application context that contains the current app settings */
     ApplicationContext& m_context;
+    /** Listening unix socket for runtime wallpaper switching, -1 when unavailable */
+    int m_controlSocket = -1;
+    /** Path of the bound control socket so it can be unlinked on exit */
+    std::string m_controlSocketPath {};
     /** Maps screens to backgrounds */
     std::map<std::string, ProjectUniquePtr> m_backgrounds {};
     std::map<std::string, ActivePlaylist> m_activePlaylists {};
