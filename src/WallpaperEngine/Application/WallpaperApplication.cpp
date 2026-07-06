@@ -23,8 +23,13 @@
 #endif /* DEMOMODE */
 
 #include <algorithm>
+#include <cerrno>
 #include <climits>
+#include <cstring>
 #include <numeric>
+#include <poll.h>
+#include <sys/socket.h>
+#include <sys/un.h>
 #include <unistd.h>
 #define STB_IMAGE_WRITE_IMPLEMENTATION
 #include <stb_image_write.h>
@@ -383,6 +388,188 @@ bool WallpaperApplication::selectNextCandidate (ActivePlaylist& playlist, std::s
     return false;
 }
 
+namespace {
+/**
+ * Maps a transition name from the control socket to its mode. "random" maps to
+ * TransitionMode_None as a sentinel the caller resolves to a random pick.
+ */
+std::optional<WallpaperEngine::Render::TransitionMode> parseTransitionName (const std::string& name) {
+    using namespace WallpaperEngine::Render;
+    static const std::map<std::string, TransitionMode> NAMES = {
+	{ "random", TransitionMode_None },	{ "fade", TransitionMode_Fade },
+	{ "wipeleft", TransitionMode_WipeLeft }, { "wiperight", TransitionMode_WipeRight },
+	{ "wipeup", TransitionMode_WipeUp },	{ "wipedown", TransitionMode_WipeDown },
+	{ "disc", TransitionMode_Disc },	{ "stripes", TransitionMode_Stripes },
+	{ "pixelate", TransitionMode_Pixelate }, { "honeycomb", TransitionMode_Honeycomb },
+    };
+
+    const auto it = NAMES.find (name);
+    return it != NAMES.end () ? std::optional (it->second) : std::nullopt;
+}
+} // namespace
+
+void WallpaperApplication::setupControlSocket () {
+    const char* runtimeDir = getenv ("XDG_RUNTIME_DIR");
+    this->m_controlSocketPath = std::string (runtimeDir != nullptr ? runtimeDir : "/tmp") + "/linux-wallpaperengine.sock";
+
+    this->m_controlSocket = socket (AF_UNIX, SOCK_STREAM | SOCK_NONBLOCK | SOCK_CLOEXEC, 0);
+
+    if (this->m_controlSocket < 0) {
+	sLog.error ("Cannot create control socket: ", strerror (errno));
+	return;
+    }
+
+    // a previous instance (or a crashed one) may have left the socket file behind
+    unlink (this->m_controlSocketPath.c_str ());
+
+    sockaddr_un address {};
+    address.sun_family = AF_UNIX;
+    strncpy (address.sun_path, this->m_controlSocketPath.c_str (), sizeof (address.sun_path) - 1);
+
+    if (bind (this->m_controlSocket, reinterpret_cast<sockaddr*> (&address), sizeof (address)) < 0
+	|| listen (this->m_controlSocket, 4) < 0) {
+	sLog.error ("Cannot bind control socket ", this->m_controlSocketPath, ": ", strerror (errno));
+	close (this->m_controlSocket);
+	this->m_controlSocket = -1;
+	return;
+    }
+
+    sLog.out ("Control socket listening on ", this->m_controlSocketPath);
+}
+
+void WallpaperApplication::processControlSocket () {
+    if (this->m_controlSocket < 0) {
+	return;
+    }
+
+    // handle every pending connection; each carries a single command line
+    while (true) {
+	const int client = accept4 (this->m_controlSocket, nullptr, nullptr, SOCK_CLOEXEC);
+
+	if (client < 0) {
+	    return;
+	}
+
+	// the client writes right after connecting, but give it a small grace period
+	pollfd pfd { .fd = client, .events = POLLIN, .revents = 0 };
+	std::string command;
+
+	while (poll (&pfd, 1, 100) > 0 && (pfd.revents & POLLIN) != 0) {
+	    char buffer [4096];
+	    const ssize_t bytes = read (client, buffer, sizeof (buffer));
+
+	    if (bytes <= 0) {
+		break;
+	    }
+
+	    command.append (buffer, bytes);
+
+	    if (command.find ('\n') != std::string::npos) {
+		break;
+	    }
+	}
+
+	if (const auto newline = command.find ('\n'); newline != std::string::npos) {
+	    command.resize (newline);
+	}
+
+	std::string reply = "err invalid command, expected: switch <screen> [transition] <path>\n";
+
+	// switch <screen> [transition] <path> - path may contain spaces, so the optional
+	// transition sits before it where it can be recognized unambiguously
+	if (command.rfind ("switch ", 0) == 0) {
+	    auto body = command.substr (7);
+
+	    if (const auto separator = body.find (' '); separator != std::string::npos) {
+		const auto screen = body.substr (0, separator);
+		auto path = body.substr (separator + 1);
+		auto transition = Render::TransitionMode_Fade;
+
+		if (const auto transitionEnd = path.find (' '); transitionEnd != std::string::npos) {
+		    if (const auto parsed = parseTransitionName (path.substr (0, transitionEnd));
+			parsed.has_value ()) {
+			transition = parsed.value ();
+			path = path.substr (transitionEnd + 1);
+		    }
+		}
+
+		if (transition == Render::TransitionMode_None) {
+		    // "random" resolves here so the whole animation set stays in one place
+		    transition = static_cast<Render::TransitionMode> (std::uniform_int_distribution<int> (
+			Render::TransitionMode_Fade, Render::TransitionMode_Last
+		    ) (this->m_playlistRng));
+		}
+
+		if (this->m_renderContext == nullptr
+		    || !this->m_renderContext->getWallpapers ().contains (screen)) {
+		    reply = "err unknown screen " + screen + "\n";
+		} else if (this->switchBackground (screen, path, transition)) {
+		    reply = "ok\n";
+		} else {
+		    reply = "err failed to load " + path + "\n";
+		}
+	    }
+	}
+
+	if (write (client, reply.c_str (), reply.size ()) < 0) {
+	    sLog.error ("Cannot write control socket reply: ", strerror (errno));
+	}
+
+	close (client);
+    }
+}
+
+bool WallpaperApplication::switchBackground (
+    const std::string& screen, const std::string& path, const Render::TransitionMode transition
+) {
+    try {
+	if (!this->makeAnyViewportCurrent ()) {
+	    sLog.error ("Cannot switch wallpaper on ", screen, ": no active viewport");
+	    throw std::runtime_error ("No viewport available");
+	}
+
+	auto project = this->loadBackground (path);
+
+	this->setupPropertiesForProject (*project);
+	this->ensureBrowserForProject (*project);
+
+	// the outgoing CWallpaper references this Project's data; the render context
+	// keeps it alive until the crossfade is over
+	std::shared_ptr<void> previousProject;
+	if (const auto it = this->m_backgrounds.find (screen); it != this->m_backgrounds.end ()) {
+	    previousProject = std::shared_ptr<Project> (std::move (it->second));
+	}
+
+	this->m_backgrounds[screen] = std::move (project);
+
+	const auto scalingIt = this->m_context.settings.general.screenScalings.find (screen);
+	const auto clampIt = this->m_context.settings.general.screenClamps.find (screen);
+	const auto scaling = scalingIt != this->m_context.settings.general.screenScalings.end ()
+	    ? scalingIt->second
+	    : this->m_context.settings.render.window.scalingMode;
+	const auto clamp = clampIt != this->m_context.settings.general.screenClamps.end ()
+	    ? clampIt->second
+	    : this->m_context.settings.render.window.clamp;
+
+	if (this->m_renderContext) {
+	    this->m_renderContext->setWallpaper (
+		screen,
+		WallpaperEngine::Render::CWallpaper::fromWallpaper (
+		    *this->m_backgrounds[screen]->wallpaper, *this->m_renderContext, *this->m_audioContext,
+		    this->m_browserContext.get (), scaling, clamp
+		),
+		std::move (previousProject), transition
+	    );
+	}
+
+	this->m_context.settings.general.screenBackgrounds[screen] = path;
+	return true;
+    } catch (const std::exception& e) {
+	sLog.error ("Failed to switch wallpaper on ", screen, ": ", e.what ());
+	return false;
+    }
+}
+
 void WallpaperApplication::advancePlaylist (
     const std::string& screen, ActivePlaylist& playlist, const std::chrono::steady_clock::time_point& now
 ) {
@@ -422,45 +609,7 @@ void WallpaperApplication::advancePlaylist (
     playlist.orderIndex = candidateOrderIndex;
     const auto& nextPath = playlist.definition.items[playlist.order[playlist.orderIndex]];
 
-    bool loaded = false;
-
-    try {
-	if (!this->makeAnyViewportCurrent ()) {
-	    sLog.error ("Cannot switch playlist on ", screen, ": no active viewport");
-	    throw std::runtime_error ("No viewport available");
-	}
-
-	auto project = this->loadBackground (nextPath.string ());
-
-	this->setupPropertiesForProject (*project);
-	this->ensureBrowserForProject (*project);
-
-	this->m_backgrounds[screen] = std::move (project);
-
-	const auto scalingIt = this->m_context.settings.general.screenScalings.find (screen);
-	const auto clampIt = this->m_context.settings.general.screenClamps.find (screen);
-	const auto scaling = scalingIt != this->m_context.settings.general.screenScalings.end ()
-	    ? scalingIt->second
-	    : this->m_context.settings.render.window.scalingMode;
-	const auto clamp = clampIt != this->m_context.settings.general.screenClamps.end ()
-	    ? clampIt->second
-	    : this->m_context.settings.render.window.clamp;
-
-	if (this->m_renderContext) {
-	    this->m_renderContext->setWallpaper (
-		screen,
-		WallpaperEngine::Render::CWallpaper::fromWallpaper (
-		    *this->m_backgrounds[screen]->wallpaper, *this->m_renderContext, *this->m_audioContext,
-		    this->m_browserContext.get (), scaling, clamp
-		)
-	    );
-	}
-
-	this->m_context.settings.general.screenBackgrounds[screen] = nextPath;
-	loaded = true;
-    } catch (const std::exception& e) {
-	sLog.error ("Failed to advance playlist on ", screen, ": ", e.what ());
-    }
+    const bool loaded = this->switchBackground (screen, nextPath.string ());
 
     if (!loaded) {
 	playlist.failedIndices.insert (playlist.order[playlist.orderIndex]);
@@ -827,6 +976,7 @@ void WallpaperApplication::setup () {
     this->setupAudio ();
     this->prepareOutputs ();
     this->setupOpenGLDebugging ();
+    this->setupControlSocket ();
 
     if (this->m_context.settings.general.dumpStructure) {
 	auto prettyPrinter = Data::Dumpers::StringPrinter ();
@@ -937,6 +1087,7 @@ void WallpaperApplication::render () {
 	}
     }
 
+    this->processControlSocket ();
     this->updatePlaylists ();
 
     if (!this->m_context.settings.screenshot.take || this->m_screenShotTaken == true) {
@@ -966,6 +1117,12 @@ void WallpaperApplication::show () {
     while (this->m_context.state.general.keepRunning) {
 	render ();
     }
+
+    if (this->m_controlSocket >= 0) {
+	close (this->m_controlSocket);
+	unlink (this->m_controlSocketPath.c_str ());
+    }
+
     cleanup ();
 }
 

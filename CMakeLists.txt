@@ -411,6 +411,7 @@ set(COMMON_SOURCES
     src/WallpaperEngine/Render/Helpers/ContextAware.h
 
     src/WallpaperEngine/Render/CWallpaper.h
+    src/WallpaperEngine/Render/TransitionMode.h
     src/WallpaperEngine/Render/CWallpaper.cpp
     src/WallpaperEngine/Render/WallpaperState.h
     src/WallpaperEngine/Render/WallpaperState.cpp
