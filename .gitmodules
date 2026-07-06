@@ -32,3 +32,10 @@
 [submodule "src/External/quickjs"]
 	path = src/External/quickjs
 	url = https://github.com/quickjs-ng/quickjs.git
+[submodule "src/External/kissfft-WallpaperEngine"]
+	path = src/External/kissfft-WallpaperEngine
+	url = https://github.com/Almamu/kissfft-WallpaperEngine.git
+	branch = main
+[submodule "src/External/source-parsers"]
+	path = src/External/source-parsers
+	url = https://github.com/tasbox-org/source-parsers.git

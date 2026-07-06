@@ -110,9 +110,10 @@ public:
 
     /**
      * Transition state for the final on-screen composite; while progress < 1.0 the
-     * composite shader reveals this wallpaper over the outgoing one using the given mode
+     * composite shader reveals this wallpaper over the outgoing one using the given mode.
+     * @param center normalized origin for transitions that grow from a point (e.g. disc)
      */
-    void setTransition (TransitionMode mode, float progress);
+    void setTransition (TransitionMode mode, float progress, glm::vec2 center = { 0.5f, 0.5f });
 
     /**
      * Sets span info for this wallpaper, enabling span-mode rendering
@@ -184,6 +185,7 @@ private:
     GLint g_Texture0 = GL_NONE;
     GLint g_TransitionMode = GL_NONE;
     GLint g_TransitionProgress = GL_NONE;
+    GLint g_TransitionCenter = GL_NONE;
     GLint a_Position = GL_NONE;
     GLint a_TexCoord = GL_NONE;
     /** The framebuffer to draw the background to */
@@ -192,6 +194,8 @@ private:
     TransitionMode m_transitionMode = TransitionMode_None;
     /** Progress of the reveal animation, 0..1 */
     float m_transitionProgress = 1.0f;
+    /** Normalized origin for point-based reveal animations */
+    glm::vec2 m_transitionCenter = { 0.5f, 0.5f };
     /** Setups OpenGL's shaders for this wallpaper backbuffer */
     void setupShaders ();
     /** List of FBOs registered for this wallpaper */

@@ -29,6 +29,7 @@
 #include <numeric>
 #include <poll.h>
 #include <sys/socket.h>
+#include <sys/stat.h>
 #include <sys/un.h>
 #include <unistd.h>
 #define STB_IMAGE_WRITE_IMPLEMENTATION
@@ -401,6 +402,11 @@ std::optional<WallpaperEngine::Render::TransitionMode> parseTransitionName (cons
 	{ "wipeup", TransitionMode_WipeUp },	{ "wipedown", TransitionMode_WipeDown },
 	{ "disc", TransitionMode_Disc },	{ "stripes", TransitionMode_Stripes },
 	{ "pixelate", TransitionMode_Pixelate }, { "honeycomb", TransitionMode_Honeycomb },
+	{ "wipediag", TransitionMode_WipeDiag }, { "clock", TransitionMode_Clock },
+	{ "iris", TransitionMode_Iris },	{ "checkerboard", TransitionMode_Checkerboard },
+	{ "blinds", TransitionMode_Blinds },	{ "split", TransitionMode_Split },
+	{ "voronoi", TransitionMode_Voronoi },	{ "noise", TransitionMode_Noise },
+	{ "dots", TransitionMode_Dots },	{ "inksplash", TransitionMode_InkSplash },
     };
 
     const auto it = NAMES.find (name);
@@ -432,6 +438,13 @@ void WallpaperApplication::setupControlSocket () {
 	close (this->m_controlSocket);
 	this->m_controlSocket = -1;
 	return;
+    }
+
+    // remember which filesystem entry we created; a newer instance may replace
+    // it (unlink + rebind), in which case the exit path must leave it alone
+    struct stat info {};
+    if (stat (this->m_controlSocketPath.c_str (), &info) == 0) {
+	this->m_controlSocketInode = info.st_ino;
     }
 
     sLog.out ("Control socket listening on ", this->m_controlSocketPath);
@@ -1120,7 +1133,13 @@ void WallpaperApplication::show () {
 
     if (this->m_controlSocket >= 0) {
 	close (this->m_controlSocket);
-	unlink (this->m_controlSocketPath.c_str ());
+
+	// only remove the socket file if it is still the one this instance
+	// bound - a newer engine may own the path by now
+	struct stat info {};
+	if (stat (this->m_controlSocketPath.c_str (), &info) == 0 && info.st_ino == this->m_controlSocketInode) {
+	    unlink (this->m_controlSocketPath.c_str ());
+	}
     }
 
     cleanup ();

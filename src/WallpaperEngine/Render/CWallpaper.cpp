@@ -112,35 +112,51 @@ void CWallpaper::setupShaders () {
     // give shader's source code to OpenGL to be compiled
     // transitions compute a per-pixel reveal alpha; blending is only enabled while
     // a wallpaper switch is animating, so the alpha is ignored the rest of the time
+    // every transition except fade reveals with a hard step() edge - no feathering
     sourcePointer = "#version 330\n"
 		    "precision highp float;\n"
 		    "uniform sampler2D g_Texture0;\n"
 		    "uniform int g_TransitionMode;\n"
 		    "uniform float g_TransitionProgress;\n"
+		    "uniform vec2 g_TransitionCenter;\n"
 		    "in vec2 v_TexCoord;\n"
 		    "in vec2 v_ScreenPos;\n"
 		    "out vec4 out_FragColor;\n"
+		    "float hash21 (vec2 v) {\n"
+		    "return fract (sin (dot (v, vec2 (12.9898, 78.233))) * 43758.5453);\n"
+		    "}\n"
+		    "vec2 hash22 (vec2 v) {\n"
+		    "return fract (sin (vec2 (dot (v, vec2 (127.1, 311.7)), dot (v, vec2 (269.5, 183.3)))) * 43758.5453);\n"
+		    "}\n"
+		    // smooth value noise, used for the organic reveal shapes
+		    "float vnoise (vec2 v) {\n"
+		    "vec2 i = floor (v);\n"
+		    "vec2 u = fract (v);\n"
+		    "u = u * u * (3.0 - 2.0 * u);\n"
+		    "return mix (mix (hash21 (i), hash21 (i + vec2 (1.0, 0.0)), u.x),\n"
+		    "mix (hash21 (i + vec2 (0.0, 1.0)), hash21 (i + vec2 (1.0, 1.0)), u.x), u.y);\n"
+		    "}\n"
 		    "float transitionAlpha () {\n"
-		    "const float edge = 0.05;\n"
 		    "float p = g_TransitionProgress;\n"
-		    "if (g_TransitionMode == 1) return p;\n" // fade
-		    "if (g_TransitionMode == 2) return clamp ((p * (1.0 + edge) - v_ScreenPos.x) / edge, 0.0, 1.0);\n"
-		    "if (g_TransitionMode == 3) return clamp ((p * (1.0 + edge) - (1.0 - v_ScreenPos.x)) / edge, 0.0, 1.0);\n"
-		    "if (g_TransitionMode == 4) return clamp ((p * (1.0 + edge) - v_ScreenPos.y) / edge, 0.0, 1.0);\n"
-		    "if (g_TransitionMode == 5) return clamp ((p * (1.0 + edge) - (1.0 - v_ScreenPos.y)) / edge, 0.0, 1.0);\n"
-		    "if (g_TransitionMode == 6) {\n" // disc growing from the center
-		    "float radius = distance (v_ScreenPos, vec2 (0.5));\n"
-		    "return clamp ((p * (0.7072 + edge) - radius) / edge, 0.0, 1.0);\n"
+		    "if (g_TransitionMode == 1) return p;\n" // fade: uniform crossfade
+		    "if (g_TransitionMode == 2) return step (v_ScreenPos.x, p);\n"
+		    "if (g_TransitionMode == 3) return step (1.0 - v_ScreenPos.x, p);\n"
+		    "if (g_TransitionMode == 4) return step (v_ScreenPos.y, p);\n"
+		    "if (g_TransitionMode == 5) return step (1.0 - v_ScreenPos.y, p);\n"
+		    "if (g_TransitionMode == 6) {\n" // disc growing from a per-switch origin
+		    // farthest corner from the origin determines the radius that covers the screen
+		    "float maxRadius = length (max (g_TransitionCenter, vec2 (1.0) - g_TransitionCenter));\n"
+		    "return step (distance (v_ScreenPos, g_TransitionCenter), p * maxRadius);\n"
 		    "}\n"
 		    "if (g_TransitionMode == 7) {\n" // vertical stripes sweeping in alternating directions
 		    "float stripe = floor (v_ScreenPos.x * 12.0);\n"
 		    "float y = mod (stripe, 2.0) < 1.0 ? v_ScreenPos.y : 1.0 - v_ScreenPos.y;\n"
-		    "return clamp ((p * (1.0 + edge) - y) / edge, 0.0, 1.0);\n"
+		    "return step (y, p);\n"
 		    "}\n"
 		    "if (g_TransitionMode == 8) {\n" // pixelate: grid cells dissolve in pseudo-random order
 		    "vec2 cell = floor (v_ScreenPos * vec2 (48.0, 27.0));\n"
 		    "float order = fract (sin (dot (cell, vec2 (12.9898, 78.233))) * 43758.5453);\n"
-		    "return clamp ((p * (1.0 + edge) - order) / edge, 0.0, 1.0);\n"
+		    "return step (order, p);\n"
 		    "}\n"
 		    "if (g_TransitionMode == 9) {\n" // honeycomb: hexagonal cells pop in, ordered by a hash
 		    "vec2 uv = v_ScreenPos * vec2 (16.0, 9.0);\n"
@@ -152,7 +168,57 @@ void CWallpaper::setupShaders () {
 		    "float order = fract (sin (dot (id, vec2 (12.9898, 78.233))) * 43758.5453);\n"
 		    // cells grow from their center: inner distance delays the reveal slightly
 		    "float inner = length (offset) * 0.35;\n"
-		    "return clamp ((p * (1.35 + edge) - order - inner) / edge, 0.0, 1.0);\n"
+		    "return step (order + inner, p * 1.35);\n"
+		    "}\n"
+		    "if (g_TransitionMode == 10) return step ((v_ScreenPos.x + v_ScreenPos.y) * 0.5, p);\n" // diagonal wipe
+		    "if (g_TransitionMode == 11) {\n" // clock: radial sweep around the center
+		    "vec2 d = v_ScreenPos - vec2 (0.5);\n"
+		    "return step (atan (d.x, -d.y) / 6.28318530718 + 0.5, p);\n"
+		    "}\n"
+		    "if (g_TransitionMode == 12) {\n" // iris: diamond growing from a per-switch origin
+		    "vec2 d = abs (v_ScreenPos - g_TransitionCenter);\n"
+		    "float maxDist = max (g_TransitionCenter.x, 1.0 - g_TransitionCenter.x)\n"
+		    "+ max (g_TransitionCenter.y, 1.0 - g_TransitionCenter.y);\n"
+		    "return step (d.x + d.y, p * maxDist);\n"
+		    "}\n"
+		    "if (g_TransitionMode == 13) {\n" // checkerboard: alternating cells wipe in two waves
+		    "vec2 cell = floor (v_ScreenPos * vec2 (8.0, 4.0));\n"
+		    "float parity = mod (cell.x + cell.y, 2.0);\n"
+		    "return step ((fract (v_ScreenPos.x * 8.0) + parity) * 0.5, p);\n"
+		    "}\n"
+		    "if (g_TransitionMode == 14) return step (fract (v_ScreenPos.y * 12.0), p);\n" // horizontal blinds
+		    "if (g_TransitionMode == 15) return step (abs (v_ScreenPos.x - 0.5) * 2.0, p);\n" // split from center outward
+		    "if (g_TransitionMode == 16) {\n" // voronoi: irregular shards pop in random order
+		    "vec2 uv = v_ScreenPos * vec2 (12.0, 6.75);\n"
+		    "vec2 base = floor (uv);\n"
+		    "float best = 1e9;\n"
+		    "vec2 bestId = vec2 (0.0);\n"
+		    "for (int yo = -1; yo <= 1; yo++) {\n"
+		    "for (int xo = -1; xo <= 1; xo++) {\n"
+		    "vec2 cell = base + vec2 (float (xo), float (yo));\n"
+		    "vec2 delta = uv - cell - hash22 (cell);\n"
+		    "float dist = dot (delta, delta);\n"
+		    "if (dist < best) { best = dist; bestId = cell; }\n"
+		    "}\n"
+		    "}\n"
+		    "return step (hash21 (bestId), p);\n"
+		    "}\n"
+		    "if (g_TransitionMode == 17) {\n" // noise: organic blobs dissolve in, perlin style
+		    "float n = vnoise (v_ScreenPos * vec2 (10.0, 5.6)) * 0.6\n"
+		    "+ vnoise (v_ScreenPos * vec2 (23.0, 13.0)) * 0.3\n"
+		    "+ vnoise (v_ScreenPos * vec2 (47.0, 26.0)) * 0.1;\n"
+		    // stretch the midtone-heavy fbm range so the dissolve spans the full animation
+		    "return step (clamp ((n - 0.15) * 1.4, 0.0, 0.995), p);\n"
+		    "}\n"
+		    "if (g_TransitionMode == 18) {\n" // dots: polka dots grow along a diagonal curtain
+		    "float sweep = (v_ScreenPos.x + v_ScreenPos.y) * 0.5;\n"
+		    "float radius = clamp ((p * 1.6 - sweep) / 0.6, 0.0, 1.0) * 0.75;\n"
+		    "return step (distance (fract (v_ScreenPos * vec2 (20.0, 11.25)), vec2 (0.5)), radius);\n"
+		    "}\n"
+		    "if (g_TransitionMode == 19) {\n" // ink splash: wobbly-edged blob from a per-switch origin
+		    "float maxRadius = length (max (g_TransitionCenter, vec2 (1.0) - g_TransitionCenter));\n"
+		    "float wobble = vnoise (v_ScreenPos * 9.0) - 0.5;\n"
+		    "return step (distance (v_ScreenPos, g_TransitionCenter) * (1.0 + wobble * 0.7), p * maxRadius * 1.4);\n"
 		    "}\n"
 		    "return 1.0;\n"
 		    "}\n"
@@ -222,15 +288,17 @@ void CWallpaper::setupShaders () {
     this->g_Texture0 = glGetUniformLocation (this->m_shader, "g_Texture0");
     this->g_TransitionMode = glGetUniformLocation (this->m_shader, "g_TransitionMode");
     this->g_TransitionProgress = glGetUniformLocation (this->m_shader, "g_TransitionProgress");
+    this->g_TransitionCenter = glGetUniformLocation (this->m_shader, "g_TransitionCenter");
     this->a_Position = glGetAttribLocation (this->m_shader, "a_Position");
     this->a_TexCoord = glGetAttribLocation (this->m_shader, "a_TexCoord");
 }
 
 void CWallpaper::setDestinationFramebuffer (GLuint framebuffer) { this->m_destFramebuffer = framebuffer; }
 
-void CWallpaper::setTransition (const TransitionMode mode, const float progress) {
+void CWallpaper::setTransition (const TransitionMode mode, const float progress, const glm::vec2 center) {
     this->m_transitionMode = mode;
     this->m_transitionProgress = progress;
+    this->m_transitionCenter = center;
 }
 
 void CWallpaper::setSpanInfo (const SpanInfo& spanInfo) { this->m_spanInfo = spanInfo; }
@@ -361,6 +429,7 @@ void CWallpaper::render (
     glUniform1i (this->g_Texture0, 0);
     glUniform1i (this->g_TransitionMode, transitionActive ? this->m_transitionMode : TransitionMode_None);
     glUniform1f (this->g_TransitionProgress, this->m_transitionProgress);
+    glUniform2f (this->g_TransitionCenter, this->m_transitionCenter.x, this->m_transitionCenter.y);
     // write the framebuffer as is to the screen
     glBindBuffer (GL_ARRAY_BUFFER, this->m_texCoordBuffer);
     glDrawArrays (GL_TRIANGLES, 0, 6);
