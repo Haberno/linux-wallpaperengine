@@ -27,9 +27,34 @@ void RenderContext::render (Drivers::Output::OutputViewport* viewport) {
 
     // render the background
     if (const auto ref = this->m_wallpapers.find (viewport->name); ref != this->m_wallpapers.end ()) {
+	// transition: draw the outgoing wallpaper first, then reveal the new one on top
+	if (const auto transition = this->m_transitions.find (viewport->name);
+	    transition != this->m_transitions.end ()) {
+	    // start the clock on the first rendered frame, not when the wallpaper was
+	    // installed - loading the scene blocks the render loop long enough that the
+	    // animation window would otherwise expire before a single frame is drawn
+	    if (transition->second.startTime < 0.0f) {
+		transition->second.startTime = this->m_driver.getRenderTime ();
+	    }
+
+	    const float elapsed = this->m_driver.getRenderTime () - transition->second.startTime;
+	    const float progress = elapsed / TRANSITION_DURATION;
+
+	    if (progress >= 1.0f) {
+		this->m_transitions.erase (transition);
+	    } else {
+		transition->second.from->render (
+		    viewport->viewport, this->getOutput ().renderVFlip (), viewport->globalPosition,
+		    viewport->logicalSize
+		);
+		ref->second->setTransition (transition->second.mode, progress);
+	    }
+	}
+
 	ref->second->render (
 	    viewport->viewport, this->getOutput ().renderVFlip (), viewport->globalPosition, viewport->logicalSize
 	);
+	ref->second->setTransition (TransitionMode_None, 1.0f);
     }
 
 #if !NDEBUG
@@ -39,8 +64,32 @@ void RenderContext::render (Drivers::Output::OutputViewport* viewport) {
     viewport->swapOutput ();
 }
 
-void RenderContext::setWallpaper (const std::string& display, std::shared_ptr<CWallpaper> wallpaper) {
+void RenderContext::setWallpaper (
+    const std::string& display, std::shared_ptr<CWallpaper> wallpaper, std::shared_ptr<void> keepAlive,
+    const TransitionMode transition
+) {
     wallpaper->setDestinationFramebuffer (this->m_app.getDestinationFramebuffer ());
+
+    // keep the previous wallpaper (and its backing data) alive and animate into the new one,
+    // but only when the caller provided the keep-alive - without it the outgoing wallpaper's
+    // Project may already be destroyed and rendering it would use dangling references
+    if (keepAlive != nullptr && transition != TransitionMode_None) {
+	if (const auto previous = this->m_wallpapers.find (display); previous != this->m_wallpapers.end ()) {
+	    // startTime is stamped on the first rendered frame (see render above)
+	    this->m_transitions.insert_or_assign (
+		display,
+		Transition {
+		    .from = previous->second,
+		    .keepAlive = std::move (keepAlive),
+		    .mode = transition,
+		    .startTime = -1.0f,
+		}
+	    );
+	}
+    } else {
+	this->m_transitions.erase (display);
+    }
+
     this->m_wallpapers.insert_or_assign (display, wallpaper);
 }
 

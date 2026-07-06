@@ -11,6 +11,7 @@
 #include "WallpaperEngine/Render/Drivers/Output/Output.h"
 #include "WallpaperEngine/Render/Drivers/Output/OutputViewport.h"
 #include "WallpaperEngine/Render/Drivers/VideoDriver.h"
+#include "WallpaperEngine/Render/TransitionMode.h"
 
 namespace WallpaperEngine {
 namespace Application {
@@ -38,7 +39,17 @@ namespace Render {
 	RenderContext (Drivers::VideoDriver& driver, WallpaperApplication& app, Media::MediaSource& mediaSource);
 
 	void render (Drivers::Output::OutputViewport* viewport);
-	void setWallpaper (const std::string& display, std::shared_ptr<CWallpaper> wallpaper);
+	/**
+	 * @param keepAlive resources the outgoing wallpaper still references (e.g. its
+	 *		    Project); held until the transition finishes. Without it the
+	 *		    wallpaper is swapped instantly.
+	 * @param transition how to reveal the new wallpaper over the old one
+	 */
+	void setWallpaper (
+	    const std::string& display, std::shared_ptr<CWallpaper> wallpaper,
+	    std::shared_ptr<void> keepAlive = nullptr,
+	    TransitionMode transition = TransitionMode_Fade
+	);
 	void setPause (bool newState) const;
 	[[nodiscard]] Input::InputContext& getInputContext () const;
 	[[nodiscard]] const WallpaperApplication& getApp () const;
@@ -49,10 +60,24 @@ namespace Render {
 	[[nodiscard]] Media::MediaSource& getMediaSource () const;
 
     private:
+	/** Crossfade between the previous and the current wallpaper of a screen */
+	struct Transition {
+	    std::shared_ptr<CWallpaper> from;
+	    /** Keeps the outgoing wallpaper's backing data (Project) alive during the animation */
+	    std::shared_ptr<void> keepAlive;
+	    TransitionMode mode;
+	    float startTime;
+	};
+
+	/** How long a wallpaper switch crossfade lasts, in seconds */
+	static constexpr float TRANSITION_DURATION = 1.0f;
+
 	/** Video driver in use */
 	Drivers::VideoDriver& m_driver;
 	/** Maps screen -> wallpaper list */
 	std::map<std::string, std::shared_ptr<CWallpaper>> m_wallpapers = {};
+	/** Screens with a crossfade in progress, keeping the outgoing wallpaper alive */
+	std::map<std::string, Transition> m_transitions = {};
 	/** App that holds the render context */
 	WallpaperApplication& m_app;
 	/** Source for the media playback information */
