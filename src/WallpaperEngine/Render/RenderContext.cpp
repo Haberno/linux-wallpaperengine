@@ -1,4 +1,5 @@
 #include <iostream>
+#include <random>
 
 #include <GL/glew.h>
 
@@ -47,7 +48,7 @@ void RenderContext::render (Drivers::Output::OutputViewport* viewport) {
 		    viewport->viewport, this->getOutput ().renderVFlip (), viewport->globalPosition,
 		    viewport->logicalSize
 		);
-		ref->second->setTransition (transition->second.mode, progress);
+		ref->second->setTransition (transition->second.mode, progress, transition->second.center);
 	    }
 	}
 
@@ -75,6 +76,16 @@ void RenderContext::setWallpaper (
     // Project may already be destroyed and rendering it would use dangling references
     if (keepAlive != nullptr && transition != TransitionMode_None) {
 	if (const auto previous = this->m_wallpapers.find (display); previous != this->m_wallpapers.end ()) {
+	    // point-based transitions open from a random spot on screen each switch
+	    glm::vec2 center { 0.5f, 0.5f };
+
+	    if (transition == TransitionMode_Disc || transition == TransitionMode_Iris
+		|| transition == TransitionMode_InkSplash) {
+		static std::mt19937 generator { std::random_device {} () };
+		std::uniform_real_distribution<float> position (0.1f, 0.9f);
+		center = { position (generator), position (generator) };
+	    }
+
 	    // startTime is stamped on the first rendered frame (see render above)
 	    this->m_transitions.insert_or_assign (
 		display,
@@ -83,6 +94,7 @@ void RenderContext::setWallpaper (
 		    .keepAlive = std::move (keepAlive),
 		    .mode = transition,
 		    .startTime = -1.0f,
+		    .center = center,
 		}
 	    );
 	}
