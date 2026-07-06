@@ -186,6 +186,8 @@ private:
     int m_controlSocket = -1;
     /** Path of the bound control socket so it can be unlinked on exit */
     std::string m_controlSocketPath {};
+    /** Inode of the socket file this instance bound; exit only unlinks the path while it still matches */
+    ino_t m_controlSocketInode = 0;
     /** Maps screens to backgrounds */
     std::map<std::string, ProjectUniquePtr> m_backgrounds {};
     std::map<std::string, ActivePlaylist> m_activePlaylists {};

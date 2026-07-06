@@ -1,5 +1,6 @@
 #pragma once
 
+#include <glm/vec2.hpp>
 #include <glm/vec4.hpp>
 #include <memory>
 #include <vector>
@@ -67,6 +68,8 @@ namespace Render {
 	    std::shared_ptr<void> keepAlive;
 	    TransitionMode mode;
 	    float startTime;
+	    /** Normalized origin for point-based transitions (e.g. disc), randomized per switch */
+	    glm::vec2 center;
 	};
 
 	/** How long a wallpaper switch crossfade lasts, in seconds */
