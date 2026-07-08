@@ -1,7 +1,7 @@
 #pragma once
 
 #include <libavutil/samplefmt.h>
-#include <set>
+#include <string>
 #include <vector>
 
 #include "WallpaperEngine/Application/ApplicationContext.h"
@@ -40,21 +40,22 @@ namespace Audio {
 	void removeStream (int streamId) const;
 
 	/**
-	 * Claims playback ownership of a scene sound. Screens showing the same wallpaper share
-	 * one loaded Project — and therefore the same Sound data objects — so keying by the data
-	 * address dedupes identical audio across monitors (only the first CSound plays) while
-	 * different wallpapers keep their own audio untouched.
-	 *
-	 * @param sound The Sound data object's address
-	 * @return true when the caller now owns playback, false when another screen already does
+	 * Soundtrack coordinator: at most one wallpaper's audio is audible at a time across any
+	 * number of monitors. Sound objects register under a wallpaper key (value-based, so the
+	 * same wallpaper on several screens shares it) plus a per-sound key (so a wallpaper with
+	 * several authored Sound objects plays all of them together, deduped per screen). One
+	 * wallpaper is active at a time; advanceActiveSound() rotates round-robin through the
+	 * distinct wallpapers — the active CSound calls it when its track finishes a full pass.
 	 */
-	bool claimSound (const void* sound);
-	/**
-	 * Releases a claim made by claimSound (call only when the claim succeeded).
-	 *
-	 * @param sound The Sound data object's address
-	 */
-	void releaseSound (const void* sound);
+	void registerSoundCandidate (const std::string& wallpaper, const std::string& sound, const void* instance);
+	void unregisterSoundCandidate (const std::string& wallpaper, const std::string& sound, const void* instance);
+	/** @return true when this instance is the one that should be audible for its sound right now */
+	[[nodiscard]] bool
+	isActiveSoundPlayer (const std::string& wallpaper, const std::string& sound, const void* instance) const;
+	/** @return how many distinct wallpapers with audio are registered */
+	[[nodiscard]] size_t distinctSoundWallpaperCount () const;
+	/** Rotate the active soundtrack to the next distinct wallpaper in registration order */
+	void advanceActiveSound ();
 
 	/**
 	 * TODO: MAYBE THIS SHOULD BE OUR OWN DEFINITIONS INSTEAD OF LIBRARY SPECIFIC ONES?
@@ -85,10 +86,19 @@ namespace Audio {
 	[[nodiscard]] Drivers::AudioDriver& getDriver () const;
 
     private:
+	/** One registered CSound instance, in registration order */
+	struct SoundCandidate {
+	    std::string wallpaper;
+	    std::string sound;
+	    const void* instance;
+	};
+
 	/** The audio driver in use */
 	Drivers::AudioDriver& m_driver;
-	/** Sound data objects currently owned by a playing CSound, see claimSound */
-	std::set<const void*> m_claimedSounds = {};
+	/** Registered wallpaper sounds, see registerSoundCandidate */
+	std::vector<SoundCandidate> m_soundCandidates = {};
+	/** The wallpaper whose sounds are currently audible; empty = none */
+	std::string m_activeSoundWallpaper;
     };
 } // namespace Audio
 } // namespace WallpaperEngine

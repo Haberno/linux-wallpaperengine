@@ -33,6 +33,8 @@ int audio_read_thread (void* arg) {
 	ret = av_read_frame (stream->getFormatContext (), packet);
 
 	if (ret == AVERROR_EOF) {
+	    // a full pass finished — the playback coordinator uses this to rotate soundtracks
+	    stream->notifyCompletion ();
 	    // seek to the beginning of the file again
 	    avformat_seek_file (stream->getFormatContext (), stream->getAudioStream (), 0, 0, 0, ~AVSEEK_FLAG_FRAME);
 	    avcodec_flush_buffers (stream->getContext ());
