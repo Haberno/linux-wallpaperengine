@@ -18,20 +18,24 @@ timestamp: 2026-07-06T20:00:00-04:00
   ported beingsuz's `af82084` — `~ScriptEngine` leaked the album-art listener
   (captures `this`), so any track change after a wallpaper swap called through
   a dangling pointer. Pending verification.
-- **MyGO clock text invisible** (3558034522): `CText`'s 2D path ignores the
-  `parent` chain — the "Date" (352) and "Clock" (360) text objects are
-  children of 341 with relative origins (0,-83)/(0,-128) and render
-  off-screen bottom-left. Additionally CText only ticks the *text* script,
-  never the *origin* script (341 positions itself via an
-  `engine.canvasSize`-based script). Fix: route the 2D path through
-  `CObject::resolveWorldMatrix` and register origin scripts. Parent
-  visibility should cascade to children at the same time (children have no
-  own `visible`; parent's is `{user: clock}`).
+- **MyGO clock text invisible** (3558034522): *fixed 2026-07-08, pending
+  visual verification.* Three commits: 2D text path now composes the
+  `parent` chain via `resolveWorldMatrix` (8cc5ad2), parent visibility
+  cascades to image/text children (8123d17), and text rasterizes UTF-8
+  codepoints instead of bytes (d8173ee — fixes the CJK watermark mojibake).
+  Correction to the original analysis: origin scripts already ticked —
+  `ScriptableObject::registerProperty` → `ScriptEngine::queueScript` wraps
+  and runs property scripts every frame (`engine.canvasSize` is exposed), so
+  only the parent-chain and cascade pieces were real bugs.
 - **MyGO audio bars invisible** (3558034522): object 415 "Audio bar"
   (composelayer + `Simple_Audio_Bars` effect, combos ANTIALIAS/CLIP_HIGH/
-  RESOLUTION=64, `g_AudioSpectrum64*` uniforms — CPass binds these). Root
-  cause not yet confirmed; needs a log run to check for shader-translation
-  or setup failure on the effect.
+  RESOLUTION=64, `g_AudioSpectrum64*` uniforms — CPass binds these
+  unconditionally, so silent/zero recorder buffers render zero-height bars,
+  i.e. invisible). Static analysis 2026-07-08 found no shader-side smoking
+  gun; suspects are the PulseAudio default-sink monitor resolution (PipeWire)
+  or an effect setup failure. Diagnosis run:
+  `./build/output/linux-wallpaperengine --window 100x100x960x540 --fps 30 --render-debug pass-log 3558034522 2>&1 | rg -i "error|fail|audio"`
+  with music playing.
 - **MyGO eyelid skin missing on blink** (3558034522): the eyelid "skin" is
   driven by the clipping-mask system (second vertex array + per-bone index
   ranges + `masks/clipping_mask_*` refs between MDLV and MDLS) that we don't
