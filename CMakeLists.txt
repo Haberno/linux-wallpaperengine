@@ -539,6 +539,8 @@ set(COMMON_SOURCES
     src/WallpaperEngine/Scripting/Modules/ColorModule.cpp
     src/WallpaperEngine/Scripting/Modules/MathModule.h
     src/WallpaperEngine/Scripting/Modules/MathModule.cpp
+    src/WallpaperEngine/Scripting/Modules/VectorModule.h
+    src/WallpaperEngine/Scripting/Modules/VectorModule.cpp
     src/WallpaperEngine/Scripting/Modules/ScriptModule.h
     src/WallpaperEngine/Scripting/Modules/ScriptModule.cpp
 
