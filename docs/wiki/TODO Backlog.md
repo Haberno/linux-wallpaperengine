@@ -27,11 +27,11 @@ over-engineering audit, and an in-code TODO/FIXME scan. Ordered by priority.
    UTF-8 codepoint decoding + `Testing/Cases/Utf8Text.cpp`. CJK font
    *fallback* (fonts lacking the glyphs show .notdef boxes) remains a P2
    nicety.
-5. **MyGO audio bars invisible — root cause unconfirmed.** CPass binds
-   `g_AudioSpectrum64*` unconditionally, so a silent recorder renders
-   zero-height (invisible) bars; suspects are PipeWire monitor-source
-   resolution or effect setup failure. Needs the diagnosis run in
-   [[Known Issues]]. → [[Debugging Workflow]].
+5. ~~MyGO audio bars invisible~~ — **fixed 2026-07-08** in two stages:
+   capture drain (998386a — one fragment/frame was slower than realtime) and
+   band normalization (5b548f4 — clamped log-power saturated every bar;
+   now auto-gained linear magnitudes + noise gate). Pending final user
+   confirmation of bar dynamics.
 6. **Verify the media-update segfault fix** — the ported album-art listener
    deregistration (af82084) very likely fixes the Gojo (3100265648)
    track-change crash. Play music, swap wallpapers, change tracks. If it
@@ -92,7 +92,10 @@ over-engineering audit, and an in-code TODO/FIXME scan. Ordered by priority.
 22. **Control-socket extras** — live screenshot command (a83347a), live
     renderscale/audiodevice apply (53c...), in-process rebuild on any
     bool/combo property change (61d3528) — reconcile with our own socket
-    protocol (switching + transitions).
+    protocol (switching + transitions). *Partial 2026-07-08*: `prop <screen>
+    <key> <value>` sets a property live + fires applyUserProperties
+    (29b0e1e); structural rebuilds still missing. Also still open:
+    `--audio-device` capture-source override (their recorder device param).
 23. **Cold-build optimizations** for faster wallpaper switches (739e9c6) —
     complements our transition system.
 24. **Web/CEF fixes batch** (1150c42, c700c2f, ed032bb, e4ca729, 0d127f9) —

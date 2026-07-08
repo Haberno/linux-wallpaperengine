@@ -4,20 +4,15 @@ title: Known Issues
 description: Open bugs, deferred rendering features, and house rules for the linux-wallpaperengine fork.
 resource: file:///home/admin/repos/linux-wallpaperengine
 tags: [linux-wallpaperengine, bugs, deferred-work, rendering]
-timestamp: 2026-07-06T20:00:00-04:00
+timestamp: 2026-07-08T13:30:00-04:00
 ---
 
 # Known Issues
 
+For the live consolidated dashboard (open issues + parity gaps + verification
+queue), see [[Current Status]]. This page keeps the durable issue records.
+
 ## Open bugs
-- **Audio capture overruns** (open, evidence 2026-07-08): pipewire-pulse logs
-  `[wallpaperengine-audioprocessing] overrun recover ... skip:~50k` every
-  ~1.5s — the engine drains the monitor stream far slower than realtime, so
-  visualizer data skips/stalls. Likely related to invisible/erratic audio
-  bars (MyGO 3558034522). Suspect the read path in
-  `PulseAudioPlaybackRecorder` (drain rate vs fragment size). The 11:18
-  crash cascade also coincided with an AirPods default-sink switch — sink
-  hot-swap needs testing once the drain issue is fixed.
 - **Media-update segfault** (pre-existing): a D-Bus album-art/track change
   fires `ScriptEngine::notifyMediaUpdate` → crash in the QuickJS
   `ObjectAdapter::instantiate` / `VectorAdapter<3>::instantiate` path.
@@ -25,34 +20,7 @@ timestamp: 2026-07-06T20:00:00-04:00
   captured 2026-07-06). Rendering-independent. *Possibly fixed 2026-07-08*:
   ported beingsuz's `af82084` — `~ScriptEngine` leaked the album-art listener
   (captures `this`), so any track change after a wallpaper swap called through
-  a dangling pointer. Pending verification.
-- **MyGO clock text invisible** (3558034522): *fixed 2026-07-08, pending
-  visual verification.* Four commits: 2D text path now composes the
-  `parent` chain via `resolveWorldMatrix` (8cc5ad2), parent visibility
-  cascades to image/text children (8123d17), text rasterizes UTF-8
-  codepoints instead of bytes (d8173ee — fixes the CJK watermark mojibake),
-  and text sizes at WE's true semantics (f9aa10c): pointsize is **points at
-  300 DPI** (EM = pointsize × 300/72 px — mined from the Windows install's
-  `lib.sceneScript.d.ts`), with own+parent scale applied by the world matrix
-  instead of the old compensate hack that cancelled it.
-  Follow-up: scene coordinates are **y-up (bottom-left origin)** — the old
-  2D text path (and its "y-down" comment) had it inverted, which mirrored
-  the stack to the wrong screen height and reversed the day/date/time order;
-  text now maps through CImage's (x−w/2, h/2−y) convention with the quad
-  re-mirrored to stay upright.
-  Correction to the original analysis: origin scripts already ticked —
-  `ScriptableObject::registerProperty` → `ScriptEngine::queueScript` wraps
-  and runs property scripts every frame (`engine.canvasSize` is exposed), so
-  only the parent-chain and cascade pieces were real bugs.
-- **MyGO audio bars invisible** (3558034522): object 415 "Audio bar"
-  (composelayer + `Simple_Audio_Bars` effect, combos ANTIALIAS/CLIP_HIGH/
-  RESOLUTION=64, `g_AudioSpectrum64*` uniforms — CPass binds these
-  unconditionally, so silent/zero recorder buffers render zero-height bars,
-  i.e. invisible). Static analysis 2026-07-08 found no shader-side smoking
-  gun; suspects are the PulseAudio default-sink monitor resolution (PipeWire)
-  or an effect setup failure. Diagnosis run:
-  `./build/output/linux-wallpaperengine --window 100x100x960x540 --fps 30 --render-debug pass-log 3558034522 2>&1 | rg -i "error|fail|audio"`
-  with music playing.
+  a dangling pointer. Needs days of real track-change use to confirm.
 - **MyGO eyelid skin missing on blink** (3558034522): the eyelid "skin" is
   driven by the clipping-mask system (second vertex array + per-bone index
   ranges + `masks/clipping_mask_*` refs between MDLV and MDLS) that we don't
@@ -60,13 +28,40 @@ timestamp: 2026-07-06T20:00:00-04:00
   Data is decoded and understood — see [[MDL File Format]] — implementation
   deferred.
 
-## Fixed 2026-07-08 (parse robustness)
-- **Type-drift parse abort** (honeycomb 3758354038): text `padding` authored
-  as a `"32.00000 32.00000"` string; `JsonExtensions::optional<T>` was
-  `noexcept` while nlohmann's conversion throws → `std::terminate` killed the
-  engine on load/switch. Fixed (7dbce65): optionals log + default on
-  mismatched types, matching WE's JsonCpp tolerance. Regression test:
-  `Testing/Cases/JsonTolerance.cpp`.
+## Fixed 2026-07-08 (verified unless noted)
+- **MyGO clock stack invisible/mispositioned** (3558034522) — four root
+  causes, all in CText: 2D path ignored the `parent` chain (8cc5ad2), parent
+  visibility didn't cascade (8123d17), UTF-8 rasterized per byte → mojibake
+  (d8173ee), and sizing missed WE's semantics — pointsize is **points at 300
+  DPI** (EM = pointsize × 300/72 px, mined from `lib.sceneScript.d.ts`), with
+  scale applied via the world matrix (f9aa10c). Position/order needed the
+  follow-up y-axis fix: **scene coordinates are y-up (bottom-left origin)**
+  (628b698) — the old path assumed y-down. User-verified on screen.
+- **Multi-line text + alignment + padding** (50a82c4) and **text effect
+  chains + brightness** (9c66ad2, regressions fixed in 0f3ced8: leaked
+  glClearColor blanked scenes; box-clipping cut overflowing text).
+- **Type-drift parse abort** (honeycomb 3758354038): `optional<T>` was
+  `noexcept` over a throwing conversion → `std::terminate` on authored type
+  drift (string `padding`). Fixed 7dbce65 + `Testing/Cases/JsonTolerance.cpp`.
+- **Audio capture overruns**: update() dispatched one ~10ms fragment per
+  frame — structurally slower than realtime; pipewire spammed
+  `overrun recover`. Fixed by draining the event queue per frame (998386a).
+- **Wallpaper music silent**: automute counted corked/silent streams
+  (skwd-paper's keep-alive, paused players) as "audio playing" and muted
+  forever (b52091d requires uncorked+unmuted); the machine's wrapper also
+  passes `--noautomute` now since skwd-paper's stream defeats detection.
+  User-verified.
+- **Same wallpaper on two monitors echoed its music**: per-screen Projects
+  meant address-based dedupe failed; replaced with a value-keyed soundtrack
+  coordinator in AudioContext (a1693e7) — one wallpaper's audio at a time,
+  round-robin rotation at end-of-track across wallpapers with music,
+  duplicates silent, migration on switch-away.
+- **Visualizer bars saturated** (flicker-only response): band reduction was
+  `0.35·log10(mag²)` clamped to 1 — real music pegged nearly every bar.
+  Replaced with linear magnitudes + slow-decay auto-gain + sqrt shaping +
+  noise gate (5b548f4). `WPE_AUDIO_GATE` / `WPE_AUDIO_DEBUG=1`
+  (→ `/tmp/we-audio-debug.log`). *Pending final user confirmation of
+  bar dynamics.*
 
 ## Deferred / not implemented
 - Puppet bone constraint JSON (`"tp"`/`"tm"`) — mouse-interactive puppets.
@@ -77,14 +72,15 @@ timestamp: 2026-07-06T20:00:00-04:00
   smoothing has no ease-in (snaps to full filter speed on direction change),
   unlike WE's likely damped-spring feel. Needs a reference wallpaper
   recording to calibrate against → [[Parallax System]].
-- `parseMdlvHeader` strict path never matches real files (docs' original
-  layout was wrong); every load takes the scan fallback and logs an error —
-  cosmetic, could drop the strict path or fix its offsets.
 - Puppet effect chain: `clampuvs`, `copybackground`, and the `solid` flag are
   unhandled on puppet objects.
 
 ## House rules (from memory)
 - No grim/PNG-diff verification of live output — ask the user; engine
   `--screenshot` on isolated windows is OK for debugging.
-- Data-driven rendering: no magic numbers; derive from scene.json/assets.
+- Claude never launches the engine (or any window-creating process) itself —
+  give the user the command instead.
+- Data-driven rendering: no magic numbers; derive from scene.json/assets or
+  the mined WE reference ([[WE Reference Mining]]); DSP constants get a
+  `ponytail:` tuning note.
 - Watch for stale engine instances after rebuilds → [[Debugging Workflow]].
