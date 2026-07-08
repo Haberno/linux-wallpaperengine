@@ -310,6 +310,10 @@ ScriptEngine::ScriptEngine (Wallpapers::CScene& scene, Media::MediaSource& media
 
 ScriptEngine::~ScriptEngine () {
     this->m_unregisterMediaUpdateCallback ();
+    // also drop the album-art listener: it captures `this`, and scenes are destroyed and recreated
+    // on every in-process wallpaper rebuild — a leaked registration turns the next album-art update
+    // into a call through a dangling pointer
+    this->m_unregisterAlbumArtUpdateCallback ();
 
     for (const auto& module : this->m_scriptModules | std::views::values) {
 	JS_FreeValue (this->m_context, module.module);
