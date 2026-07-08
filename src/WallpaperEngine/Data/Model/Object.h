@@ -27,8 +27,10 @@ struct ObjectData {
     std::optional<int> parent;
     /** The point of origin of the object */
     UserSettingUniquePtr origin;
-    /** Whether the object's transform is locked, which also excludes it from camera parallax */
+    /** Whether the object's transform is locked in the editor UI (no effect on rendering) */
     bool locktransforms;
+    /** Parallax depth as authored; unset means inherit from the parent chain (1 at the root) */
+    std::optional<glm::vec2> authoredParallaxDepth;
     /** Transform fields for generic scene/group objects. Typed objects keep their own transform fields. */
     UserSettingUniquePtr groupScale;
     UserSettingUniquePtr groupAngles;
