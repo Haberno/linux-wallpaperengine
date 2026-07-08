@@ -10,6 +10,10 @@ Open Knowledge Format bundle for rendering work on the local linux-wallpaperengi
 * [Parallax System](Parallax%20System.md) - depth resolution, mouse displacement, and authored layer behavior.
 * [Shader Translation](Shader%20Translation.md) - HLSL-flavored GLSL translation and `v_TexCoord` compatibility.
 
+# Status
+
+* [Current Status](Current%20Status.md) - **start here**: live dashboard of open issues, parity gaps, and the verification queue.
+
 # Reference And Workflow
 
 * [WE Reference Mining](WE%20Reference%20Mining.md) - mining the Windows Wallpaper Engine binaries/assets for parity: generated shaders, combos, uniforms, SceneScript API.

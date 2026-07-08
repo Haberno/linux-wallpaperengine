@@ -4,7 +4,7 @@ title: Wallpaper Case Studies
 description: Workshop wallpapers that drove rendering fixes and serve as regression cases.
 resource: file:///home/admin/.steam/root/steamapps/workshop/content/431960
 tags: [linux-wallpaperengine, regression, workshop, test-cases]
-timestamp: 2026-07-06T20:00:00-04:00
+timestamp: 2026-07-08T13:30:00-04:00
 ---
 
 # Wallpaper Case Studies
@@ -23,7 +23,21 @@ Workshop wallpapers that drove fixes; useful as a regression suite.
 - Drove: **cull-face disable** (eyes vanished — cullmode normal + Y-flip
   winding), **fps fix** (blink was 4× too slow when float read as duration),
   **parallax depth inheritance** (character parts inherit parent's depth 0).
+- 2026-07-08, clock/date/watermark text objects drove the CText overhaul:
+  **parent-chain composition in the 2D path**, **parent visibility cascade**,
+  **UTF-8 codepoint rasterization**, **pointsize = points at 300 DPI**,
+  **scene y-up mapping** (day/date/time order + screen height), multi-line
+  layout, and text effect chains (blurprecise glow). Its "Audio bar" object
+  drove the capture drain + band auto-gain fixes.
 - Still open: eyelid skin uses the clipping-mask system → [[Known Issues]].
+
+## 3758354038 — honeycomb clock hub
+- Text-heavy scene (5 clock/date/day font variants switched by user-property
+  conditions), scale scripts on every text layer, vector-string `padding`.
+- Drove: **JSON type-drift tolerance** (`optional<T>` was noexcept over a
+  throwing conversion — one string-typed `padding` aborted the engine) and
+  the vec2 padding parse. Good regression case for text layout +
+  user-property visibility conditions.
 
 ## 3135984503 — One Piece (Luffy & Zoro)
 - MDLV0017, Luffy 25 bones/1 anim, Zoro 31 bones/2 anims.
