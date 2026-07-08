@@ -27,6 +27,11 @@ timestamp: 2026-07-06T20:00:00-04:00
   300 DPI** (EM = pointsize × 300/72 px — mined from the Windows install's
   `lib.sceneScript.d.ts`), with own+parent scale applied by the world matrix
   instead of the old compensate hack that cancelled it.
+  Follow-up: scene coordinates are **y-up (bottom-left origin)** — the old
+  2D text path (and its "y-down" comment) had it inverted, which mirrored
+  the stack to the wrong screen height and reversed the day/date/time order;
+  text now maps through CImage's (x−w/2, h/2−y) convention with the quad
+  re-mirrored to stay upright.
   Correction to the original analysis: origin scripts already ticked —
   `ScriptableObject::registerProperty` → `ScriptEngine::queueScript` wraps
   and runs property scripts every frame (`engine.canvasSize` is exposed), so

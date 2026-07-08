@@ -454,11 +454,6 @@ void CText::render () {
     const glm::vec4 color = m_text.color->value->getVec4 ();
     const float alpha = m_text.alpha->value->getFloat ();
 
-    // WE uses a Y-down coordinate system (origin at top-left, y increases downward).
-    // The final FBO is presented to screen with vflip=true on Wayland/GLFW, which maps
-    // GL y- to screen top and GL y+ to screen bottom. This effectively inverts Y again,
-    // so we need: gl_y = origin.y - scene_h/2  (not the CImage-style scene_h/2 - origin.y).
-    // CImage pre-compensates for X11 (no vflip) and gets corrected by the Wayland vflip.
     // 3D scenes: no screen-space centering or parallax; the world matrix carries the
     // transform chain (origin, parents, text scale)
     if (getScene ().getScene ().camera.projection.isPerspective) {
@@ -492,19 +487,20 @@ void CText::render () {
 	return;
     }
 
-    // CText renders with direct vflip-aware coordinates.
     const float scene_w = getScene ().getCamera ().getWidth ();
     const float scene_h = getScene ().getCamera ().getHeight ();
-    // Scene-space placement composed through the parent chain: clock/date texts are commonly
-    // children of a positioning container (e.g. MyGO 3558034522's "Clock"/"Date" under object
-    // 341), so raw origins are parent-relative and rendered them off-screen before. The world
-    // matrix carries origin, parent transforms and the text scale; both WE authoring and this
-    // path's vflip-aware convention are y-down, so the composition transfers unchanged and the
-    // shift below just recenters WE's top-left origin onto the GL center.
-    glm::vec3 gl_shift = { -scene_w * 0.5f, -scene_h * 0.5f, 0.0f };
 
-    // camera parallax translation, same convention as CImage but with y following
-    // this renderer's vflip-aware coordinates; locktransforms is only an editor-UI lock
+    // Scene coordinates are y-up (bottom-left origin) — the same convention CImage maps with
+    // (x - w/2, h/2 - y) before the Wayland/GLFW vflip corrects the presentation on screen.
+    // Mirror the composed world transform (origin, parent chain, text scale — via
+    // resolveWorldMatrix) into that convention, then re-mirror the quad around its own center
+    // so the glyph texture stays upright. Verified against MyGO 3558034522: the clock stack
+    // sits at 0.93 of the canvas height (near the top) and its Date/Clock children hang at
+    // negative offsets (below the container): day line, then date, then time.
+    glm::vec3 parallaxShift = { 0.0f, 0.0f, 0.0f };
+
+    // camera parallax translation in the mapped screen space, same signs as CImage's
+    // updateScreenSpacePosition; locktransforms is only an editor-UI lock
     if (getScene ().getScene ().camera.parallax.enabled->value->getBool ()
 	&& !getScene ().getContext ().getApp ().getContext ().settings.mouse.disableparallax) {
 	const float amount = getScene ().getScene ().camera.parallax.amount->value->getFloat ();
@@ -513,11 +509,14 @@ void CText::render () {
 	const float referenceSize
 	    = static_cast<float> (getScene ().getWidth ()) * Wallpapers::CScene::PARALLAX_TRANSLATION_SPAN;
 
-	gl_shift.x += -depth.x * amount * displacement->x * referenceSize;
-	gl_shift.y -= depth.y * amount * displacement->y * referenceSize;
+	parallaxShift.x = -depth.x * amount * displacement->x * referenceSize;
+	parallaxShift.y = depth.y * amount * displacement->y * referenceSize;
     }
 
-    const glm::mat4 model = glm::translate (glm::mat4 (1.0f), gl_shift) * this->resolveWorldMatrix ();
+    const glm::mat4 model = glm::translate (glm::mat4 (1.0f), parallaxShift)
+	* glm::scale (glm::mat4 (1.0f), glm::vec3 (1.0f, -1.0f, 1.0f))
+	* glm::translate (glm::mat4 (1.0f), glm::vec3 (-scene_w * 0.5f, -scene_h * 0.5f, 0.0f))
+	* this->resolveWorldMatrix () * glm::scale (glm::mat4 (1.0f), glm::vec3 (1.0f, -1.0f, 1.0f));
 
     const glm::mat4 mvp = getScene ().getCamera ().getProjection () * getScene ().getCamera ().getLookAt () * model;
 
