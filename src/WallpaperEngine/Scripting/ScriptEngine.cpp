@@ -755,6 +755,26 @@ void ScriptEngine::queueScript (const std::string& key, DynamicValue& currentVal
     }
 }
 
+std::string ScriptEngine::getRunningModuleWorkshopId () const {
+    if (this->m_runningModule == nullptr || this->m_context == nullptr) {
+	return "";
+    }
+
+    JSValue wid = JS_GetPropertyStr (this->m_context, this->m_runningModule->module, "__workshopId");
+    std::string result;
+
+    if (JS_IsString (wid)) {
+	const char* str = JS_ToCString (this->m_context, wid);
+	if (str != nullptr) {
+	    result = str;
+	    JS_FreeCString (this->m_context, str);
+	}
+    }
+
+    JS_FreeValue (this->m_context, wid);
+    return result;
+}
+
 void ScriptEngine::tick () {
     // run intervals
     this->m_engineObject->tick ();

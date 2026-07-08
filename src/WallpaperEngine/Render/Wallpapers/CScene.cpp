@@ -526,3 +526,109 @@ const CObject* CScene::getObject (int id) const {
     const auto object = this->m_objects.find (id);
     return object == this->m_objects.end () ? nullptr : object->second;
 }
+
+Render::CObject* CScene::createLayer (const std::string& modelPath, const std::string& workshopId) {
+    // Resolve the asset path: scripts reference bar models by their bare workshop-relative path
+    // (e.g. "models/full-pixel.json"), but the packaged asset lives under the script's workshop id
+    // ("models/workshop/<id>/full-pixel.json"). Try the bare path first, then the workshop-scoped one.
+    std::string path = modelPath;
+    const auto resolves = [this] (const std::string& candidate) {
+	try {
+	    this->getAssetLocator ().readString (candidate);
+	    return true;
+	} catch (const std::exception&) {
+	    return false;
+	}
+    };
+
+    if (!resolves (path) && !workshopId.empty ()) {
+	if (const auto slash = path.find ('/'); slash != std::string::npos) {
+	    std::string scoped
+		= path.substr (0, slash + 1) + "workshop/" + workshopId + "/" + path.substr (slash + 1);
+	    if (resolves (scoped)) {
+		path = std::move (scoped);
+	    }
+	}
+    }
+
+    // Allocate a fresh id above everything currently known (live objects + parse-time objects), so it
+    // never collides with an existing key in m_objects or a not-yet-instantiated dependency.
+    int newId = 0;
+    for (const auto& id : this->m_objects | std::views::keys) {
+	newId = std::max (newId, id);
+    }
+    for (const auto& object : this->getScene ().objects) {
+	newId = std::max (newId, object->id);
+    }
+    ++newId;
+
+    const glm::vec3 origin = { this->m_camera->getWidth () / 2.0f, this->m_camera->getHeight () / 2.0f, 0.0f };
+
+    const JSON layer = {
+	{ "image", path },
+	{ "name", "runtime-layer-" + std::to_string (newId) },
+	{ "visible", true },
+	{ "scale", "1.0 1.0 1.0" },
+	{ "angles", "0.0 0.0 0.0" },
+	{ "origin", std::to_string (origin.x) + " " + std::to_string (origin.y) + " " + std::to_string (origin.z) },
+	{ "id", newId },
+    };
+
+    try {
+	ObjectUniquePtr data = ObjectParser::parse (layer, this->getScene ().project);
+	Object* raw = data.get ();
+	this->m_runtimeLayerData.push_back (std::move (data));
+
+	Render::CObject* renderObject = this->createObject (*raw);
+	if (renderObject == nullptr) {
+	    return nullptr;
+	}
+
+	this->m_objectsByRenderOrder.push_back (renderObject);
+	return renderObject;
+    } catch (const std::exception& e) {
+	sLog.error ("createLayer failed for ", modelPath, ": ", e.what ());
+	return nullptr;
+    }
+}
+
+int CScene::getScriptableLayerIndex (const CObject* layer) const {
+    int index = 0;
+    for (const auto* object : this->m_objectsByRenderOrder) {
+	if (object == nullptr || !object->is<Scripting::ScriptableObject> ()) {
+	    continue;
+	}
+	if (object == layer) {
+	    return index;
+	}
+	++index;
+    }
+    return -1;
+}
+
+void CScene::moveLayerToScriptableIndex (CObject* layer, int index) {
+    auto& order = this->m_objectsByRenderOrder;
+    const auto current = std::ranges::find (order, layer);
+    if (current == order.end ()) {
+	return;
+    }
+    order.erase (current);
+
+    // Insert just before the index-th scriptable layer; a negative / past-the-end index appends,
+    // leaving the layer on top of the render order.
+    auto insertPos = order.end ();
+    if (index >= 0) {
+	int scriptIndex = 0;
+	for (auto it = order.begin (); it != order.end (); ++it) {
+	    if (*it == nullptr || !(*it)->is<Scripting::ScriptableObject> ()) {
+		continue;
+	    }
+	    if (scriptIndex == index) {
+		insertPos = it;
+		break;
+	    }
+	    ++scriptIndex;
+	}
+    }
+    order.insert (insertPos, layer);
+}
