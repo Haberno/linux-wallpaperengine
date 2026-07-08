@@ -3,6 +3,7 @@
 #include "Adapters/ScriptableObjectAdapter.h"
 #include "Modules/ColorModule.h"
 #include "Modules/MathModule.h"
+#include "Modules/VectorModule.h"
 #include "Modules/ScriptModule.h"
 #include "ScriptPropertiesObject.h"
 #include "ScriptableObject.h"
@@ -280,9 +281,11 @@ ScriptEngine::ScriptEngine (Wallpapers::CScene& scene, Media::MediaSource& media
 
     auto wemath = std::make_unique<Modules::MathModule> (*this);
     auto wecolor = std::make_unique<Modules::ColorModule> (*this);
+    auto wevector = std::make_unique<Modules::VectorModule> (*this);
 
     this->m_modules.emplace (wemath->getName (), std::move (wemath));
     this->m_modules.emplace (wecolor->getName (), std::move (wecolor));
+    this->m_modules.emplace (wevector->getName (), std::move (wevector));
 
     JS_SetModuleLoaderFunc (this->m_runtime, nullptr, scriptengine_module_loader, this);
     // setup scene objects and other things
