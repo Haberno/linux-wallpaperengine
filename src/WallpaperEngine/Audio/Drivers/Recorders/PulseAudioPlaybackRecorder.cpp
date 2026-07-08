@@ -108,6 +108,10 @@ void pa_server_info_cb (pa_context* ctx, const pa_server_info* info, void* userd
     spec.channels = 1;
 
     if (recorder->captureStream) {
+	// this callback re-runs on every sink/source event (volume change, bluetooth
+	// connect); without an explicit disconnect the old capture stream stays alive
+	// server-side until the context dies, piling monitor streams onto the server
+	pa_stream_disconnect (recorder->captureStream);
 	pa_stream_unref (recorder->captureStream);
     }
 
