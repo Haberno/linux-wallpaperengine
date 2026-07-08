@@ -79,7 +79,7 @@ public:
 
 	return result;
     }
-    template <typename T> [[nodiscard]] std::optional<T> optional (const std::string& key) const noexcept {
+    template <typename T> [[nodiscard]] std::optional<T> optional (const std::string& key) const {
 	auto base = this->base ();
 	const auto it = base.find (key);
 
@@ -87,9 +87,19 @@ public:
 	    return std::nullopt;
 	}
 
-	return *it;
+	// Wallpaper Engine (JsonCpp-based) tolerates authored type drift — e.g. newer editors write a
+	// text layer's "padding" as a "32.00000 32.00000" vector while older scenes store a number
+	// (workshop 3758354038 authors exactly that on every text object). A mismatched optional has
+	// to degrade to "not set" instead of crashing: these methods were marked noexcept while the
+	// json conversion can throw, so the type_error became std::terminate and killed the engine.
+	try {
+	    return static_cast<T> (*it);
+	} catch (const std::exception& e) {
+	    sLog.error ("Ignoring optional value '", key, "' of mismatched type: ", e.what ());
+	    return std::nullopt;
+	}
     }
-    template <typename T> [[nodiscard]] T optional (const std::string& key, T defaultValue) const noexcept {
+    template <typename T> [[nodiscard]] T optional (const std::string& key, T defaultValue) const {
 	auto base = this->base ();
 	const auto it = base.find (key);
 
@@ -97,7 +107,13 @@ public:
 	    return defaultValue;
 	}
 
-	return (*it);
+	// see optional(key) above: tolerate authored type drift like Wallpaper Engine does
+	try {
+	    return static_cast<T> (*it);
+	} catch (const std::exception& e) {
+	    sLog.error ("Ignoring optional value '", key, "' of mismatched type: ", e.what ());
+	    return defaultValue;
+	}
     }
     [[nodiscard]] UserSettingUniquePtr user (const std::string& key, const Properties& properties) const;
     template <typename T>
