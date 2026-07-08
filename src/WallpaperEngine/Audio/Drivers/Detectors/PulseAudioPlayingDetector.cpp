@@ -1,9 +1,33 @@
 #include "PulseAudioPlayingDetector.h"
 #include "WallpaperEngine/Logging/Log.h"
 
+#include <algorithm>
+#include <string>
 #include <unistd.h>
 
 namespace WallpaperEngine::Audio::Drivers::Detectors {
+namespace {
+bool matchesIgnoreList (const pa_sink_input_info* info, const std::vector<std::string>& ignoreList) {
+    const auto contains = [] (const char* haystack, const std::string& needle) {
+	if (haystack == nullptr) {
+	    return false;
+	}
+	std::string lowered = haystack;
+	std::ranges::transform (lowered, lowered.begin (), [] (unsigned char c) { return std::tolower (c); });
+	return lowered.find (needle) != std::string::npos;
+    };
+
+    const char* name = pa_proplist_gets (info->proplist, PA_PROP_APPLICATION_NAME);
+    const char* binary = pa_proplist_gets (info->proplist, PA_PROP_APPLICATION_PROCESS_BINARY);
+
+    return std::ranges::any_of (ignoreList, [&] (const std::string& entry) {
+	std::string needle = entry;
+	std::ranges::transform (needle, needle.begin (), [] (unsigned char c) { return std::tolower (c); });
+	return contains (name, needle) || contains (binary, needle);
+    });
+}
+} // namespace
+
 void sinkInputInfoCallback (pa_context* context, const pa_sink_input_info* info, int eol, void* userdata) {
     auto* detector = static_cast<PulseAudioPlayingDetector*> (userdata);
 
@@ -22,10 +46,18 @@ void sinkInputInfoCallback (pa_context* context, const pa_sink_input_info* info,
     // browser tab, a paused player, or a bluetooth keep-alive stream sits corked/silent for
     // hours and would otherwise mute wallpaper audio permanently), and the mute flag is
     // separate from the volume level. Wallpaper Engine only mutes while something plays.
+    // Wallpaper daemons are ignored wholesale: skwd-paper keeps an always-unmuted phantom
+    // stream open and stale wallpaperengine instances leave their own — either would mute
+    // us forever and automute could then never unmute (see --automute-ignore).
     if (value && strtol (value, nullptr, 10) != getpid () && !info->corked && !info->mute
-	&& pa_cvolume_avg (&info->volume) != PA_VOLUME_MUTED) {
+	&& pa_cvolume_avg (&info->volume) != PA_VOLUME_MUTED
+	&& !matchesIgnoreList (info, detector->getAutomuteIgnore ())) {
 	detector->setIsPlaying (true);
     }
+}
+
+const std::vector<std::string>& PulseAudioPlayingDetector::getAutomuteIgnore () const {
+    return this->getApplicationContext ().settings.audio.automuteIgnore;
 }
 
 void defaultSinkInfoCallback (pa_context* context, const pa_server_info* info, void* userdata) {
