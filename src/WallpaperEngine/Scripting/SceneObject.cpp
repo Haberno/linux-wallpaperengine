@@ -189,6 +189,68 @@ JSValue get_layer (JSContext* ctx, JSValueConst this_val, int argc, JSValueConst
 
 JSValue scene_set_value (JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) { return JS_EXCEPTION; }
 
+// thisScene.getLayerIndex(layer) -> index of the layer in the scriptable render order, or -1.
+JSValue scene_get_layer_index (JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    if (argc != 1) {
+	return JS_EXCEPTION;
+    }
+
+    auto* container = get_opaque (this_val);
+    auto* layer = WallpaperEngine::Scripting::Adapters::ScriptableObjectAdapter::fromJS (argv[0]);
+
+    if (layer == nullptr) {
+	return JS_NewInt32 (ctx, -1);
+    }
+
+    return JS_NewInt32 (ctx, container->getScene ().getScriptableLayerIndex (layer));
+}
+
+// thisScene.createLayer(modelPath) -> instantiate a new image layer at runtime and return its
+// handle. Generative scripts (audio visualizers, particle-ish bar systems) build their layers here.
+JSValue scene_create_layer (JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    if (argc < 1 || !JS_IsString (argv[0])) {
+	return JS_UNDEFINED;
+    }
+
+    auto* container = get_opaque (this_val);
+    const char* path = JS_ToCString (ctx, argv[0]);
+
+    if (path == nullptr) {
+	return JS_UNDEFINED;
+    }
+
+    ScopeGuard guard ([=] { JS_FreeCString (ctx, path); });
+
+    const std::string workshopId = container->getEngine ().getRunningModuleWorkshopId ();
+    auto* layer = container->getScene ().createLayer (path, workshopId);
+
+    if (layer == nullptr || !layer->is<ScriptableObject> ()) {
+	return JS_UNDEFINED;
+    }
+
+    return container->getEngine ().getAdapters ().object->instantiate (*layer->as<ScriptableObject> ());
+}
+
+// thisScene.sortLayer(layer, index) -> move a layer to a z-position in the render order.
+JSValue scene_sort_layer (JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    if (argc < 2) {
+	return JS_UNDEFINED;
+    }
+
+    auto* container = get_opaque (this_val);
+    auto* layer = WallpaperEngine::Scripting::Adapters::ScriptableObjectAdapter::fromJS (argv[0]);
+
+    if (layer == nullptr) {
+	return JS_UNDEFINED;
+    }
+
+    int index = 0;
+    JS_ToInt32 (ctx, &index, argv[1]);
+    container->getScene ().moveLayerToScriptableIndex (layer, index);
+
+    return JS_UNDEFINED;
+}
+
 SceneObject::SceneObject (ScriptEngine& engine, Render::Wallpapers::CScene& scene) :
     m_scene (scene), m_engine (engine), m_classId (0) {
     this->m_definition = { .class_name = "IScene" };
@@ -303,6 +365,18 @@ SceneObject::SceneObject (ScriptEngine& engine, Render::Wallpapers::CScene& scen
     JS_DefinePropertyValueStr (
 	this->m_engine.getContext (), this->m_instance, "getLayer",
 	JS_NewCFunction (this->m_engine.getContext (), get_layer, "getLayer", 1), JS_PROP_ENUMERABLE
+    );
+    JS_DefinePropertyValueStr (
+	this->m_engine.getContext (), this->m_instance, "getLayerIndex",
+	JS_NewCFunction (this->m_engine.getContext (), scene_get_layer_index, "getLayerIndex", 1), JS_PROP_ENUMERABLE
+    );
+    JS_DefinePropertyValueStr (
+	this->m_engine.getContext (), this->m_instance, "createLayer",
+	JS_NewCFunction (this->m_engine.getContext (), scene_create_layer, "createLayer", 1), JS_PROP_ENUMERABLE
+    );
+    JS_DefinePropertyValueStr (
+	this->m_engine.getContext (), this->m_instance, "sortLayer",
+	JS_NewCFunction (this->m_engine.getContext (), scene_sort_layer, "sortLayer", 2), JS_PROP_ENUMERABLE
     );
     // TODO: ADD REST OF THE METHODS
 }

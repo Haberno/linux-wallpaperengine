@@ -80,6 +80,21 @@ public:
 
     [[nodiscard]] const SceneLights& getLights () const;
 
+    // Runtime layer API — backs thisScene.createLayer()/getLayerIndex()/sortLayer() in the
+    // scripting engine. Audio visualizers (and other generative scripts) spawn their bar layers
+    // at init() time via these; without them the controlling script throws and the placeholder
+    // template renders as a static block.
+    //
+    // createLayer instantiates a new image layer from a model path (e.g. "models/full-pixel.json"),
+    // resolving the script's workshop-scoped asset path when the bare path doesn't exist. Returns the
+    // created object (a scriptable CImage) or nullptr on failure.
+    Render::CObject* createLayer (const std::string& modelPath, const std::string& workshopId);
+    // Index of a layer within the scriptable-layer subset of the render order (matches getLayer()/
+    // getLayerCount()), or -1 if not present.
+    [[nodiscard]] int getScriptableLayerIndex (const CObject* layer) const;
+    // Move a layer so it sits at the given scriptable-layer index in the render order (z-order).
+    void moveLayerToScriptableIndex (CObject* layer, int index);
+
 protected:
     void renderFrame (const glm::ivec4& viewport) override;
     void updateMouse (const glm::ivec4& viewport);
@@ -96,6 +111,8 @@ private:
     std::unique_ptr<Camera> m_camera;
     ObjectUniquePtr m_bloomObjectData;
     CObject* m_bloomObject = nullptr;
+    // Keeps runtime-created layer data (createLayer) alive: CImage holds a const Image& into it.
+    std::vector<ObjectUniquePtr> m_runtimeLayerData = {};
     std::map<int, CObject*> m_objects = {};
     std::vector<CObject*> m_objectsByRenderOrder = {};
     std::vector<Objects::CLight*> m_lightObjects = {};

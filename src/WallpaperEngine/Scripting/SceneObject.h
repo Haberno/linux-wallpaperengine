@@ -12,6 +12,7 @@ public:
     ~SceneObject ();
 
     const Render::Wallpapers::CScene& getScene () const { return m_scene; }
+    Render::Wallpapers::CScene& getScene () { return m_scene; }
     JSValue getInstance () const { return m_instance; }
     ScriptEngine& getEngine () const { return m_engine; }
 
