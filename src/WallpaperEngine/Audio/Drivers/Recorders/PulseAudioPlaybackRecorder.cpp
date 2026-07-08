@@ -122,10 +122,12 @@ void pa_server_info_cb (pa_context* ctx, const pa_server_info* info, void* userd
     // setup latency
     pa_buffer_attr attr {};
 
-    // 10 = latency msecs, 750 = max msecs to store
+    // 10 = latency msecs, 750 = max msecs to store. Milliseconds means dividing by 1000 —
+    // the previous /100 requested 100ms fragments, which made audio visualizers update at
+    // ~10Hz and visibly lag behind the music.
     size_t bytesPerSec = pa_bytes_per_second (&spec);
-    attr.fragsize = bytesPerSec * 10 / 100;
-    attr.maxlength = attr.fragsize + bytesPerSec * 750 / 100;
+    attr.fragsize = bytesPerSec * 10 / 1000;
+    attr.maxlength = attr.fragsize + bytesPerSec * 750 / 1000;
 
     if (pa_stream_connect_record (recorder->captureStream, monitor_name.c_str (), &attr, PA_STREAM_ADJUST_LATENCY)
 	!= 0) {
