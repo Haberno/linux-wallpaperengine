@@ -85,6 +85,8 @@ private:
 
     glm::ivec2 m_textureSize = { 0, 0 };
     glm::vec2 m_quadSize = { 0.0f, 0.0f };
+    /** ink bbox center relative to the authored box center, local +y-down space */
+    glm::vec2 m_quadOffset = { 0.0f, 0.0f };
 
     bool m_valid = false;
 };
