@@ -189,6 +189,52 @@ JSValue get_layer (JSContext* ctx, JSValueConst this_val, int argc, JSValueConst
 
 JSValue scene_set_value (JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) { return JS_EXCEPTION; }
 
+// thisScene.enumerateLayers() -> array of every scriptable layer in render order.
+JSValue scene_enumerate_layers (JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    auto* container = get_opaque (this_val);
+    JSValue arr = JS_NewArray (ctx);
+    uint32_t index = 0;
+
+    for (auto* object : container->getScene ().getObjectsByRenderOrder ()) {
+	if (object == nullptr || !object->is<ScriptableObject> ()) {
+	    continue;
+	}
+	JS_SetPropertyUint32 (
+	    ctx, arr, index++, container->getEngine ().getAdapters ().object->instantiate (*object->as<ScriptableObject> ())
+	);
+    }
+
+    return arr;
+}
+
+// thisScene.getLayerByID(id) -> the layer whose object id matches (id given as a string), or undefined.
+JSValue scene_get_layer_by_id (JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    if (argc != 1) {
+	return JS_EXCEPTION;
+    }
+
+    auto* container = get_opaque (this_val);
+    const char* str = JS_ToCString (ctx, argv[0]);
+
+    if (str == nullptr) {
+	return JS_UNDEFINED;
+    }
+
+    const long id = std::strtol (str, nullptr, 10);
+    JS_FreeCString (ctx, str);
+
+    for (auto* object : container->getScene ().getObjectsByRenderOrder ()) {
+	if (object == nullptr || !object->is<ScriptableObject> ()) {
+	    continue;
+	}
+	if (object->getId () == id) {
+	    return container->getEngine ().getAdapters ().object->instantiate (*object->as<ScriptableObject> ());
+	}
+    }
+
+    return JS_UNDEFINED;
+}
+
 // thisScene.getLayerIndex(layer) -> index of the layer in the scriptable render order, or -1.
 JSValue scene_get_layer_index (JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
     if (argc != 1) {
@@ -365,6 +411,14 @@ SceneObject::SceneObject (ScriptEngine& engine, Render::Wallpapers::CScene& scen
     JS_DefinePropertyValueStr (
 	this->m_engine.getContext (), this->m_instance, "getLayer",
 	JS_NewCFunction (this->m_engine.getContext (), get_layer, "getLayer", 1), JS_PROP_ENUMERABLE
+    );
+    JS_DefinePropertyValueStr (
+	this->m_engine.getContext (), this->m_instance, "enumerateLayers",
+	JS_NewCFunction (this->m_engine.getContext (), scene_enumerate_layers, "enumerateLayers", 0), JS_PROP_ENUMERABLE
+    );
+    JS_DefinePropertyValueStr (
+	this->m_engine.getContext (), this->m_instance, "getLayerByID",
+	JS_NewCFunction (this->m_engine.getContext (), scene_get_layer_by_id, "getLayerByID", 1), JS_PROP_ENUMERABLE
     );
     JS_DefinePropertyValueStr (
 	this->m_engine.getContext (), this->m_instance, "getLayerIndex",
