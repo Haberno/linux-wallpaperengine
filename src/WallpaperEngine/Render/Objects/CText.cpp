@@ -404,8 +404,6 @@ void CText::render () {
 
     const glm::vec4 color = m_text.color->value->getVec4 ();
     const float alpha = m_text.alpha->value->getFloat ();
-    const glm::vec3 scale = m_text.scale->value->getVec3 ();
-    const glm::vec3 origin = m_text.origin->value->getVec3 ();
 
     // WE uses a Y-down coordinate system (origin at top-left, y increases downward).
     // The final FBO is presented to screen with vflip=true on Wayland/GLFW, which maps
@@ -448,11 +446,13 @@ void CText::render () {
     // CText renders with direct vflip-aware coordinates.
     const float scene_w = getScene ().getCamera ().getWidth ();
     const float scene_h = getScene ().getCamera ().getHeight ();
-    glm::vec3 gl_origin = {
-	origin.x - scene_w * 0.5f,
-	origin.y - scene_h * 0.5f,
-	origin.z,
-    };
+    // Scene-space placement composed through the parent chain: clock/date texts are commonly
+    // children of a positioning container (e.g. MyGO 3558034522's "Clock"/"Date" under object
+    // 341), so raw origins are parent-relative and rendered them off-screen before. The world
+    // matrix carries origin, parent transforms and the text scale; both WE authoring and this
+    // path's vflip-aware convention are y-down, so the composition transfers unchanged and the
+    // shift below just recenters WE's top-left origin onto the GL center.
+    glm::vec3 gl_shift = { -scene_w * 0.5f, -scene_h * 0.5f, 0.0f };
 
     // camera parallax translation, same convention as CImage but with y following
     // this renderer's vflip-aware coordinates; locktransforms is only an editor-UI lock
@@ -464,12 +464,11 @@ void CText::render () {
 	const float referenceSize
 	    = static_cast<float> (getScene ().getWidth ()) * Wallpapers::CScene::PARALLAX_TRANSLATION_SPAN;
 
-	gl_origin.x += -depth.x * amount * displacement->x * referenceSize;
-	gl_origin.y -= depth.y * amount * displacement->y * referenceSize;
+	gl_shift.x += -depth.x * amount * displacement->x * referenceSize;
+	gl_shift.y -= depth.y * amount * displacement->y * referenceSize;
     }
 
-    glm::mat4 model = glm::translate (glm::mat4 (1.0f), gl_origin);
-    model = glm::scale (model, scale);
+    const glm::mat4 model = glm::translate (glm::mat4 (1.0f), gl_shift) * this->resolveWorldMatrix ();
 
     const glm::mat4 mvp = getScene ().getCamera ().getProjection () * getScene ().getCamera ().getLookAt () * model;
 
