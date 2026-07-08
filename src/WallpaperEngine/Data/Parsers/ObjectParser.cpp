@@ -149,7 +149,19 @@ TextUniquePtr ObjectParser::parseText (const JSON& it, const Project& project, O
 	    .visible = it.user ("visible", project.properties, true),
 	    .alignment = it.optional ("horizontalalign", it.optional ("alignment", std::string ("center"))),
 	    .verticalalign = it.optional ("verticalalign", std::string ("center")),
-	    .padding = it.optional ("padding", 0),
+	    // padding is authored as a single number by older scenes and as an "x y" vector
+	    // string by newer editors (e.g. workshop 3758354038)
+	    .padding =
+		[&] () -> glm::vec2 {
+		    const auto raw = it.optional ("padding");
+		    if (!raw.has_value ()) {
+			return glm::vec2 (0.0f);
+		    }
+		    if (raw->is_number ()) {
+			return glm::vec2 (raw->get<float> ());
+		    }
+		    return it.optional ("padding", glm::vec2 (0.0f));
+		}(),
 	}
     );
 }

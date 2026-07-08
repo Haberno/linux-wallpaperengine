@@ -1,6 +1,9 @@
 #include "CText.h"
 
+#include <algorithm>
+#include <cmath>
 #include <filesystem>
+#include <limits>
 #include <vector>
 
 #include <ft2build.h>
@@ -273,54 +276,125 @@ void CText::initScriptLayer () {
 }
 
 void CText::rebuildTextureFrom (const std::string& text) {
-    // Two-pass rasterization: first measure the bounding box, then rasterize
-    // every glyph into a single grayscale bitmap. Phase 1 renders one line —
-    // multi-line wrapping, alignment, and padding come with Phase 2.
+    // Lays the text out like Wallpaper Engine: lines split on \n are aligned inside the
+    // authored bounding box (horizontalalign/verticalalign, inset by padding), the box
+    // being centered on the object origin. Text may overflow the box — limitwidth and
+    // limitrows are not implemented. The texture covers the ink bounding box only and
+    // the quad is offset from the box center accordingly (see uploadQuadVertices).
     //
     // Safe to call repeatedly: GL handles (texture, VAO, VBO) are reused when
     // already allocated, so dynamic/scripted text can regenerate the glyph
     // bitmap every time the rendered string changes without leaking.
     FT_GlyphSlot slot = m_ftFace->glyph;
 
-    int penX = 0;
-    int maxAscent = 0;
-    int maxDescent = 0;
+    // metrics-based line boxes: stable across glyph mixes and meaningful for empty lines
+    const int lineHeight = static_cast<int> (m_ftFace->size->metrics.height >> 6);
+    const int ascender = static_cast<int> (m_ftFace->size->metrics.ascender >> 6);
 
-    for (size_t offset = 0; offset < text.size ();) {
-	if (FT_Load_Char (m_ftFace, static_cast<FT_ULong> (nextUtf8Codepoint (text, offset)), FT_LOAD_RENDER) != 0) {
-	    continue;
+    // \n splitting is UTF-8 safe: continuation bytes are always >= 0x80
+    struct Line {
+	std::string text;
+	int width = 0;
+	int x = 0;
+    };
+    std::vector<Line> lines;
+    for (size_t start = 0, i = 0; i <= text.size (); i++) {
+	if (i == text.size () || text[i] == '\n') {
+	    lines.push_back ({ .text = text.substr (start, i - start) });
+	    start = i + 1;
 	}
-	penX += slot->advance.x >> 6;
-	maxAscent = std::max (maxAscent, slot->bitmap_top);
-	maxDescent = std::max (maxDescent, static_cast<int> (slot->bitmap.rows) - slot->bitmap_top);
     }
 
-    const int width = std::max (1, penX);
-    const int height = std::max (1, maxAscent + maxDescent);
+    int maxLineWidth = 0;
+    for (auto& line : lines) {
+	for (size_t offset = 0; offset < line.text.size ();) {
+	    if (FT_Load_Char (m_ftFace, static_cast<FT_ULong> (nextUtf8Codepoint (line.text, offset)), FT_LOAD_RENDER)
+		!= 0) {
+		continue;
+	    }
+	    line.width += slot->advance.x >> 6;
+	}
+	maxLineWidth = std::max (maxLineWidth, line.width);
+    }
+
+    const int blockHeight = static_cast<int> (lines.size ()) * lineHeight;
+
+    // authored box centered on the origin; scenes without one get the ink extents
+    glm::vec2 box = m_text.size;
+    if (box.x <= 0.0f || box.y <= 0.0f) {
+	box = { static_cast<float> (maxLineWidth), static_cast<float> (blockHeight) };
+    }
+
+    // content rect after padding, in box-local raster coordinates (top-left origin, +y down —
+    // the same convention the quad's local space uses)
+    const glm::vec2 padding = m_text.padding;
+    const float contentX0 = padding.x;
+    const float contentX1 = box.x - padding.x;
+    const float contentY0 = padding.y;
+    const float contentY1 = box.y - padding.y;
+
+    float blockTop;
+    if (m_text.verticalalign == "top") {
+	blockTop = contentY0;
+    } else if (m_text.verticalalign == "bottom") {
+	blockTop = contentY1 - static_cast<float> (blockHeight);
+    } else {
+	blockTop = contentY0 + ((contentY1 - contentY0) - static_cast<float> (blockHeight)) * 0.5f;
+    }
+
+    float inkX0 = std::numeric_limits<float>::max ();
+    float inkX1 = std::numeric_limits<float>::lowest ();
+    for (auto& line : lines) {
+	float x;
+	if (m_text.alignment == "left") {
+	    x = contentX0;
+	} else if (m_text.alignment == "right") {
+	    x = contentX1 - static_cast<float> (line.width);
+	} else {
+	    x = contentX0 + ((contentX1 - contentX0) - static_cast<float> (line.width)) * 0.5f;
+	}
+	line.x = static_cast<int> (std::round (x));
+	inkX0 = std::min (inkX0, x);
+	inkX1 = std::max (inkX1, x + static_cast<float> (line.width));
+    }
+
+    // ink bounding box, with a margin for glyphs poking past the font's ascender/descender
+    constexpr int kInkMargin = 4;
+    const int x0 = static_cast<int> (std::floor (inkX0)) - kInkMargin;
+    const int y0 = static_cast<int> (std::floor (blockTop)) - kInkMargin;
+    const int width = std::max (1, static_cast<int> (std::ceil (inkX1 - inkX0)) + kInkMargin * 2);
+    const int height = std::max (1, blockHeight + kInkMargin * 2);
     std::vector<uint8_t> pixels (static_cast<size_t> (width) * height, 0);
 
-    penX = 0;
-    for (size_t offset = 0; offset < text.size ();) {
-	if (FT_Load_Char (m_ftFace, static_cast<FT_ULong> (nextUtf8Codepoint (text, offset)), FT_LOAD_RENDER) != 0) {
-	    continue;
-	}
+    for (size_t i = 0; i < lines.size (); i++) {
+	const auto& line = lines[i];
+	int penX = line.x - x0;
+	const int baseline
+	    = static_cast<int> (std::round (blockTop)) - y0 + ascender + static_cast<int> (i) * lineHeight;
 
-	const auto& bmp = slot->bitmap;
-	const int originX = penX + slot->bitmap_left;
-	const int originY = maxAscent - slot->bitmap_top;
-
-	for (unsigned int row = 0; row < bmp.rows; ++row) {
-	    for (unsigned int col = 0; col < bmp.width; ++col) {
-		const int dstX = originX + static_cast<int> (col);
-		const int dstY = originY + static_cast<int> (row);
-		if (dstX < 0 || dstX >= width || dstY < 0 || dstY >= height) {
-		    continue;
-		}
-		pixels[static_cast<size_t> (dstY) * width + dstX] = bmp.buffer[row * bmp.pitch + col];
+	for (size_t offset = 0; offset < line.text.size ();) {
+	    if (FT_Load_Char (m_ftFace, static_cast<FT_ULong> (nextUtf8Codepoint (line.text, offset)), FT_LOAD_RENDER)
+		!= 0) {
+		continue;
 	    }
-	}
 
-	penX += slot->advance.x >> 6;
+	    const auto& bmp = slot->bitmap;
+	    const int originX = penX + slot->bitmap_left;
+	    const int originY = baseline - slot->bitmap_top;
+
+	    for (unsigned int row = 0; row < bmp.rows; ++row) {
+		for (unsigned int col = 0; col < bmp.width; ++col) {
+		    const int dstX = originX + static_cast<int> (col);
+		    const int dstY = originY + static_cast<int> (row);
+		    if (dstX < 0 || dstX >= width || dstY < 0 || dstY >= height) {
+			continue;
+		    }
+		    pixels[static_cast<size_t> (dstY) * width + dstX] = bmp.buffer[row * bmp.pitch + col];
+		}
+	    }
+
+	    penX += slot->advance.x >> 6;
+	}
     }
 
     const bool firstUpload = (m_texture == 0);
@@ -339,6 +413,12 @@ void CText::rebuildTextureFrom (const std::string& text) {
 
     m_textureSize = { width, height };
     m_quadSize = { static_cast<float> (width), static_cast<float> (height) };
+    // offset from the object origin (= the authored box center) to the ink bbox center,
+    // in the quad's local +y-down space
+    m_quadOffset = {
+	(static_cast<float> (x0) + static_cast<float> (width) * 0.5f) - box.x * 0.5f,
+	(static_cast<float> (y0) + static_cast<float> (height) * 0.5f) - box.y * 0.5f,
+    };
     m_lastRenderedText = text;
 
     uploadQuadVertices ();
@@ -381,18 +461,22 @@ void CText::buildShader () {
 }
 
 void CText::uploadQuadVertices () {
-    // Quad centered at the origin, sized in pixels. Scene-space placement is
-    // done via the model matrix using the object's origin/scale. VBO contents
-    // are re-uploaded whenever the glyph bitmap is rebuilt so the quad always
-    // matches the current texture dimensions.
+    // Quad in local raster-space coordinates (+y down, matching the texture rows; render()'s
+    // mirror pair maps this into the y-up world so the glyphs stay upright). The quad covers
+    // the ink bounding box, offset from the object origin (the authored box center) so the
+    // authored alignment inside the box is preserved. VBO contents are re-uploaded whenever
+    // the glyph bitmap is rebuilt so the quad always matches the current texture.
     const float hx = m_quadSize.x * 0.5f;
     const float hy = m_quadSize.y * 0.5f;
-    // With vflip=true (Wayland/GLFW), GL y- = screen top. So the quad bottom (y=-hy,
-    // lower GL y) appears at screen top. UV.v=0 here = FT glyph top → shows at screen top ✓
+    const float x0 = m_quadOffset.x - hx;
+    const float x1 = m_quadOffset.x + hx;
+    const float y0 = m_quadOffset.y - hy;
+    const float y1 = m_quadOffset.y + hy;
+    // UV.v=0 = texture top row = the visual top of the text
     const float verts[] = {
-	// pos        // uv
-	-hx, -hy, 0.0f, 0.0f, hx, -hy, 1.0f, 0.0f, hx,  hy, 1.0f, 1.0f,
-	-hx, -hy, 0.0f, 0.0f, hx, hy,  1.0f, 1.0f, -hx, hy, 0.0f, 1.0f,
+	// pos      // uv
+	x0, y0, 0.0f, 0.0f, x1, y0, 1.0f, 0.0f, x1, y1, 1.0f, 1.0f,
+	x0, y0, 0.0f, 0.0f, x1, y1, 1.0f, 1.0f, x0, y1, 0.0f, 1.0f,
     };
 
     const bool firstUpload = (m_vao == 0);
