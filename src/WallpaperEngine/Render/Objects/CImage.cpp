@@ -23,6 +23,7 @@
 #include "WallpaperEngine/Data/Utils/BinaryReader.h"
 #include "WallpaperEngine/Data/Utils/MemoryStream.h"
 #include "WallpaperEngine/Logging/Log.h"
+#include "WallpaperEngine/Scripting/ScriptEngine.h"
 
 using namespace WallpaperEngine;
 using namespace WallpaperEngine::Render::Objects;
@@ -983,6 +984,27 @@ void CImage::setup () {
 	    // visible but affect the output of the image...
 	    if (!cur->visible->value->getBool ()) {
 		continue;
+	    }
+
+	    // Register any script-driven shader constants in this effect's pass overrides so their per-frame
+	    // scripts actually run. The script source is parsed onto the constant's DynamicValue, but unlike
+	    // object-level properties these effect constants are never queued — so e.g. a "rainbow" colour
+	    // cycle (a tint colour driven by a JS update()) stays frozen at its static fallback. Queue them
+	    // here (visible effects only) so tick() advances the value and CPass uploads the live result.
+	    {
+		int passIndex = 0;
+		for (const auto& passOverride : cur->passOverrides) {
+		    for (const auto& [constantName, setting] : passOverride->constants) {
+			if (setting->value != nullptr && setting->value->getScriptSource ().has_value ()) {
+			    this->getScene ().getScriptEngine ().queueScript (
+				constantName + "_fx" + std::to_string (cur->id) + "_p" + std::to_string (passIndex)
+				    + "_" + std::to_string (this->getId ()),
+				*setting->value, *this
+			    );
+			}
+		    }
+		    ++passIndex;
+		}
 	    }
 
 	    const auto fboProvider = std::make_shared<FBOProvider> (this);
