@@ -8,6 +8,7 @@
 #include "WallpaperEngine/Logging/Log.h"
 #include "WallpaperEngine/Render/Drivers/VideoFactories.h"
 #include "WallpaperEngine/Render/RenderContext.h"
+#include "WallpaperEngine/Render/Wallpapers/CScene.h"
 
 #include "WallpaperEngine/Data/Dumpers/StringPrinter.h"
 #include "WallpaperEngine/Data/Parsers/ProjectParser.h"
@@ -486,7 +487,49 @@ void WallpaperApplication::processControlSocket () {
 	    command.resize (newline);
 	}
 
-	std::string reply = "err invalid command, expected: switch <screen> [transition] <path>\n";
+	std::string reply
+	    = "err invalid command, expected: switch <screen> [transition] <path> | prop <screen> <key> <value>\n";
+
+	// prop <screen> <key> <value> - live user-property change: updates the property value and
+	// fires the scripts' applyUserProperties handler. Properties that gate scene structure
+	// (visibility conditions, effect toggles) need a rebuild, which this does NOT do yet.
+	if (command.rfind ("prop ", 0) == 0) {
+	    const auto body = command.substr (5);
+	    const auto screenEnd = body.find (' ');
+	    const auto keyEnd = body.find (' ', screenEnd + 1);
+
+	    if (screenEnd == std::string::npos || keyEnd == std::string::npos) {
+		reply = "err expected: prop <screen> <key> <value>\n";
+	    } else {
+		const auto screen = body.substr (0, screenEnd);
+		const auto key = body.substr (screenEnd + 1, keyEnd - screenEnd - 1);
+		const auto value = body.substr (keyEnd + 1);
+
+		const auto& wallpapers
+		    = this->m_renderContext != nullptr ? this->m_renderContext->getWallpapers ()
+						       : std::map<std::string, std::shared_ptr<Render::CWallpaper>> {};
+		const auto wpIt = wallpapers.find (screen);
+
+		if (wpIt == wallpapers.end ()) {
+		    reply = "err unknown screen " + screen + "\n";
+		} else if (auto* scene = dynamic_cast<Render::Wallpapers::CScene*> (wpIt->second.get ());
+			   scene == nullptr) {
+		    reply = "err not a scene wallpaper on " + screen + "\n";
+		} else {
+		    // Scene::project is a reference member, so it stays mutable through the const getter
+		    auto& project = scene->getScene ().project;
+		    const auto propertyIt = project.properties.find (key);
+
+		    if (propertyIt == project.properties.end ()) {
+			reply = "err unknown property " + key + "\n";
+		    } else {
+			propertyIt->second->update (value, DynamicValue::UpdateSource::User);
+			scene->getScriptEngine ().dispatchUserProperty (key, *propertyIt->second);
+			reply = "ok\n";
+		    }
+		}
+	    }
+	}
 
 	// switch <screen> [transition] <path> - path may contain spaces, so the optional
 	// transition sits before it where it can be recognized unambiguously

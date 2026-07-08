@@ -705,6 +705,7 @@ void ScriptEngine::queueScript (const std::string& key, DynamicValue& currentVal
 	    << "    mediaPlaybackChanged: (typeof mediaPlaybackChanged === 'function') ? mediaPlaybackChanged : null,\n"
 	    << "    mediaTimelineChanged: (typeof mediaTimelineChanged === 'function') ? mediaTimelineChanged : null,\n"
 	    << "    mediaThumbnailChanged: (typeof mediaThumbnailChanged === 'function') ? mediaThumbnailChanged : null,\n"
+	    << "    applyUserProperties: (typeof applyUserProperties === 'function') ? applyUserProperties : null,\n"
 	    << "  };\n"
 	    << "})()";
 
@@ -753,6 +754,31 @@ void ScriptEngine::queueScript (const std::string& key, DynamicValue& currentVal
 	    jsToDynamicValue (this->m_context, result, currentValue);
 	}
     }
+}
+
+void ScriptEngine::dispatchUserProperty (const std::string& key, DynamicValue& value) {
+    if (this->m_context == nullptr) {
+	return;
+    }
+
+    JSValue changed = JS_NewObject (this->m_context);
+    JS_SetPropertyStr (this->m_context, changed, key.c_str (), this->dynamicToJs (value));
+
+    // property-script wrappers capture their own thisLayer in the eval closure, so no
+    // per-module global rebinding is needed here (unlike beingsuz's original)
+    for (auto& module : this->m_scriptModules | std::views::values) {
+	this->m_runningModule = &module;
+	JSValue args[] = { changed };
+	JSValue result = this->call (module.module, 1, args, "applyUserProperties");
+
+	if (JS_IsException (result)) {
+	    logJSException (this->m_context, "applyUserProperties");
+	}
+
+	JS_FreeValue (this->m_context, result);
+    }
+
+    JS_FreeValue (this->m_context, changed);
 }
 
 std::string ScriptEngine::getRunningModuleWorkshopId () const {

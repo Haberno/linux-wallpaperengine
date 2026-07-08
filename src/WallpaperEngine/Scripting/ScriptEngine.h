@@ -67,6 +67,9 @@ public:
     // Workshop id exported by the currently-running script module (`export let __workshopId = '...'`),
     // or "" if none. Scripts use it to resolve their own workshop-scoped asset paths at runtime.
     [[nodiscard]] std::string getRunningModuleWorkshopId () const;
+    // Fire the scripts' applyUserProperties({key: value}) handler after a live property change, so
+    // script-driven wallpapers react to settings without a reload. No-op for scripts without it.
+    void dispatchUserProperty (const std::string& key, DynamicValue& value);
     JSValue dynamicToJs (DynamicValue& value) const;
 
     /**
