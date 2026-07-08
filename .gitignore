@@ -13,3 +13,4 @@ packaging/archlinux/*
 AGENTS.md
 .headroom/
 scripts/
+.claude/settings.local.json
