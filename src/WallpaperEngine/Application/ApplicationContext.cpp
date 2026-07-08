@@ -532,6 +532,11 @@ void ApplicationContext::loadSettingsFromArgv () {
 	.flag ()
 	.action ([this] (const std::string& value) -> void { this->settings.audio.automute = false; });
 
+    audioGroup.add_argument ("--automute-ignore")
+	.help ("Application-name substring whose audio never triggers automute (repeatable)")
+	.action ([this] (const std::string& value) -> void { this->settings.audio.automuteIgnore.push_back (value); })
+	.append ();
+
     audioGroup.add_argument ("--no-audio-processing")
 	.help ("Disables audio processing for backgrounds")
 	.flag ()
