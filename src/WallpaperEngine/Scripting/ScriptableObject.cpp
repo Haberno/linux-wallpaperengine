@@ -31,13 +31,19 @@ const std::map<std::string, ScriptableObject::PropertyEntry>& ScriptableObject::
 }
 
 void ScriptableObject::registerProperty (const std::string& name, DynamicValue& value) {
-    auto inserted = this->m_properties.emplace (
-	name, PropertyEntry { .key = name + "_" + std::to_string (this->getId ()), .value = value }
-    );
+    // Last registration wins. The base ScriptableObject registers the group/object fallbacks
+    // (groupScale/groupAngles/groupVisible) first; a derived CImage/CText then re-registers the
+    // same names with its ImageData/TextData values — and those are what the renderer actually
+    // reads (localTransform uses image.scale/angles, render gates on image.visible). With a
+    // first-wins emplace the script would drive the group values while the image rendered from the
+    // unset image values, so thisLayer.scale/visible silently did nothing on image layers.
+    const std::string key = name + "_" + std::to_string (this->getId ());
+    // PropertyEntry holds a reference member (not assignable), so drop any prior registration and
+    // re-emplace to let the derived value win.
+    this->m_properties.erase (name);
+    const auto [it, inserted] = this->m_properties.emplace (name, PropertyEntry { .key = key, .value = value });
 
-    if (!inserted.second) {
-	return;
-    }
-
-    this->getScene ().getScriptEngine ().queueScript (inserted.first->second.key, inserted.first->second.value, *this);
+    // queueScript is keyed and self-guards against duplicate keys, so re-registering the same name
+    // re-points the property without spawning a second script module.
+    this->getScene ().getScriptEngine ().queueScript (it->second.key, it->second.value, *this);
 }
