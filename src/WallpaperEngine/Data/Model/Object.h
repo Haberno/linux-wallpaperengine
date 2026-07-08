@@ -625,6 +625,10 @@ struct TextData {
     /** Padding inside the bounding box, in pixels. Older scenes author a single number
      *  (uniform padding); newer editors write an "x y" vector. */
     glm::vec2 padding;
+    /** Layer brightness multiplier, applied to the text color at draw time */
+    UserSettingUniquePtr brightness;
+    /** Effects applied over the rendered text, same pipeline as image effects */
+    std::vector<ImageEffectUniquePtr> effects;
     // TODO: PARSE LIMITS TOO!
 };
 
