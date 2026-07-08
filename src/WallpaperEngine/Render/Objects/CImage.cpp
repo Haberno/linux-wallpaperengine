@@ -1309,6 +1309,12 @@ void CImage::render () {
 	(*cur)->render ();
     }
 
+    // Restore alpha writes: leaving the mask disabled leaks it into the next frame's scene clear (the
+    // clear silently stops writing alpha) and into any FBO created afterwards (an in-process wallpaper
+    // rebuild "clears" its new framebuffers to uninitialized VRAM). The scene buffer's alpha then sticks
+    // at whatever the allocation contained, and every alpha-blended writeback composites against it.
+    glColorMask (true, true, true, true);
+
 #if !NDEBUG
     glPopDebugGroup ();
 #endif /* DEBUG */
