@@ -1316,6 +1316,11 @@ void CImage::render () {
 	return;
     }
 
+    // a hidden container hides its whole subtree; children often have no visible of their own
+    if (!this->isVisibleThroughParents ()) {
+	return;
+    }
+
     glColorMask (true, true, true, true);
 
     // Always update screen transform (handles rotation + parallax dynamically);
