@@ -58,18 +58,21 @@ over-engineering audit, and an in-code TODO/FIXME scan. Ordered by priority.
 
 ## P2 — CText feature completion
 
-12. **Multi-line text** — wrapping, `maxrows`/`limitrows`,
-    `limituseellipsis`; renderer is single-line today (`rebuildTextureFrom`).
-13. **Alignment and padding** — honor `horizontalalign`, `verticalalign`,
-    `padding`, `anchor`, `maxwidth`/`limitwidth`.
-14. **Effects on text objects** — MyGO clock uses a `blurprecise` effect
-    chain on each text layer; CText ignores `effects` entirely. Needs the
-    CImage-style FBO/pass pipeline (or a shared path).
+12. ~~Multi-line text~~ — **done 2026-07-08** (50a82c4): \n line splitting +
+    box layout. Still open: word *wrapping* (`limitwidth`/`maxwidth`),
+    `maxrows`/`limitrows`/`limituseellipsis` enforcement.
+13. ~~Alignment and padding~~ — **done 2026-07-08** (50a82c4):
+    `horizontalalign`/`verticalalign`/`padding` (both authored forms).
+    Still open: `anchor` (dynamic screen anchoring).
+14. ~~Effects on text objects~~ — **done 2026-07-08** (9c66ad2): CPass-based
+    chain in a box-sized FBO via a value-neutral CRenderable host; brightness
+    applied at composite. Unsupported: command passes and scene-sampling
+    text effects (none seen authored yet).
 15. **Text background** — `opaquebackground`, `backgroundcolor`,
     `backgroundbrightness`.
-16. **Cleanups** — stale "Phase 1 uses a system font" comment block
-    (embedded fonts are implemented); revisit the
-    `computeEffectivePixelSize` scale-compensation heuristic (`CText.cpp:204`).
+16. **Cleanups** — stale "Phase 1" comment blocks in CText.h/cpp (embedded
+    fonts, effects and scripted text are all implemented now); CJK font
+    fallback for fonts missing glyphs.
 
 ## P3 — Remaining beingsuz ports (deliberately deferred 2026-07-08)
 
