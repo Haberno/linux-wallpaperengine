@@ -64,6 +64,9 @@ public:
     JSContext* getContext () const { return m_context; }
     JSValue getGlobalThis () const { return m_globalThis; }
     LoadedModule* getRunningModule () const { return m_runningModule; }
+    // Workshop id exported by the currently-running script module (`export let __workshopId = '...'`),
+    // or "" if none. Scripts use it to resolve their own workshop-scoped asset paths at runtime.
+    [[nodiscard]] std::string getRunningModuleWorkshopId () const;
     JSValue dynamicToJs (DynamicValue& value) const;
 
     /**
