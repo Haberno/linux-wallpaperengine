@@ -73,6 +73,48 @@ GLuint compileShader (GLenum type, const char* source) {
 }
 } // namespace
 
+uint32_t WallpaperEngine::Render::Objects::nextUtf8Codepoint (const std::string& text, size_t& offset) {
+    const auto lead = static_cast<uint8_t> (text[offset]);
+    int continuations;
+    uint32_t code;
+
+    if (lead < 0x80) {
+	continuations = 0;
+	code = lead;
+    } else if ((lead & 0xE0) == 0xC0) {
+	continuations = 1;
+	code = lead & 0x1Fu;
+    } else if ((lead & 0xF0) == 0xE0) {
+	continuations = 2;
+	code = lead & 0x0Fu;
+    } else if ((lead & 0xF8) == 0xF0) {
+	continuations = 3;
+	code = lead & 0x07u;
+    } else {
+	// stray continuation byte or invalid lead
+	offset++;
+	return 0xFFFD;
+    }
+
+    if (offset + continuations >= text.size ()) {
+	// truncated sequence at end of string
+	offset++;
+	return 0xFFFD;
+    }
+
+    for (int i = 1; i <= continuations; i++) {
+	const auto cont = static_cast<uint8_t> (text[offset + i]);
+	if ((cont & 0xC0) != 0x80) {
+	    offset++;
+	    return 0xFFFD;
+	}
+	code = (code << 6) | (cont & 0x3Fu);
+    }
+
+    offset += continuations + 1;
+    return code;
+}
+
 CText::CText (Wallpapers::CScene& scene, const Text& text) :
     CObject (scene, text), ScriptableObject (scene, text), m_text (text) {
     this->registerProperty ("color", *text.color->value);
@@ -242,8 +284,8 @@ void CText::rebuildTextureFrom (const std::string& text) {
     int maxAscent = 0;
     int maxDescent = 0;
 
-    for (unsigned char c : text) {
-	if (FT_Load_Char (m_ftFace, static_cast<FT_ULong> (c), FT_LOAD_RENDER) != 0) {
+    for (size_t offset = 0; offset < text.size ();) {
+	if (FT_Load_Char (m_ftFace, static_cast<FT_ULong> (nextUtf8Codepoint (text, offset)), FT_LOAD_RENDER) != 0) {
 	    continue;
 	}
 	penX += slot->advance.x >> 6;
@@ -256,8 +298,8 @@ void CText::rebuildTextureFrom (const std::string& text) {
     std::vector<uint8_t> pixels (static_cast<size_t> (width) * height, 0);
 
     penX = 0;
-    for (unsigned char c : text) {
-	if (FT_Load_Char (m_ftFace, static_cast<FT_ULong> (c), FT_LOAD_RENDER) != 0) {
+    for (size_t offset = 0; offset < text.size ();) {
+	if (FT_Load_Char (m_ftFace, static_cast<FT_ULong> (nextUtf8Codepoint (text, offset)), FT_LOAD_RENDER) != 0) {
 	    continue;
 	}
 
