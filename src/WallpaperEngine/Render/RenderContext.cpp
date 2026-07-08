@@ -119,6 +119,15 @@ const Drivers::VideoDriver& RenderContext::getDriver () const { return this->m_d
 
 const Drivers::Output::Output& RenderContext::getOutput () const { return this->m_driver.getOutput (); }
 
+glm::ivec2 RenderContext::getStableOutputSize () const {
+    if (!this->m_stableOutputSize.has_value ()) {
+	this->m_stableOutputSize
+	    = glm::ivec2 (this->getOutput ().getFullWidth (), this->getOutput ().getFullHeight ());
+    }
+
+    return this->m_stableOutputSize.value ();
+}
+
 std::shared_ptr<const TextureProvider> RenderContext::resolveTexture (const std::string& name) const {
     return this->m_textureCache->resolve (name);
 }
