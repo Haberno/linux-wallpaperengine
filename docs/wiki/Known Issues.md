@@ -19,10 +19,14 @@ timestamp: 2026-07-06T20:00:00-04:00
   (captures `this`), so any track change after a wallpaper swap called through
   a dangling pointer. Pending verification.
 - **MyGO clock text invisible** (3558034522): *fixed 2026-07-08, pending
-  visual verification.* Three commits: 2D text path now composes the
+  visual verification.* Four commits: 2D text path now composes the
   `parent` chain via `resolveWorldMatrix` (8cc5ad2), parent visibility
-  cascades to image/text children (8123d17), and text rasterizes UTF-8
-  codepoints instead of bytes (d8173ee — fixes the CJK watermark mojibake).
+  cascades to image/text children (8123d17), text rasterizes UTF-8
+  codepoints instead of bytes (d8173ee — fixes the CJK watermark mojibake),
+  and text sizes at WE's true semantics (f9aa10c): pointsize is **points at
+  300 DPI** (EM = pointsize × 300/72 px — mined from the Windows install's
+  `lib.sceneScript.d.ts`), with own+parent scale applied by the world matrix
+  instead of the old compensate hack that cancelled it.
   Correction to the original analysis: origin scripts already ticked —
   `ScriptableObject::registerProperty` → `ScriptEngine::queueScript` wraps
   and runs property scripts every frame (`engine.canvasSize` is exposed), so
