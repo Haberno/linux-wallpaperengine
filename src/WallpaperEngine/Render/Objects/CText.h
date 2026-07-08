@@ -75,11 +75,12 @@ private:
     unsigned int computeEffectivePixelSize () const;
     void initScriptLayer ();
 
-    // text-effect chain (built once at setup: FBOs are sized to the authored box, which is
-    // stable across text changes)
+    // text-effect chain (built once at setup; FBOs sized by computeEffectSurface)
     void setupEffectChain ();
     void destroyEffectChain ();
     void renderEffectChain (const glm::mat4& mvp, float brightness, float alpha);
+    /** chain surface: covers the authored box and the current ink quad plus blur headroom */
+    [[nodiscard]] glm::vec2 computeEffectSurface () const;
 
     const Text& m_text;
     std::string m_lastRenderedText;
@@ -123,6 +124,7 @@ private:
     GLint m_cuMVP = -1;
     GLint m_cuTexture = -1;
     glm::mat4 m_baseMVP = glm::mat4 (1.0f);
+    glm::vec2 m_effectSurface = { 0.0f, 0.0f };
     bool m_effectsEnabled = false;
 
     bool m_valid = false;
