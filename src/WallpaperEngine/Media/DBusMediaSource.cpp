@@ -75,7 +75,7 @@ DBusMediaSource::DBusMediaSource (std::chrono::milliseconds updateInterval) : Me
     dbus_connection_flush (this->m_connection);
 
     this->detectPlayer ();
-    this->initialStatusFetch ();
+    this->fetchMetadata ();
 }
 
 DBusMediaSource::~DBusMediaSource () {
@@ -196,6 +196,11 @@ void DBusMediaSource::parsePlaybackStatus (DBusMessageIter& variant, const char*
 
 	newState = PlaybackState::Playing;
     } else if (statusStr == "Paused") {
+	// Adopt a paused player when none is selected yet so an already-paused track still
+	// provides metadata; a Playing player (handled above) still takes precedence.
+	if (sender != nullptr && !this->m_currentPlayer.has_value ()) {
+	    this->m_currentPlayer = sender;
+	}
 	newState = PlaybackState::Paused;
     } else {
 	newState = PlaybackState::Stopped;
@@ -314,7 +319,7 @@ void DBusMediaSource::detectPlayer () {
     }
 }
 
-void DBusMediaSource::initialStatusFetch () {
+void DBusMediaSource::fetchMetadata () {
     if (this->m_currentPlayer.has_value () == false) {
 	return;
     }
@@ -339,10 +344,18 @@ void DBusMediaSource::initialStatusFetch () {
 }
 
 void DBusMediaSource::performUpdate () {
+    // 'available' reflects whether a media player is currently selected (it is otherwise
+    // never set, leaving consumers unable to tell whether there is now-playing info).
+    this->m_mediaInfo.available = this->m_currentPlayer.has_value ();
     // nothing to do if no player is detected
     if (!this->m_currentPlayer.has_value ()) {
 	return;
     }
+
+    // Re-poll the track metadata (title/artist/album/art). The constructor's one-shot
+    // fetch races player detection and PropertiesChanged signals don't always carry the
+    // full metadata, so without this an already-playing track delivers no title/artist.
+    this->fetchMetadata ();
 
     DBusMessage* reply = this->dbusMessage (
 	this->m_currentPlayer.value ().c_str (), "/org/mpris/MediaPlayer2", "org.freedesktop.DBus.Properties", "Get",
