@@ -18,7 +18,12 @@ void sinkInputInfoCallback (pa_context* context, const pa_sink_input_info* info,
     // get processid
     const char* value = pa_proplist_gets (info->proplist, PA_PROP_APPLICATION_PROCESS_ID);
 
-    if (value && strtol (value, nullptr, 10) != getpid () && pa_cvolume_avg (&info->volume) != PA_VOLUME_MUTED) {
+    // Only count streams that are actually producing audio: corked means paused (an idle
+    // browser tab, a paused player, or a bluetooth keep-alive stream sits corked/silent for
+    // hours and would otherwise mute wallpaper audio permanently), and the mute flag is
+    // separate from the volume level. Wallpaper Engine only mutes while something plays.
+    if (value && strtol (value, nullptr, 10) != getpid () && !info->corked && !info->mute
+	&& pa_cvolume_avg (&info->volume) != PA_VOLUME_MUTED) {
 	detector->setIsPlaying (true);
     }
 }
