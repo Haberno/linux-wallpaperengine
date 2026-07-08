@@ -183,8 +183,10 @@ void pa_context_notify_cb (pa_context* ctx, void* userdata) {
 PulseAudioPlaybackRecorder::PulseAudioPlaybackRecorder () :
     m_captureData (
 	{ .kisscfg = kiss_fftr_alloc (WAVE_BUFFER_SIZE, 0, nullptr, nullptr),
-	  .audioBuffer = new uint8_t[WAVE_BUFFER_SIZE],
-	  .audioBufferTmp = new uint8_t[WAVE_BUFFER_SIZE] }
+	  // value-initialize ("()") so silence/failed capture reads as zeros, not
+	  // uninitialized noise (which renders as random audio-reactive motion)
+	  .audioBuffer = new uint8_t[WAVE_BUFFER_SIZE](),
+	  .audioBufferTmp = new uint8_t[WAVE_BUFFER_SIZE]() }
     ) {
     this->m_mainloop = pa_mainloop_new ();
     this->m_mainloopApi = pa_mainloop_get_api (this->m_mainloop);
