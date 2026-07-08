@@ -419,18 +419,33 @@ std::string ShaderUnit::applyFragmentTexCoordCompatibility (std::string source) 
 	return source;
     }
 
-    const std::regex texCoordBeforeCast2 (R"(\bv_TexCoord\b(\s*[-+*/]\s*CAST2\s*\())");
-    const std::regex cast2BeforeTexCoord (R"((CAST2\s*\([^)]+\)\s*[-+*/]\s*)\bv_TexCoord\b)");
-
-    const std::regex wideTexCoordDecl (R"(\bvarying\s+vec[34]\s+v_TexCoord\s*;)");
-    if (!std::regex_search (source, wideTexCoordDecl)
-	|| (!std::regex_search (source, texCoordBeforeCast2) && !std::regex_search (source, cast2BeforeTexCoord))) {
-	return source;
-    }
-
     const std::string original = source;
-    source = std::regex_replace (source, texCoordBeforeCast2, "v_TexCoord.xy$1");
-    source = std::regex_replace (source, cast2BeforeTexCoord, "$1v_TexCoord.xy");
+    const std::regex wideTexCoordDecl (R"(\bvarying\s+vec[34]\s+v_TexCoord\s*;)");
+    const std::regex narrowTexCoordDecl (R"(\bvarying\s+vec2\s+v_TexCoord\s*;)");
+
+    if (std::regex_search (source, narrowTexCoordDecl) && this->m_link != nullptr
+	&& std::regex_search (this->m_link->m_preprocessed, wideTexCoordDecl)) {
+	// the linked vertex shader outputs a wider v_TexCoord, so glslang widens this input at
+	// link time and every bare (vec2) use of it becomes an implicit vec4 truncation; widen
+	// the declaration ourselves and qualify all uses with .xy. declarations are shielded
+	// first: shaders like genericparticle declare both widths in different #if branches
+	const std::regex anyTexCoordDecl (R"(\bvarying\s+(vec[234])\s+v_TexCoord\s*;)");
+	source = std::regex_replace (source, anyTexCoordDecl, "varying $1 V_TEXCOORD_DECL;");
+	source = std::regex_replace (source, std::regex (R"(\bv_TexCoord\b(?!\s*\.))"), "v_TexCoord.xy");
+	source = std::regex_replace (
+	    source, std::regex (R"(\bvarying\s+vec2\s+V_TEXCOORD_DECL\s*;)"), "varying vec4 v_TexCoord;"
+	);
+	source = std::regex_replace (source, std::regex ("V_TEXCOORD_DECL"), "v_TexCoord");
+    } else if (std::regex_search (source, wideTexCoordDecl)) {
+	const std::regex texCoordBeforeCast2 (R"(\bv_TexCoord\b(\s*[-+*/]\s*CAST2\s*\())");
+	const std::regex cast2BeforeTexCoord (R"((CAST2\s*\([^)]+\)\s*[-+*/]\s*)\bv_TexCoord\b)");
+	// HLSL allows implicit truncation on assignment (vec2 x = v_TexCoord), GLSL does not
+	const std::regex vec2AssignTexCoord (R"((\bvec2\s+[A-Za-z_][A-Za-z0-9_]*\s*=\s*)v_TexCoord\s*;)");
+
+	source = std::regex_replace (source, texCoordBeforeCast2, "v_TexCoord.xy$1");
+	source = std::regex_replace (source, cast2BeforeTexCoord, "$1v_TexCoord.xy");
+	source = std::regex_replace (source, vec2AssignTexCoord, "$1v_TexCoord.xy;");
+    }
 
     if (source != original) {
 	sLog.out ("Applied fragment TexCoord vec2 compatibility in ", this->m_file);

@@ -23,6 +23,9 @@ public:
     [[nodiscard]] const AssetLocator& getAssetLocator () const;
     [[nodiscard]] int getId () const;
     [[nodiscard]] const Object& getObject () const;
+    /** effective parallax depth: the object's own if authored, else inherited from the
+     *  nearest ancestor that authored one, else 1 (Wallpaper Engine's root default) */
+    [[nodiscard]] glm::vec2 resolveParallaxDepth () const;
 
 private:
     Wallpapers::CScene& m_scene;

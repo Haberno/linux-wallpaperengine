@@ -37,6 +37,9 @@ ObjectUniquePtr ObjectParser::parse (const JSON& it, const Project& project) {
 	    .parent = it.optional<int> ("parent"),
 	    .origin = it.user ("origin", project.properties, glm::vec3 (0.0f)),
 	    .locktransforms = it.optional ("locktransforms", false),
+	    .authoredParallaxDepth = it.find ("parallaxDepth") != it.end ()
+		? std::optional (it.user ("parallaxDepth", project.properties, glm::vec2 (0.0f))->value->getVec2 ())
+		: std::nullopt,
 	    .groupScale = it.user ("scale", project.properties, glm::vec3 (1.0f)),
 	    .groupAngles = it.user ("angles", project.properties, glm::vec3 (0.0f)),
 	    .groupVisible = it.user ("visible", project.properties, true),
@@ -61,6 +64,9 @@ ObjectUniquePtr ObjectParser::parse (const JSON& it, const Project& project) {
 	    .parent = it.optional<int> ("parent"),
 	    .origin = it.user ("origin", project.properties, glm::vec3 (0.0f)),
 	    .locktransforms = it.optional ("locktransforms", false),
+	    .authoredParallaxDepth = it.find ("parallaxDepth") != it.end ()
+		? std::optional (it.user ("parallaxDepth", project.properties, glm::vec2 (0.0f))->value->getVec2 ())
+		: std::nullopt,
 	    .groupScale = it.user ("scale", project.properties, glm::vec3 (1.0f)),
 	    .groupAngles = it.user ("angles", project.properties, glm::vec3 (0.0f)),
 	    .groupVisible = it.user ("visible", project.properties, true),
