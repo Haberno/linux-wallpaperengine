@@ -377,6 +377,11 @@ void CText::render () {
     if (!m_text.visible->value->getBool ()) {
 	return;
     }
+    // a hidden container hides its whole subtree; MyGO's Clock/Date children carry no
+    // visible of their own — the parent's user-property toggle must gate them too
+    if (!this->isVisibleThroughParents ()) {
+	return;
+    }
 
 #if !NDEBUG
     std::string str = "Text " + this->getObject ().name + " (" + std::to_string (this->getObject ().id) + ")";

@@ -74,6 +74,34 @@ glm::vec2 CObject::resolveParallaxDepth () const {
     return glm::vec2 (1.0f);
 }
 
+bool CObject::isVisibleThroughParents () const {
+    constexpr int kMaxParentDepth = 32;
+    const Object* current = &this->m_object;
+
+    for (int depth = 0; current->parent.has_value () && depth <= kMaxParentDepth; depth++) {
+	const auto* parentObject = this->m_scene.getObject (current->parent.value ());
+
+	if (parentObject == nullptr) {
+	    break;
+	}
+
+	const Object& parent = parentObject->getObject ();
+	// image/text parents render from their own visible value; plain group containers
+	// only carry the group fallback
+	const auto& visible = parent.is<Image> () ? parent.as<Image> ()->visible
+	    : parent.is<Text> ()                  ? parent.as<Text> ()->visible
+						  : parent.groupVisible;
+
+	if (visible != nullptr && visible->value != nullptr && !visible->value->getBool ()) {
+	    return false;
+	}
+
+	current = &parent;
+    }
+
+    return true;
+}
+
 glm::mat4 CObject::resolveWorldMatrix () const {
     constexpr int kMaxParentDepth = 32;
 
