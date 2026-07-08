@@ -15,6 +15,28 @@ float movetowards (float current, float target, float maxDelta) {
     return current + glm::sign (target - current) * maxDelta;
 }
 
+/**
+ * Per-band gain replicating Wallpaper Engine's spectrum output. WE's raw g_AudioSpectrum
+ * values are NOT normalized or equalized by the engine (authors do that in wallpapers);
+ * on a pink-noise input its 64 bands average the curve measured by the community
+ * ("pink noise" reference array, Steam guide 837435817 — the calibration standard every
+ * WE audio emulator matches). This table maps OUR pipeline (44.1kHz U8 mono capture,
+ * Hann-windowed 1024-point FFT, bins band*2) onto that measured response: gain[band] =
+ * table[band] / mean|X_pink(band*2)|, derived numerically by pushing -20dBFS pink noise
+ * through the exact capture math. Shape is exact; absolute scale assumes the reference
+ * measurement used the standard -20dBFS test level.
+ */
+constexpr float kWeBandGain[64] = {
+    0.039542f, 0.110015f, 0.130629f, 0.149603f, 0.148387f, 0.151763f, 0.154256f, 0.158409f,
+    0.162823f, 0.171196f, 0.178758f, 0.182072f, 0.188283f, 0.186852f, 0.196723f, 0.199302f,
+    0.200487f, 0.212511f, 0.229720f, 0.233533f, 0.231954f, 0.245645f, 0.244336f, 0.254547f,
+    0.251100f, 0.278948f, 0.280204f, 0.283992f, 0.286617f, 0.369209f, 0.493948f, 0.505885f,
+    0.573950f, 0.577447f, 0.678270f, 0.703267f, 0.786335f, 0.832643f, 0.894425f, 0.947850f,
+    1.012235f, 1.078655f, 1.170370f, 1.229459f, 1.347654f, 1.376703f, 1.491941f, 1.585113f,
+    1.662624f, 1.758022f, 1.850683f, 1.954022f, 2.037420f, 2.113416f, 2.223025f, 2.256487f,
+    2.336662f, 2.435359f, 2.443985f, 2.488910f, 2.579635f, 2.558157f, 2.574051f, 2.525312f,
+};
+
 namespace WallpaperEngine::Audio::Drivers::Recorders {
 void pa_stream_notify_cb (pa_stream* stream, void* /*userdata*/) {
     switch (pa_stream_get_state (stream)) {
@@ -191,6 +213,11 @@ PulseAudioPlaybackRecorder::PulseAudioPlaybackRecorder () :
 	  .audioBuffer = new uint8_t[WAVE_BUFFER_SIZE](),
 	  .audioBufferTmp = new uint8_t[WAVE_BUFFER_SIZE]() }
     ) {
+    for (int i = 0; i < WAVE_BUFFER_SIZE; i++) {
+	this->m_hannWindow[i]
+	    = 0.5f * (1.0f - std::cos (2.0f * static_cast<float> (M_PI) * i / (WAVE_BUFFER_SIZE - 1)));
+    }
+
     this->m_mainloop = pa_mainloop_new ();
     this->m_mainloopApi = pa_mainloop_get_api (this->m_mainloop);
     this->m_context = pa_context_new (this->m_mainloopApi, "wallpaperengine-audioprocessing");
@@ -234,17 +261,26 @@ void PulseAudioPlaybackRecorder::update () {
     for (int guard = 0; guard < 256 && pa_mainloop_iterate (this->m_mainloop, 0, nullptr) > 0; guard++) {
     }
 
-    // interpolate current values to the destination
+    // Interpolate published values toward the FFT destinations with WE's visual feel:
+    // near-instant attack, gradual exponential release (bars snap up on a beat, fall away
+    // smoothly). The old symmetric linear step also crawled toward >1 peaks for ~10 frames.
+    // ponytail: attack/release factors tuned by eye against WE footage; per render frame
+    const auto follow = [] (float current, float target) {
+	constexpr float kAttack = 0.7f;
+	constexpr float kRelease = 0.12f;
+	return current + (target - current) * (target > current ? kAttack : kRelease);
+    };
+
     for (int i = 0; i < 64; i++) {
-	this->audio64[i] = movetowards (this->audio64[i], this->m_FFTdestination64[i], 0.3f);
+	this->audio64[i] = follow (this->audio64[i], this->m_FFTdestination64[i]);
 	if (i >= 32) {
 	    continue;
 	}
-	this->audio32[i] = movetowards (this->audio32[i], this->m_FFTdestination32[i], 0.3f);
+	this->audio32[i] = follow (this->audio32[i], this->m_FFTdestination32[i]);
 	if (i >= 16) {
 	    continue;
 	}
-	this->audio16[i] = movetowards (this->audio16[i], this->m_FFTdestination16[i], 0.3f);
+	this->audio16[i] = follow (this->audio16[i], this->m_FFTdestination16[i]);
     }
 
     if (!this->m_captureData.fullFrameReady) {
@@ -286,37 +322,25 @@ void PulseAudioPlaybackRecorder::update () {
 	return;
     }
 
+    // Hann window before the FFT: an unwindowed (rectangular) transform leaks every tone
+    // across the whole spectrum, smearing the bands into mush. WE-scale compensation for
+    // the window's 0.5 coherent gain is folded into kWeBandGain's derivation.
+    for (int i = 0; i < WAVE_BUFFER_SIZE; i++) {
+	this->m_audioFFTbuffer[i] *= this->m_hannWindow[i];
+    }
+
     // perform full fft pass
     kiss_fftr (this->m_captureData.kisscfg, this->m_audioFFTbuffer, this->m_FFTinfo);
 
-    // Reduce to bands using linear magnitudes normalized by a running peak. The previous
-    // 0.35*log10(mag²) mapping clamped to 1.0 saturated on real music — any bin above ~5%
-    // of full scale pegged its bar at max height, leaving only a slight flicker as visible
-    // dynamics — and its output also depended on the system volume. Auto-gain adapts to
-    // whatever level the monitor stream delivers so the loudest band rides near 1.0 and the
-    // rest scale proportionally; sqrt shaping lifts quiet detail (perceptual, like WE bars).
-    float weighted[64];
-    float frameMax = 0.0f;
-
+    // Reduce to bands exactly like Wallpaper Engine presents them: raw per-band magnitudes
+    // scaled by kWeBandGain (see its comment). No normalization, no clamp — WE's values
+    // track the actual playback level and can exceed 1; wallpapers were authored against
+    // that behavior and do their own peak handling.
     for (int band = 0; band < 64; band++) {
 	const int index = band * 2;
 	const float re = this->m_FFTinfo[index].r;
 	const float im = this->m_FFTinfo[index].i;
-	// keep the original frequency-weight curve: music carries less energy up high
-	const float weight = static_cast<float> (2.0f - pow (M_E, (1.0f - band / 63.0f) * 1.0f - 0.5f));
-	weighted[band] = std::sqrt (re * re + im * im) * weight;
-	frameMax = std::max (frameMax, weighted[band]);
-    }
-
-    // ponytail: tuned by ear, not derived — decay halves the gain reference in ~3s at the
-    // ~43 completed frames/sec this capture produces; the floor keeps quiet-but-real music
-    // from being amplified to full scale (full-scale bin magnitude is ~512)
-    constexpr float kPeakDecay = 0.995f;
-    constexpr float kPeakFloor = 32.0f;
-    this->m_bandPeak = std::max ({ frameMax, this->m_bandPeak * kPeakDecay, kPeakFloor });
-
-    for (int band = 0; band < 64; band++) {
-	const float value = std::sqrt (std::min (1.0f, weighted[band] / this->m_bandPeak));
+	const float value = std::sqrt (re * re + im * im) * kWeBandGain[band];
 
 	this->m_FFTdestination64[band] = value;
 	this->m_FFTdestination32[band >> 1] = value;
@@ -329,8 +353,8 @@ void PulseAudioPlaybackRecorder::update () {
 	if (++debugCounter % 43 == 0) {
 	    if (FILE* f = fopen ("/tmp/we-audio-debug.log", "a")) {
 		fprintf (
-		    f, "rms=%.2f peak=%.2f b0=%.2f b8=%.2f b32=%.2f\n", rms, this->m_bandPeak,
-		    this->m_FFTdestination64[0], this->m_FFTdestination64[8], this->m_FFTdestination64[32]
+		    f, "rms=%.2f b0=%.2f b8=%.2f b32=%.2f b60=%.2f\n", rms, this->m_FFTdestination64[0],
+		    this->m_FFTdestination64[8], this->m_FFTdestination64[32], this->m_FFTdestination64[60]
 		);
 		fclose (f);
 	    }
