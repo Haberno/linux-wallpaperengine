@@ -344,6 +344,15 @@ static void logJSException (JSContext* ctx, const char* context) {
 	    sLog.error ("ScriptEngine [", context, "]: ", str);
 	    JS_FreeCString (ctx, str);
 	}
+	JSValue stack = JS_GetPropertyStr (ctx, exc, "stack");
+	if (!JS_IsUndefined (stack) && !JS_IsNull (stack)) {
+	    const char* sstr = JS_ToCString (ctx, stack);
+	    if (sstr) {
+		sLog.error ("ScriptEngine [", context, "] stack: ", sstr);
+		JS_FreeCString (ctx, sstr);
+	    }
+	}
+	JS_FreeValue (ctx, stack);
     }
     JS_FreeValue (ctx, exc);
 }
