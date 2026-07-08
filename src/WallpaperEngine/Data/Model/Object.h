@@ -622,8 +622,9 @@ struct TextData {
     std::string alignment;
     /** Vertical alignment: "top", "center", "bottom" */
     std::string verticalalign;
-    /** Padding inside the bounding box */
-    int padding;
+    /** Padding inside the bounding box, in pixels. Older scenes author a single number
+     *  (uniform padding); newer editors write an "x y" vector. */
+    glm::vec2 padding;
     // TODO: PARSE LIMITS TOO!
 };
 
