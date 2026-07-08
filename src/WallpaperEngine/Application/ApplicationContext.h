@@ -158,6 +158,11 @@ public:
 	    int volume;
 	    /** If the audio must be muted if something else is playing sound */
 	    bool automute;
+	    /** Case-insensitive substrings of application names whose audio streams never
+	     *  count as "something playing" for automute: wallpaper daemons keep phantom
+	     *  streams open (skwd-paper holds an always-unmuted ALSA stream; stale
+	     *  wallpaperengine instances leave their own), which would mute us forever. */
+	    std::vector<std::string> automuteIgnore;
 	    /** If audio processing can be enabled or not */
 	    bool audioprocessing;
 	} audio;
@@ -224,6 +229,7 @@ public:
             .enabled = true,
             .volume = 15,
             .automute = true,
+            .automuteIgnore = { "wallpaperengine", "skwd" },
             .audioprocessing = true,
         },
         .mouse = {
