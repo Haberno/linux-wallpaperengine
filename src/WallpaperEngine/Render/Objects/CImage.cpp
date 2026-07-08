@@ -1181,10 +1181,24 @@ void CImage::setupPasses () {
 	// TODO: PROPERLY CHECK IF THIS IS ALL THAT'S NEEDED
 	if (!writesToTarget && this->shouldRenderFinalPass (std::next (cur) == end)) {
 	    // TODO: PROPERLY CHECK EFFECT'S VISIBILITY AND TAKE IT INTO ACCOUNT
-	    spacePosition = this->getSceneSpacePosition ();
 	    drawTo = this->getScene ().getFBO ();
-	    projection = &this->m_modelViewProjectionScreen;
-	    inverseProjection = &this->m_modelViewProjectionScreenInverse;
+
+	    if (this->getImage ().model->passthrough && this->getImage ().model->fullscreen) {
+		// A fullscreen passthrough layer is a whole-frame post-process (it sampled the scene from
+		// _rt_FullFrameBuffer and graded it). Its writeback must cover the entire framebuffer. The
+		// scene-space quad routes through m_modelViewProjectionScreen (ortho * camera lookAt), whose
+		// lookAt tilts this flat z=0 quad so its corners fall outside the [-1,1] depth-clip volume —
+		// the GPU clips a slab and the uncovered pixels keep the ungraded scene (the "coloring applies
+		// only halfway" artifact on Starscape). Use the identity-projected full -1..1 NDC quad instead,
+		// exactly like the copy/intermediate passes (and like WE's untransformed passthrough.vert).
+		spacePosition = this->getPassSpacePosition ();
+		projection = &this->m_modelViewProjectionPass;
+		inverseProjection = &this->m_modelViewProjectionPassInverse;
+	    } else {
+		spacePosition = this->getSceneSpacePosition ();
+		projection = &this->m_modelViewProjectionScreen;
+		inverseProjection = &this->m_modelViewProjectionScreenInverse;
+	    }
 
 	    // puppet warp deforms the final on-screen geometry only; every earlier pass works on
 	    // the untouched image so effect masks keep lining up with it in the intermediate FBOs
