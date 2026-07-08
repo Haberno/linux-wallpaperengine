@@ -20,6 +20,7 @@ public:
     ~Camera ();
 
     void setOrthogonalProjection (const float width, const float height);
+    void setPerspectiveProjection (const float width, const float height, const bool flipY);
 
     [[nodiscard]] const glm::vec3& getCenter () const;
     [[nodiscard]] const glm::vec3& getEye () const;
@@ -28,6 +29,9 @@ public:
     [[nodiscard]] const glm::mat4& getLookAt () const;
     [[nodiscard]] Wallpapers::CScene& getScene () const;
     [[nodiscard]] bool isOrthogonal () const;
+    /** True when the perspective projection renders Y-mirrored to compensate the
+     *  output's vertical flip at present time (see Output::renderVFlip) */
+    [[nodiscard]] bool isYFlipped () const;
     [[nodiscard]] float getWidth () const;
     [[nodiscard]] float getHeight () const;
     [[nodiscard]] float getFov () const;
@@ -38,6 +42,7 @@ private:
     float m_width;
     float m_height;
     bool m_isOrthogonal = false;
+    bool m_isYFlipped = false;
     glm::mat4 m_projection = {};
     glm::mat4 m_lookat = {};
     const SceneData::Camera& m_camera;

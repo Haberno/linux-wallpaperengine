@@ -1,6 +1,9 @@
 #include "EngineObject.h"
 #include "ScriptEngine.h"
+#include "WallpaperEngine/Audio/AudioContext.h"
+#include "WallpaperEngine/Audio/Drivers/Recorders/PlaybackRecorder.h"
 #include "WallpaperEngine/Logging/Log.h"
+#include "WallpaperEngine/Render/Wallpapers/CScene.h"
 
 #include <ranges>
 
@@ -29,6 +32,31 @@ JSValue engine_get_runtime (JSContext* ctx, JSValueConst this_val, int argc, JSV
 
 JSValue engine_get_daytime (JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
     return JS_NewFloat64 (ctx, g_Daytime);
+}
+
+JSValue engine_get_screen_resolution (JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    JSClassID classId;
+    auto* engine = static_cast<EngineObject*> (JS_GetAnyOpaque (this_val, &classId));
+    const auto& output = engine->getScene ().getContext ().getOutput ();
+
+    JSValue result = engine->getEngine ().getAdapters ().vec2->instantiate ();
+
+    JS_SetPropertyStr (ctx, result, "x", JS_NewFloat64 (ctx, output.getFullWidth ()));
+    JS_SetPropertyStr (ctx, result, "y", JS_NewFloat64 (ctx, output.getFullHeight ()));
+
+    return result;
+}
+
+JSValue engine_get_canvas_size (JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    JSClassID classId;
+    auto* engine = static_cast<EngineObject*> (JS_GetAnyOpaque (this_val, &classId));
+
+    JSValue result = engine->getEngine ().getAdapters ().vec2->instantiate ();
+
+    JS_SetPropertyStr (ctx, result, "x", JS_NewFloat64 (ctx, engine->getScene ().getWidth ()));
+    JS_SetPropertyStr (ctx, result, "y", JS_NewFloat64 (ctx, engine->getScene ().getHeight ()));
+
+    return result;
 }
 
 JSValue engine_stop_interval (
@@ -98,11 +126,59 @@ JSValue engine_set_interval (JSContext* ctx, JSValueConst this_val, int argc, JS
 	return JS_EXCEPTION;
     }
 
-    int id = it->second.reserveNextIntervalId (function, delay);
+    // the callback is stored past this call, so it needs its own reference
+    int id = it->second.reserveNextIntervalId (JS_DupValue (ctx, function), delay);
 
     JSValue args[] = { JS_NewInt32 (ctx, id) };
 
     return JS_NewCFunctionData (ctx, engine_stop_interval, 2, magic, 1, args);
+}
+
+JSValue engine_register_audio_buffers (JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv, int magic) {
+    const auto it = engineInstances.find (magic);
+
+    if (it == engineInstances.end ()) {
+	return JS_EXCEPTION;
+    }
+
+    int resolution = 16;
+
+    if (argc > 0) {
+	JS_ToInt32 (ctx, &resolution, argv[0]);
+    }
+
+    auto& recorder = it->second.getScene ().getAudioContext ().getRecorder ();
+    float* data;
+
+    switch (resolution) {
+	case 32: data = recorder.audio32; break;
+	case 64: data = recorder.audio64; break;
+	default:
+	    resolution = 16;
+	    data = recorder.audio16;
+	    break;
+    }
+
+    // Float32Array views over the recorder's live spectrum: scripts read fresh values every
+    // frame without any per-tick copying. The recorder outlives the script engine, so the
+    // buffer memory stays valid for the runtime's whole lifetime.
+    JSValue buffer = JS_NewArrayBuffer (
+	ctx, reinterpret_cast<uint8_t*> (data), resolution * sizeof (float), nullptr, nullptr, false
+    );
+    JSValue view = JS_NewTypedArray (ctx, 1, &buffer, JS_TYPED_ARRAY_FLOAT32);
+    JS_FreeValue (ctx, buffer);
+
+    if (JS_IsException (view)) {
+	return view;
+    }
+
+    // the recorder keeps a mono spectrum, so both channels and the average share it
+    JSValue result = JS_NewObject (ctx);
+    JS_SetPropertyStr (ctx, result, "left", JS_DupValue (ctx, view));
+    JS_SetPropertyStr (ctx, result, "right", JS_DupValue (ctx, view));
+    JS_SetPropertyStr (ctx, result, "average", view);
+
+    return result;
 }
 
 JSValue engine_set_timeout (JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv, int magic) {
@@ -128,7 +204,8 @@ JSValue engine_set_timeout (JSContext* ctx, JSValueConst this_val, int argc, JSV
 	return JS_EXCEPTION;
     }
 
-    int id = it->second.reserveNextTimeoutId (function, delay);
+    // the callback is stored past this call, so it needs its own reference
+    int id = it->second.reserveNextTimeoutId (JS_DupValue (ctx, function), delay);
 
     JSValue args[] = { JS_NewInt32 (ctx, id) };
 
@@ -137,6 +214,7 @@ JSValue engine_set_timeout (JSContext* ctx, JSValueConst this_val, int argc, JSV
 
 EngineObject::EngineObject (ScriptEngine& engine, Render::Wallpapers::CScene& scene) :
     m_scene (scene), m_engine (engine), m_instanceId (++EngineInstanceId), m_classId (0) {
+    engineInstances.emplace (this->m_instanceId, *this);
     this->m_definition = { .class_name = "IEngine" };
     JS_NewClassID (this->m_engine.getRuntime (), &this->m_classId);
     JS_NewClass (this->m_engine.getRuntime (), this->m_classId, &this->m_definition);
@@ -161,6 +239,16 @@ EngineObject::EngineObject (ScriptEngine& engine, Render::Wallpapers::CScene& sc
 	JS_NewCFunction (this->m_engine.getContext (), engine_get_daytime, "get", 0),
 	JS_NewCFunction (this->m_engine.getContext (), engine_set_value, "set", 1), JS_PROP_ENUMERABLE
     );
+    JS_DefinePropertyGetSet (
+	this->m_engine.getContext (), this->m_instance, JS_NewAtom (this->m_engine.getContext (), "screenResolution"),
+	JS_NewCFunction (this->m_engine.getContext (), engine_get_screen_resolution, "get", 0),
+	JS_NewCFunction (this->m_engine.getContext (), engine_set_value, "set", 1), JS_PROP_ENUMERABLE
+    );
+    JS_DefinePropertyGetSet (
+	this->m_engine.getContext (), this->m_instance, JS_NewAtom (this->m_engine.getContext (), "canvasSize"),
+	JS_NewCFunction (this->m_engine.getContext (), engine_get_canvas_size, "get", 0),
+	JS_NewCFunction (this->m_engine.getContext (), engine_set_value, "set", 1), JS_PROP_ENUMERABLE
+    );
     JS_DefinePropertyValueStr (
 	this->m_engine.getContext (), this->m_instance, "AUDIO_RESOLUTION_16",
 	JS_NewInt32 (this->m_engine.getContext (), 16), JS_PROP_ENUMERABLE
@@ -176,14 +264,24 @@ EngineObject::EngineObject (ScriptEngine& engine, Render::Wallpapers::CScene& sc
     JS_DefinePropertyValueStr (
 	this->m_engine.getContext (), this->m_instance, "setInterval",
 	JS_NewCFunctionMagic (
-	    this->m_engine.getContext (), engine_set_interval, "setInterval", 2, JS_CFUNC_generic, this->m_instanceId
+	    this->m_engine.getContext (), engine_set_interval, "setInterval", 2, JS_CFUNC_generic_magic,
+	    this->m_instanceId
 	),
 	JS_PROP_ENUMERABLE
     );
     JS_DefinePropertyValueStr (
 	this->m_engine.getContext (), this->m_instance, "setTimeout",
 	JS_NewCFunctionMagic (
-	    this->m_engine.getContext (), engine_set_timeout, "setTimeout", 2, JS_CFUNC_generic, this->m_instanceId
+	    this->m_engine.getContext (), engine_set_timeout, "setTimeout", 2, JS_CFUNC_generic_magic,
+	    this->m_instanceId
+	),
+	JS_PROP_ENUMERABLE
+    );
+    JS_DefinePropertyValueStr (
+	this->m_engine.getContext (), this->m_instance, "registerAudioBuffers",
+	JS_NewCFunctionMagic (
+	    this->m_engine.getContext (), engine_register_audio_buffers, "registerAudioBuffers", 1,
+	    JS_CFUNC_generic_magic, this->m_instanceId
 	),
 	JS_PROP_ENUMERABLE
     );
@@ -267,7 +365,9 @@ void EngineObject::tick () {
 
 	timeout.next = now + timeout.duration;
 
-	JS_Call (this->m_engine.getContext (), timeout.callback, JS_NULL, 0, nullptr);
+	JS_FreeValue (
+	    this->m_engine.getContext (), JS_Call (this->m_engine.getContext (), timeout.callback, JS_NULL, 0, nullptr)
+	);
     }
 
     std::vector<uint32_t> removeTimeouts;
@@ -278,7 +378,9 @@ void EngineObject::tick () {
 	    continue;
 	}
 
-	JS_Call (this->m_engine.getContext (), timeout.callback, JS_NULL, 0, nullptr);
+	JS_FreeValue (
+	    this->m_engine.getContext (), JS_Call (this->m_engine.getContext (), timeout.callback, JS_NULL, 0, nullptr)
+	);
 
 	JS_FreeValue (this->m_engine.getContext (), timeout.callback);
 

@@ -50,3 +50,27 @@ void Camera::setOrthogonalProjection (const float width, const float height) {
     this->m_projection = glm::translate (this->m_projection, this->getEye ());
     this->m_isOrthogonal = true;
 }
+
+void Camera::setPerspectiveProjection (const float width, const float height, const bool flipY) {
+    this->m_width = width;
+    this->m_height = height;
+
+    const float nearz = glm::max (this->getNearZ (), 0.0001f);
+    const float farz = this->getFarZ ();
+
+    // fov is treated as the vertical field of view; view transform is the lookAt
+    // computed in the constructor from the scene's eye/center/up
+    this->m_projection = glm::perspective (glm::radians (this->getFov ()), width / height, nearz, farz);
+
+    // outputs that present the scene framebuffer with a vertical flip (see
+    // Output::renderVFlip) need the scene rendered mirrored for the flip to undo it;
+    // the 2D pipeline bakes the same compensation into its object coordinates
+    if (flipY) {
+	this->m_projection[1][1] *= -1.0f;
+    }
+
+    this->m_isOrthogonal = false;
+    this->m_isYFlipped = flipY;
+}
+
+bool Camera::isYFlipped () const { return this->m_isYFlipped; }

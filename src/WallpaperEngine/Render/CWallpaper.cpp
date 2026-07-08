@@ -441,14 +441,15 @@ void CWallpaper::render (
 
 void CWallpaper::setPause (bool newState) { }
 
-void CWallpaper::setupFramebuffers () {
+void CWallpaper::setupFramebuffers (bool sceneDepthBuffer) {
     const uint32_t width = this->getWidth ();
     const uint32_t height = this->getHeight ();
     const uint32_t clamp = this->m_state.getClampingMode ();
 
     // create framebuffer for the scene
     this->m_sceneFBO = this->create (
-	"_rt_FullFrameBuffer", TextureFormat_ARGB8888, clamp, 1.0, { width, height }, { width, height }
+	"_rt_FullFrameBuffer", TextureFormat_ARGB8888, clamp, 1.0, { width, height }, { width, height },
+	sceneDepthBuffer
     );
 
     this->alias ("_rt_MipMappedFrameBuffer", "_rt_FullFrameBuffer");

@@ -165,7 +165,7 @@ protected:
     /**
      * Setups OpenGL's framebuffers for ping-pong and scene rendering
      */
-    void setupFramebuffers ();
+    void setupFramebuffers (bool sceneDepthBuffer = false);
 
     const Wallpaper& m_wallpaperData;
 
