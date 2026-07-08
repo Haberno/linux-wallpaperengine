@@ -71,11 +71,17 @@ void AlbumTexture::copyContents (const TextureProvider& other) const noexcept {
     // RGBA8 texture: 4 bytes per pixel
     size_t bufferSize = other.getTextureWidth (0) * other.getTextureHeight (0) * 4;
 
+    if (bufferSize == 0) {
+	return;
+    }
+
     uint8_t* buffer = new uint8_t[bufferSize];
 
-    // Read the source texture
+    // Read the source texture. The buffer is sized exactly for the texture, so the plain
+    // glGetTexImage is enough — glGetnTexImage is a GL 4.5 entry point and is a null pointer
+    // on the GL 3.3 context this engine runs, crashing on the first album-art change.
     glBindTexture (GL_TEXTURE_2D, other.getTextureID (0));
-    glGetnTexImage (GL_TEXTURE_2D, 0, GL_RGBA, GL_UNSIGNED_BYTE, bufferSize, buffer);
+    glGetTexImage (GL_TEXTURE_2D, 0, GL_RGBA, GL_UNSIGNED_BYTE, buffer);
 
     // Upload into another texture
     glBindTexture (GL_TEXTURE_2D, this->m_textureID);

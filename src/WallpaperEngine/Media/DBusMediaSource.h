@@ -17,7 +17,7 @@ public:
 
 protected:
     void performUpdate () override;
-    void initialStatusFetch ();
+    void fetchMetadata ();
     void detectPlayer ();
 
     DBusMessage* dbusMessage (
