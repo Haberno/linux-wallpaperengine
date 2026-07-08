@@ -39,6 +39,10 @@ public:
      */
     virtual bool closeRequested () = 0;
     /**
+     * @return If the driver stopped abnormally (e.g. lost its only output) and should be relaunched
+     */
+    [[nodiscard]] virtual bool abnormalTermination () const { return false; }
+    /**
      * @param size The new size for the window
      */
     virtual void resizeWindow (glm::ivec2 size) = 0;

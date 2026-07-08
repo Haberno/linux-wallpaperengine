@@ -64,6 +64,7 @@ public:
     [[nodiscard]] Output::Output& getOutput () override;
     float getRenderTime () const override;
     bool closeRequested () override;
+    [[nodiscard]] bool abnormalTermination () const override;
     void resizeWindow (glm::ivec2 size) override;
     void resizeWindow (glm::ivec4 sizeandpos) override;
     void showWindow () override;
@@ -92,6 +93,8 @@ private:
     /** The Wayland context in use */
     WaylandContext m_waylandContext = {};
     mutable bool m_requestedExit;
+    /** Set when the compositor closed our last layer surface, so the process exits non-zero to be relaunched. */
+    bool m_abnormalExit = false;
 
     void initWaylandRegistry ();
     void setupOutputLayerSurfaces ();

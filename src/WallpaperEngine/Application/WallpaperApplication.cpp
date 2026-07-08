@@ -1145,6 +1145,10 @@ void WallpaperApplication::show () {
     cleanup ();
 }
 
+bool WallpaperApplication::abnormalTermination () const {
+    return this->m_videoDriver->abnormalTermination ();
+}
+
 void WallpaperApplication::update (Render::Drivers::Output::OutputViewport* viewport) {
     // render the scene
     m_renderContext->render (viewport);
