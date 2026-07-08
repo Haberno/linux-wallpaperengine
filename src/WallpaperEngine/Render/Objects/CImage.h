@@ -153,6 +153,12 @@ private:
     glm::mat4 m_modelMatrix = {};
     glm::mat4 m_viewProjectionMatrix = {};
 
+    /** rotation-only local->world matrix (and its inverse) fed to effect passes as
+     * g_EffectTextureProjectionMatrix so depthparallax-style shaders can rotate the
+     * parallax input into the layer's own local axes; identity when angles are zero */
+    glm::mat4 m_effectTextureProjectionMatrix = glm::mat4 (1.0f);
+    glm::mat4 m_effectTextureProjectionMatrixInverse = glm::mat4 (1.0f);
+
     std::shared_ptr<const CFBO> m_mainFBO = nullptr;
     std::shared_ptr<const CFBO> m_subFBO = nullptr;
     std::shared_ptr<const CFBO> m_currentMainFBO = nullptr;

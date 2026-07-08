@@ -106,6 +106,56 @@ JSValue ScriptEngine::dynamicToJs (DynamicValue& value) const {
     }
 }
 
+// Wallpaper Engine's SceneScript API exposes object angles in degrees while the scene
+// data stores radians (see the authored values vs. the angle scripts in e.g. workshop
+// scene 3589454154). Angle properties therefore cross the script boundary as plain
+// degree objects instead of live radian adapters.
+static bool isAnglesProperty (const std::string& key) { return key.rfind ("angles_", 0) == 0; }
+
+static JSValue anglesToJs (JSContext* ctx, const DynamicValue& value) {
+    const glm::vec3 degrees = glm::degrees (value.getVec3 ());
+    JSValue result = JS_NewObject (ctx);
+
+    JS_SetPropertyStr (ctx, result, "x", JS_NewFloat64 (ctx, degrees.x));
+    JS_SetPropertyStr (ctx, result, "y", JS_NewFloat64 (ctx, degrees.y));
+    JS_SetPropertyStr (ctx, result, "z", JS_NewFloat64 (ctx, degrees.z));
+
+    return result;
+}
+
+static void jsToAngles (JSContext* ctx, JSValue result, JSValue argument, DynamicValue& source) {
+    // scripts either mutate the passed value, return a new one, or both
+    const JSValue val = JS_IsObject (result) ? result : argument;
+
+    if (!JS_IsObject (val)) {
+	return;
+    }
+
+    JSValue x = JS_GetPropertyStr (ctx, val, "x");
+    JSValue y = JS_GetPropertyStr (ctx, val, "y");
+    JSValue z = JS_GetPropertyStr (ctx, val, "z");
+    ScopeGuard guard ([=] {
+	JS_FreeValue (ctx, x);
+	JS_FreeValue (ctx, y);
+	JS_FreeValue (ctx, z);
+    });
+
+    if (!JS_IsNumber (x) || !JS_IsNumber (y) || !JS_IsNumber (z)) {
+	return;
+    }
+
+    double xVal = 0.0, yVal = 0.0, zVal = 0.0;
+    JS_ToFloat64 (ctx, &xVal, x);
+    JS_ToFloat64 (ctx, &yVal, y);
+    JS_ToFloat64 (ctx, &zVal, z);
+
+    if (std::isnan (xVal) || std::isnan (yVal) || std::isnan (zVal)) {
+	return;
+    }
+
+    source.update (glm::radians (glm::vec3 (xVal, yVal, zVal)), DynamicValue::UpdateSource::Script);
+}
+
 static void jsToDynamicValue (JSContext* ctx, JSValue val, DynamicValue& source) {
     if (JS_IsException (val)) {
 	return;
@@ -115,7 +165,9 @@ static void jsToDynamicValue (JSContext* ctx, JSValue val, DynamicValue& source)
     int tag = JS_VALUE_GET_TAG (val);
 
     if (tag == JS_TAG_UNDEFINED || tag == JS_TAG_UNINITIALIZED || tag == JS_TAG_NULL) {
-	source.update (DynamicValue::UpdateSource::Script);
+	// no return value means "keep the current value": scripts that mutate the passed
+	// vector in place already wrote through the live adapter, and hooks that don't
+	// exist (e.g. a missing init) come back as undefined through call()
 	return;
     }
 
@@ -153,8 +205,10 @@ static void jsToDynamicValue (JSContext* ctx, JSValue val, DynamicValue& source)
 	    JS_FreeValue (ctx, w);
 	});
 
-	if (!JS_IsNumber (x) || JS_IsNumber (y)) {
-	    sLog.exception ("Vector's x and y components must be numbers");
+	if (!JS_IsNumber (x) || !JS_IsNumber (y)) {
+	    // scripts can transiently return garbage (e.g. NaN math while another script's
+	    // shared values aren't populated yet); keep the previous value instead of dying
+	    return;
 	}
 
 	double xVal = 0.0f, yVal = 0.0f, zVal = 0.0f, wVal = 0.0f;
@@ -167,11 +221,14 @@ static void jsToDynamicValue (JSContext* ctx, JSValue val, DynamicValue& source)
 	    return;
 	}
 
+	JS_ToFloat64 (ctx, &zVal, z);
+
 	if (!JS_IsNumber (w)) {
 	    source.update (glm::vec3 (xVal, yVal, zVal), DynamicValue::UpdateSource::Script);
 	    return;
 	}
 
+	JS_ToFloat64 (ctx, &wVal, w);
 	source.update (glm::vec4 (xVal, yVal, zVal, wVal), DynamicValue::UpdateSource::Script);
     }
 }
@@ -577,8 +634,70 @@ void ScriptEngine::queueScript (const std::string& key, DynamicValue& currentVal
 	return;
     }
 
-    // load the script and store it
-    JSValue module = JS_Eval (this->m_context, source->c_str (), source->size (), key.c_str (), JS_EVAL_TYPE_MODULE);
+    // QuickJS module namespaces don't expose their exports as plain properties, so evaluating
+    // the source as an ES6 module leaves `update` unreachable and property scripts inert.
+    // Use the same strip-and-wrap approach as createLayerScript: remove the module syntax and
+    // evaluate an IIFE that hands back the script's lifecycle hooks. The closure also captures
+    // `thisLayer` per script instead of relying on a shared global that the last queued object
+    // would otherwise overwrite.
+    std::string body = *source;
+    size_t pos;
+    while ((pos = body.find ("'use strict';")) != std::string::npos) {
+	body.erase (pos, 13);
+    }
+    while ((pos = body.find ("\"use strict\";")) != std::string::npos) {
+	body.erase (pos, 13);
+    }
+    while ((pos = body.find ("export ")) != std::string::npos) {
+	body.erase (pos, 7);
+    }
+
+    JS_SetPropertyStr (
+	this->m_context, this->m_globalThis, "__propScriptLayer", this->m_adapters.object->instantiate (object)
+    );
+
+    // seed the user-property values bound to this setting so scriptProperties.X resolves to
+    // the configured value (same seeding approach as createLayerScript)
+    JSValue seedProps = JS_NewObject (this->m_context);
+
+    for (const auto& [name, setting] : currentValue.getProperties ()) {
+	JS_SetPropertyStr (this->m_context, seedProps, name.c_str (), this->dynamicToJs (*setting->value));
+    }
+
+    JS_SetPropertyStr (this->m_context, this->m_globalThis, "__propScriptProps", seedProps);
+
+    std::ostringstream wrapper;
+    wrapper << "(function() {\n"
+	    << "  var thisLayer = globalThis.__propScriptLayer;\n"
+	    // WE's scriptProperties builder doubles as the values object (scripts read
+	    // scriptProperties.<name> without calling finish()), so the shim collects slider
+	    // defaults straight onto the object it returns, seeded values winning
+	    << "  var __props = Object.assign({}, globalThis.__propScriptProps || {});\n"
+	    << "  function createScriptProperties() {\n"
+	    << "    function reg(o){ if (o && o.name && !(o.name in __props)) __props[o.name] = o.value; return __props; }\n"
+	    << "    __props.addSlider = reg; __props.addCheckbox = reg; __props.addCombo = reg;\n"
+	    << "    __props.addColor = reg; __props.addText = reg; __props.addTextInput = reg;\n"
+	    << "    __props.finish = function(){ return __props; };\n"
+	    << "    return __props;\n"
+	    << "  }\n"
+	    << body << "\n"
+	    << "  return {\n"
+	    << "    update: (typeof update === 'function') ? update : null,\n"
+	    << "    init: (typeof init === 'function') ? init : null,\n"
+	    << "    destroy: (typeof destroy === 'function') ? destroy : null,\n"
+	    << "    mediaPropertiesChanged: (typeof mediaPropertiesChanged === 'function') ? mediaPropertiesChanged : null,\n"
+	    << "    mediaPlaybackChanged: (typeof mediaPlaybackChanged === 'function') ? mediaPlaybackChanged : null,\n"
+	    << "    mediaTimelineChanged: (typeof mediaTimelineChanged === 'function') ? mediaTimelineChanged : null,\n"
+	    << "    mediaThumbnailChanged: (typeof mediaThumbnailChanged === 'function') ? mediaThumbnailChanged : null,\n"
+	    << "  };\n"
+	    << "})()";
+
+    const std::string wrapped = wrapper.str ();
+    JSValue module = JS_Eval (this->m_context, wrapped.c_str (), wrapped.size (), key.c_str (), JS_EVAL_TYPE_GLOBAL);
+
+    if (JS_IsException (module)) {
+	logJSException (this->m_context, key.c_str ());
+    }
 
     auto inserted = this->m_scriptModules.emplace (
 	key,
@@ -592,25 +711,32 @@ void ScriptEngine::queueScript (const std::string& key, DynamicValue& currentVal
 	return;
     }
 
-    JS_SetPropertyStr (this->m_context, this->m_globalThis, "thisLayer", this->m_adapters.object->instantiate (object));
-
     // script properties do not need update as they're connected directly to the source data
     this->m_runningModule = &inserted.first->second;
 
-    // check if there's an update method and run it
-    JSValue args[] = { this->dynamicToJs (currentValue) };
-    JSValue result = this->call (module, 1, args, "update");
+    // run the script's init hook (if any) followed by the first update, mirroring WE's lifecycle
+    const bool angles = isAnglesProperty (key);
 
-    ScopeGuard guard2 ([this, args, result] () {
-	JS_FreeValue (this->m_context, result);
-	JS_FreeValue (this->m_context, args[0]);
-    });
+    for (const auto* hook : { "init", "update" }) {
+	JSValue args[] = { angles ? anglesToJs (this->m_context, currentValue) : this->dynamicToJs (currentValue) };
+	JSValue result = this->call (module, 1, args, hook);
 
-    if (JS_IsException (result)) {
-	return;
+	ScopeGuard guard2 ([this, args, result] () {
+	    JS_FreeValue (this->m_context, result);
+	    JS_FreeValue (this->m_context, args[0]);
+	});
+
+	if (JS_IsException (result)) {
+	    logJSException (this->m_context, key.c_str ());
+	    continue;
+	}
+
+	if (angles) {
+	    jsToAngles (this->m_context, result, args[0], currentValue);
+	} else {
+	    jsToDynamicValue (this->m_context, result, currentValue);
+	}
     }
-
-    jsToDynamicValue (this->m_context, result, currentValue);
 }
 
 void ScriptEngine::tick () {
@@ -620,10 +746,11 @@ void ScriptEngine::tick () {
     // run any pending notifications
 
     // run all update methods
-    for (auto& module : this->m_scriptModules | std::views::values) {
+    for (auto& [key, module] : this->m_scriptModules) {
 	this->m_runningModule = &module;
 
-	JSValue args[] = { this->dynamicToJs (module.value) };
+	const bool angles = isAnglesProperty (key);
+	JSValue args[] = { angles ? anglesToJs (this->m_context, module.value) : this->dynamicToJs (module.value) };
 	JSValue result = this->call (module.module, 1, args, "update");
 	ScopeGuard guard ([result, args, this] () {
 	    JS_FreeValue (this->m_context, result);
@@ -631,10 +758,15 @@ void ScriptEngine::tick () {
 	});
 
 	if (JS_IsException (result)) {
+	    logJSException (this->m_context, key.c_str ());
 	    continue;
 	}
 
-	jsToDynamicValue (this->m_context, result, module.value);
+	if (angles) {
+	    jsToAngles (this->m_context, result, args[0], module.value);
+	} else {
+	    jsToDynamicValue (this->m_context, result, module.value);
+	}
     }
 }
 
