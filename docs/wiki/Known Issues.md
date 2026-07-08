@@ -10,6 +10,14 @@ timestamp: 2026-07-06T20:00:00-04:00
 # Known Issues
 
 ## Open bugs
+- **Audio capture overruns** (open, evidence 2026-07-08): pipewire-pulse logs
+  `[wallpaperengine-audioprocessing] overrun recover ... skip:~50k` every
+  ~1.5s — the engine drains the monitor stream far slower than realtime, so
+  visualizer data skips/stalls. Likely related to invisible/erratic audio
+  bars (MyGO 3558034522). Suspect the read path in
+  `PulseAudioPlaybackRecorder` (drain rate vs fragment size). The 11:18
+  crash cascade also coincided with an AirPods default-sink switch — sink
+  hot-swap needs testing once the drain issue is fixed.
 - **Media-update segfault** (pre-existing): a D-Bus album-art/track change
   fires `ScriptEngine::notifyMediaUpdate` → crash in the QuickJS
   `ObjectAdapter::instantiate` / `VectorAdapter<3>::instantiate` path.
@@ -51,6 +59,14 @@ timestamp: 2026-07-06T20:00:00-04:00
   consume yet. Eyelashes close but the skin behind them doesn't appear.
   Data is decoded and understood — see [[MDL File Format]] — implementation
   deferred.
+
+## Fixed 2026-07-08 (parse robustness)
+- **Type-drift parse abort** (honeycomb 3758354038): text `padding` authored
+  as a `"32.00000 32.00000"` string; `JsonExtensions::optional<T>` was
+  `noexcept` while nlohmann's conversion throws → `std::terminate` killed the
+  engine on load/switch. Fixed (7dbce65): optionals log + default on
+  mismatched types, matching WE's JsonCpp tolerance. Regression test:
+  `Testing/Cases/JsonTolerance.cpp`.
 
 ## Deferred / not implemented
 - Puppet bone constraint JSON (`"tp"`/`"tm"`) — mouse-interactive puppets.
