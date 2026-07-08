@@ -8,29 +8,26 @@ using namespace WallpaperEngine::Render::Objects;
 
 CSound::CSound (Wallpapers::CScene& scene, const Sound& sound) : CObject (scene, sound), m_sound (sound) {
     if (this->getContext ().getApp ().getContext ().settings.audio.enabled) {
-	// Screens showing the same wallpaper share the loaded Project, so this Sound data
-	// object is the same instance across their scenes — claim it so only one screen
-	// plays it (overlapping copies of the same track phase into an echo). Different
-	// wallpapers have their own Sound instances and are unaffected.
-	this->m_ownsPlayback = this->getScene ().getAudioContext ().claimSound (&sound);
-
-	if (this->m_ownsPlayback) {
-	    this->load ();
+	// Value keys: screens showing the same wallpaper parse their own Project copies, so data
+	// addresses differ — but title/workshop id (wallpaper) and object id/file list (sound)
+	// are identical, collapsing duplicates into one playback candidate per authored sound.
+	const auto& project = this->getScene ().getScene ().project;
+	this->m_wallpaperKey = project.title + "|" + project.workshopId;
+	this->m_soundKey = std::to_string (this->m_sound.id);
+	for (const auto& cur : this->m_sound.sounds) {
+	    this->m_soundKey += "|" + cur;
 	}
+
+	this->getScene ().getAudioContext ().registerSoundCandidate (this->m_wallpaperKey, this->m_soundKey, this);
+	this->m_registered = true;
     }
 }
 
 CSound::~CSound () {
-    // free all the sound buffers and streams
-    for (const auto& stream : this->m_audioStreams) {
-	this->getScene ().getAudioContext ().removeStream (stream.first);
-	delete stream.second;
-    }
+    this->unload ();
 
-    this->m_audioStreams.clear ();
-
-    if (this->m_ownsPlayback) {
-	this->getScene ().getAudioContext ().releaseSound (&this->m_sound);
+    if (this->m_registered) {
+	this->getScene ().getAudioContext ().unregisterSoundCandidate (this->m_wallpaperKey, this->m_soundKey, this);
     }
 }
 
@@ -46,14 +43,39 @@ void CSound::load () {
     }
 }
 
-void CSound::render () {
-    // self-heal after the owning screen switches away: the destroyed scene releases its
-    // claim, and the surviving screen picks playback up on its next frame
-    if (!this->m_ownsPlayback && this->getContext ().getApp ().getContext ().settings.audio.enabled) {
-	this->m_ownsPlayback = this->getScene ().getAudioContext ().claimSound (&this->m_sound);
+void CSound::unload () {
+    // free all the sound buffers and streams
+    for (const auto& stream : this->m_audioStreams) {
+	this->getScene ().getAudioContext ().removeStream (stream.first);
+	delete stream.second;
+    }
 
-	if (this->m_ownsPlayback) {
-	    this->load ();
+    this->m_audioStreams.clear ();
+}
+
+void CSound::render () {
+    if (!this->m_registered) {
+	return;
+    }
+
+    auto& audioContext = this->getScene ().getAudioContext ();
+    const bool active = audioContext.isActiveSoundPlayer (this->m_wallpaperKey, this->m_soundKey, this);
+
+    if (active && this->m_audioStreams.empty ()) {
+	// became the audible soundtrack (startup, rotation, or the previous owner went away):
+	// streams start from the top of the track
+	this->load ();
+    } else if (!active && !this->m_audioStreams.empty ()) {
+	this->unload ();
+    } else if (active && audioContext.distinctSoundWallpaperCount () > 1) {
+	// several wallpapers have music: rotate to the next one when this track finishes a
+	// full pass (the read thread counts completions at demuxer EOF, loop or not)
+	for (const auto& [id, stream] : this->m_audioStreams) {
+	    if (stream->getCompletionCount () > 0) {
+		this->unload ();
+		audioContext.advanceActiveSound ();
+		break;
+	    }
 	}
     }
 }
