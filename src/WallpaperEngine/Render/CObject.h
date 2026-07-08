@@ -27,6 +27,11 @@ public:
      *  nearest ancestor that authored one, else 1 (Wallpaper Engine's root default) */
     [[nodiscard]] glm::vec2 resolveParallaxDepth () const;
 
+    /** world transform for 3D scenes: translate * rotate (Rz*Ry*Rx, radians) * scale,
+     *  composed through the parent chain. 2D images keep their own decomposed
+     *  accumulation in CImage::resolveTransform */
+    [[nodiscard]] glm::mat4 resolveWorldMatrix () const;
+
 private:
     Wallpapers::CScene& m_scene;
     const Object& m_object;

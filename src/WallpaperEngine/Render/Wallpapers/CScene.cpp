@@ -1,4 +1,6 @@
 #include "WallpaperEngine/Render/Objects/CImage.h"
+#include "WallpaperEngine/Render/Objects/CLight.h"
+#include "WallpaperEngine/Render/Objects/CModel.h"
 #include "WallpaperEngine/Render/Objects/CParticle.h"
 #include "WallpaperEngine/Render/Objects/CSound.h"
 #include "WallpaperEngine/Render/Objects/CText.h"
@@ -36,9 +38,16 @@ CScene::CScene (
 
     float width = scene->camera.projection.width;
     float height = scene->camera.projection.height;
+    const bool isPerspective = scene->camera.projection.isPerspective;
+
+    // 3D scenes have no authored projection size; render at the output's resolution
+    if (isPerspective) {
+	width = this->getContext ().getOutput ().getFullWidth ();
+	height = this->getContext ().getOutput ().getFullHeight ();
+    }
 
     // detect size if the orthogonal project is auto
-    if (scene->camera.projection.isAuto) {
+    if (!isPerspective && scene->camera.projection.isAuto) {
 	glm::vec2 maxExtent = { 0.0f, 0.0f };
 
 	for (const auto& object : scene->objects) {
@@ -70,11 +79,43 @@ CScene::CScene (
 
     this->m_parallaxDisplacement = { 0, 0 };
 
-    // TODO: CONVERSION
-    this->m_camera->setOrthogonalProjection (width, height);
+    if (isPerspective) {
+	this->m_camera->setPerspectiveProjection (
+	    width, height, this->getContext ().getOutput ().renderVFlip ()
+	);
 
-    // setup framebuffers here as they're required for the scene setup
-    this->setupFramebuffers ();
+	const float zoom = scene->camera.projection.zoom->value->getFloat ();
+	if (zoom != 1.0f) {
+	    // ponytail: zoom untested against real WE output; implement when a wallpaper needs it
+	    sLog.error ("Scene camera zoom ", zoom, " is not supported yet and will be ignored");
+	}
+
+	// fixed light counts let passes compile LightingV1 with matching uniform arrays
+	// before any object is created
+	for (const auto& object : scene->objects) {
+	    if (!object->is<Data::Model::Light> ()) {
+		continue;
+	    }
+
+	    if (object->as<Data::Model::Light> ()->type == LightData::Type_Directional) {
+		this->m_lights.directionalCount++;
+	    } else {
+		this->m_lights.pointCount++;
+	    }
+	}
+
+	this->m_lights.directionalDirections.resize (this->m_lights.directionalCount, glm::vec4 (0.0f));
+	this->m_lights.directionalColors.resize (this->m_lights.directionalCount, glm::vec4 (0.0f));
+	this->m_lights.pointOrigins.resize (this->m_lights.pointCount, glm::vec4 (0.0f));
+	this->m_lights.pointColors.resize (this->m_lights.pointCount, glm::vec4 (0.0f));
+    } else {
+	// TODO: CONVERSION
+	this->m_camera->setOrthogonalProjection (width, height);
+    }
+
+    // setup framebuffers here as they're required for the scene setup;
+    // 3D scenes depth-test their models, so their scene framebuffer carries a depth buffer
+    this->setupFramebuffers (isPerspective);
 
     const uint32_t sceneWidth = this->m_camera->getWidth ();
     const uint32_t sceneHeight = this->m_camera->getHeight ();
@@ -158,7 +199,11 @@ CScene::CScene (
 	      ) } };
 
     // create image for bloom passes
-    if (scene->camera.bloom.enabled->value->getBool ()) {
+    // the bloom helper is an orthographic full-scene quad; 3D scenes use the HDR bloom
+    // pipeline instead, which is not implemented yet
+    if (isPerspective && scene->camera.bloom.enabled->value->getBool ()) {
+	sLog.error ("Bloom is not supported on 3D scenes yet, ignoring");
+    } else if (scene->camera.bloom.enabled->value->getBool ()) {
 	this->m_bloomObjectData = ObjectParser::parse (bloom, scene->project);
 	this->m_bloomObject = this->createObject (*this->m_bloomObjectData);
 
@@ -234,6 +279,12 @@ Render::CObject* CScene::dispatchObjectType (const Object& object) {
 	renderObject = new Objects::CSound (*this, *object.as<Sound> ());
     } else if (object.is<Text> ()) {
 	renderObject = new Objects::CText (*this, *object.as<Text> ());
+    } else if (object.is<Data::Model::Model3D> ()) {
+	renderObject = new Objects::CModel (*this, *object.as<Data::Model::Model3D> ());
+    } else if (object.is<Data::Model::Light> ()) {
+	auto* light = new Objects::CLight (*this, *object.as<Data::Model::Light> ());
+	this->m_lightObjects.push_back (light);
+	renderObject = light;
     } else if (object.is<Particle> ()) {
 	const auto& particleData = *object.as<Particle> ();
 
@@ -244,8 +295,9 @@ Render::CObject* CScene::dispatchObjectType (const Object& object) {
 
 	renderObject = new Objects::CParticle (*this, particleData);
     } else {
-	sLog.error ("Unknown object type, creating placeholder, empty object: ", object.id);
-	renderObject = new CObject (*this, object);
+	// containers/groups: no rendering of their own, but their transform properties can be
+	// script-driven (e.g. orbital mechanics groups), so they must register with the script engine
+	renderObject = new Scripting::ScriptableObject (*this, object);
     }
 
     try {
@@ -330,6 +382,9 @@ void CScene::renderFrame (const glm::ivec4& viewport) {
     // run a tick in the javascript logic
     this->getScriptEngine ().tick ();
 
+    // refresh light uniform state after scripts have moved the lights
+    this->updateLightState ();
+
     // update main textures for images
     for (const auto& cur : this->m_objectsByRenderOrder) {
 	if (!cur->is<Objects::CImage> ()) {
@@ -358,6 +413,8 @@ void CScene::renderFrame (const glm::ivec4& viewport) {
     // ensure we render over the whole framebuffer
     glViewport (0, 0, this->m_sceneFBO->getRealWidth (), this->m_sceneFBO->getRealHeight ());
 
+    // passes with depthwrite disabled leave the mask off, which would block the depth clear
+    glDepthMask (true);
     glClear (GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
     for (const auto& cur : this->m_objectsByRenderOrder) {
@@ -400,6 +457,30 @@ void CScene::updateMouse (const glm::ivec4& viewport) {
 
     this->m_mousePosition.x = this->m_mousePositionNormalized.x;
     this->m_mousePosition.y = uvs.vstart + mouseY * (uvs.vend - uvs.vstart);
+}
+
+const CScene::SceneLights& CScene::getLights () const { return this->m_lights; }
+
+void CScene::updateLightState () {
+    int directional = 0;
+    int point = 0;
+
+    for (const auto* light : this->m_lightObjects) {
+	const auto& data = light->getLight ();
+
+	if (data.type == LightData::Type_Directional && directional < this->m_lights.directionalCount) {
+	    // the shader expects the direction towards the light
+	    this->m_lights.directionalDirections[directional] = glm::vec4 (-light->getWorldDirection (), 0.0f);
+	    this->m_lights.directionalColors[directional] = glm::vec4 (light->getPremultipliedColor (), 0.0f);
+	    directional++;
+	} else if (data.type == LightData::Type_Point && point < this->m_lights.pointCount) {
+	    this->m_lights.pointOrigins[point]
+		= glm::vec4 (light->getWorldPosition (), data.exponent->value->getFloat ());
+	    this->m_lights.pointColors[point]
+		= glm::vec4 (light->getPremultipliedColor (), data.radius->value->getFloat ());
+	    point++;
+	}
+    }
 }
 
 const Scene& CScene::getScene () const { return *this->getWallpaperData ().as<Scene> (); }

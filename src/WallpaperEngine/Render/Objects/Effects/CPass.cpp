@@ -374,9 +374,9 @@ void CPass::setupRenderUniforms () {
 	    case Integer:
 		glUniform1iv (value->id, value->count, static_cast<const int*> (value->value));
 		break;
-	    // TODO: THESE MIGHT NEED SPECIAL TREATMENT? IDK ONLY SUPPORT 1 FOR NOW
+	    // TODO: VEC2/VEC3 MIGHT NEED SPECIAL TREATMENT? IDK ONLY SUPPORT 1 FOR NOW
 	    case Vector4:
-		glUniform4fv (value->id, 1, glm::value_ptr (*static_cast<const glm::vec4*> (value->value)));
+		glUniform4fv (value->id, value->count, glm::value_ptr (*static_cast<const glm::vec4*> (value->value)));
 		break;
 	    case Vector3:
 		glUniform3fv (value->id, 1, glm::value_ptr (*static_cast<const glm::vec3*> (value->value)));
@@ -531,6 +531,11 @@ void CPass::setModelMatrix (const glm::mat4* model) { this->m_modelMatrix = mode
 
 void CPass::setViewProjectionMatrix (const glm::mat4* viewProjection) { this->m_viewProjectionMatrix = viewProjection; }
 
+void CPass::setEffectTextureProjectionMatrix (const glm::mat4* matrix, const glm::mat4* inverse) {
+    this->m_effectTextureProjectionMatrix = matrix;
+    this->m_effectTextureProjectionMatrixInverse = inverse;
+}
+
 void CPass::setBlendingMode (BlendingMode blendingmode) { this->m_blendingmode = blendingmode; }
 
 BlendingMode CPass::getBlendingMode () const { return this->m_blendingmode; }
@@ -599,6 +604,25 @@ void CPass::setupShaders () {
 
     // copy the combos from the pass
     this->m_combos.insert (this->m_pass.combos.begin (), this->m_pass.combos.end ());
+
+    // WE compiles every scene shader with SCENE_ORTHO describing the camera type; lit shaders
+    // (genericimage3/4) use it to pick a fixed view vector on 2D scenes vs. the perspective
+    // view direction on 3D scenes (combo list mined from wallpaper64.exe)
+    this->m_combos.insert_or_assign (
+	"SCENE_ORTHO", this->m_renderable.getScene ().getScene ().camera.projection.isPerspective ? 0 : 1
+    );
+
+    // scenes with lights need LightingV1 modules compiled with matching uniform array sizes;
+    // 2D scenes have no light objects, keeping their shader compilation untouched
+    const auto& lights = this->m_renderable.getScene ().getLights ();
+
+    if (lights.directionalCount > 0) {
+	this->m_combos.insert_or_assign ("LIGHTS_DIRECTIONAL", lights.directionalCount);
+    }
+
+    if (lights.pointCount > 0) {
+	this->m_combos.insert_or_assign ("LIGHTS_POINT", lights.pointCount);
+    }
 
     // TODO: THE VALUES ARE THE SAME AS THE ENUMERATION, SO MAYBE IT HAS TO BE SPECIFIED FOR THE TEXTURE 0 OF ALL
     // ELEMENTS?
@@ -856,6 +880,20 @@ void CPass::setupUniforms () {
     // lighting variables
     this->addUniform ("g_LightAmbientColor", sceneData.colors.ambient->value->getVec3 ());
     this->addUniform ("g_LightSkylightColor", sceneData.colors.skylight->value->getVec3 ());
+    this->addUniform ("g_EyePosition", &scene.getCamera ().getEye ());
+
+    // dynamic light state, refreshed by CScene::updateLightState every frame
+    const auto& lights = scene.getLights ();
+
+    if (lights.directionalCount > 0) {
+	this->addUniform ("g_LDirectional_Direction", lights.directionalDirections.data (), lights.directionalCount);
+	this->addUniform ("g_LDirectional_Color", lights.directionalColors.data (), lights.directionalCount);
+    }
+
+    if (lights.pointCount > 0) {
+	this->addUniform ("g_LPoint_Origin", lights.pointOrigins.data (), lights.pointCount);
+	this->addUniform ("g_LPoint_Color", lights.pointColors.data (), lights.pointCount);
+    }
     // register variables like brightness and alpha with some default value
     this->addUniform ("g_Brightness", renderable.getBrightness ());
     this->addUniform ("g_UserAlpha", renderable.getUserAlpha ());
@@ -879,8 +917,8 @@ void CPass::setupUniforms () {
     this->addUniform ("g_PointerPosition", scene.getMousePosition ());
     this->addUniform ("g_PointerPositionLast", scene.getMousePositionLast ());
     this->addUniform ("g_ParallaxPosition", scene.getParallaxPosition ());
-    this->addUniform ("g_EffectTextureProjectionMatrix", glm::mat4 (1.0));
-    this->addUniform ("g_EffectTextureProjectionMatrixInverse", glm::mat4 (1.0));
+    this->addUniform ("g_EffectTextureProjectionMatrix", &this->m_effectTextureProjectionMatrix);
+    this->addUniform ("g_EffectTextureProjectionMatrixInverse", &this->m_effectTextureProjectionMatrixInverse);
     this->addUniform ("g_TexelSize", glm::vec2 (1.0 / scene.getWidth (), 1.0 / scene.getHeight ()));
     this->addUniform ("g_TexelSizeHalf", glm::vec2 (0.5 / scene.getWidth (), 0.5 / scene.getHeight ()));
     this->addUniform ("g_AudioSpectrum16Left", recorder.audio16, 16);
@@ -1082,8 +1120,8 @@ void CPass::addUniform (const std::string& name, const glm::vec4 value) {
     this->addUniform (name, UniformType::Vector4, value);
 }
 
-void CPass::addUniform (const std::string& name, const glm::vec4* value) {
-    this->addUniform (name, UniformType::Vector4, value, 1);
+void CPass::addUniform (const std::string& name, const glm::vec4* value, int count) {
+    this->addUniform (name, UniformType::Vector4, value, count);
 }
 
 void CPass::addUniform (const std::string& name, const glm::vec4** value) {

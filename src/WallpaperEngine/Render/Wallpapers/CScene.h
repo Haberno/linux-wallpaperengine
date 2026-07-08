@@ -10,6 +10,10 @@ class Camera;
 class CObject;
 }
 
+namespace WallpaperEngine::Render::Objects {
+class CLight;
+}
+
 namespace WallpaperEngine::Render::Wallpapers {
 using namespace WallpaperEngine::Data::Model;
 
@@ -56,6 +60,26 @@ public:
     [[nodiscard]] const std::vector<CObject*>& getObjectsByRenderOrder () const;
     [[nodiscard]] const CObject* getObject (int id) const;
 
+    /**
+     * Per-frame light state for 3D scenes, laid out to match the LightingV1
+     * uniform contract (see ShaderUnit::generateLightingV1). Counts are fixed
+     * at load time so the vectors' storage stays valid for uniform pointers.
+     */
+    struct SceneLights {
+	int directionalCount = 0;
+	int pointCount = 0;
+	/** xyz = world-space direction towards the light, w unused */
+	std::vector<glm::vec4> directionalDirections = {};
+	/** rgb = color premultiplied by intensity, w unused */
+	std::vector<glm::vec4> directionalColors = {};
+	/** xyz = world-space position, w = falloff exponent */
+	std::vector<glm::vec4> pointOrigins = {};
+	/** rgb = color premultiplied by intensity, w = radius */
+	std::vector<glm::vec4> pointColors = {};
+    };
+
+    [[nodiscard]] const SceneLights& getLights () const;
+
 protected:
     void renderFrame (const glm::ivec4& viewport) override;
     void updateMouse (const glm::ivec4& viewport);
@@ -66,6 +90,7 @@ private:
     Render::CObject* createObject (const Object& object);
     Render::CObject* dispatchObjectType (const Object& object);
     void addObjectToRenderOrder (const Object& object);
+    void updateLightState ();
 
     std::unique_ptr<Scripting::ScriptEngine> m_scriptEngine;
     std::unique_ptr<Camera> m_camera;
@@ -73,6 +98,8 @@ private:
     CObject* m_bloomObject = nullptr;
     std::map<int, CObject*> m_objects = {};
     std::vector<CObject*> m_objectsByRenderOrder = {};
+    std::vector<Objects::CLight*> m_lightObjects = {};
+    SceneLights m_lights = {};
     std::vector<DynamicValue*> m_scriptedValues = {};
     glm::vec2 m_mousePosition = {};
     glm::vec2 m_mousePositionLast = {};

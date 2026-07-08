@@ -5,7 +5,7 @@ using namespace WallpaperEngine::Render;
 
 CFBO::CFBO (
     std::string name, const TextureFormat format, const uint32_t flags, const float scale, uint32_t realWidth,
-    uint32_t realHeight, uint32_t textureWidth, uint32_t textureHeight
+    uint32_t realHeight, uint32_t textureWidth, uint32_t textureHeight, bool withDepthBuffer
 ) : m_scale (scale), m_name (std::move (name)), m_format (format), m_flags (flags) {
     // create an empty texture that'll be free'd so the FBO is transparent
     constexpr GLenum drawBuffers[1] = { GL_COLOR_ATTACHMENT0 };
@@ -46,6 +46,15 @@ CFBO::CFBO (
 
     // set the texture as the colour attachmend #0
     glFramebufferTexture2D (GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, this->m_texture, 0);
+
+    // 3D scenes depth-test their models, so the scene framebuffer needs a depth attachment
+    if (withDepthBuffer) {
+	glGenRenderbuffers (1, &this->m_depthbuffer);
+	glBindRenderbuffer (GL_RENDERBUFFER, this->m_depthbuffer);
+	glRenderbufferStorage (GL_RENDERBUFFER, GL_DEPTH_COMPONENT24, textureWidth, textureHeight);
+	glFramebufferRenderbuffer (GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_RENDERBUFFER, this->m_depthbuffer);
+    }
+
     // finally set the list of draw buffers
     glDrawBuffers (1, drawBuffers);
 
@@ -83,6 +92,10 @@ CFBO::~CFBO () {
     // free opengl texture and framebuffer
     glDeleteTextures (1, &this->m_texture);
     glDeleteFramebuffers (1, &this->m_framebuffer);
+
+    if (this->m_depthbuffer != GL_NONE) {
+	glDeleteRenderbuffers (1, &this->m_depthbuffer);
+    }
 }
 
 const std::string& CFBO::getName () const { return this->m_name; }

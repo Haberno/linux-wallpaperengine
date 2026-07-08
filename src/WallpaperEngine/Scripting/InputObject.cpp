@@ -18,11 +18,14 @@ JSValue get_cursor_screen_position (JSContext* ctx, JSValueConst this_val, int a
     JSClassID classId;
     auto* input = static_cast<InputObject*> (JS_GetAnyOpaque (this_val, &classId));
     auto position = input->getScene ().getMousePositionNormalized ();
+    // the script API reports the cursor in screen pixels (see lib.sceneScript.d.ts), scripts
+    // normalize it against engine.screenResolution themselves
+    const auto& output = input->getScene ().getContext ().getOutput ();
 
     JSValue result = input->getScene ().getScriptEngine ().getAdapters ().vec2->instantiate ();
 
-    JS_SetPropertyStr (ctx, result, "x", JS_NewFloat64 (ctx, position->x));
-    JS_SetPropertyStr (ctx, result, "y", JS_NewFloat64 (ctx, position->y));
+    JS_SetPropertyStr (ctx, result, "x", JS_NewFloat64 (ctx, position->x * output.getFullWidth ()));
+    JS_SetPropertyStr (ctx, result, "y", JS_NewFloat64 (ctx, position->y * output.getFullHeight ()));
 
     return result;
 }
