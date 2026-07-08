@@ -1,6 +1,9 @@
 #include "PulseAudioPlaybackRecorder.h"
 #include "WallpaperEngine/Logging/Log.h"
+#include <algorithm>
 #include <cmath>
+#include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <glm/common.hpp>
 
@@ -255,28 +258,83 @@ void PulseAudioPlaybackRecorder::update () {
 	this->m_audioFFTbuffer[i] = (this->m_captureData.audioBuffer[i] - 128) / 128.0f;
     }
 
+    // Noise gate (ported from beingsuz): a monitor source is never perfectly silent, and
+    // auto-gain below would amplify that floor into full-height bars. RMS in 0-128 sample
+    // units; tunable via WPE_AUDIO_GATE (0 disables).
+    double sumSquares = 0.0;
+    for (int i = 0; i < WAVE_BUFFER_SIZE; i++) {
+	const double d = static_cast<int> (this->m_captureData.audioBuffer[i]) - 128;
+	sumSquares += d * d;
+    }
+    const float rms = static_cast<float> (std::sqrt (sumSquares / WAVE_BUFFER_SIZE));
+
+    float gate = 2.0f;
+    if (const char* g = std::getenv ("WPE_AUDIO_GATE")) {
+	gate = std::atof (g);
+    }
+
+    if (gate > 0.0f && rms < gate) {
+	for (int i = 0; i < 64; i++) {
+	    this->m_FFTdestination64[i] = 0.0f;
+	    if (i < 32) {
+		this->m_FFTdestination32[i] = 0.0f;
+	    }
+	    if (i < 16) {
+		this->m_FFTdestination16[i] = 0.0f;
+	    }
+	}
+	return;
+    }
+
     // perform full fft pass
     kiss_fftr (this->m_captureData.kisscfg, this->m_audioFFTbuffer, this->m_FFTinfo);
 
-    // now reduce to the different bands
-    // use just one for loop to produce all 3
+    // Reduce to bands using linear magnitudes normalized by a running peak. The previous
+    // 0.35*log10(mag²) mapping clamped to 1.0 saturated on real music — any bin above ~5%
+    // of full scale pegged its bar at max height, leaving only a slight flicker as visible
+    // dynamics — and its output also depended on the system volume. Auto-gain adapts to
+    // whatever level the monitor stream delivers so the loudest band rides near 1.0 and the
+    // rest scale proportionally; sqrt shaping lifts quiet detail (perceptual, like WE bars).
+    float weighted[64];
+    float frameMax = 0.0f;
+
     for (int band = 0; band < 64; band++) {
-	int index = band * 2;
-	float f1 = this->m_FFTinfo[index].r;
-	float f2 = this->m_FFTinfo[index].i;
-	f2 = f1 * f1 + f2 * f2; // magnitude
-	f1 = 0.0f;
+	const int index = band * 2;
+	const float re = this->m_FFTinfo[index].r;
+	const float im = this->m_FFTinfo[index].i;
+	// keep the original frequency-weight curve: music carries less energy up high
+	const float weight = static_cast<float> (2.0f - pow (M_E, (1.0f - band / 63.0f) * 1.0f - 0.5f));
+	weighted[band] = std::sqrt (re * re + im * im) * weight;
+	frameMax = std::max (frameMax, weighted[band]);
+    }
 
-	if (f2 > 0.0f) {
-	    f1 = 0.35f * log10 (f2);
+    // ponytail: tuned by ear, not derived — decay halves the gain reference in ~3s at the
+    // ~43 completed frames/sec this capture produces; the floor keeps quiet-but-real music
+    // from being amplified to full scale (full-scale bin magnitude is ~512)
+    constexpr float kPeakDecay = 0.995f;
+    constexpr float kPeakFloor = 32.0f;
+    this->m_bandPeak = std::max ({ frameMax, this->m_bandPeak * kPeakDecay, kPeakFloor });
+
+    for (int band = 0; band < 64; band++) {
+	const float value = std::sqrt (std::min (1.0f, weighted[band] / this->m_bandPeak));
+
+	this->m_FFTdestination64[band] = value;
+	this->m_FFTdestination32[band >> 1] = value;
+	this->m_FFTdestination16[band >> 2] = value;
+    }
+
+    // WPE_AUDIO_DEBUG=1: log capture activity ~once a second for verification
+    if (std::getenv ("WPE_AUDIO_DEBUG") != nullptr) {
+	static int debugCounter = 0;
+	if (++debugCounter % 43 == 0) {
+	    if (FILE* f = fopen ("/tmp/we-audio-debug.log", "a")) {
+		fprintf (
+		    f, "rms=%.2f peak=%.2f b0=%.2f b8=%.2f b32=%.2f\n", rms, this->m_bandPeak,
+		    this->m_FFTdestination64[0], this->m_FFTdestination64[8], this->m_FFTdestination64[32]
+		);
+		fclose (f);
+	    }
 	}
-
-	this->m_FFTdestination64[band]
-	    = fmin (1.0f, f1 * static_cast<float> (2.0f - pow (M_E, (1.0f - band / 63.0f) * 1.0f - 0.5f)));
-	this->m_FFTdestination32[band >> 1]
-	    = fmin (1.0f, f1 * static_cast<float> (2.0f - pow (M_E, (1.0f - band / 31.0f) * 1.0f - 0.5f)));
-	this->m_FFTdestination16[band >> 2]
-	    = fmin (1.0f, f1 * static_cast<float> (2.0f - pow (M_E, (1.0f - band / 15.0f) * 1.0f - 0.5f)));
     }
 }
 
