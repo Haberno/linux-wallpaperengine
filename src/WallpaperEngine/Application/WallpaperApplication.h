@@ -50,6 +50,11 @@ public:
      */
     void show ();
     /**
+     * @return Whether the render loop stopped abnormally (the video driver lost its output), so the
+     *         process should exit non-zero and let a supervisor relaunch it
+     */
+    [[nodiscard]] bool abnormalTermination () const;
+    /**
      * Handles a OS signal sent to this PID
      *
      * @param signal

@@ -68,9 +68,14 @@ int main (int argc, char* argv[]) {
 	std::signal (SIGTERM, SIG_DFL);
 	std::signal (SIGKILL, SIG_DFL);
 
+	// A clean stop (signal, socket quit) returns 0; an abnormal one (the driver lost its only
+	// output) returns non-zero so the launcher's supervisor relaunches instead of leaving the
+	// wallpaper dead.
+	const bool abnormal = app->abnormalTermination ();
+
 	delete app;
 
-	return 0;
+	return abnormal ? 1 : 0;
     } catch (const std::exception& e) {
 	std::cerr << e.what () << std::endl;
 	return 1;
