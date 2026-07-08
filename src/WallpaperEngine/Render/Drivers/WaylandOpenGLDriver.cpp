@@ -258,6 +258,14 @@ void WaylandOpenGLDriver::onLayerClose (Output::WaylandOutputViewport* viewport)
     // remove the output from the list
     std::erase (this->m_screens, viewport);
 
+    // This process drives a single output; with its last layer surface gone there is nothing left
+    // to render, so request an abnormal exit and let the launcher relaunch us instead of lingering
+    // invisibly (the compositor closes the surface on output disable / reload / hotplug).
+    if (this->m_screens.empty ()) {
+	this->m_requestedExit = true;
+	this->m_abnormalExit = true;
+    }
+
     // reset the viewports
     this->getOutput ().reset ();
 
@@ -443,6 +451,8 @@ float WaylandOpenGLDriver::getRenderTime () const {
 }
 
 bool WaylandOpenGLDriver::closeRequested () { return this->m_requestedExit; }
+
+bool WaylandOpenGLDriver::abnormalTermination () const { return this->m_abnormalExit; }
 
 void WaylandOpenGLDriver::resizeWindow (glm::ivec2 size) { }
 
