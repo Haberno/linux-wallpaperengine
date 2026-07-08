@@ -247,28 +247,42 @@ void CText::setup () {
     m_valid = m_texture != 0 && m_program != 0 && m_vao != 0;
 }
 
+glm::vec2 CText::computeEffectSurface () const {
+    // Half-extents around the box center: whichever reaches farther, the authored box or
+    // the current ink quad (its center is m_quadOffset in box-center space). WE text
+    // overflows its box when limitwidth is off, so the box alone is NOT a safe raster
+    // surface. The margin gives blur-style effects bleed room past the ink.
+    const glm::vec2 margin = glm::max (m_text.padding, glm::vec2 (32.0f));
+    const float hx = std::max (
+	m_text.size.x * 0.5f, std::abs (m_quadOffset.x) + m_quadSize.x * 0.5f + margin.x
+    );
+    const float hy = std::max (
+	m_text.size.y * 0.5f, std::abs (m_quadOffset.y) + m_quadSize.y * 0.5f + margin.y
+    );
+    return { hx * 2.0f, hy * 2.0f };
+}
+
 void CText::setupEffectChain () {
-    // The chain renders inside the authored box (stable across text changes — a ticking
-    // clock only re-rasterizes glyphs, never rebuilds passes/FBOs); scenes without a box
-    // fall back to the current ink size. The default padding=32 is exactly the headroom
-    // effects like blur need around the glyphs inside that box.
-    glm::vec2 box = m_text.size;
-    if (box.x <= 0.0f || box.y <= 0.0f) {
-	// no authored box: give effects the same headroom the default padding would
-	box = m_quadSize + glm::vec2 (64.0f);
-    }
+    // The chain renders on a fixed surface sized to cover BOTH the authored box and the
+    // current ink (WE text overflows its box when limitwidth is off — MyGO 3558034522's
+    // day/date line is ~3.5x its box), plus blur headroom (the authored padding, floored
+    // at 32, exists exactly for that). The surface is centered on the box center, so the
+    // quad's box-relative placement carries over unchanged. Text changes only re-rasterize
+    // glyphs; if scripted text later outgrows the surface, render() degrades to plain text.
+    m_effectSurface = computeEffectSurface ();
+    const glm::vec2 surface = m_effectSurface;
 
     m_effectMaterial
 	= Data::Parsers::MaterialParser::load (this->getScene ().getScene ().project, "materials/util/effectpassthrough.json");
     m_effectHost = std::make_unique<CTextEffectHost> (this->getScene (), m_text, *m_effectMaterial);
 
     m_fboA = std::make_shared<CFBO> (
-	"_text_raster_" + std::to_string (this->getId ()), TextureFormat_ARGB8888, TextureFlags_ClampUVs, 1, box.x,
-	box.y, box.x, box.y
+	"_text_raster_" + std::to_string (this->getId ()), TextureFormat_ARGB8888, TextureFlags_ClampUVs, 1, surface.x,
+	surface.y, surface.x, surface.y
     );
     m_fboB = std::make_shared<CFBO> (
-	"_text_pingpong_" + std::to_string (this->getId ()), TextureFormat_ARGB8888, TextureFlags_ClampUVs, 1, box.x,
-	box.y, box.x, box.y
+	"_text_pingpong_" + std::to_string (this->getId ()), TextureFormat_ARGB8888, TextureFlags_ClampUVs, 1,
+	surface.x, surface.y, surface.x, surface.y
     );
     m_effectHost->setTexture (m_fboA);
 
@@ -298,7 +312,7 @@ void CText::setupEffectChain () {
 	m_effectProviders.push_back (fboProvider);
 
 	for (const auto& fbo : effect->effect->fbos) {
-	    m_effectClears.push_back (fboProvider->create (*fbo, TextureFlags_ClampUVs, box));
+	    m_effectClears.push_back (fboProvider->create (*fbo, TextureFlags_ClampUVs, surface));
 	}
 
 	auto curOverride = effect->passOverrides.begin ();
@@ -398,13 +412,13 @@ void CText::setupEffectChain () {
 
     // raster MVP: maps the quad's box-center-relative y-down coordinates onto the box FBO,
     // top of the box (y=-H/2) at texture row 0 so the standard v=0-at-top UVs stay valid
-    m_baseMVP = glm::ortho (-box.x * 0.5f, box.x * 0.5f, -box.y * 0.5f, box.y * 0.5f);
+    m_baseMVP = glm::ortho (-surface.x * 0.5f, surface.x * 0.5f, -surface.y * 0.5f, surface.y * 0.5f);
 
     // composite quad: the whole box centered on the object origin, same y-down local
     // convention and v=0-at-top UV layout as the glyph quad, so the world MVP of the
     // direct path positions it identically
-    const float hx = box.x * 0.5f;
-    const float hy = box.y * 0.5f;
+    const float hx = surface.x * 0.5f;
+    const float hy = surface.y * 0.5f;
     const float quad[] = {
 	// pos      // uv
 	-hx, -hy, 0.0f, 0.0f, hx, -hy, 1.0f, 0.0f, hx,	hy, 1.0f, 1.0f,
@@ -463,7 +477,13 @@ void CText::destroyEffectChain () {
 void CText::renderEffectChain (const glm::mat4& mvp, const float brightness, const float alpha) {
     const glm::vec4 color = m_text.color->value->getVec4 ();
 
-    // 1. rasterize the colored text into the box FBO (single quad over a cleared target:
+    // the scene sets its clear color once at setup, not per frame — leaking ours would
+    // make every subsequent scene clear transparent black (same pattern as CFBO's ctor)
+    GLfloat previousClearColor[4];
+    glGetFloatv (GL_COLOR_CLEAR_VALUE, previousClearColor);
+    const GLboolean depthWasEnabled = glIsEnabled (GL_DEPTH_TEST);
+
+    // 1. rasterize the colored text into the surface FBO (single quad over a cleared target:
     //    blending off writes the exact texel data — rgb keeps the text color even where
     //    coverage is 0, so blurred edges keep their hue)
     glBindFramebuffer (GL_FRAMEBUFFER, m_fboA->getFramebuffer ());
@@ -514,6 +534,12 @@ void CText::renderEffectChain (const glm::mat4& mvp, const float brightness, con
     glBindVertexArray (m_compositeVao);
     glDrawArrays (GL_TRIANGLES, 0, 6);
     glBindVertexArray (0);
+
+    // restore the state this chain touched that nothing downstream re-sets per draw
+    glClearColor (previousClearColor[0], previousClearColor[1], previousClearColor[2], previousClearColor[3]);
+    if (depthWasEnabled == GL_TRUE) {
+	glEnable (GL_DEPTH_TEST);
+    }
 }
 
 bool CText::initFreeType () {
@@ -862,6 +888,19 @@ void CText::render () {
 	rebuildTextureFrom (renderedText);
     } else if (renderedText != m_lastRenderedText) {
 	rebuildTextureFrom (renderedText);
+    }
+
+    // scripted text can outgrow the chain surface sized at setup (the FBOs and pass texture
+    // chains are fixed); degrade to plain rendering permanently rather than clipping
+    if (m_effectsEnabled) {
+	const glm::vec2 needed = computeEffectSurface ();
+	if (needed.x > m_effectSurface.x || needed.y > m_effectSurface.y) {
+	    sLog.error (
+		"CText: text outgrew the effect surface for '", m_text.name, "' (", needed.x, "x", needed.y, " > ",
+		m_effectSurface.x, "x", m_effectSurface.y, "), disabling its effects"
+	    );
+	    destroyEffectChain ();
+	}
     }
 
     const glm::vec4 color = m_text.color->value->getVec4 ();
