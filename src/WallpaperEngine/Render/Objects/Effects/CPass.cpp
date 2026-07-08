@@ -32,6 +32,8 @@ extern float g_Daytime;
 const TextureMap DEFAULT_BINDS = {};
 const ImageEffectPassOverride DEFAULT_OVERRIDE = {};
 
+const glm::mat4 CPass::s_defaultMatrix = glm::mat4 (1.0f);
+
 namespace {
 std::string textureSizeLabel (const std::shared_ptr<const TextureProvider>& texture) {
     if (texture == nullptr) {
@@ -51,7 +53,7 @@ CPass::CPass (
     Helpers::ContextAware (renderable), m_renderable (renderable), m_fboProvider (std::move (fboProvider)),
     m_pass (pass), m_binds (binds.has_value () ? binds.value ().get () : DEFAULT_BINDS),
     m_override (override.has_value () ? override.value ().get () : DEFAULT_OVERRIDE), m_target (target),
-    m_blendingmode (pass.blending), m_vao (GL_NONE) {
+    m_blendingmode (pass.blending) {
     this->setupShaders ();
     glGenVertexArrays (1, &m_vao);
 }
