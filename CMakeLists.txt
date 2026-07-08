@@ -441,6 +441,10 @@ set(COMMON_SOURCES
     src/WallpaperEngine/Render/Objects/CParticle.cpp
     src/WallpaperEngine/Render/Objects/CText.h
     src/WallpaperEngine/Render/Objects/CText.cpp
+    src/WallpaperEngine/Render/Objects/CModel.h
+    src/WallpaperEngine/Render/Objects/CModel.cpp
+    src/WallpaperEngine/Render/Objects/CLight.h
+    src/WallpaperEngine/Render/Objects/CLight.cpp
 
     src/WallpaperEngine/Render/CFBO.h
     src/WallpaperEngine/Render/CFBO.cpp
@@ -472,6 +476,7 @@ set(COMMON_SOURCES
     src/WallpaperEngine/Data/Model/Material.h
     src/WallpaperEngine/Data/Model/Effect.h
     src/WallpaperEngine/Data/Model/Model.h
+    src/WallpaperEngine/Data/Model/MdlMesh.h
     src/WallpaperEngine/Data/Model/UserSetting.h
     src/WallpaperEngine/Data/Model/PropertyAnimation.h
     src/WallpaperEngine/Data/Model/PropertyAnimation.cpp
@@ -497,6 +502,8 @@ set(COMMON_SOURCES
     src/WallpaperEngine/Data/Parsers/ObjectParser.h
     src/WallpaperEngine/Data/Parsers/MaterialParser.cpp
     src/WallpaperEngine/Data/Parsers/MaterialParser.h
+    src/WallpaperEngine/Data/Parsers/MdlParser.cpp
+    src/WallpaperEngine/Data/Parsers/MdlParser.h
     src/WallpaperEngine/Data/Parsers/ModelParser.cpp
     src/WallpaperEngine/Data/Parsers/ModelParser.h
     src/WallpaperEngine/Data/Parsers/ShaderConstantParser.cpp

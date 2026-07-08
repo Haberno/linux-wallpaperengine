@@ -1172,6 +1172,9 @@ void CImage::setupPasses () {
 
 	pass->setModelMatrix (&this->m_modelMatrix);
 	pass->setViewProjectionMatrix (&this->m_viewProjectionMatrix);
+	pass->setEffectTextureProjectionMatrix (
+	    &this->m_effectTextureProjectionMatrix, &this->m_effectTextureProjectionMatrixInverse
+	);
 
 	writesToTarget = this->configurePassTarget (pass, drawTo, asInput, effectInput, inTargetEffectSequence);
 	// determine if it's the last element in the list as this is a screen-copy-like process
@@ -1348,6 +1351,17 @@ glm::vec2 CImage::resolveGeometrySize (float sceneWidth, float sceneHeight, glm:
 void CImage::updateScenePosition (
     const glm::vec3& origin, const glm::vec2& size, const glm::vec3& scale, float sceneWidth, float sceneHeight
 ) {
+    // 3D scenes: image quads are plain world-space quads centered on their local origin;
+    // origin/angles/scale (and the parent chain) are applied by the world matrix instead
+    // of being baked into the vertices, and there is no screen-space y-flip
+    if (this->getScene ().getScene ().camera.projection.isPerspective) {
+	this->m_pos.x = -size.x / 2.0f;
+	this->m_pos.z = size.x / 2.0f;
+	this->m_pos.y = -size.y / 2.0f;
+	this->m_pos.w = size.y / 2.0f;
+	return;
+    }
+
     const glm::vec2 scaledSize = size * glm::vec2 (scale);
     this->m_pos.x = origin.x - (scaledSize.x / 2.0f);
     this->m_pos.w = origin.y + (scaledSize.y / 2.0f);
@@ -1457,6 +1471,24 @@ CImage::ResolvedTransform CImage::updateGeometryBuffers () {
 void CImage::updateScreenSpacePosition () {
     const ResolvedTransform transform = this->updateGeometryBuffers ();
 
+    // 3D scenes: the world matrix carries the full transform chain and the camera provides
+    // a real perspective view; 2D-only concerns (scene-center rotation, mouse parallax)
+    // do not apply
+    if (this->getScene ().getScene ().camera.projection.isPerspective) {
+	const glm::mat4 world = this->resolveWorldMatrix ();
+
+	this->m_modelViewProjectionScreen
+	    = this->getScene ().getCamera ().getProjection () * this->getScene ().getCamera ().getLookAt () * world;
+	this->m_modelViewProjectionScreenInverse = glm::inverse (this->m_modelViewProjectionScreen);
+
+	if (this->getImage ().model->passthrough) {
+	    this->m_modelViewProjectionCopy = this->m_modelViewProjectionScreen;
+	    this->m_modelViewProjectionCopyInverse = this->m_modelViewProjectionScreenInverse;
+	}
+
+	return;
+    }
+
     // Build rotation from angles (already in radians from scene.json — see CParticle.cpp:2119)
     // Negate X and Z rotations to account for Y-flipped coordinate system (CParticle.cpp:2120)
     // all three axes are resolved through the parent chain by resolveTransform (PR #479)
@@ -1468,6 +1500,19 @@ void CImage::updateScreenSpacePosition () {
 	rotModel = glm::rotate (rotModel, angles.y, glm::vec3 (0.0f, 1.0f, 0.0f));
 	rotModel = glm::rotate (rotModel, angles.x, glm::vec3 (-1.0f, 0.0f, 0.0f));
 	rotModel = glm::translate (rotModel, -this->m_sceneCenter);
+
+	// same rotation as rotModel above, without the scene-center translate: a direction-only
+	// local->world matrix for effect shaders (e.g. depthparallax) that rotate the parallax
+	// input into the layer's own axes via g_EffectTextureProjectionMatrixInverse
+	this->m_effectTextureProjectionMatrix = glm::mat4 (1.0f);
+	this->m_effectTextureProjectionMatrix = glm::rotate (this->m_effectTextureProjectionMatrix, -angles.z, glm::vec3 (0.0f, 0.0f, 1.0f));
+	this->m_effectTextureProjectionMatrix = glm::rotate (this->m_effectTextureProjectionMatrix, angles.y, glm::vec3 (0.0f, 1.0f, 0.0f));
+	this->m_effectTextureProjectionMatrix = glm::rotate (this->m_effectTextureProjectionMatrix, angles.x, glm::vec3 (-1.0f, 0.0f, 0.0f));
+	// pure rotation matrix: inverse == transpose, cheaper and numerically exact
+	this->m_effectTextureProjectionMatrixInverse = glm::transpose (this->m_effectTextureProjectionMatrix);
+    } else {
+	this->m_effectTextureProjectionMatrix = glm::mat4 (1.0f);
+	this->m_effectTextureProjectionMatrixInverse = glm::mat4 (1.0f);
     }
 
     glm::mat4 mvp = this->getScene ().getCamera ().getProjection () * this->getScene ().getCamera ().getLookAt ();

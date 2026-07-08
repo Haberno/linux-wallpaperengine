@@ -42,6 +42,7 @@ public:
     void setModelViewProjectionMatrixInverse (const glm::mat4* projection);
     void setModelMatrix (const glm::mat4* model);
     void setViewProjectionMatrix (const glm::mat4* viewProjection);
+    void setEffectTextureProjectionMatrix (const glm::mat4* matrix, const glm::mat4* inverse);
     void setBlendingMode (BlendingMode blendingmode);
     [[nodiscard]] BlendingMode getBlendingMode () const;
     [[nodiscard]] std::shared_ptr<const CFBO> resolveFBO (const std::string& name) const;
@@ -61,7 +62,8 @@ public:
     // Public uniform setters for external callers (pointer-based, updated per-frame)
     void addUniform (const std::string& name, const float* value, int count = 1);
     void addUniform (const std::string& name, const glm::vec3* value);
-    void addUniform (const std::string& name, const glm::vec4* value);
+    void addUniform (const std::string& name, const glm::vec4* value, int count = 1);
+    void addUniform (const std::string& name, const glm::mat3* value);
     void addUniform (const std::string& name, const glm::mat4* value);
 
 private:
@@ -142,7 +144,6 @@ private:
     void addUniform (const std::string& name, const int* value, int count = 1);
     void addUniform (const std::string& name, const double* value, int count = 1);
     void addUniform (const std::string& name, const glm::vec2* value);
-    void addUniform (const std::string& name, const glm::mat3* value);
     void addUniform (const std::string& name, const int** value);
     void addUniform (const std::string& name, const double** value);
     void addUniform (const std::string& name, const float** value);
@@ -189,6 +190,8 @@ private:
     const glm::mat4* m_modelViewProjectionMatrixInverse;
     const glm::mat4* m_modelMatrix;
     const glm::mat4* m_viewProjectionMatrix;
+    const glm::mat4* m_effectTextureProjectionMatrix = nullptr;
+    const glm::mat4* m_effectTextureProjectionMatrixInverse = nullptr;
 
     /**
      * Contains the final map of textures to be used

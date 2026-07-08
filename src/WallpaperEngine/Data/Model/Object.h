@@ -11,6 +11,7 @@
 #include "DynamicValue.h"
 #include "Effect.h"
 #include "Material.h"
+#include "MdlMesh.h"
 #include "Model.h"
 #include "Types.h"
 #include "UserSetting.h"
@@ -631,5 +632,52 @@ public:
     explicit Text (ObjectData data, TextData textData) noexcept :
 	Object (std::move (data)), TextData (std::move (textData)) { };
     ~Text () override = default;
+};
+
+/**
+ * Static 3D model object ("model" key in 3D scenes). Transform fields
+ * (origin/scale/angles/visible) live in the base ObjectData group fields.
+ */
+struct Model3DData {
+    /** The .mdl file the object references */
+    std::string filename;
+    /** Mesh data read from the MDLV container */
+    MdlMesh mesh;
+    /** Materials referenced by the submesh headers, aligned with mesh.submeshes */
+    std::vector<MaterialUniquePtr> materials;
+};
+
+class Model3D : public Object, public Model3DData {
+public:
+    explicit Model3D (ObjectData data, Model3DData modelData) noexcept :
+	Object (std::move (data)), Model3DData (std::move (modelData)) { };
+    ~Model3D () override = default;
+};
+
+/**
+ * Light object in 3D scenes. Origin/angles come from the base ObjectData
+ * (both can be script-driven, e.g. a sun tracking script).
+ */
+struct LightData {
+    enum Type {
+	Type_Point = 0,
+	Type_Directional = 1,
+    };
+
+    Type type;
+    UserSettingUniquePtr color;
+    UserSettingUniquePtr intensity;
+    UserSettingUniquePtr radius;
+    /** Falloff exponent for point lights */
+    UserSettingUniquePtr exponent;
+    /** Stored for later shadow support; unused while shadows are not implemented */
+    bool castShadow;
+};
+
+class Light : public Object, public LightData {
+public:
+    explicit Light (ObjectData data, LightData lightData) noexcept :
+	Object (std::move (data)), LightData (std::move (lightData)) { };
+    ~Light () override = default;
 };
 } // namespace WallpaperEngine::Data::Model

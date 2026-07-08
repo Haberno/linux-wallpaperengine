@@ -412,6 +412,39 @@ void CText::render () {
     // GL y- to screen top and GL y+ to screen bottom. This effectively inverts Y again,
     // so we need: gl_y = origin.y - scene_h/2  (not the CImage-style scene_h/2 - origin.y).
     // CImage pre-compensates for X11 (no vflip) and gets corrected by the Wayland vflip.
+    // 3D scenes: no screen-space centering or parallax; the world matrix carries the
+    // transform chain (origin, parents, text scale)
+    if (getScene ().getScene ().camera.projection.isPerspective) {
+	// the shared VBO bakes the 2D path's vflip into its UVs (glyph top at -y); world
+	// space is y-up, so mirror the centered quad back around its own center
+	const glm::mat4 model
+	    = this->resolveWorldMatrix () * glm::scale (glm::mat4 (1.0f), glm::vec3 (1.0f, -1.0f, 1.0f));
+	const glm::mat4 mvp
+	    = getScene ().getCamera ().getProjection () * getScene ().getCamera ().getLookAt () * model;
+
+	glEnable (GL_BLEND);
+	glBlendFunc (GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+	// the mirror flips the quad's winding, and the last material pass may have left
+	// face culling on; text plates are double-sided anyway
+	glDisable (GL_CULL_FACE);
+
+	glUseProgram (m_program);
+	glUniformMatrix4fv (m_uMVP, 1, GL_FALSE, glm::value_ptr (mvp));
+	glUniform4f (m_uColor, color.r, color.g, color.b, color.a * alpha);
+
+	glActiveTexture (GL_TEXTURE0);
+	glBindTexture (GL_TEXTURE_2D, m_texture);
+	glUniform1i (m_uTexture, 0);
+
+	glBindVertexArray (m_vao);
+	glDrawArrays (GL_TRIANGLES, 0, 6);
+	glBindVertexArray (0);
+#if !NDEBUG
+	glPopDebugGroup ();
+#endif /* DEBUG */
+	return;
+    }
+
     // CText renders with direct vflip-aware coordinates.
     const float scene_w = getScene ().getCamera ().getWidth ();
     const float scene_h = getScene ().getCamera ().getHeight ();

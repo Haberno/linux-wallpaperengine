@@ -1,6 +1,7 @@
 #include "ObjectParser.h"
 #include "EffectParser.h"
 #include "MaterialParser.h"
+#include "MdlParser.h"
 #include "ModelParser.h"
 
 #include "ShaderConstantParser.h"
@@ -22,6 +23,7 @@ ObjectUniquePtr ObjectParser::parse (const JSON& it, const Project& project) {
     const auto soundIt = it.find ("sound");
     const auto particleIt = it.find ("particle");
     const auto textIt = it.find ("text");
+    const auto modelIt = it.find ("model");
     const auto lightIt = it.find ("light");
     // use shape to refer to VolumeLight
     const auto shapeIt = it.find ("shape");
@@ -81,8 +83,10 @@ ObjectUniquePtr ObjectParser::parse (const JSON& it, const Project& project) {
 	return parseParticle (it, project, std::move (basedata));
     } else if (textIt != it.end ()) {
 	return parseText (it, project, std::move (basedata));
-    } else if (lightIt != it.end ()) {
-	sLog.error ("Light objects are not supported yet");
+    } else if (modelIt != it.end () && modelIt->is_string ()) {
+	return parseModel3D (project, std::move (basedata), *modelIt);
+    } else if (lightIt != it.end () && lightIt->is_string ()) {
+	return parseLight (it, project, std::move (basedata), *lightIt);
     } else if (shapeIt != it.end ()) {
 	sLog.error ("VolumeLight objects are not supported yet");
     } else {
@@ -146,6 +150,53 @@ TextUniquePtr ObjectParser::parseText (const JSON& it, const Project& project, O
 	    .alignment = it.optional ("horizontalalign", it.optional ("alignment", std::string ("center"))),
 	    .verticalalign = it.optional ("verticalalign", std::string ("center")),
 	    .padding = it.optional ("padding", 0),
+	}
+    );
+}
+
+ObjectUniquePtr ObjectParser::parseModel3D (const Project& project, ObjectData base, const std::string& model) {
+    try {
+	auto mesh = MdlParser::load (project, model);
+	std::vector<MaterialUniquePtr> materials;
+
+	for (const auto& submesh : mesh.submeshes) {
+	    materials.push_back (MaterialParser::load (project, submesh.materialPath));
+	}
+
+	return std::make_unique<Model3D> (
+	    std::move (base),
+	    Model3DData {
+		.filename = model,
+		.mesh = std::move (mesh),
+		.materials = std::move (materials),
+	    }
+	);
+    } catch (const std::exception& e) {
+	sLog.error ("Cannot load model object ", base.id, " (", model, "): ", e.what ());
+	return std::make_unique<Object> (std::move (base));
+    }
+}
+
+LightUniquePtr ObjectParser::parseLight (const JSON& it, const Project& project, ObjectData base, const std::string& light) {
+    const auto& properties = project.properties;
+    LightData::Type type = LightData::Type_Point;
+
+    if (light == "ldirectional") {
+	type = LightData::Type_Directional;
+    } else if (light != "lpoint") {
+	// spot and tube lights are parsed as point lights until a wallpaper needs them
+	sLog.error ("Unsupported light type '", light, "' on object ", base.id, ", treating as point light");
+    }
+
+    return std::make_unique<Light> (
+	std::move (base),
+	LightData {
+	    .type = type,
+	    .color = it.user ("color", properties, glm::vec3 (1.0f)),
+	    .intensity = it.user ("intensity", properties, 1.0f),
+	    .radius = it.user ("radius", properties, 100.0f),
+	    .exponent = it.user ("exponent", properties, 1.0f),
+	    .castShadow = it.optional ("castshadow", false),
 	}
     );
 }
