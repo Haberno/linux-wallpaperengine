@@ -26,5 +26,7 @@ private:
     std::map<int, Audio::AudioStream*> m_audioStreams = {};
 
     const Sound& m_sound;
+    /** whether this instance claimed playback of m_sound (see AudioContext::claimSound) */
+    bool m_ownsPlayback = false;
 };
 } // namespace WallpaperEngine::Render::Objects

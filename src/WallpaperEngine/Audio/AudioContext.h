@@ -1,6 +1,7 @@
 #pragma once
 
 #include <libavutil/samplefmt.h>
+#include <set>
 #include <vector>
 
 #include "WallpaperEngine/Application/ApplicationContext.h"
@@ -39,6 +40,23 @@ namespace Audio {
 	void removeStream (int streamId) const;
 
 	/**
+	 * Claims playback ownership of a scene sound. Screens showing the same wallpaper share
+	 * one loaded Project — and therefore the same Sound data objects — so keying by the data
+	 * address dedupes identical audio across monitors (only the first CSound plays) while
+	 * different wallpapers keep their own audio untouched.
+	 *
+	 * @param sound The Sound data object's address
+	 * @return true when the caller now owns playback, false when another screen already does
+	 */
+	bool claimSound (const void* sound);
+	/**
+	 * Releases a claim made by claimSound (call only when the claim succeeded).
+	 *
+	 * @param sound The Sound data object's address
+	 */
+	void releaseSound (const void* sound);
+
+	/**
 	 * TODO: MAYBE THIS SHOULD BE OUR OWN DEFINITIONS INSTEAD OF LIBRARY SPECIFIC ONES?
 	 *
 	 * @return The audio format the driver supports
@@ -69,6 +87,8 @@ namespace Audio {
     private:
 	/** The audio driver in use */
 	Drivers::AudioDriver& m_driver;
+	/** Sound data objects currently owned by a playing CSound, see claimSound */
+	std::set<const void*> m_claimedSounds = {};
     };
 } // namespace Audio
 } // namespace WallpaperEngine
