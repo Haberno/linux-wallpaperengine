@@ -186,10 +186,18 @@ private:
     std::map<std::string, UniformEntry*> m_uniforms = {};
     std::map<std::string, ReferenceUniformEntry*> m_referenceUniforms = {};
     BlendingMode m_blendingmode = BlendingMode_Normal;
-    const glm::mat4* m_modelViewProjectionMatrix;
-    const glm::mat4* m_modelViewProjectionMatrixInverse;
-    const glm::mat4* m_modelMatrix;
-    const glm::mat4* m_viewProjectionMatrix;
+    /**
+     * Default matrix the pointers below start at. Owners (CImage, CModel, ...) point these at their own
+     * matrices before rendering; passes whose owner never does (e.g. plain copy passes) must still read
+     * a valid matrix. Leaving them uninitialized made the render depend on heap garbage: it worked on a
+     * fresh launch but an in-process wallpaper rebuild (live property change / bg swap) recycled heap
+     * memory into new passes and the same scene rendered wrong.
+     */
+    static const glm::mat4 s_defaultMatrix;
+    const glm::mat4* m_modelViewProjectionMatrix = &s_defaultMatrix;
+    const glm::mat4* m_modelViewProjectionMatrixInverse = &s_defaultMatrix;
+    const glm::mat4* m_modelMatrix = &s_defaultMatrix;
+    const glm::mat4* m_viewProjectionMatrix = &s_defaultMatrix;
     const glm::mat4* m_effectTextureProjectionMatrix = nullptr;
     const glm::mat4* m_effectTextureProjectionMatrixInverse = nullptr;
 
@@ -205,14 +213,14 @@ private:
     std::shared_ptr<const TextureProvider> m_previousInput = nullptr;
     glm::vec4 m_texture0Resolution = {};
 
-    GLuint m_programID;
+    GLuint m_programID = GL_NONE;
 
     // shader variables used temporary
-    GLint g_Texture0Rotation;
-    GLint g_Texture0Translation;
-    GLuint a_TexCoord;
-    GLuint a_Position;
-    GLuint m_vao;
+    GLint g_Texture0Rotation = -1;
+    GLint g_Texture0Translation = -1;
+    GLuint a_TexCoord = GL_NONE;
+    GLuint a_Position = GL_NONE;
+    GLuint m_vao = GL_NONE;
 
     // Custom geometry callbacks (for particles, etc.)
     GeometryCallback m_setupAttribsCallback;
