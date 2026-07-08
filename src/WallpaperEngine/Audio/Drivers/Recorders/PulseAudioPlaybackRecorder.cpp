@@ -214,7 +214,16 @@ PulseAudioPlaybackRecorder::~PulseAudioPlaybackRecorder () {
 }
 
 void PulseAudioPlaybackRecorder::update () {
-    pa_mainloop_iterate (this->m_mainloop, 0, nullptr);
+    // Drain everything the server has queued instead of dispatching a single event: one
+    // non-blocking iterate consumes at most one ~10ms fragment per render frame (16.6ms at
+    // 60fps), which is structurally slower than realtime — the monitor stream backed up to
+    // maxlength and pipewire-pulse spammed "overrun recover"/skip, feeding the FFT stale,
+    // gappy audio. The loop ends once the event queue is empty; the guard caps a frame's
+    // work if the server keeps queueing while we dispatch (~76 fragments fit maxlength).
+    // ponytail: single-threaded pump on the render thread; a capture thread only becomes
+    // worth it if sub-frame audio latency ever matters
+    for (int guard = 0; guard < 256 && pa_mainloop_iterate (this->m_mainloop, 0, nullptr) > 0; guard++) {
+    }
 
     // interpolate current values to the destination
     for (int i = 0; i < 64; i++) {
