@@ -78,9 +78,40 @@ protected:
     [[nodiscard]] static ResolvedTransform localTransform (const WallpaperEngine::Data::Model::Object& object, float time);
 
 private:
+    struct PuppetBone {
+	int32_t parent = -1;
+	/** inverse of the composed bind-pose transform; the rest mesh is the parts atlas,
+	 *  so posed vertex = animWorld * inverseBindWorld * vertex */
+	glm::mat4 inverseBindWorld = glm::mat4 (1.0f);
+    };
+
+    struct PuppetBoneFrame {
+	glm::vec3 translation = glm::vec3 (0.0f);
+	glm::vec3 rotation = glm::vec3 (0.0f);
+	glm::vec3 scale = glm::vec3 (1.0f);
+    };
+
+    struct PuppetAnimation {
+	uint32_t id = 0;
+	std::string name = {};
+	std::string mode = {};
+	float fps = 0.0f;
+	uint32_t frameCount = 0;
+	/** boneFrames[bone][frame], usually frameCount + 1 entries with the last matching the first */
+	std::vector<std::vector<PuppetBoneFrame>> boneFrames = {};
+    };
+
+    struct PuppetActiveLayer {
+	const PuppetAnimation* animation = nullptr;
+	float rate = 1.0f;
+    };
+
     bool loadPuppetMesh (const glm::vec2& size);
+    bool loadPuppetBones (const std::vector<char>& data, size_t mdlsOffset);
+    void loadPuppetAnimations (const std::vector<char>& data, size_t mdlaOffset);
+    void selectPuppetAnimation ();
     void updatePuppetPositionBuffer (const glm::vec2& size);
-    void setupPuppetGeometryCallback (Effects::CPass* pass) const;
+    void setupPuppetGeometryCallback (Effects::CPass* pass, bool samplesSourceTexture) const;
     ResolvedTransform updateGeometryBuffers ();
     [[nodiscard]] glm::vec2 resolveGeometrySize (float sceneWidth, float sceneHeight, glm::vec3& origin) const;
     void updateScenePosition (
@@ -101,10 +132,16 @@ private:
     GLuint m_texcoordPass;
     GLuint m_puppetSpacePosition = GL_NONE;
     GLuint m_puppetTexCoord = GL_NONE;
+    GLuint m_puppetTexCoordFirstPass = GL_NONE;
     GLuint m_puppetIndices = GL_NONE;
     GLsizei m_puppetIndexCount = 0;
     bool m_hasPuppetMesh = false;
     std::vector<GLfloat> m_puppetRawPositions = {};
+    std::vector<uint32_t> m_puppetBlendIndices = {};
+    std::vector<GLfloat> m_puppetBlendWeights = {};
+    std::vector<PuppetBone> m_puppetBones = {};
+    std::vector<PuppetAnimation> m_puppetAnimations = {};
+    std::vector<PuppetActiveLayer> m_puppetActiveLayers = {};
 
     glm::mat4 m_modelViewProjectionScreen = {};
     glm::mat4 m_modelViewProjectionPass = {};

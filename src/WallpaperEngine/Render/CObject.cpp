@@ -19,3 +19,23 @@ const AssetLocator& CObject::getAssetLocator () const { return this->getScene ()
 int CObject::getId () const { return this->m_object.id; }
 
 const Object& CObject::getObject () const { return this->m_object; }
+
+glm::vec2 CObject::resolveParallaxDepth () const {
+    constexpr int kMaxParentDepth = 32;
+    const Object* current = &this->m_object;
+
+    for (int depth = 0; current != nullptr && depth <= kMaxParentDepth; depth++) {
+	if (current->authoredParallaxDepth.has_value ()) {
+	    return *current->authoredParallaxDepth;
+	}
+
+	if (!current->parent.has_value ()) {
+	    break;
+	}
+
+	const auto* parentObject = this->m_scene.getObject (current->parent.value ());
+	current = parentObject != nullptr ? &parentObject->getObject () : nullptr;
+    }
+
+    return glm::vec2 (1.0f);
+}

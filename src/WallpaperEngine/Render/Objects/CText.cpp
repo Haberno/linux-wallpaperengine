@@ -422,11 +422,11 @@ void CText::render () {
     };
 
     // camera parallax translation, same convention as CImage but with y following
-    // this renderer's vflip-aware coordinates; locked transforms opt out entirely
-    if (getScene ().getScene ().camera.parallax.enabled->value->getBool () && !m_text.locktransforms
+    // this renderer's vflip-aware coordinates; locktransforms is only an editor-UI lock
+    if (getScene ().getScene ().camera.parallax.enabled->value->getBool ()
 	&& !getScene ().getContext ().getApp ().getContext ().settings.mouse.disableparallax) {
 	const float amount = getScene ().getScene ().camera.parallax.amount->value->getFloat ();
-	const glm::vec2 depth = m_text.parallaxDepth->value->getVec2 ();
+	const glm::vec2 depth = this->resolveParallaxDepth ();
 	const glm::vec2* displacement = getScene ().getParallaxDisplacement ();
 	const float referenceSize
 	    = static_cast<float> (getScene ().getWidth ()) * Wallpapers::CScene::PARALLAX_TRANSLATION_SPAN;
