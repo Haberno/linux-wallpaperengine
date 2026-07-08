@@ -336,11 +336,25 @@ void PulseAudioPlaybackRecorder::update () {
     // scaled by kWeBandGain (see its comment). No normalization, no clamp — WE's values
     // track the actual playback level and can exceed 1; wallpapers were authored against
     // that behavior and do their own peak handling.
+    //
+    // Master trim: kWeBandGain's absolute level assumes the community reference was
+    // measured at -20dBFS; in practice that runs hot (bars peg too easily), so trim down.
+    // ponytail: 0.6 tuned by eye on real wallpapers; override via WPE_AUDIO_SCALE.
+    static const float masterGain = [] {
+	if (const char* s = std::getenv ("WPE_AUDIO_SCALE")) {
+	    const float parsed = std::atof (s);
+	    if (parsed > 0.0f) {
+		return parsed;
+	    }
+	}
+	return 0.6f;
+    }();
+
     for (int band = 0; band < 64; band++) {
 	const int index = band * 2;
 	const float re = this->m_FFTinfo[index].r;
 	const float im = this->m_FFTinfo[index].i;
-	const float value = std::sqrt (re * re + im * im) * kWeBandGain[band];
+	const float value = std::sqrt (re * re + im * im) * kWeBandGain[band] * masterGain;
 
 	this->m_FFTdestination64[band] = value;
 	this->m_FFTdestination32[band >> 1] = value;
