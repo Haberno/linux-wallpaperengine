@@ -16,6 +16,7 @@ Open Knowledge Format bundle for rendering work on the local linux-wallpaperengi
 * [Wallpaper Case Studies](Wallpaper%20Case%20Studies.md) - workshop wallpapers used as regression evidence.
 * [Debugging Workflow](Debugging%20Workflow.md) - object isolation, screenshots, asset extraction, and instance hygiene.
 * [Known Issues](Known%20Issues.md) - open rendering bugs and deferred implementation work.
+* [TODO Backlog](TODO%20Backlog.md) - consolidated audit: bugs, verifications, unported fixes, missing features, code health.
 * [Candidate Refactors](Candidate%20Refactors.md) - user-supplied cleanup/refactor backlog.
 
 # Bundle Metadata
