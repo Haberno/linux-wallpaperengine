@@ -61,6 +61,10 @@ public:
      * @return Other combos detected by this shader unit during the preprocess
      */
     [[nodiscard]] const ComboMap& getDiscoveredCombos () const;
+    /**
+     * @return Combos forced on by the [COMBO] "require" chain (e.g. RIMLIGHTING requires LIGHTING:1).
+     */
+    [[nodiscard]] const ComboMap& getPromotedCombos () const;
 
 protected:
     /**
@@ -113,6 +117,13 @@ private:
      */
     void parseComboConfiguration (const std::string& content, int defaultValue = 0);
     /**
+     * Resolves the [COMBO] "require" chain. Wallpaper Engine only compiles a combo's code path when its
+     * requirements hold; a material can ship an enabled combo whose requirement it leaves unset (e.g.
+     * RIMLIGHTING:1 / SHADINGGRADIENT:1 with LIGHTING:0). For every enabled combo that declares a
+     * requirement, this forces the required combo to the needed value (transitively), matching WE.
+     */
+    void resolveComboRequires ();
+    /**
      * Parses a parameter extra metadata created by wallpaper engine
      *
      * @param type The type of variable to parse
@@ -164,6 +175,14 @@ private:
      * The combos used by this unit that should be added
      */
     std::map<std::string, bool> m_usedCombos = {};
+    /**
+     * Combo "require" dependencies parsed from the [COMBO] annotations (combo -> {requiredCombo: value}).
+     */
+    std::map<std::string, ComboMap> m_comboRequires = {};
+    /**
+     * Combos forced on by resolveComboRequires(); highest precedence in the generated #defines.
+     */
+    ComboMap m_promotedCombos = {};
     /**
      * The constants defined for this unit
      */
