@@ -76,15 +76,18 @@ over-engineering audit, and an in-code TODO/FIXME scan. Ordered by priority.
 
 ## P3 — Remaining beingsuz ports (deliberately deferred 2026-07-08)
 
-17. **Runtime layer API** — `thisScene.createLayer`/`getLayerIndex`/
-    `sortLayer` (+106 lines CScene, 53cfa5b): generative audio visualizers
-    spawn their bar layers at init and currently render a static block.
+17. ~~Runtime layer API~~ — **ported 2026-07-08** (731cfff):
+    createLayer/getLayerIndex/sortLayer. Camera-transform scripting
+    (getCameraTransforms/setCameraTransforms) NOT taken — needs their Camera
+    base/override API (their Camera.cpp +49), tracked here instead.
 18. **ILayer API expansion** — getParent/getChildren/rotateObjectSpace
     (c209500), lookAt/getTransformMatrix/setParent, engine.registerAsset
-    (bb73165); SceneObject enumerateLayers/getLayerByID (27ad70c part).
+    (bb73165). ~~enumerateLayers/getLayerByID~~ ported (b7fd0d6).
 19. **IEngine context queries** — isWallpaper/isDesktopDevice/isPortrait/...
     (08f2a41).
-20. **applyUserProperties event** on live property change (319e2f7).
+20. ~~applyUserProperties event~~ — **ported 2026-07-08** (29b0e1e), with a
+    minimal `prop <screen> <key> <value>` socket command as the live trigger
+    (structural rebuilds still deferred with 61d3528).
 21. **--render-scale supersampling** (8947ec6) — quality/antialias knob.
 22. **Control-socket extras** — live screenshot command (a83347a), live
     renderscale/audiodevice apply (53c...), in-process rebuild on any
