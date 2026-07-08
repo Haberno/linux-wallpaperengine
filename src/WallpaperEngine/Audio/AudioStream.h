@@ -1,5 +1,7 @@
 #pragma once
 
+#include <atomic>
+#include <cstdint>
 #include <string>
 
 extern "C" {
@@ -84,6 +86,15 @@ public:
      */
     [[nodiscard]] bool isRepeat () const;
     /**
+     * Marks a full playback pass (called by the read thread when the demuxer reaches EOF,
+     * whether or not the stream loops afterwards)
+     */
+    void notifyCompletion () { this->m_completions++; }
+    /**
+     * @return How many full passes the stream has played so far
+     */
+    [[nodiscard]] uint32_t getCompletionCount () const { return this->m_completions; }
+    /**
      * Stops decoding and playback of the stream
      */
     void stop ();
@@ -165,6 +176,8 @@ private:
     bool m_initialized = false;
     /** Repeat enabled? */
     bool m_repeat = false;
+    /** Full playback passes so far; written by the read thread, read by the render thread */
+    std::atomic<uint32_t> m_completions = 0;
     /** The codec context that contains the original audio format information */
     AVCodecContext* m_context = nullptr;
     /** The format context that controls how data is read off the file */

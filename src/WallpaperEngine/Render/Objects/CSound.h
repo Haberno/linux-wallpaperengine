@@ -21,12 +21,16 @@ public:
 
 protected:
     void load ();
+    void unload ();
 
 private:
     std::map<int, Audio::AudioStream*> m_audioStreams = {};
 
     const Sound& m_sound;
-    /** whether this instance claimed playback of m_sound (see AudioContext::claimSound) */
-    bool m_ownsPlayback = false;
+    /** value keys identifying this wallpaper and sound across screens (see registerSoundCandidate) */
+    std::string m_wallpaperKey;
+    std::string m_soundKey;
+    /** registered with the AudioContext soundtrack coordinator */
+    bool m_registered = false;
 };
 } // namespace WallpaperEngine::Render::Objects
