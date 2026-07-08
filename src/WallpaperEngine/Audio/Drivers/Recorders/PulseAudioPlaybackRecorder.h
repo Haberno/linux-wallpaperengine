@@ -39,7 +39,7 @@ private:
     float m_FFTdestination64[64] = { 0 };
     float m_FFTdestination32[32] = { 0 };
     float m_FFTdestination16[16] = { 0 };
-    /** slow-decaying running peak of the weighted band magnitudes, see update()'s auto-gain */
-    float m_bandPeak = 0.0f;
+    /** Hann window, computed once — unwindowed FFT leakage smears the bands */
+    float m_hannWindow[WAVE_BUFFER_SIZE] = { 0.0f };
 };
 } // namespace WallpaperEngine::Audio::Drivers::Recorders
