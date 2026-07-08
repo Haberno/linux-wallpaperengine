@@ -35,6 +35,8 @@
 	  "#define CAST3(x) (vec3(x))\n"                                                                               \
 	  "#define CAST4(x) (vec4(x))\n"                                                                               \
 	  "#define CAST3X3(x) (mat3(x))\n"                                                                             \
+	  "#define CASTF(x) (float(x))\n"                                                                              \
+	  "#define CASTU(x) (uint(x))\n"                                                                               \
 	  "#define float2 vec2\n"                                                                                      \
 	  "#define float3 vec3\n"                                                                                      \
 	  "#define float4 vec4\n"                                                                                      \
@@ -81,6 +83,7 @@ void ShaderUnit::preprocess () {
     this->preprocessIncludes ();
     this->preprocessRequires ();
     this->preprocessVariables ();
+    this->resolveComboRequires ();
 
     // replace gl_FragColor with the equivalent
     const std::string from = "gl_FragColor";
@@ -506,7 +509,6 @@ std::string ShaderUnit::applyFragmentTexCoordCompatibility (std::string source) 
 }
 
 void ShaderUnit::parseComboConfiguration (const std::string& content, const int defaultValue) {
-    // TODO: SUPPORT REQUIRES SO WE PROPERLY FOLLOW THE REQUIRED CHAIN
     JSON data;
     try {
 	data = JSON::parse (content);
@@ -518,6 +520,21 @@ void ShaderUnit::parseComboConfiguration (const std::string& content, const int 
     // ignore type as it seems to be used only on the editor
     // const auto type = data.find ("type");
     const auto defvalue = data.find ("default");
+
+    // Record the "require" dependency, e.g. {"combo":"RIMLIGHTING","require":{"LIGHTING":1}}. Wallpaper Engine
+    // only compiles a combo's code path when its requirements hold, so an enabled combo forces its requirement
+    // on (resolved later in resolveComboRequires once every combo's value is known).
+    if (const auto require = data.find ("require"); require != data.end () && require->is_object ()) {
+	ComboMap requirements;
+	for (const auto& [name, value] : require->items ()) {
+	    if (value.is_number_integer ()) {
+		requirements.emplace (name, value.get<int> ());
+	    }
+	}
+	if (!requirements.empty ()) {
+	    this->m_comboRequires.emplace (combo, std::move (requirements));
+	}
+    }
 
     // check the combos
     const auto entry = this->m_combos.find (combo);
@@ -541,6 +558,48 @@ void ShaderUnit::parseComboConfiguration (const std::string& content, const int 
 	    sLog.exception ("string combos are not supported in shader ", this->m_file, ". ", combo);
 	} else {
 	    sLog.exception ("cannot parse combo information ", combo, ". unknown type for ", defvalue->dump ());
+	}
+    }
+}
+
+void ShaderUnit::resolveComboRequires () {
+    if (this->m_comboRequires.empty ()) {
+	return;
+    }
+
+    // Effective value of a combo across the precedence chain (promoted > override > material > discovered).
+    const auto effective = [this] (const std::string& name) -> int {
+	if (const auto it = this->m_promotedCombos.find (name); it != this->m_promotedCombos.end ()) {
+	    return it->second;
+	}
+	if (const auto it = this->m_overrideCombos.find (name); it != this->m_overrideCombos.end ()) {
+	    return it->second;
+	}
+	if (const auto it = this->m_combos.find (name); it != this->m_combos.end ()) {
+	    return it->second;
+	}
+	if (const auto it = this->m_discoveredCombos.find (name); it != this->m_discoveredCombos.end ()) {
+	    return it->second;
+	}
+	return 0;
+    };
+
+    // Fixed-point iteration so transitive requirements (A requires B requires C) all resolve. The combo set
+    // is tiny, so the bounded loop is cheap; the guard just prevents a cyclic annotation from spinning.
+    constexpr int kMaxComboRequireIterations = 16;
+    bool changed = true;
+    for (int guard = 0; changed && guard < kMaxComboRequireIterations; ++guard) {
+	changed = false;
+	for (const auto& [combo, requirements] : this->m_comboRequires) {
+	    if (effective (combo) == 0) {
+		continue; // combo disabled -> its requirements do not apply
+	    }
+	    for (const auto& [required, value] : requirements) {
+		if (effective (required) != value) {
+		    this->m_promotedCombos.insert_or_assign (required, value);
+		    changed = true;
+		}
+	    }
 	}
     }
 }
@@ -707,6 +766,8 @@ const ComboMap& ShaderUnit::getCombos () const { return this->m_combos; }
 
 const ComboMap& ShaderUnit::getDiscoveredCombos () const { return this->m_discoveredCombos; }
 
+const ComboMap& ShaderUnit::getPromotedCombos () const { return this->m_promotedCombos; }
+
 void ShaderUnit::linkToUnit (const ShaderUnit* unit) { this->m_link = unit; }
 
 const ShaderUnit* ShaderUnit::getLinkedUnit () const { return this->m_link; }
@@ -725,6 +786,29 @@ const std::string& ShaderUnit::compile () {
     }
 
     std::map<std::string, bool> addedCombos;
+
+    // Combos forced on by the [COMBO] "require" chain come first so they win over the material/override values.
+    // The linked unit's promotions are emitted too: the [COMBO] annotations live in one unit (usually the
+    // fragment) but the #if guards span both, so vertex and fragment must agree on the promoted combo values or
+    // their varyings desync and the program fails to link.
+    const ComboMap* promotedSets[] = {
+	&this->m_promotedCombos,
+	this->m_link != nullptr ? &this->m_link->getPromotedCombos () : nullptr,
+    };
+    for (const ComboMap* promoted : promotedSets) {
+	if (promoted == nullptr) {
+	    continue;
+	}
+	for (const auto& [name, value] : *promoted) {
+	    std::string uppercase;
+	    std::ranges::transform (name, std::back_inserter (uppercase), ::toupper);
+
+	    if (!addedCombos.contains (uppercase)) {
+		this->m_final += DEFINE_COMBO (uppercase, value);
+		addedCombos.emplace (uppercase, true);
+	    }
+	}
+    }
 
     for (const auto& [name, value] : this->m_overrideCombos) {
 	std::string uppercase;
