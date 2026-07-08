@@ -13,6 +13,13 @@
 #include <glm/gtc/type_ptr.hpp>
 
 #include "WallpaperEngine/Data/Model/DynamicValue.h"
+#include "WallpaperEngine/Data/Model/Effect.h"
+#include "WallpaperEngine/Data/Model/Material.h"
+#include "WallpaperEngine/Data/Parsers/MaterialParser.h"
+#include "WallpaperEngine/Render/CFBO.h"
+#include "WallpaperEngine/Render/FBOProvider.h"
+#include "WallpaperEngine/Render/Objects/CRenderable.h"
+#include "WallpaperEngine/Render/Objects/Effects/CPass.h"
 #include "WallpaperEngine/Data/Model/Object.h"
 #include "WallpaperEngine/Data/Model/UserSetting.h"
 #include "WallpaperEngine/Logging/Log.h"
@@ -55,6 +62,19 @@ out vec4 FragColor;
 void main() {
     float coverage = texture(uTexture, vUV).r;
     FragColor = vec4(uColor.rgb, uColor.a * coverage);
+}
+)glsl";
+
+// composite shader for the effect path: the chain result is already colored RGBA;
+// uColor modulates it (brightness on rgb, object alpha on a)
+const char* kFragmentShaderRGBA = R"glsl(
+#version 330 core
+in vec2 vUV;
+uniform sampler2D uTexture;
+uniform vec4 uColor;
+out vec4 FragColor;
+void main() {
+    FragColor = texture(uTexture, vUV) * uColor;
 }
 )glsl";
 
@@ -118,6 +138,34 @@ uint32_t WallpaperEngine::Render::Objects::nextUtf8Codepoint (const std::string&
     return code;
 }
 
+namespace WallpaperEngine::Render::Objects {
+/**
+ * CPass needs a CRenderable owner for its uniform sources (brightness/alpha/color) and the
+ * texture-0 fallback. Text effect passes run value-neutral — brightness and object alpha are
+ * applied once at composite time (the blur-style shaders don't read them) — so every getter
+ * returns a constant and the texture is the rasterized-text FBO.
+ */
+class CTextEffectHost final : public CRenderable {
+public:
+    CTextEffectHost (Wallpapers::CScene& scene, const Text& text, const Material& material) :
+	CObject (scene, text), CRenderable (scene, text, material) { }
+
+    void setTexture (std::shared_ptr<const TextureProvider> texture) { this->m_texture = std::move (texture); }
+
+    [[nodiscard]] const float& getBrightness () const override { return m_one; }
+    [[nodiscard]] const float& getUserAlpha () const override { return m_one; }
+    [[nodiscard]] const float& getAlpha () const override { return m_one; }
+    [[nodiscard]] const glm::vec3& getColor () const override { return m_white3; }
+    [[nodiscard]] const glm::vec4& getColor4 () const override { return m_white4; }
+    [[nodiscard]] const glm::vec3& getCompositeColor () const override { return m_white3; }
+
+private:
+    const float m_one = 1.0f;
+    const glm::vec3 m_white3 = glm::vec3 (1.0f);
+    const glm::vec4 m_white4 = glm::vec4 (1.0f);
+};
+} // namespace WallpaperEngine::Render::Objects
+
 CText::CText (Wallpapers::CScene& scene, const Text& text) :
     CObject (scene, text), ScriptableObject (scene, text), m_text (text) {
     this->registerProperty ("color", *text.color->value);
@@ -135,6 +183,7 @@ CText::~CText () {
 	this->getScene ().getScriptEngine ().destroyLayer (m_layerHandle);
 	m_layerHandle = Scripting::kInvalidLayerHandle;
     }
+    destroyEffectChain ();
     if (m_vbo != 0) {
 	glDeleteBuffers (1, &m_vbo);
     }
@@ -184,7 +233,287 @@ void CText::setup () {
 	initScriptLayer ();
     }
 
+    if (!m_text.effects.empty ()) {
+	try {
+	    setupEffectChain ();
+	} catch (const std::exception& e) {
+	    // a failed effect (missing asset, shader translation) degrades to plain text
+	    // instead of killing the object like CImage's all-or-nothing setup does
+	    sLog.error ("CText: effect chain failed for '", m_text.name, "', rendering without effects: ", e.what ());
+	    destroyEffectChain ();
+	}
+    }
+
     m_valid = m_texture != 0 && m_program != 0 && m_vao != 0;
+}
+
+void CText::setupEffectChain () {
+    // The chain renders inside the authored box (stable across text changes — a ticking
+    // clock only re-rasterizes glyphs, never rebuilds passes/FBOs); scenes without a box
+    // fall back to the current ink size. The default padding=32 is exactly the headroom
+    // effects like blur need around the glyphs inside that box.
+    glm::vec2 box = m_text.size;
+    if (box.x <= 0.0f || box.y <= 0.0f) {
+	// no authored box: give effects the same headroom the default padding would
+	box = m_quadSize + glm::vec2 (64.0f);
+    }
+
+    m_effectMaterial
+	= Data::Parsers::MaterialParser::load (this->getScene ().getScene ().project, "materials/util/effectpassthrough.json");
+    m_effectHost = std::make_unique<CTextEffectHost> (this->getScene (), m_text, *m_effectMaterial);
+
+    m_fboA = std::make_shared<CFBO> (
+	"_text_raster_" + std::to_string (this->getId ()), TextureFormat_ARGB8888, TextureFlags_ClampUVs, 1, box.x,
+	box.y, box.x, box.y
+    );
+    m_fboB = std::make_shared<CFBO> (
+	"_text_pingpong_" + std::to_string (this->getId ()), TextureFormat_ARGB8888, TextureFlags_ClampUVs, 1, box.x,
+	box.y, box.x, box.y
+    );
+    m_effectHost->setTexture (m_fboA);
+
+    // NDC quad + texcoords for the intermediate passes, same layout as CImage's pass buffers
+    constexpr GLfloat passPosition[]
+	= { -1.0, 1.0, 0.0f, -1.0, -1.0, 0.0f, 1.0, 1.0, 0.0f, 1.0, 1.0, 0.0f, -1.0, -1.0, 0.0f, 1.0, -1.0, 0.0f };
+    constexpr GLfloat passTexcoord[] = { 0.0f, 1.0f, 0.0f, 0.0f, 1.0f, 1.0f, 1.0f, 1.0f, 0.0f, 0.0f, 1.0f, 0.0f };
+
+    glGenBuffers (1, &m_ndcPosition);
+    glBindBuffer (GL_ARRAY_BUFFER, m_ndcPosition);
+    glBufferData (GL_ARRAY_BUFFER, sizeof (passPosition), passPosition, GL_STATIC_DRAW);
+    glGenBuffers (1, &m_passTexCoord);
+    glBindBuffer (GL_ARRAY_BUFFER, m_passTexCoord);
+    glBufferData (GL_ARRAY_BUFFER, sizeof (passTexcoord), passTexcoord, GL_STATIC_DRAW);
+
+    // build the passes, mirroring the material-pass subset of CImage::setup/setupPasses
+    // (no copy commands, no scene writeback — the final result composites in render())
+    std::shared_ptr<const TextureProvider> asInput = m_fboA;
+    std::shared_ptr<const CFBO> drawTo = m_fboB;
+
+    for (const auto& effect : m_text.effects) {
+	if (!effect->visible->value->getBool ()) {
+	    continue;
+	}
+
+	const auto fboProvider = std::make_shared<FBOProvider> (nullptr);
+	m_effectProviders.push_back (fboProvider);
+
+	for (const auto& fbo : effect->effect->fbos) {
+	    m_effectClears.push_back (fboProvider->create (*fbo, TextureFlags_ClampUVs, box));
+	}
+
+	auto curOverride = effect->passOverrides.begin ();
+	const auto endOverride = effect->passOverrides.end ();
+
+	for (const auto& effectPass : effect->effect->passes) {
+	    if (!effectPass->material.has_value ()) {
+		sLog.error ("CText: command passes are not supported on text effects, object ", this->getId ());
+		continue;
+	    }
+
+	    for (const auto& pass : effectPass->material.value ()->passes) {
+		const auto override = curOverride != endOverride
+		    ? **curOverride
+		    : std::optional<std::reference_wrapper<const ImageEffectPassOverride>> (std::nullopt);
+		const auto target = effectPass->target.has_value ()
+		    ? *effectPass->target
+		    : std::optional<std::reference_wrapper<std::string>> (std::nullopt);
+
+		auto* cpass = new Effects::CPass (*m_effectHost, fboProvider, *pass, override, effectPass->binds, target);
+
+		const std::shared_ptr<const CFBO> prevDrawTo = drawTo;
+		bool writesToTarget = false;
+
+		if (cpass->getTarget ().has_value ()) {
+		    const std::string& targetName = cpass->getTarget ().value ();
+		    if (auto resolved = fboProvider->find (targetName); resolved != nullptr) {
+			drawTo = resolved;
+			writesToTarget = true;
+		    } else {
+			sLog.error ("CText: pass target FBO '", targetName, "' not found, object ", this->getId ());
+		    }
+		}
+
+		cpass->setDestination (drawTo);
+		cpass->setInput (asInput);
+		cpass->setPosition (m_ndcPosition);
+		cpass->setTexCoord (m_passTexCoord);
+		// matrices keep CPass' shared identity defaults: intermediate passes are 1:1 blits
+
+		m_effectPasses.push_back (cpass);
+
+		if (writesToTarget) {
+		    asInput = drawTo;
+		    drawTo = prevDrawTo;
+		} else {
+		    // pingpong between the A/B buffers
+		    const auto nextDraw = (drawTo == m_fboA) ? m_fboB : m_fboA;
+		    asInput = drawTo;
+		    drawTo = nextDraw;
+		}
+	    }
+
+	    if (curOverride != endOverride) {
+		++curOverride;
+	    }
+	}
+    }
+
+    if (m_effectPasses.empty ()) {
+	destroyEffectChain ();
+	return;
+    }
+
+    m_effectResult = std::dynamic_pointer_cast<const CFBO> (asInput);
+
+    // composite program: same vertex shader, RGBA fragment
+    GLuint vs = compileShader (GL_VERTEX_SHADER, kVertexShader);
+    GLuint fs = compileShader (GL_FRAGMENT_SHADER, kFragmentShaderRGBA);
+    if (vs == 0 || fs == 0 || m_effectResult == nullptr) {
+	if (vs) {
+	    glDeleteShader (vs);
+	}
+	if (fs) {
+	    glDeleteShader (fs);
+	}
+	destroyEffectChain ();
+	return;
+    }
+
+    m_compositeProgram = glCreateProgram ();
+    glAttachShader (m_compositeProgram, vs);
+    glAttachShader (m_compositeProgram, fs);
+    glLinkProgram (m_compositeProgram);
+    glDeleteShader (vs);
+    glDeleteShader (fs);
+
+    GLint status = GL_FALSE;
+    glGetProgramiv (m_compositeProgram, GL_LINK_STATUS, &status);
+    if (status != GL_TRUE) {
+	destroyEffectChain ();
+	return;
+    }
+
+    m_cuMVP = glGetUniformLocation (m_compositeProgram, "uMVP");
+    m_cuTexture = glGetUniformLocation (m_compositeProgram, "uTexture");
+
+    // raster MVP: maps the quad's box-center-relative y-down coordinates onto the box FBO,
+    // top of the box (y=-H/2) at texture row 0 so the standard v=0-at-top UVs stay valid
+    m_baseMVP = glm::ortho (-box.x * 0.5f, box.x * 0.5f, -box.y * 0.5f, box.y * 0.5f);
+
+    // composite quad: the whole box centered on the object origin, same y-down local
+    // convention and v=0-at-top UV layout as the glyph quad, so the world MVP of the
+    // direct path positions it identically
+    const float hx = box.x * 0.5f;
+    const float hy = box.y * 0.5f;
+    const float quad[] = {
+	// pos      // uv
+	-hx, -hy, 0.0f, 0.0f, hx, -hy, 1.0f, 0.0f, hx,	hy, 1.0f, 1.0f,
+	-hx, -hy, 0.0f, 0.0f, hx, hy,  1.0f, 1.0f, -hx, hy, 0.0f, 1.0f,
+    };
+
+    glGenVertexArrays (1, &m_compositeVao);
+    glGenBuffers (1, &m_compositeVbo);
+    glBindVertexArray (m_compositeVao);
+    glBindBuffer (GL_ARRAY_BUFFER, m_compositeVbo);
+    glBufferData (GL_ARRAY_BUFFER, sizeof (quad), quad, GL_STATIC_DRAW);
+    glEnableVertexAttribArray (0);
+    glVertexAttribPointer (0, 2, GL_FLOAT, GL_FALSE, 4 * sizeof (float), reinterpret_cast<void*> (0));
+    glEnableVertexAttribArray (1);
+    glVertexAttribPointer (1, 2, GL_FLOAT, GL_FALSE, 4 * sizeof (float), reinterpret_cast<void*> (2 * sizeof (float)));
+    glBindVertexArray (0);
+
+    m_effectsEnabled = true;
+}
+
+void CText::destroyEffectChain () {
+    for (const auto* pass : m_effectPasses) {
+	delete pass;
+    }
+    m_effectPasses.clear ();
+    m_effectProviders.clear ();
+    m_effectClears.clear ();
+    m_effectResult = nullptr;
+    m_fboA = nullptr;
+    m_fboB = nullptr;
+    m_effectHost = nullptr;
+    m_effectMaterial = nullptr;
+    if (m_compositeProgram != 0) {
+	glDeleteProgram (m_compositeProgram);
+	m_compositeProgram = 0;
+    }
+    if (m_compositeVbo != 0) {
+	glDeleteBuffers (1, &m_compositeVbo);
+	m_compositeVbo = 0;
+    }
+    if (m_compositeVao != 0) {
+	glDeleteVertexArrays (1, &m_compositeVao);
+	m_compositeVao = 0;
+    }
+    if (m_ndcPosition != 0) {
+	glDeleteBuffers (1, &m_ndcPosition);
+	m_ndcPosition = 0;
+    }
+    if (m_passTexCoord != 0) {
+	glDeleteBuffers (1, &m_passTexCoord);
+	m_passTexCoord = 0;
+    }
+    m_effectsEnabled = false;
+}
+
+void CText::renderEffectChain (const glm::mat4& mvp, const float brightness, const float alpha) {
+    const glm::vec4 color = m_text.color->value->getVec4 ();
+
+    // 1. rasterize the colored text into the box FBO (single quad over a cleared target:
+    //    blending off writes the exact texel data — rgb keeps the text color even where
+    //    coverage is 0, so blurred edges keep their hue)
+    glBindFramebuffer (GL_FRAMEBUFFER, m_fboA->getFramebuffer ());
+    glViewport (0, 0, m_fboA->getRealWidth (), m_fboA->getRealHeight ());
+    glClearColor (0.0f, 0.0f, 0.0f, 0.0f);
+    glClear (GL_COLOR_BUFFER_BIT);
+    glDisable (GL_BLEND);
+    glDisable (GL_DEPTH_TEST);
+
+    glUseProgram (m_program);
+    glUniformMatrix4fv (m_uMVP, 1, GL_FALSE, glm::value_ptr (m_baseMVP));
+    glUniform4f (m_uColor, color.r, color.g, color.b, color.a);
+    glActiveTexture (GL_TEXTURE0);
+    glBindTexture (GL_TEXTURE_2D, m_texture);
+    glUniform1i (m_uTexture, 0);
+    glBindVertexArray (m_vao);
+    glDrawArrays (GL_TRIANGLES, 0, 6);
+    glBindVertexArray (0);
+
+    // 2. clear the chain's other destinations — nothing in the chain samples last frame
+    for (const auto& fbo : m_effectClears) {
+	glBindFramebuffer (GL_FRAMEBUFFER, fbo->getFramebuffer ());
+	glClear (GL_COLOR_BUFFER_BIT);
+    }
+    glBindFramebuffer (GL_FRAMEBUFFER, m_fboB->getFramebuffer ());
+    glClear (GL_COLOR_BUFFER_BIT);
+
+    // 3. run the passes (each binds its own destination FBO and viewport)
+    for (auto* pass : m_effectPasses) {
+	pass->render ();
+    }
+
+    // 4. composite the result onto the scene with the object's world transform
+    glBindFramebuffer (GL_FRAMEBUFFER, this->getScene ().getWallpaperFramebuffer ());
+    glViewport (0, 0, this->getScene ().getFBO ()->getRealWidth (), this->getScene ().getFBO ()->getRealHeight ());
+
+    glEnable (GL_BLEND);
+    glBlendFunc (GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+    glDisable (GL_CULL_FACE);
+
+    glUseProgram (m_compositeProgram);
+    glUniformMatrix4fv (m_cuMVP, 1, GL_FALSE, glm::value_ptr (mvp));
+    const GLint uColor = glGetUniformLocation (m_compositeProgram, "uColor");
+    glUniform4f (uColor, brightness, brightness, brightness, alpha);
+    glActiveTexture (GL_TEXTURE0);
+    glBindTexture (GL_TEXTURE_2D, m_effectResult->getTextureID (0));
+    glUniform1i (m_cuTexture, 0);
+    glBindVertexArray (m_compositeVao);
+    glDrawArrays (GL_TRIANGLES, 0, 6);
+    glBindVertexArray (0);
 }
 
 bool CText::initFreeType () {
@@ -537,6 +866,7 @@ void CText::render () {
 
     const glm::vec4 color = m_text.color->value->getVec4 ();
     const float alpha = m_text.alpha->value->getFloat ();
+    const float brightness = m_text.brightness->value->getFloat ();
 
     // 3D scenes: no screen-space centering or parallax; the world matrix carries the
     // transform chain (origin, parents, text scale)
@@ -548,6 +878,14 @@ void CText::render () {
 	const glm::mat4 mvp
 	    = getScene ().getCamera ().getProjection () * getScene ().getCamera ().getLookAt () * model;
 
+	if (m_effectsEnabled) {
+	    renderEffectChain (mvp, brightness, alpha);
+#if !NDEBUG
+	    glPopDebugGroup ();
+#endif /* DEBUG */
+	    return;
+	}
+
 	glEnable (GL_BLEND);
 	glBlendFunc (GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
 	// the mirror flips the quad's winding, and the last material pass may have left
@@ -556,7 +894,7 @@ void CText::render () {
 
 	glUseProgram (m_program);
 	glUniformMatrix4fv (m_uMVP, 1, GL_FALSE, glm::value_ptr (mvp));
-	glUniform4f (m_uColor, color.r, color.g, color.b, color.a * alpha);
+	glUniform4f (m_uColor, color.r * brightness, color.g * brightness, color.b * brightness, color.a * alpha);
 
 	glActiveTexture (GL_TEXTURE0);
 	glBindTexture (GL_TEXTURE_2D, m_texture);
@@ -604,12 +942,20 @@ void CText::render () {
 
     const glm::mat4 mvp = getScene ().getCamera ().getProjection () * getScene ().getCamera ().getLookAt () * model;
 
+    if (m_effectsEnabled) {
+	renderEffectChain (mvp, brightness, alpha);
+#if !NDEBUG
+	glPopDebugGroup ();
+#endif /* DEBUG */
+	return;
+    }
+
     glEnable (GL_BLEND);
     glBlendFunc (GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
 
     glUseProgram (m_program);
     glUniformMatrix4fv (m_uMVP, 1, GL_FALSE, glm::value_ptr (mvp));
-    glUniform4f (m_uColor, color.r, color.g, color.b, color.a * alpha);
+    glUniform4f (m_uColor, color.r * brightness, color.g * brightness, color.b * brightness, color.a * alpha);
 
     glActiveTexture (GL_TEXTURE0);
     glBindTexture (GL_TEXTURE_2D, m_texture);
