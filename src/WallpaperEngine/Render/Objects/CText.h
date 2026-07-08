@@ -24,6 +24,11 @@ class CScene;
 namespace WallpaperEngine::Render::Objects {
 using namespace WallpaperEngine::Data::Model;
 
+/** Decodes the UTF-8 codepoint starting at @p offset and advances it past the sequence.
+ *  Malformed bytes decode as U+FFFD one byte at a time. No overlong/range validation —
+ *  the result only feeds glyph lookup, where a bogus codepoint just misses the charmap. */
+uint32_t nextUtf8Codepoint (const std::string& text, size_t& offset);
+
 /**
  * Phase 1 text renderer.
  *
