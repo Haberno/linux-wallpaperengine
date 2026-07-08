@@ -4,6 +4,7 @@
 #include <vector>
 
 #include <GL/glew.h>
+#include <glm/mat4x4.hpp>
 #include <glm/vec2.hpp>
 #include <glm/vec4.hpp>
 
@@ -19,6 +20,15 @@ typedef struct FT_FaceRec_* FT_Face;
 
 namespace WallpaperEngine::Render::Wallpapers {
 class CScene;
+}
+
+namespace WallpaperEngine::Render {
+class CFBO;
+class FBOProvider;
+}
+
+namespace WallpaperEngine::Render::Objects::Effects {
+class CPass;
 }
 
 namespace WallpaperEngine::Render::Objects {
@@ -65,6 +75,12 @@ private:
     unsigned int computeEffectivePixelSize () const;
     void initScriptLayer ();
 
+    // text-effect chain (built once at setup: FBOs are sized to the authored box, which is
+    // stable across text changes)
+    void setupEffectChain ();
+    void destroyEffectChain ();
+    void renderEffectChain (const glm::mat4& mvp, float brightness, float alpha);
+
     const Text& m_text;
     std::string m_lastRenderedText;
     unsigned int m_lastPixelSize = 0;
@@ -87,6 +103,27 @@ private:
     glm::vec2 m_quadSize = { 0.0f, 0.0f };
     /** ink bbox center relative to the authored box center, local +y-down space */
     glm::vec2 m_quadOffset = { 0.0f, 0.0f };
+
+    // ---- text-effect chain state (only used when the object authors effects) ----
+    /** satisfies the CRenderable contract for CPass (uniform sources, FBO resolution) */
+    std::unique_ptr<class CTextEffectHost> m_effectHost;
+    Data::Model::MaterialUniquePtr m_effectMaterial;
+    std::vector<Effects::CPass*> m_effectPasses;
+    std::vector<std::shared_ptr<const FBOProvider>> m_effectProviders;
+    /** destinations written by the chain, cleared each frame before the passes run */
+    std::vector<std::shared_ptr<const CFBO>> m_effectClears;
+    std::shared_ptr<CFBO> m_fboA;
+    std::shared_ptr<CFBO> m_fboB;
+    std::shared_ptr<const CFBO> m_effectResult;
+    GLuint m_ndcPosition = 0;
+    GLuint m_passTexCoord = 0;
+    GLuint m_compositeVao = 0;
+    GLuint m_compositeVbo = 0;
+    GLuint m_compositeProgram = 0;
+    GLint m_cuMVP = -1;
+    GLint m_cuTexture = -1;
+    glm::mat4 m_baseMVP = glm::mat4 (1.0f);
+    bool m_effectsEnabled = false;
 
     bool m_valid = false;
 };
