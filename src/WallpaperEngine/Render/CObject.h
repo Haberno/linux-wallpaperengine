@@ -27,6 +27,10 @@ public:
      *  nearest ancestor that authored one, else 1 (Wallpaper Engine's root default) */
     [[nodiscard]] glm::vec2 resolveParallaxDepth () const;
 
+    /** true when no ancestor in the parent chain is hidden — a hidden container hides its
+     *  whole subtree in Wallpaper Engine, and children often carry no visible of their own */
+    [[nodiscard]] bool isVisibleThroughParents () const;
+
     /** world transform for 3D scenes: translate * rotate (Rz*Ry*Rx, radians) * scale,
      *  composed through the parent chain. 2D images keep their own decomposed
      *  accumulation in CImage::resolveTransform */
