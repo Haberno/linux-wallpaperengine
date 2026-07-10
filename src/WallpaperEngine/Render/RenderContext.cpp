@@ -132,6 +132,10 @@ std::shared_ptr<const TextureProvider> RenderContext::resolveTexture (const std:
     return this->m_textureCache->resolve (name);
 }
 
+void RenderContext::storeTexture (const std::string& name, std::shared_ptr<const TextureProvider> texture) const {
+    this->m_textureCache->store (name, std::move (texture));
+}
+
 const std::map<std::string, std::shared_ptr<CWallpaper>>& RenderContext::getWallpapers () const {
     return this->m_wallpapers;
 }

@@ -40,7 +40,15 @@ public:
     bool isReady () const override;
 
 private:
-    GLuint m_framebuffer = GL_NONE;
+    /**
+     * Creates the framebuffer object on first use. Framebuffers are container objects
+     * and are NOT shared between GL contexts: when a wallpaper is built on the async
+     * switch worker's shared context, only the texture/renderbuffer can be created
+     * there — the FBO itself must be created lazily on the render thread.
+     */
+    void ensureFramebuffer () const;
+
+    mutable GLuint m_framebuffer = GL_NONE;
     GLuint m_depthbuffer = GL_NONE;
     GLuint m_texture = GL_NONE;
     glm::vec4 m_resolution = {};
