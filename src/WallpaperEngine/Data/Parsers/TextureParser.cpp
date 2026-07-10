@@ -6,7 +6,6 @@
 #include <stb_image.h>
 
 #include "TextureParser.h"
-#include "WallpaperEngine/BuildTiming.h"
 #include "WallpaperEngine/Data/Assets/Texture.h"
 #include "WallpaperEngine/Logging/Log.h"
 
@@ -49,8 +48,6 @@ void TextureParser::decodeMipmaps (Texture& texture) {
 }
 
 TextureUniquePtr TextureParser::parse (const BinaryReader& file) {
-    // ponytail: temporary switch-timing instrumentation, remove after measuring
-    const WallpaperEngine::BuildTiming::Scope timing_ (WallpaperEngine::BuildTiming::texLoadUs);
     auto result = std::make_unique<Texture> ();
 
     parseTextureHeader (*result, file);
