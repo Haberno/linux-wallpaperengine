@@ -17,6 +17,12 @@ public:
     ReadStreamSharedPtr read (const std::filesystem::path& path) const;
     std::filesystem::path physicalPath (const std::filesystem::path& path) const;
 
+    /**
+     * @return Stable identity of the underlying container's mounts, usable as a cache key
+     * that survives engine restarts of the same project
+     */
+    [[nodiscard]] const std::string& identity () const;
+
 private:
     std::string shader (const std::filesystem::path& filename) const;
 
