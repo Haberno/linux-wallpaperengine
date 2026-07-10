@@ -28,16 +28,13 @@ public:
 	int height
     ) override;
 
+    /** Stops late CEF callbacks from accessing a CWeb that is being destroyed. */
+    void detach ();
+
     //! \brief CefBase interface
     IMPLEMENT_REFCOUNTING (RenderHandler);
 
 private:
     WallpaperEngine::Render::Wallpapers::CWeb* m_webdata = nullptr;
-
-    [[nodiscard]] int getWidth () const;
-    [[nodiscard]] int getHeight () const;
-
-    //! \brief Return the OpenGL texture handle
-    [[nodiscard]] GLuint texture () const;
 };
 } // namespace WallpaperEngine::WebBrowser::CEF

@@ -4,10 +4,28 @@
 #include "WallpaperEngine/WebBrowser/CEF/SubprocessApp.h"
 #include "include/cef_app.h"
 #include "include/cef_render_handler.h"
+#include <chrono>
 #include <filesystem>
 #include <random>
+#include <ranges>
+#include <string>
+#include <thread>
+#include <unistd.h>
+#include <vector>
 
 using namespace WallpaperEngine::WebBrowser;
+
+int WebBrowserContext::executeSubprocess (int argc, char* argv[]) {
+    CefMainArgs main_args (argc, argv);
+
+    // Subprocess only registers the fixed wp scheme; avoid any file IO here — it would close the
+    // inherited ICU data descriptor before CefExecuteProcess reads it.
+    const CefRefPtr<CefApp> app = new CEF::SubprocessApp ();
+    const int exitCode = CefExecuteProcess (main_args, app, nullptr);
+    // A helper process always terminates here; CefExecuteProcess returns its exit
+    // code (>= 0). Guard against -1 just in case so we still exit cleanly.
+    return exitCode < 0 ? 0 : exitCode;
+}
 
 // TODO: THIS IS USED TO GENERATE A RANDOM FOLDER FOR THE CHROME PROFILE, MAYBE A DIFFERENT APPROACH WOULD BE BETTER?
 namespace uuid {
@@ -50,51 +68,90 @@ WebBrowserContext::WebBrowserContext (WallpaperEngine::Application::WallpaperApp
 	this->m_wallpaperApplication.getContext ().getArgc (), this->m_wallpaperApplication.getContext ().getArgv ()
     );
 
-    // only care about app if the process is the main process
-    // we should maybe use a better lib for handling command line arguments instead
-    // or using C's version on some places and CefCommandLine on others
-    // TODO: ANOTHER THING TO TAKE CARE OF BEFORE MERGING
-    const CefRefPtr<CefCommandLine> commandLine = CefCommandLine::CreateCommandLine ();
-
-    commandLine->InitFromArgv (main_args.argc, main_args.argv);
-
-    if (!commandLine->HasSwitch ("type")) {
-	this->m_browserApplication = new CEF::BrowserApp (wallpaperApplication);
-    } else {
-	this->m_browserApplication = new CEF::SubprocessApp (wallpaperApplication);
-    }
-
-    // this blocks for anything not-main-thread
-    const int exit_code = CefExecuteProcess (main_args, this->m_browserApplication, nullptr);
-
-    // this is needed to kill subprocesses after they're done
-    if (exit_code >= 0) {
-	// Sub proccess has endend, so exit
-	exit (exit_code);
-    }
+    // Only the browser process reaches here (helpers are handled in executeSubprocess), so never call
+    // CefExecuteProcess here: it puts the ICU loader into "child" mode and fails to find its data fd.
+    this->m_browserApplication = new CEF::BrowserApp (wallpaperApplication);
 
     // Configurate Chromium
     CefSettings settings;
     std::string cache_path = (std::filesystem::temp_directory_path () / uuid::generate_uuid_v4 ()).string ();
-    // CefString(&settings.locales_dir_path) = "OffScreenCEF/godot/locales";
-    // CefString(&settings.resources_dir_path) = "OffScreenCEF/godot/";
-    // CefString(&settings.framework_dir_path) = "OffScreenCEF/godot/";
-    // CefString(&settings.cache_path) = "OffScreenCEF/godot/";
-    //  CefString(&settings.browser_subprocess_path) = "path/to/client"
+
+    // Point CEF at its resources dir (icudtl.dat, *.pak, locales/) next to the executable;
+    // without it subprocesses fail to load ICU and web wallpapers crash.
+    char proc_path[4096];
+    const ssize_t proc_len = readlink ("/proc/self/exe", proc_path, sizeof (proc_path) - 1);
+    if (proc_len > 0) {
+	proc_path[proc_len] = '\0';
+	const std::string exe_dir = std::filesystem::path (proc_path).parent_path ().string ();
+	CefString (&settings.resources_dir_path) = exe_dir;
+	CefString (&settings.locales_dir_path) = exe_dir + "/locales";
+    }
+
     cef_string_utf8_to_utf16 (cache_path.c_str (), cache_path.length (), &settings.root_cache_path);
     settings.windowless_rendering_enabled = true;
-#if defined(CEF_NO_SANDBOX)
+    // No sandbox: content is local/trusted, and the sandbox's fd remapping breaks ICU-data loading,
+    // so disabling it lets every process read icudtl.dat from resources_dir_path directly.
     settings.no_sandbox = true;
-#endif
 
     // spawns two new processess
 
-    if (!CefInitialize (main_args, settings, this->m_browserApplication, nullptr)) {
+    this->m_initialized = CefInitialize (main_args, settings, this->m_browserApplication, nullptr);
+    if (!this->m_initialized) {
 	sLog.exception ("CefInitialize: failed");
     }
 }
 
+void WebBrowserContext::doMessageLoopWork () {
+    if (!this->m_initialized) {
+	return;
+    }
+
+    CEF_REQUIRE_UI_THREAD ();
+    CefDoMessageLoopWork ();
+}
+
+void WebBrowserContext::onBrowserCreated (CefRefPtr<CefBrowser> browser) {
+    CEF_REQUIRE_UI_THREAD ();
+    if (browser != nullptr) {
+	this->m_browsers.insert_or_assign (browser->GetIdentifier (), browser);
+    }
+}
+
+void WebBrowserContext::onBrowserClosed (CefRefPtr<CefBrowser> browser) {
+    CEF_REQUIRE_UI_THREAD ();
+    if (browser != nullptr) {
+	this->m_browsers.erase (browser->GetIdentifier ());
+    }
+}
+
 WebBrowserContext::~WebBrowserContext () {
+    if (!this->m_initialized) {
+	return;
+    }
+
+    CEF_REQUIRE_UI_THREAD ();
+    std::vector<CefRefPtr<CefBrowser>> browsers;
+    browsers.reserve (this->m_browsers.size ());
+    for (const auto& browser : this->m_browsers | std::views::values) {
+	browsers.push_back (browser);
+    }
+    for (const auto& browser : browsers) {
+	if (browser != nullptr && browser->GetHost () != nullptr) {
+	    browser->GetHost ()->CloseBrowser (true);
+	}
+    }
+
+    const auto deadline = std::chrono::steady_clock::now () + std::chrono::seconds (5);
+    while (!this->m_browsers.empty () && std::chrono::steady_clock::now () < deadline) {
+	CefDoMessageLoopWork ();
+	std::this_thread::sleep_for (std::chrono::milliseconds (1));
+    }
+
+    if (!this->m_browsers.empty ()) {
+	sLog.error ("CEF browser shutdown timed out with ", this->m_browsers.size (), " browser(s) still open");
+    }
+
     sLog.out ("Shutting down CEF");
     CefShutdown ();
+    this->m_initialized = false;
 }

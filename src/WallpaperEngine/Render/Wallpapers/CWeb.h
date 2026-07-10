@@ -5,7 +5,9 @@
 #include <glm/glm.hpp>
 
 #include <algorithm>
+#include <future>
 #include <memory>
+#include <optional>
 #include <string>
 #include <utility>
 #include <vector>
@@ -44,10 +46,19 @@ protected:
     friend class CWallpaper;
 
 private:
+    // Wallpaper Engine web API bridge (browser side): feeds the injected
+    // window.wallpaper* listeners with live audio, media (via playerctl/MPRIS) and
+    // the wallpaper's properties, by calling the page's __wp* entry points.
+    void pushBridgeData ();
+    std::string m_lastArtSent;
+    bool m_propertiesSent = false;
+    uint64_t m_frame = 0;
+
+private:
     WallpaperEngine::WebBrowser::WebBrowserContext& m_browserContext;
     CefRefPtr<CefBrowser> m_browser = nullptr;
     CefRefPtr<WallpaperEngine::WebBrowser::CEF::BrowserClient> m_client = nullptr;
-    WallpaperEngine::WebBrowser::CEF::RenderHandler* m_renderHandler = nullptr;
+    CefRefPtr<WallpaperEngine::WebBrowser::CEF::RenderHandler> m_renderHandler = nullptr;
 
     int m_width = 16;
     int m_height = 17;
