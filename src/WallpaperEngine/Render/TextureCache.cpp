@@ -14,6 +14,7 @@
 #include <chrono>
 #include <filesystem>
 #include <fstream>
+#include <vector>
 
 using namespace WallpaperEngine::Render;
 using namespace WallpaperEngine::FileSystem;
@@ -56,9 +57,23 @@ TextureCache::TextureCache (RenderContext& context) : Helpers::ContextAware (con
 
 TextureCache::~TextureCache () { this->m_mediaCallback (); }
 
+namespace {
+/** Soft cap for the texture cache; least-recently-used unreferenced entries are evicted past this */
+constexpr size_t TEXTURE_CACHE_BUDGET_BYTES = 512ULL * 1024 * 1024;
+
+size_t estimateTextureBytes (const TextureProvider& texture) {
+    // RGBA8 at the allocated texture size plus a third for mipmaps; compressed
+    // formats overestimate a bit, which is fine for a soft budget
+    const size_t base = static_cast<size_t> (texture.getTextureWidth (0)) * texture.getTextureHeight (0) * 4;
+
+    return base + base / 3;
+}
+} // namespace
+
 std::shared_ptr<const TextureProvider> TextureCache::resolve (const std::string& filename) {
     if (const auto found = this->m_textureCache.find (filename); found != this->m_textureCache.end ()) {
-	return found->second;
+	found->second.lastUsed = ++this->m_useCounter;
+	return found->second.texture;
     }
 
     // search for the texture in all the different containers just in case
@@ -94,5 +109,48 @@ std::shared_ptr<const TextureProvider> TextureCache::resolve (const std::string&
 }
 
 void TextureCache::store (const std::string& name, std::shared_ptr<const TextureProvider> texture) {
-    this->m_textureCache.insert_or_assign (name, texture);
+    const size_t bytes = estimateTextureBytes (*texture);
+
+    if (const auto it = this->m_textureCache.find (name); it != this->m_textureCache.end ()) {
+	this->m_cacheBytes -= it->second.approximateBytes;
+	it->second = CacheEntry {std::move (texture), ++this->m_useCounter, bytes};
+    } else {
+	this->m_textureCache.emplace (name, CacheEntry {std::move (texture), ++this->m_useCounter, bytes});
+    }
+
+    this->m_cacheBytes += bytes;
+    this->trim ();
+}
+
+void TextureCache::trim () {
+    if (this->m_cacheBytes <= TEXTURE_CACHE_BUDGET_BYTES) {
+	return;
+    }
+
+    // collect entries that only the cache itself keeps alive; anything with more
+    // references is in active use by a wallpaper (or the crossfade) and must stay.
+    // "$"-prefixed entries are special (album art) and are never evicted
+    std::vector<std::map<std::string, CacheEntry>::iterator> candidates;
+
+    for (auto it = this->m_textureCache.begin (); it != this->m_textureCache.end (); ++it) {
+	if (it->second.texture.use_count () == 1 && !it->first.starts_with ('$')) {
+	    candidates.push_back (it);
+	}
+    }
+
+    // oldest first
+    std::ranges::sort (candidates, [] (const auto& a, const auto& b) {
+	return a->second.lastUsed < b->second.lastUsed;
+    });
+
+    for (const auto& it : candidates) {
+	if (this->m_cacheBytes <= TEXTURE_CACHE_BUDGET_BYTES) {
+	    break;
+	}
+
+	// ~CTexture releases the GL objects; this runs on the render thread since
+	// both resolve() and store() are only called there
+	this->m_cacheBytes -= it->second.approximateBytes;
+	this->m_textureCache.erase (it);
+    }
 }
