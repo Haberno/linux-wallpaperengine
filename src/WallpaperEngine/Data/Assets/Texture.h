@@ -97,6 +97,16 @@ enum TextureFlags {
 	| TextureFlags_ClampUVsBorder | TextureFlags_Video | TextureFlags_AlphaChannelPriority,
 };
 
+/** Frees a buffer allocated by the stbi decoder (defined in TextureParser.cpp) */
+void freeDecodedPixels (void* pixels);
+
+struct DecodedPixelsDeleter {
+    void operator() (unsigned char* pixels) const { freeDecodedPixels (pixels); }
+};
+
+/** Owning pointer to stbi-decoded RGBA pixel data */
+using DecodedPixelsPtr = std::unique_ptr<unsigned char[], DecodedPixelsDeleter>;
+
 struct Mipmap {
     /** Width of the mipmap */
     uint32_t width = 0;
@@ -112,6 +122,11 @@ struct Mipmap {
     std::unique_ptr<char[]> compressedData = nullptr;
     /** Pointer to the uncompressed data */
     std::unique_ptr<char[]> uncompressedData = nullptr;
+    /** RGBA pixels pre-decoded off the render thread, if available (image formats only) */
+    DecodedPixelsPtr decodedData = nullptr;
+    /** Dimensions of the pre-decoded pixel data */
+    int decodedWidth = 0;
+    int decodedHeight = 0;
     /** JSON data */
     std::string json {};
 };

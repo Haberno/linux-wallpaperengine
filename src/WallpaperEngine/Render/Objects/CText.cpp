@@ -244,7 +244,9 @@ void CText::setup () {
 	}
     }
 
-    m_valid = m_texture != 0 && m_program != 0 && m_vao != 0;
+    // m_vao is created lazily on the render thread (see ensureVao); the VBO is the
+    // part guaranteed to exist after a successful build, even on the async worker
+    m_valid = m_texture != 0 && m_program != 0 && m_vbo != 0;
 }
 
 glm::vec2 CText::computeEffectSurface () const {
@@ -425,16 +427,11 @@ void CText::setupEffectChain () {
 	-hx, -hy, 0.0f, 0.0f, hx, hy,  1.0f, 1.0f, -hx, hy, 0.0f, 1.0f,
     };
 
-    glGenVertexArrays (1, &m_compositeVao);
+    // VBO only (shared GL object, safe on the async build worker); the VAO is created
+    // lazily in ensureCompositeVao on the render thread
     glGenBuffers (1, &m_compositeVbo);
-    glBindVertexArray (m_compositeVao);
     glBindBuffer (GL_ARRAY_BUFFER, m_compositeVbo);
     glBufferData (GL_ARRAY_BUFFER, sizeof (quad), quad, GL_STATIC_DRAW);
-    glEnableVertexAttribArray (0);
-    glVertexAttribPointer (0, 2, GL_FLOAT, GL_FALSE, 4 * sizeof (float), reinterpret_cast<void*> (0));
-    glEnableVertexAttribArray (1);
-    glVertexAttribPointer (1, 2, GL_FLOAT, GL_FALSE, 4 * sizeof (float), reinterpret_cast<void*> (2 * sizeof (float)));
-    glBindVertexArray (0);
 
     m_effectsEnabled = true;
 }
@@ -499,6 +496,7 @@ void CText::renderEffectChain (const glm::mat4& mvp, const float brightness, con
     glActiveTexture (GL_TEXTURE0);
     glBindTexture (GL_TEXTURE_2D, m_texture);
     glUniform1i (m_uTexture, 0);
+    ensureVao ();
     glBindVertexArray (m_vao);
     glDrawArrays (GL_TRIANGLES, 0, 6);
     glBindVertexArray (0);
@@ -531,6 +529,7 @@ void CText::renderEffectChain (const glm::mat4& mvp, const float brightness, con
     glActiveTexture (GL_TEXTURE0);
     glBindTexture (GL_TEXTURE_2D, m_effectResult->getTextureID (0));
     glUniform1i (m_cuTexture, 0);
+    ensureCompositeVao ();
     glBindVertexArray (m_compositeVao);
     glDrawArrays (GL_TRIANGLES, 0, 6);
     glBindVertexArray (0);
@@ -834,22 +833,45 @@ void CText::uploadQuadVertices () {
 	x0, y0, 0.0f, 0.0f, x1, y1, 1.0f, 1.0f, x0, y1, 0.0f, 1.0f,
     };
 
-    const bool firstUpload = (m_vao == 0);
-    if (firstUpload) {
-	glGenVertexArrays (1, &m_vao);
+    // only the VBO (a shared GL object) is touched here: this path also runs during
+    // async wallpaper builds on the worker context. The VAO is created lazily in
+    // ensureVao on the render thread, since VAOs are not shared between GL contexts.
+    if (m_vbo == 0) {
 	glGenBuffers (1, &m_vbo);
     }
-    glBindVertexArray (m_vao);
     glBindBuffer (GL_ARRAY_BUFFER, m_vbo);
     glBufferData (GL_ARRAY_BUFFER, sizeof (verts), verts, GL_DYNAMIC_DRAW);
-    if (firstUpload) {
-	glEnableVertexAttribArray (0);
-	glVertexAttribPointer (0, 2, GL_FLOAT, GL_FALSE, 4 * sizeof (float), reinterpret_cast<void*> (0));
-	glEnableVertexAttribArray (1);
-	glVertexAttribPointer (
-	    1, 2, GL_FLOAT, GL_FALSE, 4 * sizeof (float), reinterpret_cast<void*> (2 * sizeof (float))
-	);
+}
+
+void CText::ensureVao () {
+    if (m_vao != 0) {
+	return;
     }
+
+    glGenVertexArrays (1, &m_vao);
+    glBindVertexArray (m_vao);
+    glBindBuffer (GL_ARRAY_BUFFER, m_vbo);
+    glEnableVertexAttribArray (0);
+    glVertexAttribPointer (0, 2, GL_FLOAT, GL_FALSE, 4 * sizeof (float), reinterpret_cast<void*> (0));
+    glEnableVertexAttribArray (1);
+    glVertexAttribPointer (
+	1, 2, GL_FLOAT, GL_FALSE, 4 * sizeof (float), reinterpret_cast<void*> (2 * sizeof (float))
+    );
+    glBindVertexArray (0);
+}
+
+void CText::ensureCompositeVao () {
+    if (m_compositeVao != 0) {
+	return;
+    }
+
+    glGenVertexArrays (1, &m_compositeVao);
+    glBindVertexArray (m_compositeVao);
+    glBindBuffer (GL_ARRAY_BUFFER, m_compositeVbo);
+    glEnableVertexAttribArray (0);
+    glVertexAttribPointer (0, 2, GL_FLOAT, GL_FALSE, 4 * sizeof (float), reinterpret_cast<void*> (0));
+    glEnableVertexAttribArray (1);
+    glVertexAttribPointer (1, 2, GL_FLOAT, GL_FALSE, 4 * sizeof (float), reinterpret_cast<void*> (2 * sizeof (float)));
     glBindVertexArray (0);
 }
 
@@ -939,6 +961,7 @@ void CText::render () {
 	glBindTexture (GL_TEXTURE_2D, m_texture);
 	glUniform1i (m_uTexture, 0);
 
+	ensureVao ();
 	glBindVertexArray (m_vao);
 	glDrawArrays (GL_TRIANGLES, 0, 6);
 	glBindVertexArray (0);
@@ -1001,6 +1024,7 @@ void CText::render () {
     glBindTexture (GL_TEXTURE_2D, m_texture);
     glUniform1i (m_uTexture, 0);
 
+    ensureVao ();
     glBindVertexArray (m_vao);
     glDrawArrays (GL_TRIANGLES, 0, 6);
     glBindVertexArray (0);

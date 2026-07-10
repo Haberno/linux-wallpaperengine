@@ -17,10 +17,15 @@
 #include "WallpaperEngine/Input/InputContext.h"
 #include "WallpaperEngine/WebBrowser/WebBrowserContext.h"
 
+#include "WallpaperEngine/Data/Assets/Types.h"
 #include "WallpaperEngine/Data/Model/Types.h"
 #include "WallpaperEngine/Media/MediaSource.h"
 
+#include <condition_variable>
+#include <deque>
+#include <mutex>
 #include <set>
+#include <thread>
 
 namespace WallpaperEngine::Application {
 
@@ -111,6 +116,18 @@ private:
      */
     [[nodiscard]] ProjectUniquePtr loadBackground (const std::string& bg);
     /**
+     * Loads and parses the given project. Touches no GL or mutable application state so
+     * the switch worker thread can run it off the render thread.
+     *
+     * @param bg
+     * @return
+     */
+    [[nodiscard]] ProjectUniquePtr loadProject (const std::string& bg) const;
+    /**
+     * Re-arms the automatic screenshot so it is retaken after a background change
+     */
+    void resetScreenshotState ();
+    /**
      * Prepares all background's values and updates their properties if required
      */
     void setupProperties ();
@@ -157,15 +174,49 @@ private:
     };
 
     /**
-     * Loads a new background for the given screen and animates into it.
-     * Shared by playlists and the IPC control socket.
-     *
-     * @return whether the switch succeeded
+     * A background switch staged by the loader thread. The heavy CPU work (project parse,
+     * texture reads + decompression) happens off the render thread; only the GL work
+     * (texture uploads, shader compilation) runs on the main thread when it is applied.
      */
-    bool switchBackground (
+    struct PreparedSwitch {
+	/** Monotonic id used to drop requests superseded by a newer one for the same screen */
+	uint64_t id = 0;
+	std::string screen {};
+	std::string path {};
+	Render::TransitionMode transition = Render::TransitionMode_Fade;
+	/** Parsed project, set by the worker on success */
+	ProjectUniquePtr project = nullptr;
+	/** Textures pre-parsed by the worker; the main thread only uploads them to the GPU */
+	std::vector<std::pair<std::string, Data::Assets::TextureUniquePtr>> textures {};
+	/** Failure description, empty on success */
+	std::string error {};
+	/** Time the worker spent loading, for the switch timing log */
+	int64_t loadMs = 0;
+    };
+
+    /**
+     * Queues a background switch for the given screen. The load happens on the loader
+     * thread and the swap is applied by processPreparedSwitches once ready, so rendering
+     * never blocks. Shared by playlists and the IPC control socket.
+     */
+    void requestBackgroundSwitch (
 	const std::string& screen, const std::string& path,
 	Render::TransitionMode transition = Render::TransitionMode_Fade
     );
+    /** Loader thread main loop */
+    void switchWorkerMain ();
+    /** Applies a background switch the loader thread finished preparing, if any */
+    void processPreparedSwitches ();
+    /**
+     * GL-thread part of a background switch: texture uploads, wallpaper build and swap
+     *
+     * @return whether the switch succeeded
+     */
+    bool applyPreparedSwitch (PreparedSwitch& job);
+    /** Marks a playlist item as failed so the next advancement skips it */
+    void markPlaylistItemFailed (const std::string& screen, const std::string& path);
+    /** Stops and joins the loader thread */
+    void stopSwitchWorker ();
     /**
      * Creates the unix control socket used to switch wallpapers at runtime
      */
@@ -208,6 +259,24 @@ private:
     std::unique_ptr<WallpaperEngine::WebBrowser::WebBrowserContext> m_browserContext = nullptr;
     std::unique_ptr<WallpaperEngine::Media::MediaSource> m_mediaSource = nullptr;
     std::mt19937 m_playlistRng { std::random_device {}() };
+
+    /** Loader thread that prepares background switches off the render thread */
+    std::thread m_switchWorker {};
+    /** Guards the switch queues, ids and the stop flag */
+    std::mutex m_switchMutex {};
+    /** Wakes the loader thread when work arrives or on shutdown */
+    std::condition_variable m_switchCv {};
+    /** Switches waiting to be loaded by the worker */
+    std::deque<PreparedSwitch> m_switchRequests {};
+    /** Switches loaded by the worker, waiting to be applied on the render thread */
+    std::deque<PreparedSwitch> m_switchResults {};
+    /** Latest switch request id per screen, used to drop superseded work */
+    std::map<std::string, uint64_t> m_latestSwitchIds {};
+    /** Monotonic counter feeding PreparedSwitch::id */
+    uint64_t m_switchIdCounter = 0;
+    /** Set under m_switchMutex to make the loader thread exit */
+    bool m_switchWorkerStop = false;
+
     bool m_isPaused = false;
     bool m_screenShotTaken = false;
     uint32_t m_nextFrameScreenshot = 0;

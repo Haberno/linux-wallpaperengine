@@ -223,6 +223,81 @@ void WaylandOpenGLDriver::initEGL () {
     }
 }
 
+bool WaylandOpenGLDriver::makeBuildContextCurrent () {
+    // runs on the async wallpaper build worker thread; EGL "current" state is per-thread,
+    // so this never disturbs the render thread's context
+    if (!eglBindAPI (EGL_OPENGL_API)) {
+	sLog.error ("build context: eglBindAPI failed");
+	return false;
+    }
+
+    if (this->m_buildContext == EGL_NO_CONTEXT) {
+	const EGLint CONTEXT_ATTRIBUTES[] = {
+	    EGL_CONTEXT_MAJOR_VERSION_KHR,
+	    3,
+	    EGL_CONTEXT_MINOR_VERSION_KHR,
+	    3,
+	    EGL_CONTEXT_OPENGL_PROFILE_MASK_KHR,
+	    EGL_CONTEXT_OPENGL_CORE_PROFILE_BIT_KHR,
+	    EGL_NONE,
+	};
+
+	// share objects (textures, buffers, shaders) with the render context; container
+	// objects (FBOs, VAOs) are not shared and are created lazily on the render thread
+	this->m_buildContext = eglCreateContext (
+	    this->m_eglContext.display, this->m_eglContext.config, this->m_eglContext.context, CONTEXT_ATTRIBUTES
+	);
+
+	if (this->m_buildContext == EGL_NO_CONTEXT) {
+	    sLog.error ("build context: eglCreateContext error ", eglGetError ());
+	    return false;
+	}
+    }
+
+    // surfaceless is supported basically everywhere mesa runs; try it first
+    if (eglMakeCurrent (this->m_eglContext.display, EGL_NO_SURFACE, EGL_NO_SURFACE, this->m_buildContext)) {
+	return true;
+    }
+
+    // fall back to a 1x1 pbuffer for drivers without EGL_KHR_surfaceless_context
+    if (this->m_buildSurface == EGL_NO_SURFACE) {
+	EGLint matchedConfigs = 0;
+	EGLConfig pbufferConfig = nullptr;
+	const EGLint CONFIG_ATTRIBUTES[] = {
+	    EGL_SURFACE_TYPE, EGL_PBUFFER_BIT, EGL_RENDERABLE_TYPE, EGL_OPENGL_BIT, EGL_NONE,
+	};
+	const EGLint PBUFFER_ATTRIBUTES[] = { EGL_WIDTH, 1, EGL_HEIGHT, 1, EGL_NONE };
+
+	if (!eglChooseConfig (this->m_eglContext.display, CONFIG_ATTRIBUTES, &pbufferConfig, 1, &matchedConfigs)
+	    || matchedConfigs == 0) {
+	    sLog.error ("build context: no pbuffer-capable EGLConfig available");
+	    return false;
+	}
+
+	this->m_buildSurface = eglCreatePbufferSurface (this->m_eglContext.display, pbufferConfig, PBUFFER_ATTRIBUTES);
+
+	if (this->m_buildSurface == EGL_NO_SURFACE) {
+	    sLog.error ("build context: eglCreatePbufferSurface error ", eglGetError ());
+	    return false;
+	}
+    }
+
+    if (!eglMakeCurrent (
+	    this->m_eglContext.display, this->m_buildSurface, this->m_buildSurface, this->m_buildContext
+	)) {
+	sLog.error ("build context: eglMakeCurrent error ", eglGetError ());
+	return false;
+    }
+
+    return true;
+}
+
+void WaylandOpenGLDriver::releaseBuildContext () {
+    // unbind from the worker thread; the context itself is destroyed with the display
+    eglMakeCurrent (this->m_eglContext.display, EGL_NO_SURFACE, EGL_NO_SURFACE, EGL_NO_CONTEXT);
+    eglReleaseThread ();
+}
+
 void WaylandOpenGLDriver::finishEGL () const {
     eglMakeCurrent (EGL_NO_DISPLAY, EGL_NO_SURFACE, EGL_NO_SURFACE, EGL_NO_CONTEXT);
     if (m_eglContext.display) {

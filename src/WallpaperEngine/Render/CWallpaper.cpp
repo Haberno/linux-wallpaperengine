@@ -1,4 +1,5 @@
 #include "CWallpaper.h"
+#include "WallpaperEngine/BuildTiming.h"
 #include "WallpaperEngine/Logging/Log.h"
 #include "WallpaperEngine/Render/Wallpapers/CScene.h"
 #include "WallpaperEngine/Render/Wallpapers/CVideo.h"
@@ -15,9 +16,8 @@ CWallpaper::CWallpaper (
 ) :
     ContextAware (context), FBOProvider (nullptr), m_wallpaperData (wallpaperData), m_audioContext (audioContext),
     m_state (scalingMode, clampMode) {
-    // generate the VAO to stop opengl from complaining
-    glGenVertexArrays (1, &this->m_vaoBuffer);
-    glBindVertexArray (this->m_vaoBuffer);
+    // NOTE: m_vaoBuffer is created lazily in render(): VAOs are not shared between GL
+    // contexts, so it cannot be created here when building on the async switch worker
 
     this->setupShaders ();
 
@@ -65,6 +65,8 @@ GLuint CWallpaper::getWallpaperFramebuffer () const { return this->m_sceneFBO->g
 GLuint CWallpaper::getWallpaperTexture () const { return this->m_sceneFBO->getTextureID (0); }
 
 void CWallpaper::setupShaders () {
+    // ponytail: temporary switch-timing instrumentation, remove after measuring
+    const WallpaperEngine::BuildTiming::Scope timing_ (WallpaperEngine::BuildTiming::shGlUs);
     // reserve shaders in OpenGL
     const GLuint vertexShaderID = glCreateShader (GL_VERTEX_SHADER);
 
@@ -395,6 +397,12 @@ void CWallpaper::render (
     glViewport (viewport.x, viewport.y, viewport.z, viewport.w);
 
     glBindFramebuffer (GL_FRAMEBUFFER, this->m_destFramebuffer);
+
+    // created lazily on the render thread: VAOs are not shared between GL contexts,
+    // so an async-built wallpaper cannot create it on the worker's context
+    if (this->m_vaoBuffer == GL_NONE) {
+	glGenVertexArrays (1, &this->m_vaoBuffer);
+    }
 
     glBindVertexArray (this->m_vaoBuffer);
 

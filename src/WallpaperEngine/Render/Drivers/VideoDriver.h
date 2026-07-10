@@ -72,6 +72,20 @@ public:
      */
     [[nodiscard]] virtual void* getProcAddress (const char* name) const = 0;
     /**
+     * Makes a background-build GL context that shares objects with the render
+     * context current on the calling thread. Used by the async wallpaper-switch
+     * worker so textures/shaders/buffers can be built without blocking rendering.
+     *
+     * @return true if a shared context is now current on this thread
+     */
+    virtual bool makeBuildContextCurrent () {
+        return false;
+    }
+    /**
+     * Releases the background-build context from the calling thread.
+     */
+    virtual void releaseBuildContext () {}
+    /**
      * Process events on the driver and renders a frame
      */
     virtual void dispatchEventQueue () = 0;
