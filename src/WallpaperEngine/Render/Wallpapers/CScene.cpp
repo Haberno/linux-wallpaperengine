@@ -12,6 +12,7 @@
 
 #include "WallpaperEngine/Data/Model/Wallpaper.h"
 #include "WallpaperEngine/Data/Parsers/ObjectParser.h"
+#include "WallpaperEngine/Data/Utils/ScopeGuard.h"
 
 #include <ranges>
 
@@ -235,6 +236,17 @@ Render::CObject* CScene::createObject (const Object& object) {
 	return current->second;
     }
 
+    if (this->m_objectsInCreation.contains (object.id)) {
+	return nullptr;
+    }
+
+    this->m_objectsInCreation.insert (object.id);
+    WallpaperEngine::Data::Utils::ScopeGuard creationGuard ([this, &object] {
+	this->m_objectsInCreation.erase (object.id);
+    });
+
+    std::vector<const Object*> deferredDependencies;
+
     // check dependencies too!
     for (const auto& cur : object.dependencies) {
 	// self-dependency is a possibility...
@@ -246,6 +258,12 @@ Render::CObject* CScene::createObject (const Object& object) {
 	    = std::ranges::find_if (this->getScene ().objects, [&cur] (const auto& o) { return o->id == cur; });
 
 	if (dep != this->getScene ().objects.end ()) {
+	    const auto& depObject = **dep;
+	    if (depObject.parent.has_value () && depObject.parent.value () == object.id) {
+		deferredDependencies.push_back (&depObject);
+		continue;
+	    }
+
 	    this->createObject (**dep);
 	}
     }
@@ -269,6 +287,10 @@ Render::CObject* CScene::createObject (const Object& object) {
 
     if (renderObject != nullptr) {
 	this->m_objects.emplace (renderObject->getId (), renderObject);
+    }
+
+    for (const auto* deferred : deferredDependencies) {
+	this->createObject (*deferred);
     }
 
     return renderObject;
