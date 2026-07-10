@@ -4,7 +4,6 @@
 #include "WallpaperEngine/Application/ApplicationState.h"
 #include "WallpaperEngine/Assets/AssetLoadException.h"
 #include "WallpaperEngine/Audio/Drivers/Detectors/PulseAudioPlayingDetector.h"
-#include "WallpaperEngine/BuildTiming.h"
 #include "WallpaperEngine/FileSystem/Container.h"
 #include "WallpaperEngine/Logging/Log.h"
 #include "WallpaperEngine/Render/Drivers/VideoFactories.h"
@@ -37,11 +36,13 @@
 #include <climits>
 #include <condition_variable>
 #include <deque>
+#if defined(__GLIBC__)
+#include <malloc.h>
+#endif
 #include <malloc.h>
 #include <mutex>
 #include <cstdlib>
 #include <cstring>
-#include <fstream>
 #include <numeric>
 #include <poll.h>
 #include <sys/socket.h>
@@ -744,8 +745,6 @@ void WallpaperApplication::switchWorkerMain () {
 	    }
 	}
 
-	const auto started = std::chrono::steady_clock::now ();
-
 	try {
 	    job.project = this->loadProject (job.path);
 
@@ -774,10 +773,6 @@ void WallpaperApplication::switchWorkerMain () {
 	    job.error = e.what ();
 	}
 
-	job.loadMs = std::chrono::duration_cast<std::chrono::milliseconds> (
-	    std::chrono::steady_clock::now () - started
-	).count ();
-
 	{
 	    std::lock_guard lock (this->m_switchMutex);
 	    this->m_switchResults.emplace_back (std::move (job));
@@ -786,6 +781,17 @@ void WallpaperApplication::switchWorkerMain () {
 }
 
 void WallpaperApplication::processPreparedSwitches () {
+#if defined(__GLIBC__)
+    // a switch's peak allocations (decode staging, old+new project alive through the
+    // crossfade) leave hundreds of MB of freed-but-retained chunks in the glibc arena;
+    // once the fade is done and teardown has run, hand those pages back to the OS
+    if (this->m_pendingMallocTrim != std::chrono::steady_clock::time_point {}
+	&& std::chrono::steady_clock::now () >= this->m_pendingMallocTrim) {
+	this->m_pendingMallocTrim = {};
+	malloc_trim (0);
+    }
+#endif
+
     while (true) {
 	PreparedSwitch job {};
 
@@ -814,6 +820,10 @@ void WallpaperApplication::processPreparedSwitches () {
 	if (!this->applyPreparedSwitch (job)) {
 	    this->markPlaylistItemFailed (job.screen, job.path);
 	}
+
+	// schedule an allocator trim for after the crossfade ends and the previous
+	// project has been torn down (transitions run well under this)
+	this->m_pendingMallocTrim = std::chrono::steady_clock::now () + std::chrono::seconds (5);
     }
 }
 
@@ -823,10 +833,6 @@ bool WallpaperApplication::applyPreparedSwitch (PreparedSwitch& job) {
 	    sLog.error ("Cannot switch wallpaper on ", job.screen, ": no active viewport");
 	    throw std::runtime_error ("No viewport available");
 	}
-
-	// ponytail: temporary switch-timing instrumentation, remove after measuring
-	WallpaperEngine::BuildTiming::reset ();
-	const auto t1 = std::chrono::steady_clock::now ();
 
 	this->setupPropertiesForProject (*job.project);
 	this->ensureBrowserForProject (*job.project);
@@ -850,8 +856,6 @@ bool WallpaperApplication::applyPreparedSwitch (PreparedSwitch& job) {
 	    : this->m_context.settings.render.window.clamp;
 
 	if (this->m_renderContext) {
-	    const auto t2 = std::chrono::steady_clock::now ();
-
 	    // hand the pre-parsed textures to the cache; the wallpaper build below then
 	    // finds them there and only pays for the GPU upload
 	    for (auto& [name, texture] : job.textures) {
@@ -860,48 +864,14 @@ bool WallpaperApplication::applyPreparedSwitch (PreparedSwitch& job) {
 		);
 	    }
 
-	    const auto t3 = std::chrono::steady_clock::now ();
 	    auto renderWallpaper = WallpaperEngine::Render::CWallpaper::fromWallpaper (
 		*this->m_backgrounds[job.screen]->wallpaper, *this->m_renderContext, *this->m_audioContext,
 		this->m_browserContext.get (), scaling, clamp
 	    );
-	    const auto t4 = std::chrono::steady_clock::now ();
 
 	    this->m_renderContext->setWallpaper (
 		job.screen, std::move (renderWallpaper), std::move (previousProject), job.transition
 	    );
-
-	    // ponytail: temporary switch-timing instrumentation, remove after measuring
-	    const auto t5 = std::chrono::steady_clock::now ();
-	    const auto ms = [] (const auto& from, const auto& to) {
-		return std::chrono::duration_cast<std::chrono::milliseconds> (to - from).count ();
-	    };
-	    const char* runtimeDir = std::getenv ("XDG_RUNTIME_DIR");
-	    std::ofstream timing (
-		std::string (runtimeDir != nullptr ? runtimeDir : "/tmp") + "/lwe-switch-timing.log",
-		std::ios::app);
-	    namespace bt = WallpaperEngine::BuildTiming;
-	    const uint64_t texload = bt::texLoadUs / 1000;
-	    const uint64_t texdecode = bt::texDecodeUs / 1000;
-	    const uint64_t texgl = bt::texGlUs / 1000;
-	    const uint64_t shprep = bt::shPrepUs / 1000;
-	    const uint64_t shinc = bt::shIncludeUs / 1000;
-	    const uint64_t shifdef = bt::shIfdefUs / 1000;
-	    const uint64_t shvars = bt::shVarsUs / 1000;
-	    const uint64_t shcompat = bt::shCompatUs / 1000;
-	    const auto shrest
-		= static_cast<int64_t> (shprep) - static_cast<int64_t> (shinc + shifdef + shvars + shcompat);
-	    const uint64_t shgl = bt::shGlUs / 1000;
-	    const uint64_t fbo = bt::fboUs / 1000;
-	    const auto other = ms (t3, t4) - static_cast<int64_t> (texload + texdecode + texgl + shprep + shgl + fbo);
-	    timing << "switch " << job.screen << " " << job.path << " load(worker)=" << job.loadMs
-		   << "ms props+browser=" << ms (t1, t2) << "ms texupload=" << ms (t2, t3)
-		   << "ms glbuild=" << ms (t3, t4)
-		   << "ms [texload=" << texload << " texdecode=" << texdecode << " texgl=" << texgl
-		   << " shprep=" << shprep << "{inc=" << shinc << " ifdef=" << shifdef << " vars=" << shvars
-		   << " compat=" << shcompat << " rest=" << shrest << "}"
-		   << " shgl=" << shgl << " fbo=" << fbo << " other=" << other << "]"
-		   << " swap=" << ms (t4, t5) << "ms total(render)=" << ms (t1, t5) << "ms\n";
 	}
 
 	this->m_context.settings.general.screenBackgrounds[job.screen] = job.path;

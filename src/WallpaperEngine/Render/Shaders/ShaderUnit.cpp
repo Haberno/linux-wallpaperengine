@@ -1,6 +1,5 @@
 #include "ShaderUnit.h"
 
-#include "WallpaperEngine/BuildTiming.h"
 #include "WallpaperEngine/Logging/Log.h"
 #include <exception>
 #include <mutex>
@@ -85,10 +84,7 @@ void ShaderUnit::preprocess () {
 
     this->preprocessIncludes ();
     this->preprocessRequires ();
-    // ponytail: temporary switch-timing instrumentation, remove after measuring
-    const auto varsStart_ = std::chrono::steady_clock::now ();
     this->preprocessVariables ();
-    WallpaperEngine::BuildTiming::add (WallpaperEngine::BuildTiming::shVarsUs, varsStart_);
     this->resolveComboRequires ();
 
     // replace gl_FragColor with the equivalent
@@ -165,9 +161,6 @@ std::string buildIncludeCacheKey (const std::string& locatorIdentity, const std:
 } // namespace
 
 void ShaderUnit::preprocessIncludes () {
-    // ponytail: temporary switch-timing instrumentation, remove after measuring
-    const auto includeStart_ = std::chrono::steady_clock::now ();
-
     // check the memo cache first, keyed on the locator's mount fingerprint (stable across
     // engine restarts of the same project), the unit's file and its source text
     const std::string cacheKey = buildIncludeCacheKey (this->m_assetLocator.identity (), this->m_file, this->m_preprocessed);
@@ -177,7 +170,6 @@ void ShaderUnit::preprocessIncludes () {
 	if (const auto found = sIncludeCache.find (cacheKey); found != sIncludeCache.end ()) {
 	    this->m_preprocessed = found->second.preprocessed;
 	    this->m_includes = found->second.includes;
-	    WallpaperEngine::BuildTiming::add (WallpaperEngine::BuildTiming::shIncludeUs, includeStart_);
 	    return;
 	}
     }
@@ -254,10 +246,6 @@ void ShaderUnit::preprocessIncludes () {
 	// go back to the beginning of the line to properly continue detecting things
 	end = start;
     }
-
-    WallpaperEngine::BuildTiming::add (WallpaperEngine::BuildTiming::shIncludeUs, includeStart_);
-    // ponytail: temporary switch-timing instrumentation, remove after measuring
-    const auto ifdefStart_ = std::chrono::steady_clock::now ();
 
     // search for the main function and add the includes before that for now
     end = 0;
@@ -356,8 +344,6 @@ void ShaderUnit::preprocessIncludes () {
 	includesAdded = true;
 	break;
     }
-
-    WallpaperEngine::BuildTiming::add (WallpaperEngine::BuildTiming::shIfdefUs, ifdefStart_);
 
     if (!includesAdded) {
 	sLog.exception ("Could not find where to place includes for shader unit ", this->m_file);
@@ -928,8 +914,6 @@ const std::string& ShaderUnit::compile () {
     }
 
     // this should be the rest of the shader
-    // ponytail: temporary switch-timing instrumentation, remove after measuring
-    const auto compatStart_ = std::chrono::steady_clock::now ();
     // both compat passes are pure functions of (unit type, preprocessed source,
     // linked preprocessed source); memoized like GLSLContext::toGlsl so stock
     // shaders shared between wallpapers and switch-backs skip the regex passes.
@@ -951,7 +935,6 @@ const std::string& ShaderUnit::compile () {
 	const auto it = sCompatCache.find (compatKey);
 	if (it != sCompatCache.end ()) {
 	    this->m_final += it->second;
-	    WallpaperEngine::BuildTiming::add (WallpaperEngine::BuildTiming::shCompatUs, compatStart_);
 	    return this->m_final;
 	}
     }
@@ -968,7 +951,6 @@ const std::string& ShaderUnit::compile () {
 	    sCompatCache.clear ();
 	sCompatCache.emplace (compatKey, std::move (compatResult));
     }
-    WallpaperEngine::BuildTiming::add (WallpaperEngine::BuildTiming::shCompatUs, compatStart_);
 
     // the pass itself handles shader compilation, the unit doesn't have enough information for this step
     return this->m_final;

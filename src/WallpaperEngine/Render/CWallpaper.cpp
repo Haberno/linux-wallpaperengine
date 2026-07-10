@@ -1,5 +1,4 @@
 #include "CWallpaper.h"
-#include "WallpaperEngine/BuildTiming.h"
 #include "WallpaperEngine/Logging/Log.h"
 #include "WallpaperEngine/Render/Wallpapers/CScene.h"
 #include "WallpaperEngine/Render/Wallpapers/CVideo.h"
@@ -65,8 +64,6 @@ GLuint CWallpaper::getWallpaperFramebuffer () const { return this->m_sceneFBO->g
 GLuint CWallpaper::getWallpaperTexture () const { return this->m_sceneFBO->getTextureID (0); }
 
 void CWallpaper::setupShaders () {
-    // ponytail: temporary switch-timing instrumentation, remove after measuring
-    const WallpaperEngine::BuildTiming::Scope timing_ (WallpaperEngine::BuildTiming::shGlUs);
     // reserve shaders in OpenGL
     const GLuint vertexShaderID = glCreateShader (GL_VERTEX_SHADER);
 
