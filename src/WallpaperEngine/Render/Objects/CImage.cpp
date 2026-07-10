@@ -1580,14 +1580,17 @@ void CImage::updateScreenSpacePosition () {
 	const float parallaxAmount = this->getScene ().getScene ().camera.parallax.amount->value->getFloat ();
 	const glm::vec2 depth = this->resolveParallaxDepth ();
 	const glm::vec2* displacement = this->getScene ().getParallaxDisplacement ();
-	const float referenceSize = excludedFromParallax
-	    ? 0.0f
-	    : static_cast<float> (this->getScene ().getWidth ()) * Wallpapers::CScene::PARALLAX_TRANSLATION_SPAN;
+	// displacement is normalized per-axis ([-1,1] across width for x, across height for
+	// y), so each axis converts to pixels with its own extent — using width for y would
+	// overshoot the vertical travel by the aspect ratio and reveal the clear color
+	const float span = excludedFromParallax ? 0.0f : Wallpapers::CScene::PARALLAX_TRANSLATION_SPAN;
+	const float referenceX = static_cast<float> (this->getScene ().getWidth ()) * span;
+	const float referenceY = static_cast<float> (this->getScene ().getHeight ()) * span;
 	// x is negated: panning the camera towards the cursor shifts positive-depth
 	// layers the opposite way on screen; the y displacement already accounts for
 	// this through the viewport UV flip
-	float x = -depth.x * parallaxAmount * displacement->x * referenceSize;
-	float y = depth.y * parallaxAmount * displacement->y * referenceSize;
+	float x = -depth.x * parallaxAmount * displacement->x * referenceX;
+	float y = depth.y * parallaxAmount * displacement->y * referenceY;
 	mvp = glm::translate (mvp, { x, y, 0.0f });
     }
 
