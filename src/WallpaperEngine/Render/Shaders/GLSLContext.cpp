@@ -132,6 +132,24 @@ GLSLContext& GLSLContext::get () {
 }
 
 std::pair<std::string, std::string> GLSLContext::toGlsl (const std::string& vertex, const std::string& fragment) {
+    // the translation below is a pure function of (vertex, fragment), so the whole
+    // glslang -> SPIR-V -> SPIRV-Cross round trip is memoized; failed translations are
+    // not cached so repeated attempts keep logging their cause
+    std::string cacheKey;
+    cacheKey.reserve (vertex.size () + fragment.size () + 1);
+    cacheKey.append (vertex);
+    cacheKey.push_back ('\x1F');
+    cacheKey.append (fragment);
+
+    {
+	const std::lock_guard<std::mutex> lock (m_cacheMutex);
+	const auto it = m_cache.find (cacheKey);
+
+	if (it != m_cache.end ()) {
+	    return it->second;
+	}
+    }
+
     glslang::TShader vertexShader (EShLangVertex);
 
     const char* vertexSource = vertex.c_str ();
@@ -188,8 +206,19 @@ std::pair<std::string, std::string> GLSLContext::toGlsl (const std::string& vert
     options.es = false;
     fragmentCompiler.set_common_options (options);
 
-    return { vertexCompiler.compile () + "#if 0\n" + vertex + "\n#endif",
-	     fragmentCompiler.compile () + "#if 0\n" + fragment + "\n#endif" };
+    std::pair<std::string, std::string> result { vertexCompiler.compile () + "#if 0\n" + vertex + "\n#endif",
+						  fragmentCompiler.compile () + "#if 0\n" + fragment + "\n#endif" };
+
+    {
+	const std::lock_guard<std::mutex> lock (m_cacheMutex);
+	// content-keyed, so it stays valid across switches, but never evicts;
+	// cap it so cycling through many wallpapers can't grow it unboundedly
+	if (m_cache.size () >= 512)
+	    m_cache.clear ();
+	m_cache.emplace (std::move (cacheKey), result);
+    }
+
+    return result;
 }
 
 std::unique_ptr<GLSLContext> GLSLContext::sInstance = nullptr;
