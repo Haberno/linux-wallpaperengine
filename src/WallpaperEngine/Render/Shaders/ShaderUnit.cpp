@@ -1,10 +1,13 @@
 #include "ShaderUnit.h"
 
+#include "WallpaperEngine/BuildTiming.h"
 #include "WallpaperEngine/Logging/Log.h"
 #include <exception>
+#include <mutex>
 #include <regex>
 #include <stack>
 #include <string>
+#include <unordered_map>
 #include <utility>
 
 #include "GLSLContext.h"
@@ -82,7 +85,10 @@ void ShaderUnit::preprocess () {
 
     this->preprocessIncludes ();
     this->preprocessRequires ();
+    // ponytail: temporary switch-timing instrumentation, remove after measuring
+    const auto varsStart_ = std::chrono::steady_clock::now ();
     this->preprocessVariables ();
+    WallpaperEngine::BuildTiming::add (WallpaperEngine::BuildTiming::shVarsUs, varsStart_);
     this->resolveComboRequires ();
 
     // replace gl_FragColor with the equivalent
@@ -136,7 +142,46 @@ void ShaderUnit::preprocessVariables () {
     }
 }
 
+namespace {
+// memoization cache for the include+ifdef preprocessing passes: their result only
+// depends on the unit's source text and the container includes resolve from, so
+// repeated builds (combo variants, wallpaper re-switches) can skip the string work
+struct PreprocessedIncludes {
+    std::string preprocessed;
+    std::string includes;
+};
+
+std::mutex sIncludeCacheMutex;
+std::unordered_map<std::string, PreprocessedIncludes> sIncludeCache;
+
+std::string buildIncludeCacheKey (const void* locator, const std::string& file, const std::string& content) {
+    std::string key = std::to_string (reinterpret_cast<uintptr_t> (locator));
+    key += '|';
+    key += file;
+    key += '|';
+    key += std::to_string (std::hash<std::string> {} (content));
+    return key;
+}
+} // namespace
+
 void ShaderUnit::preprocessIncludes () {
+    // ponytail: temporary switch-timing instrumentation, remove after measuring
+    const auto includeStart_ = std::chrono::steady_clock::now ();
+
+    // check the memo cache first, keyed on the asset locator (include resolution),
+    // the unit's file and its source text (m_preprocessed == m_content at this point)
+    const std::string cacheKey = buildIncludeCacheKey (&this->m_assetLocator, this->m_file, this->m_preprocessed);
+
+    {
+	std::lock_guard lock (sIncludeCacheMutex);
+	if (const auto found = sIncludeCache.find (cacheKey); found != sIncludeCache.end ()) {
+	    this->m_preprocessed = found->second.preprocessed;
+	    this->m_includes = found->second.includes;
+	    WallpaperEngine::BuildTiming::add (WallpaperEngine::BuildTiming::shIncludeUs, includeStart_);
+	    return;
+	}
+    }
+
     size_t start = 0, end = 0;
     // prepare the include content
     while ((start = this->m_preprocessed.find ("#include", end)) != std::string::npos) {
@@ -210,6 +255,10 @@ void ShaderUnit::preprocessIncludes () {
 	end = start;
     }
 
+    WallpaperEngine::BuildTiming::add (WallpaperEngine::BuildTiming::shIncludeUs, includeStart_);
+    // ponytail: temporary switch-timing instrumentation, remove after measuring
+    const auto ifdefStart_ = std::chrono::steady_clock::now ();
+
     // search for the main function and add the includes before that for now
     end = 0;
     bool includesAdded = false;
@@ -262,7 +311,7 @@ void ShaderUnit::preprocessIncludes () {
 	// ifdefs and use that as point
 
 	// for this we'll use regex
-	const std::regex ifdef (R"((#if|#endif))");
+	static const std::regex ifdef (R"((#if|#endif))");
 	std::smatch match;
 	size_t current = 0;
 
@@ -308,8 +357,22 @@ void ShaderUnit::preprocessIncludes () {
 	break;
     }
 
+    WallpaperEngine::BuildTiming::add (WallpaperEngine::BuildTiming::shIfdefUs, ifdefStart_);
+
     if (!includesAdded) {
 	sLog.exception ("Could not find where to place includes for shader unit ", this->m_file);
+    }
+
+    // memoize the result for the next build of this unit. the key embeds the
+    // asset locator address, so entries go permanently stale once a project is
+    // unloaded (every switch loads a fresh locator) — without a bound this map
+    // grows by several MB per switch. hits only matter within a single build,
+    // so a wholesale clear on overflow is cheap and keeps memory bounded
+    {
+	std::lock_guard lock (sIncludeCacheMutex);
+	if (sIncludeCache.size () >= 1024)
+	    sIncludeCache.clear ();
+	sIncludeCache.emplace (cacheKey, PreprocessedIncludes { this->m_preprocessed, this->m_includes });
     }
 }
 
@@ -435,7 +498,7 @@ std::string ShaderUnit::applyLinkedVaryingCompatibility (std::string source) con
 	return source;
     }
 
-    std::regex fragmentVec4Varying (R"(\bvarying\s+vec4\s+([A-Za-z_][A-Za-z0-9_]*)\s*;)");
+    static const std::regex fragmentVec4Varying (R"(\bvarying\s+vec4\s+([A-Za-z_][A-Za-z0-9_]*)\s*;)");
     std::smatch varyingMatch;
     std::string linked = this->m_link->m_preprocessed;
     size_t linkedOffset = 0;
@@ -474,8 +537,8 @@ std::string ShaderUnit::applyFragmentTexCoordCompatibility (std::string source) 
     }
 
     const std::string original = source;
-    const std::regex wideTexCoordDecl (R"(\bvarying\s+vec[34]\s+v_TexCoord\s*;)");
-    const std::regex narrowTexCoordDecl (R"(\bvarying\s+vec2\s+v_TexCoord\s*;)");
+    static const std::regex wideTexCoordDecl (R"(\bvarying\s+vec[34]\s+v_TexCoord\s*;)");
+    static const std::regex narrowTexCoordDecl (R"(\bvarying\s+vec2\s+v_TexCoord\s*;)");
 
     if (std::regex_search (source, narrowTexCoordDecl) && this->m_link != nullptr
 	&& std::regex_search (this->m_link->m_preprocessed, wideTexCoordDecl)) {
@@ -483,18 +546,19 @@ std::string ShaderUnit::applyFragmentTexCoordCompatibility (std::string source) 
 	// link time and every bare (vec2) use of it becomes an implicit vec4 truncation; widen
 	// the declaration ourselves and qualify all uses with .xy. declarations are shielded
 	// first: shaders like genericparticle declare both widths in different #if branches
-	const std::regex anyTexCoordDecl (R"(\bvarying\s+(vec[234])\s+v_TexCoord\s*;)");
+	static const std::regex anyTexCoordDecl (R"(\bvarying\s+(vec[234])\s+v_TexCoord\s*;)");
+	static const std::regex bareTexCoordUse (R"(\bv_TexCoord\b(?!\s*\.))");
+	static const std::regex shieldedNarrowDecl (R"(\bvarying\s+vec2\s+V_TEXCOORD_DECL\s*;)");
+	static const std::regex shieldedDecl ("V_TEXCOORD_DECL");
 	source = std::regex_replace (source, anyTexCoordDecl, "varying $1 V_TEXCOORD_DECL;");
-	source = std::regex_replace (source, std::regex (R"(\bv_TexCoord\b(?!\s*\.))"), "v_TexCoord.xy");
-	source = std::regex_replace (
-	    source, std::regex (R"(\bvarying\s+vec2\s+V_TEXCOORD_DECL\s*;)"), "varying vec4 v_TexCoord;"
-	);
-	source = std::regex_replace (source, std::regex ("V_TEXCOORD_DECL"), "v_TexCoord");
+	source = std::regex_replace (source, bareTexCoordUse, "v_TexCoord.xy");
+	source = std::regex_replace (source, shieldedNarrowDecl, "varying vec4 v_TexCoord;");
+	source = std::regex_replace (source, shieldedDecl, "v_TexCoord");
     } else if (std::regex_search (source, wideTexCoordDecl)) {
-	const std::regex texCoordBeforeCast2 (R"(\bv_TexCoord\b(\s*[-+*/]\s*CAST2\s*\())");
-	const std::regex cast2BeforeTexCoord (R"((CAST2\s*\([^)]+\)\s*[-+*/]\s*)\bv_TexCoord\b)");
+	static const std::regex texCoordBeforeCast2 (R"(\bv_TexCoord\b(\s*[-+*/]\s*CAST2\s*\())");
+	static const std::regex cast2BeforeTexCoord (R"((CAST2\s*\([^)]+\)\s*[-+*/]\s*)\bv_TexCoord\b)");
 	// HLSL allows implicit truncation on assignment (vec2 x = v_TexCoord), GLSL does not
-	const std::regex vec2AssignTexCoord (R"((\bvec2\s+[A-Za-z_][A-Za-z0-9_]*\s*=\s*)v_TexCoord\s*;)");
+	static const std::regex vec2AssignTexCoord (R"((\bvec2\s+[A-Za-z_][A-Za-z0-9_]*\s*=\s*)v_TexCoord\s*;)");
 
 	source = std::regex_replace (source, texCoordBeforeCast2, "v_TexCoord.xy$1");
 	source = std::regex_replace (source, cast2BeforeTexCoord, "$1v_TexCoord.xy");
@@ -864,8 +928,47 @@ const std::string& ShaderUnit::compile () {
     }
 
     // this should be the rest of the shader
-    this->m_final
-	+= this->applyFragmentTexCoordCompatibility (this->applyLinkedVaryingCompatibility (this->m_preprocessed));
+    // ponytail: temporary switch-timing instrumentation, remove after measuring
+    const auto compatStart_ = std::chrono::steady_clock::now ();
+    // both compat passes are pure functions of (unit type, preprocessed source,
+    // linked preprocessed source); memoized like GLSLContext::toGlsl so stock
+    // shaders shared between wallpapers and switch-backs skip the regex passes.
+    // Guarded by a mutex so a future worker-thread caller stays safe.
+    static std::mutex sCompatCacheMutex;
+    static std::unordered_map<std::string, std::string> sCompatCache;
+    static const std::string sNoLink;
+
+    const std::string& linkedSource = this->m_link != nullptr ? this->m_link->m_preprocessed : sNoLink;
+    std::string compatKey;
+    compatKey.reserve (this->m_preprocessed.size () + linkedSource.size () + 2);
+    compatKey.push_back (this->m_type == GLSLContext::UnitType_Vertex ? 'v' : 'f');
+    compatKey.append (this->m_preprocessed);
+    compatKey.push_back ('\x1F');
+    compatKey.append (linkedSource);
+
+    {
+	const std::lock_guard<std::mutex> lock (sCompatCacheMutex);
+	const auto it = sCompatCache.find (compatKey);
+	if (it != sCompatCache.end ()) {
+	    this->m_final += it->second;
+	    WallpaperEngine::BuildTiming::add (WallpaperEngine::BuildTiming::shCompatUs, compatStart_);
+	    return this->m_final;
+	}
+    }
+
+    std::string compatResult =
+	this->applyFragmentTexCoordCompatibility (this->applyLinkedVaryingCompatibility (this->m_preprocessed));
+    this->m_final += compatResult;
+
+    {
+	const std::lock_guard<std::mutex> lock (sCompatCacheMutex);
+	// content-keyed, so it stays valid across switches, but never evicts;
+	// cap it so cycling through many wallpapers can't grow it unboundedly
+	if (sCompatCache.size () >= 512)
+	    sCompatCache.clear ();
+	sCompatCache.emplace (compatKey, std::move (compatResult));
+    }
+    WallpaperEngine::BuildTiming::add (WallpaperEngine::BuildTiming::shCompatUs, compatStart_);
 
     // the pass itself handles shader compilation, the unit doesn't have enough information for this step
     return this->m_final;
