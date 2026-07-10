@@ -492,17 +492,23 @@ bool CImage::loadPuppetMesh (const glm::vec2& size) {
 
 	constexpr size_t markerSize = 9;
 	constexpr size_t meshHeaderSize = sizeof (uint32_t) * 2;
-	constexpr size_t vertexStride = 80;
 	constexpr size_t positionOffset = 0;
-	constexpr size_t uvOffset = 72;
 
 	const std::string puppetVersion
 	    = data.size () >= markerSize ? std::string (data.data (), strlen ("MDLV0021")) : "";
-	// seen in the wild: 0017, 0021, 0023 — all share the same section layout
 	if (!puppetVersion.starts_with ("MDLV00")) {
 	    sLog.error ("Unsupported puppet model header ", puppetVersion, " in ", *this->getImage ().model->puppet);
 	    return false;
 	}
+	// Per-vertex stride and attribute offsets vary by MDLV version. v0013 packs tightly
+	// (52-byte stride: pos@0, bone indices@12, weights@28, uv@44); v0017/0021/0023 carry extra
+	// per-vertex data (80-byte stride: pos@0, indices@40, weights@56, uv@72). Blend weights
+	// always follow the four uint32 indices contiguously. Without the v0013 branch its mesh was
+	// scanned at stride 80, matched a garbage block, and the parts flew apart. (Almamu PR #625.)
+	const bool isCompactLayout = puppetVersion == "MDLV0013";
+	const size_t vertexStride = isCompactLayout ? 52 : 80;
+	const size_t blendIndicesOffset = isCompactLayout ? 12 : 40;
+	const size_t uvOffset = isCompactLayout ? 44 : 72;
 
 	const size_t mdlsOffset = findPuppetSection (data, "MDLS", markerSize);
 	const auto meshBlock = findPuppetMeshBlock (data, markerSize, mdlsOffset, meshHeaderSize, vertexStride);
@@ -515,8 +521,6 @@ bool CImage::loadPuppetMesh (const glm::vec2& size) {
 	const size_t verticesOffset = meshBlock->headerOffset + meshHeaderSize;
 	const size_t indicesOffset = verticesOffset + meshBlock->vertexBytes + sizeof (uint32_t);
 	const size_t indexCount = meshBlock->indexBytes / sizeof (uint16_t);
-	// blend weights follow the indices directly, so a single seek covers both
-	constexpr size_t blendIndicesOffset = 40;
 	std::vector<GLfloat> texcoords;
 	std::vector<GLushort> indices;
 
