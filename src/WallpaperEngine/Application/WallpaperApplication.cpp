@@ -4,6 +4,7 @@
 #include "WallpaperEngine/Application/ApplicationState.h"
 #include "WallpaperEngine/Assets/AssetLoadException.h"
 #include "WallpaperEngine/Audio/Drivers/Detectors/PulseAudioPlayingDetector.h"
+#include "WallpaperEngine/BuildTiming.h"
 #include "WallpaperEngine/FileSystem/Container.h"
 #include "WallpaperEngine/Logging/Log.h"
 #include "WallpaperEngine/Render/Drivers/VideoFactories.h"
@@ -12,6 +13,13 @@
 
 #include "WallpaperEngine/Data/Dumpers/StringPrinter.h"
 #include "WallpaperEngine/Data/Parsers/ProjectParser.h"
+#include "WallpaperEngine/Data/Parsers/TextureParser.h"
+#include "WallpaperEngine/Data/Model/Effect.h"
+#include "WallpaperEngine/Data/Model/Material.h"
+#include "WallpaperEngine/Data/Model/Model.h"
+#include "WallpaperEngine/Data/Model/Object.h"
+#include "WallpaperEngine/Data/Utils/BinaryReader.h"
+#include "WallpaperEngine/Render/CTexture.h"
 
 #include "WallpaperEngine/Data/Model/Property.h"
 #include "WallpaperEngine/Data/Model/Wallpaper.h"
@@ -25,8 +33,14 @@
 
 #include <algorithm>
 #include <cerrno>
+#include <chrono>
 #include <climits>
+#include <condition_variable>
+#include <deque>
+#include <mutex>
+#include <cstdlib>
 #include <cstring>
+#include <fstream>
 #include <numeric>
 #include <poll.h>
 #include <sys/socket.h>
@@ -240,24 +254,36 @@ void WallpaperApplication::loadBackgrounds () {
     }
 }
 
-ProjectUniquePtr WallpaperApplication::loadBackground (const std::string& bg) {
+ProjectUniquePtr WallpaperApplication::loadProject (const std::string& bg) const {
     auto container = this->setupAssetLocator (bg);
     auto json = WallpaperEngine::Data::JSON::JSON::parse (container->readString ("project.json"));
 
+    return WallpaperEngine::Data::Parsers::ProjectParser::parse (json, std::move (container));
+}
+
+void WallpaperApplication::resetScreenshotState () {
     // when a background is loaded, reset the screenshot variables
     // this allows taking screenshots after a background changes
     // useful for playlists
-    if (this->m_context.settings.screenshot.take) {
-	this->m_nextFrameScreenshot = this->m_context.settings.screenshot.delay;
-
-	if (this->m_videoDriver != nullptr) {
-	    this->m_nextFrameScreenshot += this->m_videoDriver->getFrameCounter ();
-	}
-
-	this->m_screenShotTaken = false;
+    if (!this->m_context.settings.screenshot.take) {
+	return;
     }
 
-    return WallpaperEngine::Data::Parsers::ProjectParser::parse (json, std::move (container));
+    this->m_nextFrameScreenshot = this->m_context.settings.screenshot.delay;
+
+    if (this->m_videoDriver != nullptr) {
+	this->m_nextFrameScreenshot += this->m_videoDriver->getFrameCounter ();
+    }
+
+    this->m_screenShotTaken = false;
+}
+
+ProjectUniquePtr WallpaperApplication::loadBackground (const std::string& bg) {
+    auto project = this->loadProject (bg);
+
+    this->resetScreenshotState ();
+
+    return project;
 }
 
 std::vector<std::size_t>
@@ -569,10 +595,11 @@ void WallpaperApplication::processControlSocket () {
 		if (this->m_renderContext == nullptr
 		    || !this->m_renderContext->getWallpapers ().contains (screen)) {
 		    reply = "err unknown screen " + screen + "\n";
-		} else if (this->switchBackground (screen, path, transition)) {
-		    reply = "ok\n";
 		} else {
-		    reply = "err failed to load " + path + "\n";
+		    // the load happens on the loader thread; failures only show up in the
+		    // log once the prepared switch is applied
+		    this->requestBackgroundSwitch (screen, path, transition);
+		    reply = "ok\n";
 		}
 	    }
 	}
@@ -585,31 +612,228 @@ void WallpaperApplication::processControlSocket () {
     }
 }
 
-bool WallpaperApplication::switchBackground (
+namespace {
+/** Engine-generated or media-bound texture names the switch worker must not pre-parse */
+bool isSpecialTexture (const std::string& name) {
+    return name.empty () || name.starts_with ("_rt_") || name.starts_with ("$");
+}
+
+void collectTextureNames (const TextureMap& textures, std::set<std::string>& out) {
+    for (const auto& [slot, name] : textures) {
+	if (!isSpecialTexture (name)) {
+	    out.insert (name);
+	}
+    }
+}
+
+void collectMaterialTextures (const Material& material, std::set<std::string>& out) {
+    for (const auto& pass : material.passes) {
+	collectTextureNames (pass->textures, out);
+	collectTextureNames (pass->usertextures, out);
+    }
+}
+
+void collectImageEffectTextures (const std::vector<ImageEffectUniquePtr>& effects, std::set<std::string>& out) {
+    for (const auto& imageEffect : effects) {
+	for (const auto& passOverride : imageEffect->passOverrides) {
+	    collectTextureNames (passOverride->textures, out);
+	    collectTextureNames (passOverride->usertextures, out);
+	}
+
+	if (imageEffect->effect == nullptr) {
+	    continue;
+	}
+
+	for (const auto& pass : imageEffect->effect->passes) {
+	    if (pass->material.has_value ()) {
+		collectMaterialTextures (**pass->material, out);
+	    }
+
+	    collectTextureNames (pass->binds, out);
+	}
+    }
+}
+
+/**
+ * Walks a scene's data model gathering every texture file its materials and effects
+ * reference so the switch worker can parse them off the render thread. Non-scene
+ * wallpapers (video, web) load no textures through the texture cache.
+ */
+std::set<std::string> collectProjectTextures (const Project& project) {
+    std::set<std::string> result {};
+
+    if (!project.wallpaper->is<Scene> ()) {
+	return result;
+    }
+
+    for (const auto& object : project.wallpaper->as<Scene> ()->objects) {
+	if (object->is<Image> ()) {
+	    const auto* image = object->as<Image> ();
+
+	    if (image->model != nullptr && image->model->material != nullptr) {
+		collectMaterialTextures (*image->model->material, result);
+	    }
+
+	    collectImageEffectTextures (image->effects, result);
+	} else if (object->is<Particle> ()) {
+	    const auto* particle = object->as<Particle> ();
+
+	    if (particle->material != nullptr && particle->material->material != nullptr) {
+		collectMaterialTextures (*particle->material->material, result);
+	    }
+	} else if (object->is<Text> ()) {
+	    collectImageEffectTextures (object->as<Text> ()->effects, result);
+	}
+    }
+
+    return result;
+}
+} // namespace
+
+void WallpaperApplication::requestBackgroundSwitch (
     const std::string& screen, const std::string& path, const Render::TransitionMode transition
 ) {
+    {
+	std::lock_guard lock (this->m_switchMutex);
+
+	if (!this->m_switchWorker.joinable ()) {
+	    this->m_switchWorkerStop = false;
+	    this->m_switchWorker = std::thread (&WallpaperApplication::switchWorkerMain, this);
+	}
+
+	PreparedSwitch job {};
+	job.id = ++this->m_switchIdCounter;
+	job.screen = screen;
+	job.path = path;
+	job.transition = transition;
+	this->m_latestSwitchIds[screen] = job.id;
+	this->m_switchRequests.emplace_back (std::move (job));
+    }
+
+    this->m_switchCv.notify_one ();
+}
+
+void WallpaperApplication::switchWorkerMain () {
+    while (true) {
+	PreparedSwitch job {};
+
+	{
+	    std::unique_lock lock (this->m_switchMutex);
+	    this->m_switchCv.wait (lock, [this] {
+		return this->m_switchWorkerStop || !this->m_switchRequests.empty ();
+	    });
+
+	    if (this->m_switchWorkerStop) {
+		return;
+	    }
+
+	    job = std::move (this->m_switchRequests.front ());
+	    this->m_switchRequests.pop_front ();
+
+	    // a newer request for the same screen already superseded this one
+	    if (this->m_latestSwitchIds[job.screen] != job.id) {
+		continue;
+	    }
+	}
+
+	const auto started = std::chrono::steady_clock::now ();
+
+	try {
+	    job.project = this->loadProject (job.path);
+
+	    // pre-parse the textures (file read + decompression) so the render thread
+	    // only has to upload them to the GPU
+	    for (const auto& name : collectProjectTextures (*job.project)) {
+		try {
+		    const auto contents = job.project->assetLocator->texture (name);
+		    auto stream = Data::Utils::BinaryReader (contents);
+		    auto metadataLoader = [&job] (const std::string& metaFilename) -> std::string {
+			const auto fullPath = std::filesystem::path ("materials") / metaFilename;
+			return job.project->assetLocator->readString (fullPath);
+		    };
+
+		    auto texture = Data::Parsers::TextureParser::parse (stream, name, metadataLoader);
+		    // decode image-format textures here as well so the render thread
+		    // skips the stbi work entirely and only does the GL upload
+		    Data::Parsers::TextureParser::decodeMipmaps (*texture);
+
+		    job.textures.emplace_back (name, std::move (texture));
+		} catch (const std::exception&) {
+		    // ignored, the render thread falls back to loading it synchronously
+		}
+	    }
+	} catch (const std::exception& e) {
+	    job.error = e.what ();
+	}
+
+	job.loadMs = std::chrono::duration_cast<std::chrono::milliseconds> (
+	    std::chrono::steady_clock::now () - started
+	).count ();
+
+	{
+	    std::lock_guard lock (this->m_switchMutex);
+	    this->m_switchResults.emplace_back (std::move (job));
+	}
+    }
+}
+
+void WallpaperApplication::processPreparedSwitches () {
+    while (true) {
+	PreparedSwitch job {};
+
+	{
+	    std::lock_guard lock (this->m_switchMutex);
+
+	    if (this->m_switchResults.empty ()) {
+		return;
+	    }
+
+	    job = std::move (this->m_switchResults.front ());
+	    this->m_switchResults.pop_front ();
+
+	    // a newer request for the same screen is already on the way, drop this one
+	    if (this->m_latestSwitchIds[job.screen] != job.id) {
+		continue;
+	    }
+	}
+
+	if (!job.error.empty ()) {
+	    sLog.error ("Failed to load wallpaper ", job.path, " for ", job.screen, ": ", job.error);
+	    this->markPlaylistItemFailed (job.screen, job.path);
+	    continue;
+	}
+
+	if (!this->applyPreparedSwitch (job)) {
+	    this->markPlaylistItemFailed (job.screen, job.path);
+	}
+    }
+}
+
+bool WallpaperApplication::applyPreparedSwitch (PreparedSwitch& job) {
     try {
 	if (!this->makeAnyViewportCurrent ()) {
-	    sLog.error ("Cannot switch wallpaper on ", screen, ": no active viewport");
+	    sLog.error ("Cannot switch wallpaper on ", job.screen, ": no active viewport");
 	    throw std::runtime_error ("No viewport available");
 	}
 
-	auto project = this->loadBackground (path);
+	// ponytail: temporary switch-timing instrumentation, remove after measuring
+	WallpaperEngine::BuildTiming::reset ();
+	const auto t1 = std::chrono::steady_clock::now ();
 
-	this->setupPropertiesForProject (*project);
-	this->ensureBrowserForProject (*project);
+	this->setupPropertiesForProject (*job.project);
+	this->ensureBrowserForProject (*job.project);
 
 	// the outgoing CWallpaper references this Project's data; the render context
 	// keeps it alive until the crossfade is over
 	std::shared_ptr<void> previousProject;
-	if (const auto it = this->m_backgrounds.find (screen); it != this->m_backgrounds.end ()) {
+	if (const auto it = this->m_backgrounds.find (job.screen); it != this->m_backgrounds.end ()) {
 	    previousProject = std::shared_ptr<Project> (std::move (it->second));
 	}
 
-	this->m_backgrounds[screen] = std::move (project);
+	this->m_backgrounds[job.screen] = std::move (job.project);
 
-	const auto scalingIt = this->m_context.settings.general.screenScalings.find (screen);
-	const auto clampIt = this->m_context.settings.general.screenClamps.find (screen);
+	const auto scalingIt = this->m_context.settings.general.screenScalings.find (job.screen);
+	const auto clampIt = this->m_context.settings.general.screenClamps.find (job.screen);
 	const auto scaling = scalingIt != this->m_context.settings.general.screenScalings.end ()
 	    ? scalingIt->second
 	    : this->m_context.settings.render.window.scalingMode;
@@ -618,22 +842,100 @@ bool WallpaperApplication::switchBackground (
 	    : this->m_context.settings.render.window.clamp;
 
 	if (this->m_renderContext) {
-	    this->m_renderContext->setWallpaper (
-		screen,
-		WallpaperEngine::Render::CWallpaper::fromWallpaper (
-		    *this->m_backgrounds[screen]->wallpaper, *this->m_renderContext, *this->m_audioContext,
-		    this->m_browserContext.get (), scaling, clamp
-		),
-		std::move (previousProject), transition
+	    const auto t2 = std::chrono::steady_clock::now ();
+
+	    // hand the pre-parsed textures to the cache; the wallpaper build below then
+	    // finds them there and only pays for the GPU upload
+	    for (auto& [name, texture] : job.textures) {
+		this->m_renderContext->storeTexture (
+		    name, std::make_shared<Render::CTexture> (*this->m_renderContext, std::move (texture))
+		);
+	    }
+
+	    const auto t3 = std::chrono::steady_clock::now ();
+	    auto renderWallpaper = WallpaperEngine::Render::CWallpaper::fromWallpaper (
+		*this->m_backgrounds[job.screen]->wallpaper, *this->m_renderContext, *this->m_audioContext,
+		this->m_browserContext.get (), scaling, clamp
 	    );
+	    const auto t4 = std::chrono::steady_clock::now ();
+
+	    this->m_renderContext->setWallpaper (
+		job.screen, std::move (renderWallpaper), std::move (previousProject), job.transition
+	    );
+
+	    // ponytail: temporary switch-timing instrumentation, remove after measuring
+	    const auto t5 = std::chrono::steady_clock::now ();
+	    const auto ms = [] (const auto& from, const auto& to) {
+		return std::chrono::duration_cast<std::chrono::milliseconds> (to - from).count ();
+	    };
+	    const char* runtimeDir = std::getenv ("XDG_RUNTIME_DIR");
+	    std::ofstream timing (
+		std::string (runtimeDir != nullptr ? runtimeDir : "/tmp") + "/lwe-switch-timing.log",
+		std::ios::app);
+	    namespace bt = WallpaperEngine::BuildTiming;
+	    const uint64_t texload = bt::texLoadUs / 1000;
+	    const uint64_t texdecode = bt::texDecodeUs / 1000;
+	    const uint64_t texgl = bt::texGlUs / 1000;
+	    const uint64_t shprep = bt::shPrepUs / 1000;
+	    const uint64_t shinc = bt::shIncludeUs / 1000;
+	    const uint64_t shifdef = bt::shIfdefUs / 1000;
+	    const uint64_t shvars = bt::shVarsUs / 1000;
+	    const uint64_t shcompat = bt::shCompatUs / 1000;
+	    const auto shrest
+		= static_cast<int64_t> (shprep) - static_cast<int64_t> (shinc + shifdef + shvars + shcompat);
+	    const uint64_t shgl = bt::shGlUs / 1000;
+	    const uint64_t fbo = bt::fboUs / 1000;
+	    const auto other = ms (t3, t4) - static_cast<int64_t> (texload + texdecode + texgl + shprep + shgl + fbo);
+	    timing << "switch " << job.screen << " " << job.path << " load(worker)=" << job.loadMs
+		   << "ms props+browser=" << ms (t1, t2) << "ms texupload=" << ms (t2, t3)
+		   << "ms glbuild=" << ms (t3, t4)
+		   << "ms [texload=" << texload << " texdecode=" << texdecode << " texgl=" << texgl
+		   << " shprep=" << shprep << "{inc=" << shinc << " ifdef=" << shifdef << " vars=" << shvars
+		   << " compat=" << shcompat << " rest=" << shrest << "}"
+		   << " shgl=" << shgl << " fbo=" << fbo << " other=" << other << "]"
+		   << " swap=" << ms (t4, t5) << "ms total(render)=" << ms (t1, t5) << "ms\n";
 	}
 
-	this->m_context.settings.general.screenBackgrounds[screen] = path;
+	this->m_context.settings.general.screenBackgrounds[job.screen] = job.path;
 	return true;
     } catch (const std::exception& e) {
-	sLog.error ("Failed to switch wallpaper on ", screen, ": ", e.what ());
+	sLog.error ("Failed to switch wallpaper on ", job.screen, ": ", e.what ());
 	return false;
     }
+}
+
+void WallpaperApplication::markPlaylistItemFailed (const std::string& screen, const std::string& path) {
+    const auto it = this->m_activePlaylists.find (screen);
+
+    if (it == this->m_activePlaylists.end ()) {
+	return;
+    }
+
+    auto& playlist = it->second;
+    const auto& items = playlist.definition.items;
+
+    for (std::size_t index = 0; index < items.size (); index++) {
+	if (items[index] == path) {
+	    playlist.failedIndices.insert (index);
+	    sLog.error ("Failed to load wallpaper for ", screen, ", will retry on next cycle");
+	    break;
+	}
+    }
+}
+
+void WallpaperApplication::stopSwitchWorker () {
+    {
+	std::lock_guard lock (this->m_switchMutex);
+
+	if (!this->m_switchWorker.joinable ()) {
+	    return;
+	}
+
+	this->m_switchWorkerStop = true;
+    }
+
+    this->m_switchCv.notify_all ();
+    this->m_switchWorker.join ();
 }
 
 void WallpaperApplication::advancePlaylist (
@@ -675,14 +977,9 @@ void WallpaperApplication::advancePlaylist (
     playlist.orderIndex = candidateOrderIndex;
     const auto& nextPath = playlist.definition.items[playlist.order[playlist.orderIndex]];
 
-    const bool loaded = this->switchBackground (screen, nextPath.string ());
-
-    if (!loaded) {
-	playlist.failedIndices.insert (playlist.order[playlist.orderIndex]);
-
-	// Keep current position; next timer tick will retry advancement
-	sLog.error ("Failed to load wallpaper for ", screen, ", will retry on next cycle");
-    }
+    // the load happens on the loader thread; failures are reported back through
+    // markPlaylistItemFailed so the next advancement skips the item
+    this->requestBackgroundSwitch (screen, nextPath.string ());
 
     const uint32_t delayMinutes = std::max<uint32_t> (1, playlist.definition.settings.delayMinutes);
     playlist.nextSwitch = now + std::chrono::minutes (delayMinutes);
@@ -1154,6 +1451,9 @@ void WallpaperApplication::render () {
 
     this->processControlSocket ();
     this->updatePlaylists ();
+    // apply any switch the loader thread finished preparing; runs on the render
+    // thread as it uploads textures and rebuilds the wallpaper's GL state
+    this->processPreparedSwitches ();
 
     if (!this->m_context.settings.screenshot.take || this->m_screenShotTaken == true) {
 	return;
@@ -1193,6 +1493,8 @@ void WallpaperApplication::show () {
 	    unlink (this->m_controlSocketPath.c_str ());
 	}
     }
+
+    this->stopSwitchWorker ();
 
     cleanup ();
 }
