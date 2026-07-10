@@ -17,7 +17,6 @@
 #include "WallpaperEngine/Render/Shaders/Variables/ShaderVariableVector3.h"
 #include "WallpaperEngine/Render/Shaders/Variables/ShaderVariableVector4.h"
 
-#include "WallpaperEngine/BuildTiming.h"
 #include "WallpaperEngine/Logging/Log.h"
 
 using namespace WallpaperEngine;
@@ -571,8 +570,6 @@ void CPass::setGeometryCallback (
 }
 
 GLuint CPass::compileShader (const char* shader, GLuint type) {
-    // ponytail: temporary switch-timing instrumentation, remove after measuring
-    const WallpaperEngine::BuildTiming::Scope timing_ (WallpaperEngine::BuildTiming::shGlUs);
     // reserve shaders in OpenGL
     const GLuint shaderID = glCreateShader (type);
 
@@ -657,8 +654,6 @@ void CPass::setupShaders () {
 	passTextures.insert_or_assign (index, texture);
     }
 
-    // ponytail: temporary switch-timing instrumentation, remove after measuring
-    const auto prepStart_ = std::chrono::steady_clock::now ();
     this->m_shader = new Render::Shaders::Shader (
 	this->m_renderable.getAssetLocator (), shaderName, this->m_combos, this->m_override.combos, passTextures,
 	this->m_override.textures, this->m_override.constants
@@ -666,14 +661,11 @@ void CPass::setupShaders () {
 
     const auto [vertex, fragment]
 	= Shaders::GLSLContext::get ().toGlsl (this->m_shader->vertex (), this->m_shader->fragment ());
-    WallpaperEngine::BuildTiming::add (WallpaperEngine::BuildTiming::shPrepUs, prepStart_);
 
     // compile the shaders
     const GLuint vertexShaderID = compileShader (vertex.c_str (), GL_VERTEX_SHADER);
     const GLuint fragmentShaderID = compileShader (fragment.c_str (), GL_FRAGMENT_SHADER);
     // create the final program
-    // ponytail: temporary switch-timing instrumentation, remove after measuring
-    const auto linkStart_ = std::chrono::steady_clock::now ();
     this->m_programID = glCreateProgram ();
     // link the shaders together
     glAttachShader (this->m_programID, vertexShaderID);
@@ -704,7 +696,6 @@ void CPass::setupShaders () {
 	    sLog.error (message);
 	}
     }
-    WallpaperEngine::BuildTiming::add (WallpaperEngine::BuildTiming::shGlUs, linkStart_);
 
 #if !NDEBUG
     glObjectLabel (GL_PROGRAM, this->m_programID, -1, shaderName.c_str ());
