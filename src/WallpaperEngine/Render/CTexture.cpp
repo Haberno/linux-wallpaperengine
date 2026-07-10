@@ -1,4 +1,5 @@
 #include "CTexture.h"
+#include "WallpaperEngine/BuildTiming.h"
 #include "WallpaperEngine/Logging/Log.h"
 
 #include <lz4.h>
@@ -61,12 +62,22 @@ CTexture::CTexture (RenderContext& context, TextureUniquePtr header) :
 	    GLenum textureFormat = GL_RGBA;
 
 	    if (this->m_header->freeImageFormat != FIF_UNKNOWN) {
-		int fileChannels;
+		if (mipmap->decodedData != nullptr) {
+		    // pixels were pre-decoded off the render thread (TextureParser::decodeMipmaps),
+		    // so the expensive stbi work is skipped entirely
+		    dataptr = mipmap->decodedData.get ();
+		    width = mipmap->decodedWidth;
+		    height = mipmap->decodedHeight;
+		} else {
+		    int fileChannels;
 
-		dataptr = handle = stbi_load_from_memory (
-		    reinterpret_cast<unsigned char*> (mipmap->uncompressedData.get ()), mipmap->uncompressedSize,
-		    &width, &height, &fileChannels, 4
-		);
+		    // ponytail: temporary switch-timing instrumentation, remove after measuring
+		    const WallpaperEngine::BuildTiming::Scope timing_ (WallpaperEngine::BuildTiming::texDecodeUs);
+		    dataptr = handle = stbi_load_from_memory (
+			reinterpret_cast<unsigned char*> (mipmap->uncompressedData.get ()), mipmap->uncompressedSize,
+			&width, &height, &fileChannels, 4
+		    );
+		}
 	    } else {
 		if (this->m_header->format == TextureFormat_R8) {
 		    // red textures are 1-byte-per-pixel, so it's alignment has to be set manually
@@ -77,6 +88,8 @@ CTexture::CTexture (RenderContext& context, TextureUniquePtr header) :
 		}
 	    }
 
+	    // ponytail: temporary switch-timing instrumentation, remove after measuring
+	    const auto uploadStart_ = std::chrono::steady_clock::now ();
 	    switch (internalFormat) {
 		case GL_RGBA8:
 		case GL_RG8:
@@ -95,10 +108,15 @@ CTexture::CTexture (RenderContext& context, TextureUniquePtr header) :
 		default:
 		    sLog.exception ("Cannot load texture, unknown format", this->m_header->format);
 	    }
+	    WallpaperEngine::BuildTiming::add (WallpaperEngine::BuildTiming::texGlUs, uploadStart_);
 
 	    // stbi_image buffer won't be used anymore, so free memory
 	    if (this->m_header->freeImageFormat != FIF_UNKNOWN) {
 		stbi_image_free (handle);
+		// pre-decoded pixels are on the GPU now, don't keep them in RAM
+		mipmap->decodedData.reset ();
+		mipmap->decodedWidth = 0;
+		mipmap->decodedHeight = 0;
 	    }
 
 	    level++;

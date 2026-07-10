@@ -1744,7 +1744,15 @@ void CParticle::setupPass () {
     m_pass->setModelMatrix (&m_modelMatrix);
     m_pass->setViewProjectionMatrix (&m_viewProjectionMatrix);
 
-    // Create OpenGL buffers
+    // NOTE: the VAO/VBO/EBO are created lazily in setupVao on the first render: VAOs
+    // are not shared between GL contexts, so they cannot be created here when this
+    // constructor runs on the async switch worker's build context
+
+    setupGeometryCallbacks ();
+    setupParticleUniforms ();
+}
+
+void CParticle::setupVao () {
     GLint prevVAO = 0;
     glGetIntegerv (GL_VERTEX_ARRAY_BINDING, &prevVAO);
 
@@ -1834,15 +1842,16 @@ void CParticle::setupPass () {
     }
 
     glBindVertexArray (prevVAO);
-
-    setupGeometryCallbacks ();
-    setupParticleUniforms ();
 }
 
 void CParticle::setupGeometryCallbacks () {
     m_pass->setGeometryCallback (
 	// Setup attribs: save current VAO, bind particle VAO
 	[this] () {
+	    // created lazily: VAOs are not shared between GL contexts (async builds)
+	    if (m_vao == 0) {
+		setupVao ();
+	    }
 	    glGetIntegerv (GL_VERTEX_ARRAY_BINDING, &m_prevVAO);
 	    glBindVertexArray (m_vao);
 	},

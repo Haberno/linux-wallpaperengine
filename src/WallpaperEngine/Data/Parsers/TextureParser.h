@@ -23,6 +23,11 @@ public:
 	std::function<std::string (const std::string&)> metadataLoader
     );
     static MipmapSharedPtr parseMipmap (const BinaryReader& file, const Texture& header);
+    /**
+     * Decodes image-format (FIF) mipmaps into raw RGBA pixels so the render
+     * thread only has to upload them, meant to run off the render thread
+     */
+    static void decodeMipmaps (Texture& texture);
     static FrameSharedPtr parseFrame (const BinaryReader& file);
     static FrameSharedPtr parseFrameV1 (const BinaryReader& file);
     static TextureMap parseTextureMap (const JSON& it);

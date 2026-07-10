@@ -73,6 +73,8 @@ public:
     uint32_t getFrameCounter () const override;
     void dispatchEventQueue () override;
     [[nodiscard]] void* getProcAddress (const char* name) const override;
+    bool makeBuildContextCurrent () override;
+    void releaseBuildContext () override;
 
     void onLayerClose (Output::WaylandOutputViewport*);
     Output::WaylandOutputViewport* surfaceToViewport (const wl_surface*) const;
@@ -90,6 +92,10 @@ private:
     Output::WaylandOutput m_output;
     /** The EGL context in use */
     SEGLContext m_eglContext = {};
+    /** Shared context for the async wallpaper build worker (lazily created on that thread) */
+    EGLContext m_buildContext = EGL_NO_CONTEXT;
+    /** 1x1 pbuffer fallback when EGL_KHR_surfaceless_context is unavailable */
+    EGLSurface m_buildSurface = EGL_NO_SURFACE;
     /** The Wayland context in use */
     WaylandContext m_waylandContext = {};
     mutable bool m_requestedExit;

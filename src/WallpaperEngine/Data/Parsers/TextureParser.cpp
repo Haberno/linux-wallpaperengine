@@ -3,15 +3,54 @@
 
 #include <lz4.h>
 #include <nlohmann/json.hpp>
+#include <stb_image.h>
 
 #include "TextureParser.h"
+#include "WallpaperEngine/BuildTiming.h"
 #include "WallpaperEngine/Data/Assets/Texture.h"
 #include "WallpaperEngine/Logging/Log.h"
 
 using namespace WallpaperEngine::Data::Assets;
 using namespace WallpaperEngine::Data::Parsers;
 
+void WallpaperEngine::Data::Assets::freeDecodedPixels (void* pixels) {
+    stbi_image_free (pixels);
+}
+
+void TextureParser::decodeMipmaps (Texture& texture) {
+    // videos are fed to the player as-is and non-FIF formats upload their raw data
+    // directly, so only image-format textures have anything to decode
+    if (texture.isVideoMp4 || texture.flags & TextureFlags_Video || texture.freeImageFormat == FIF_UNKNOWN) {
+	return;
+    }
+
+    for (auto& [index, mipmaps] : texture.images) {
+	for (const auto& mipmap : mipmaps) {
+	    if (mipmap->decodedData != nullptr || mipmap->uncompressedData == nullptr) {
+		continue;
+	    }
+
+	    int width = 0, height = 0, fileChannels = 0;
+	    stbi_uc* pixels = stbi_load_from_memory (
+		reinterpret_cast<unsigned char*> (mipmap->uncompressedData.get ()), mipmap->uncompressedSize,
+		&width, &height, &fileChannels, 4
+	    );
+
+	    // on failure leave the mipmap untouched, the render thread will retry and report
+	    if (pixels == nullptr) {
+		continue;
+	    }
+
+	    mipmap->decodedData.reset (pixels);
+	    mipmap->decodedWidth = width;
+	    mipmap->decodedHeight = height;
+	}
+    }
+}
+
 TextureUniquePtr TextureParser::parse (const BinaryReader& file) {
+    // ponytail: temporary switch-timing instrumentation, remove after measuring
+    const WallpaperEngine::BuildTiming::Scope timing_ (WallpaperEngine::BuildTiming::texLoadUs);
     auto result = std::make_unique<Texture> ();
 
     parseTextureHeader (*result, file);

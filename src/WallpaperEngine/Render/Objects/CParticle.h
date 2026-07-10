@@ -200,6 +200,13 @@ private:
     bool m_hasRefract { false };
     std::shared_ptr<CFBO> m_refractFBO;
 
+    /**
+     * Create and configure the VAO/VBO/EBO on first render. VAOs are container objects
+     * and are NOT shared between GL contexts, so an async-built wallpaper must create
+     * them on the render thread instead of the worker's build context.
+     */
+    void setupVao ();
+
     // OpenGL buffers
     GLuint m_vao { 0 };
     GLuint m_vbo { 0 };

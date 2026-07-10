@@ -91,6 +91,14 @@ private:
     FT_Face m_ftFace = nullptr;
     std::vector<uint8_t> m_fontData;
 
+    /**
+     * Create the quad/composite VAOs on first use. VAOs are container objects and are
+     * NOT shared between GL contexts: async-built wallpapers upload the VBOs on the
+     * worker context, but the VAOs must be created lazily on the render thread.
+     */
+    void ensureVao ();
+    void ensureCompositeVao ();
+
     GLuint m_texture = 0;
     GLuint m_program = 0;
     GLuint m_vao = 0;
