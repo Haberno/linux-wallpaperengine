@@ -147,6 +147,9 @@ PropertySharedPtr PropertyParser::parseTextInput (const JSON& it, const std::str
 	    .name = name,
 	    .text = it.optional<std::string> ("text", ""),
 	},
-	it.require ("value", "Property must have a value").dump ()
+	// value is optional and read as a raw string: require+.dump() crashed on absent
+	// values and wrapped present ones in literal JSON quotes (matches parseFile above,
+	// and upstream Almamu PR #625)
+	it.optional<std::string> ("value", "")
     );
 }
