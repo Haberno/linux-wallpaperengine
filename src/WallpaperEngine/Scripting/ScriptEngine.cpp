@@ -113,6 +113,49 @@ JSValue ScriptEngine::dynamicToJs (DynamicValue& value) const {
 // degree objects instead of live radian adapters.
 static bool isAnglesProperty (const std::string& key) { return key.rfind ("angles_", 0) == 0; }
 
+static void replaceAll (std::string& value, const std::string_view from, const std::string_view to) {
+    size_t pos = 0;
+    while ((pos = value.find (from, pos)) != std::string::npos) {
+	value.replace (pos, from.size (), to);
+	pos += to.size ();
+    }
+}
+
+static std::string normalizeSceneScriptModuleSyntax (std::string source) {
+    replaceAll (source, "'use strict';", "");
+    replaceAll (source, "\"use strict\";", "");
+    replaceAll (source, "export ", "");
+
+    std::istringstream input (source);
+    std::ostringstream output;
+    bool needsWEMath = false;
+    bool needsWEVector = false;
+
+    std::string line;
+    while (std::getline (input, line)) {
+	const auto first = line.find_first_not_of (" \t");
+	const auto trimmed = first == std::string::npos ? std::string_view {} : std::string_view (line).substr (first);
+
+	if (trimmed.rfind ("import ", 0) == 0) {
+	    needsWEMath = needsWEMath || trimmed.find ("WEMath") != std::string_view::npos;
+	    needsWEVector = needsWEVector || trimmed.find ("WEVector") != std::string_view::npos;
+	    continue;
+	}
+
+	output << line << '\n';
+    }
+
+    std::string prefix;
+    if (needsWEMath) {
+	prefix += "const WEMath = globalThis.WEMath;\n";
+    }
+    if (needsWEVector) {
+	prefix += "const WEVector = globalThis.WEVector;\n";
+    }
+
+    return prefix + output.str ();
+}
+
 static JSValue anglesToJs (JSContext* ctx, const DynamicValue& value) {
     const glm::vec3 degrees = glm::degrees (value.getVec3 ());
     JSValue result = JS_NewObject (ctx);
@@ -319,6 +362,19 @@ ScriptEngine::~ScriptEngine () {
 	JS_FreeValue (this->m_context, module.module);
     }
 
+    if (this->m_context && this->m_runtime) {
+	static constexpr const char* GLOBALS_TO_CLEAR[] = {
+	    "shared",	  "__textLayers",	"__sceneCtx",	  "__propScriptLayer",
+	    "__propScriptProps", "__layerSeedProps", "__layerSeedText", "Vec2",
+	    "Vec3",	  "Vec4",		"WEMath",	  "WEVector",
+	};
+
+	for (const char* name : GLOBALS_TO_CLEAR) {
+	    JS_SetPropertyStr (this->m_context, this->m_globalThis, name, JS_UNDEFINED);
+	}
+	JS_RunGC (this->m_runtime);
+    }
+
     JS_FreeValue (this->m_context, this->m_globalThis);
 
     this->m_adapters.vec4.reset ();
@@ -345,6 +401,10 @@ ScriptEngine::~ScriptEngine () {
 /// Helper to check for and log JS exceptions
 static void logJSException (JSContext* ctx, const char* context) {
     JSValue exc = JS_GetException (ctx);
+    if (JS_IsUninitialized (exc)) {
+	JS_FreeValue (ctx, exc);
+	return;
+    }
     if (!JS_IsNull (exc) && !JS_IsUndefined (exc)) {
 	const char* str = JS_ToCString (ctx, exc);
 	if (str) {
@@ -421,19 +481,8 @@ ScriptLayerHandle ScriptEngine::createLayerScript (
 
     const ScriptLayerHandle id = this->m_nextLayerId++;
 
-    // Same stripping logic as evaluate(): WE scripts come as ES6 modules but
-    // QuickJS is easier to drive as plain script evaluation.
-    std::string body = scriptSource;
-    size_t pos;
-    while ((pos = body.find ("'use strict';")) != std::string::npos) {
-	body.erase (pos, 13);
-    }
-    while ((pos = body.find ("\"use strict\";")) != std::string::npos) {
-	body.erase (pos, 13);
-    }
-    while ((pos = body.find ("export ")) != std::string::npos) {
-	body.erase (pos, 7);
-    }
+    // WE scripts arrive as ES modules; run them as isolated plain scripts.
+    std::string body = normalizeSceneScriptModuleSyntax (scriptSource);
 
     // The IIFE gives every layer its own closure for top-level vars and
     // functions, so two layers that both define `function update()` or a
@@ -656,17 +705,7 @@ void ScriptEngine::queueScript (const std::string& key, DynamicValue& currentVal
     // evaluate an IIFE that hands back the script's lifecycle hooks. The closure also captures
     // `thisLayer` per script instead of relying on a shared global that the last queued object
     // would otherwise overwrite.
-    std::string body = *source;
-    size_t pos;
-    while ((pos = body.find ("'use strict';")) != std::string::npos) {
-	body.erase (pos, 13);
-    }
-    while ((pos = body.find ("\"use strict\";")) != std::string::npos) {
-	body.erase (pos, 13);
-    }
-    while ((pos = body.find ("export ")) != std::string::npos) {
-	body.erase (pos, 7);
-    }
+    std::string body = normalizeSceneScriptModuleSyntax (*source);
 
     JS_SetPropertyStr (
 	this->m_context, this->m_globalThis, "__propScriptLayer", this->m_adapters.object->instantiate (object)
