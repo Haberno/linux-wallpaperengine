@@ -119,6 +119,12 @@ CTexture::CTexture (RenderContext& context, TextureUniquePtr header) :
 		mipmap->decodedHeight = 0;
 	    }
 
+	    // the raw file bytes are on the GPU now too; only the video path (which
+	    // returns early above) keeps reading them after construction, so cached
+	    // textures don't need to pin the CPU-side copy anymore
+	    mipmap->uncompressedData.reset ();
+	    mipmap->uncompressedSize = 0;
+
 	    level++;
 	}
     }
