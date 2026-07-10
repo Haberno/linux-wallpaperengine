@@ -77,6 +77,16 @@ WallpaperApplication::WallpaperApplication (ApplicationContext& context) : m_con
     this->initializePlaylists ();
 }
 
+WallpaperApplication::~WallpaperApplication () {
+    // CEF-backed wallpapers must be destroyed while their browser and GL contexts still exist.
+    if (this->m_renderContext) {
+	this->makeAnyViewportCurrent ();
+	this->m_renderContext.reset ();
+    }
+    this->m_backgrounds.clear ();
+    this->m_browserContext.reset ();
+}
+
 void WallpaperApplication::initializeSubsystems () {
     // initialize player dbus (update every 2 seconds)
     m_mediaSource = std::make_unique<WallpaperEngine::Media::DBusMediaSource> (std::chrono::milliseconds (2000));
@@ -729,15 +739,9 @@ void WallpaperApplication::setupProperties () {
 }
 
 void WallpaperApplication::setupBrowser () {
-    bool anyWebProject = std::any_of (
-	this->m_backgrounds.begin (), this->m_backgrounds.end (),
-	[] (const std::pair<const std::string, ProjectUniquePtr>& pair) -> bool {
-	    return pair.second->wallpaper->is<Web> ();
-	}
-    );
-
-    // do not perform any initialization if no web background is present
-    if (!anyWebProject || this->m_browserContext) {
+    // Runtime switching can introduce a web wallpaper after startup, and CEF
+    // must initialize before the GL/EGL context exists.
+    if (this->m_browserContext) {
 	return;
     }
 
@@ -1099,6 +1103,11 @@ void WallpaperApplication::render () {
 	m_videoDriver->getInputContext ().update ();
 	// process driver events
 	m_videoDriver->dispatchEventQueue ();
+	// Keep CEF alive while a scene wallpaper is active so browser shutdown and
+	// late callbacks from a previous web wallpaper can complete safely.
+	if (this->m_browserContext && this->makeAnyViewportCurrent ()) {
+	    this->m_browserContext->doMessageLoopWork ();
+	}
 
 	if (m_videoDriver->closeRequested ()) {
 	    sLog.out ("Stop requested by driver");

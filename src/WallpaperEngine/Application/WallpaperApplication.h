@@ -32,6 +32,7 @@ using namespace WallpaperEngine::Data::Model;
 class WallpaperApplication {
 public:
     explicit WallpaperApplication (ApplicationContext& context);
+    ~WallpaperApplication ();
 
     /**
      * Prepares the application for rendering.
