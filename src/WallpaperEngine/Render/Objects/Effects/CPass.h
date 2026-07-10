@@ -198,8 +198,8 @@ private:
     const glm::mat4* m_modelViewProjectionMatrixInverse = &s_defaultMatrix;
     const glm::mat4* m_modelMatrix = &s_defaultMatrix;
     const glm::mat4* m_viewProjectionMatrix = &s_defaultMatrix;
-    const glm::mat4* m_effectTextureProjectionMatrix = nullptr;
-    const glm::mat4* m_effectTextureProjectionMatrixInverse = nullptr;
+    const glm::mat4* m_effectTextureProjectionMatrix = &s_defaultMatrix;
+    const glm::mat4* m_effectTextureProjectionMatrixInverse = &s_defaultMatrix;
 
     /**
      * Contains the final map of textures to be used
