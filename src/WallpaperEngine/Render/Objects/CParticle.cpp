@@ -1911,12 +1911,13 @@ void CParticle::applyParallaxToModelMatrix () {
     const glm::vec2* displacement = getScene ().getParallaxDisplacement ();
     // same full-swing translation convention as CImage; locktransforms is only an editor-UI
     // lock and does not opt out of parallax (parallaxDepth 0 is the opt-out)
-    const float referenceSize
-	= static_cast<float> (getScene ().getWidth ()) * Wallpapers::CScene::PARALLAX_TRANSLATION_SPAN;
+    // per-axis reference: y uses height so vertical travel isn't over-scaled, see CImage
+    const float referenceX = static_cast<float> (getScene ().getWidth ()) * Wallpapers::CScene::PARALLAX_TRANSLATION_SPAN;
+    const float referenceY = static_cast<float> (getScene ().getHeight ()) * Wallpapers::CScene::PARALLAX_TRANSLATION_SPAN;
     const glm::vec3 parallaxOffset {
 	// x negated to match the screen-space pan direction, see CImage
-	-depth.x * parallaxAmount * displacement->x * referenceSize,
-	depth.y * parallaxAmount * displacement->y * referenceSize,
+	-depth.x * parallaxAmount * displacement->x * referenceX,
+	depth.y * parallaxAmount * displacement->y * referenceY,
 	0.0f,
     };
     m_modelMatrix = glm::translate (m_modelMatrix, parallaxOffset);
