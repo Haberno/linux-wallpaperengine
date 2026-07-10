@@ -256,7 +256,7 @@ void PulseAudioPlaybackRecorder::update () {
     // maxlength and pipewire-pulse spammed "overrun recover"/skip, feeding the FFT stale,
     // gappy audio. The loop ends once the event queue is empty; the guard caps a frame's
     // work if the server keeps queueing while we dispatch (~76 fragments fit maxlength).
-    // ponytail: single-threaded pump on the render thread; a capture thread only becomes
+    // NOTE: single-threaded pump on the render thread; a capture thread only becomes
     // worth it if sub-frame audio latency ever matters
     for (int guard = 0; guard < 256 && pa_mainloop_iterate (this->m_mainloop, 0, nullptr) > 0; guard++) {
     }
@@ -264,7 +264,7 @@ void PulseAudioPlaybackRecorder::update () {
     // Interpolate published values toward the FFT destinations with WE's visual feel:
     // near-instant attack, gradual exponential release (bars snap up on a beat, fall away
     // smoothly). The old symmetric linear step also crawled toward >1 peaks for ~10 frames.
-    // ponytail: attack/release factors tuned by eye against WE footage; per render frame
+    // NOTE: attack/release factors tuned by eye against WE footage; applied per render frame
     const auto follow = [] (float current, float target) {
 	constexpr float kAttack = 0.7f;
 	constexpr float kRelease = 0.12f;
@@ -339,7 +339,7 @@ void PulseAudioPlaybackRecorder::update () {
     //
     // Master trim: kWeBandGain's absolute level assumes the community reference was
     // measured at -20dBFS; in practice that runs hot (bars peg too easily), so trim down.
-    // ponytail: 0.6 tuned by eye on real wallpapers; override via WPE_AUDIO_SCALE.
+    // NOTE: 0.6 tuned by eye on real wallpapers; override via WPE_AUDIO_SCALE.
     static const float masterGain = [] {
 	if (const char* s = std::getenv ("WPE_AUDIO_SCALE")) {
 	    const float parsed = std::atof (s);

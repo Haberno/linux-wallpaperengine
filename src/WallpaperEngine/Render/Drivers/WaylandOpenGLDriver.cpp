@@ -443,7 +443,7 @@ void WaylandOpenGLDriver::initGLEW () {
     glewExperimental = GL_TRUE;
     if (const GLenum result = glewInit (); result != GLEW_OK) {
 	if (result == GLEW_ERROR_NO_GLX_DISPLAY) {
-	    // ponytail: expected on Wayland (no GLX), GL pointers already loaded via EGL
+	    // expected on Wayland (no GLX display), GL pointers are already loaded via EGL
 	    sLog.debug ("GLEW GLX init skipped (Wayland/EGL context)");
 	} else {
 	    const char* error = reinterpret_cast<const char*> (glewGetErrorString (result));
@@ -515,14 +515,11 @@ void WaylandOpenGLDriver::dispatchEventQueue () {
 Output::Output& WaylandOpenGLDriver::getOutput () { return this->m_output; }
 
 float WaylandOpenGLDriver::getRenderTime () const {
-    // ponytail: debug hook, jump the clock to repro long-uptime precision bugs
-    static const float offset = getenv ("LWE_TIME_OFFSET") ? atof (getenv ("LWE_TIME_OFFSET")) : 0.0f;
     return static_cast<float> (std::chrono::duration_cast<std::chrono::microseconds> (
 				   std::chrono::high_resolution_clock::now () - renderStart
 	   )
 				   .count ())
-	/ 1000000.0
-	+ offset;
+	/ 1000000.0;
 }
 
 bool WaylandOpenGLDriver::closeRequested () { return this->m_requestedExit; }

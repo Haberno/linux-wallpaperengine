@@ -1,5 +1,4 @@
 #include "CFBO.h"
-#include "WallpaperEngine/BuildTiming.h"
 #include "WallpaperEngine/Logging/Log.h"
 
 using namespace WallpaperEngine::Render;
@@ -8,8 +7,6 @@ CFBO::CFBO (
     std::string name, const TextureFormat format, const uint32_t flags, const float scale, uint32_t realWidth,
     uint32_t realHeight, uint32_t textureWidth, uint32_t textureHeight, bool withDepthBuffer
 ) : m_scale (scale), m_name (std::move (name)), m_format (format), m_flags (flags) {
-    // ponytail: temporary switch-timing instrumentation, remove after measuring
-    const WallpaperEngine::BuildTiming::Scope timing_ (WallpaperEngine::BuildTiming::fboUs);
     // NOTE: the framebuffer object itself is created lazily on first use (see
     // ensureFramebuffer): FBOs are not shared between GL contexts, so when this
     // constructor runs on the async switch worker only the shared objects

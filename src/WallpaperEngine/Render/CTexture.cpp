@@ -1,5 +1,4 @@
 #include "CTexture.h"
-#include "WallpaperEngine/BuildTiming.h"
 #include "WallpaperEngine/Logging/Log.h"
 
 #include <lz4.h>
@@ -71,8 +70,6 @@ CTexture::CTexture (RenderContext& context, TextureUniquePtr header) :
 		} else {
 		    int fileChannels;
 
-		    // ponytail: temporary switch-timing instrumentation, remove after measuring
-		    const WallpaperEngine::BuildTiming::Scope timing_ (WallpaperEngine::BuildTiming::texDecodeUs);
 		    dataptr = handle = stbi_load_from_memory (
 			reinterpret_cast<unsigned char*> (mipmap->uncompressedData.get ()), mipmap->uncompressedSize,
 			&width, &height, &fileChannels, 4
@@ -88,8 +85,6 @@ CTexture::CTexture (RenderContext& context, TextureUniquePtr header) :
 		}
 	    }
 
-	    // ponytail: temporary switch-timing instrumentation, remove after measuring
-	    const auto uploadStart_ = std::chrono::steady_clock::now ();
 	    switch (internalFormat) {
 		case GL_RGBA8:
 		case GL_RG8:
@@ -108,7 +103,6 @@ CTexture::CTexture (RenderContext& context, TextureUniquePtr header) :
 		default:
 		    sLog.exception ("Cannot load texture, unknown format", this->m_header->format);
 	    }
-	    WallpaperEngine::BuildTiming::add (WallpaperEngine::BuildTiming::texGlUs, uploadStart_);
 
 	    // stbi_image buffer won't be used anymore, so free memory
 	    if (this->m_header->freeImageFormat != FIF_UNKNOWN) {
