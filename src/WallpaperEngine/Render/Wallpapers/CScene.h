@@ -48,9 +48,15 @@ public:
      * assets; everything else (amount, delay, influence, per-object depth, locktransforms)
      * comes from scene.json.
      */
-    /** Converts the authored cameraparallaxdelay value into the smoothing time constant in seconds */
-    static constexpr float PARALLAX_DELAY_TO_SECONDS = 0.1f;
-    /** Fraction of the scene size a unit-depth layer travels over a full mouse swing */
+    /** Converts the authored cameraparallaxdelay value into the smoothing time constant in
+     * seconds: tc = cameraparallaxdelay * this. Measured against real Wallpaper Engine by
+     * capturing g_ParallaxPosition motion on "Slow down" (delay=2.0): WE's tc = 233ms
+     * (0.83s to 95%), a clean single-pole exponential — the same model this code uses. That
+     * puts WE's constant at 233ms/2.0 = 0.117, so this matches WE. (Low-delay scenes like
+     * Gojo at delay~0.1 stay effectively instant regardless.) */
+    static constexpr float PARALLAX_DELAY_TO_SECONDS = 0.117f;
+    /** Fraction of each axis' extent a unit-depth layer travels over a full mouse swing
+     * (applied per-axis: width for x, height for y) */
     static constexpr float PARALLAX_TRANSLATION_SPAN = 0.5f;
 
     const glm::vec2* getMousePosition () const;

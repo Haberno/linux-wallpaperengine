@@ -967,11 +967,12 @@ void CText::render () {
 	const float amount = getScene ().getScene ().camera.parallax.amount->value->getFloat ();
 	const glm::vec2 depth = this->resolveParallaxDepth ();
 	const glm::vec2* displacement = getScene ().getParallaxDisplacement ();
-	const float referenceSize
-	    = static_cast<float> (getScene ().getWidth ()) * Wallpapers::CScene::PARALLAX_TRANSLATION_SPAN;
+	// per-axis reference: y uses height so vertical travel isn't over-scaled, see CImage
+	const float referenceX = static_cast<float> (getScene ().getWidth ()) * Wallpapers::CScene::PARALLAX_TRANSLATION_SPAN;
+	const float referenceY = static_cast<float> (getScene ().getHeight ()) * Wallpapers::CScene::PARALLAX_TRANSLATION_SPAN;
 
-	parallaxShift.x = -depth.x * amount * displacement->x * referenceSize;
-	parallaxShift.y = depth.y * amount * displacement->y * referenceSize;
+	parallaxShift.x = -depth.x * amount * displacement->x * referenceX;
+	parallaxShift.y = depth.y * amount * displacement->y * referenceY;
     }
 
     const glm::mat4 model = glm::translate (glm::mat4 (1.0f), parallaxShift)
