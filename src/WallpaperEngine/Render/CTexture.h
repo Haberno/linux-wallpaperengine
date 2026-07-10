@@ -39,6 +39,7 @@ public:
     [[nodiscard]] uint32_t getSpritesheetRows () const override;
     [[nodiscard]] uint32_t getSpritesheetFrames () const override;
     [[nodiscard]] float getSpritesheetDuration () const override;
+    [[nodiscard]] size_t getRetainedCpuBytes () const override;
 
     /**
      * Increments the usage count of the texture

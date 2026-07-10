@@ -101,5 +101,12 @@ public:
      * Allows the texture contents to be updated (for example, for video textures)
      */
     virtual void update () const = 0;
+    /**
+     * @return Approximate CPU-side memory this texture keeps pinned after upload
+     *         (e.g. video textures retain the whole file for mpv to stream from)
+     */
+    [[nodiscard]] virtual size_t getRetainedCpuBytes () const {
+	return 0;
+    }
 };
 } // namespace WallpaperEngine::Render

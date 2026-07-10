@@ -53,6 +53,13 @@ public:
     VirtualAdapter& getVFS () const;
 
     /**
+     * @return Stable identity for this container's mounts, in mount order. Two containers
+     * mounting the same paths at the same points share a fingerprint, so it can be used to
+     * key caches that must survive engine restarts of the same project
+     */
+    [[nodiscard]] const std::string& fingerprint () const;
+
+    /**
      * @param factory The factory to register for this container
      */
     void registerAdapterFactory (FactoryUniquePtr factory);
@@ -71,6 +78,8 @@ private:
     std::vector<std::pair<std::filesystem::path, AdapterSharedPtr>> m_mountpoints;
     /** Virtual file system adapter */
     std::shared_ptr<VirtualAdapter> m_vfs;
+    /** Identity built from every mount performed on this container */
+    std::string m_fingerprint;
 };
 
 using ContainerUniquePtr = std::unique_ptr<Container>;
