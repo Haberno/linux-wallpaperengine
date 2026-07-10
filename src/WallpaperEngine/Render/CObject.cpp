@@ -71,7 +71,12 @@ glm::vec2 CObject::resolveParallaxDepth () const {
 	current = parentObject != nullptr ? &parentObject->getObject () : nullptr;
     }
 
-    return glm::vec2 (1.0f);
+    // Unauthored layers are pinned (WE zero-inits parallaxDepth). A 1.0 default made
+    // unauthored backgrounds drift the full base amount, and any whose art has less
+    // overscan than that drift (e.g. Gojo's "gojo background left", 15px margin vs 52px
+    // travel) slid off and exposed the gray clear plane. Authored backgrounds already
+    // use 0 to pin (Sea, Slow down, One Piece), so 0 is the matching default.
+    return glm::vec2 (0.0f);
 }
 
 bool CObject::isVisibleThroughParents () const {
