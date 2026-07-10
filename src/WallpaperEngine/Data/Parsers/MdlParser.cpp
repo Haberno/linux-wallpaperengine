@@ -12,6 +12,44 @@ namespace {
 /** Attribute mask observed on static meshes: position | normal | tangent | uv */
 constexpr uint32_t STATIC_VERTEX_TAG = 15;
 constexpr uint32_t STATIC_VERTEX_STRIDE = 48;
+/** Attribute mask observed on skinned character meshes: position | normal | tangent | skin | uv */
+constexpr uint32_t SKINNED_VERTEX_TAG = 0x0180000f;
+constexpr uint32_t SKINNED_VERTEX_STRIDE = 80;
+
+struct VertexLayout {
+    uint32_t tag = 0;
+    uint32_t strideBytes = 0;
+    uint32_t positionOffset = 0;
+    uint32_t normalOffset = 0;
+    uint32_t tangentOffset = 0;
+    uint32_t uvOffset = 0;
+};
+
+VertexLayout getVertexLayout (uint32_t tag) {
+    if (tag == STATIC_VERTEX_TAG) {
+	return {
+	    .tag = tag,
+	    .strideBytes = STATIC_VERTEX_STRIDE,
+	    .positionOffset = 0,
+	    .normalOffset = 12,
+	    .tangentOffset = 24,
+	    .uvOffset = 40,
+	};
+    }
+
+    if (tag == SKINNED_VERTEX_TAG) {
+	return {
+	    .tag = tag,
+	    .strideBytes = SKINNED_VERTEX_STRIDE,
+	    .positionOffset = 0,
+	    .normalOffset = 12,
+	    .tangentOffset = 24,
+	    .uvOffset = 72,
+	};
+    }
+
+    return {};
+}
 
 template <typename T> T readValue (const std::vector<char>& data, size_t& offset, const std::string& filename) {
     if (offset + sizeof (T) > data.size ()) {
@@ -44,11 +82,6 @@ MdlMesh MdlParser::load (const Project& project, const std::string& filename) {
     }
 
     MdlMesh mesh {};
-    mesh.strideBytes = STATIC_VERTEX_STRIDE;
-    mesh.positionOffset = 0;
-    mesh.normalOffset = 12;
-    mesh.tangentOffset = 24;
-    mesh.uvOffset = 40;
 
     for (uint32_t submeshIndex = 0; submeshIndex < submeshCount; submeshIndex++) {
 	// submeshes are separated by a small zero gap (6 bytes observed)
@@ -77,11 +110,24 @@ MdlMesh MdlParser::load (const Project& project, const std::string& filename) {
 
 	const auto tag = readValue<uint32_t> (data, offset, filename);
 	const auto vertexBytes = readValue<uint32_t> (data, offset, filename);
+	const auto layout = getVertexLayout (tag);
 
-	// ponytail: only the tag-15 static layout is implemented; other tags (skinned
-	// variants live in CImage's puppet loader) need their strides decoded first
-	if (tag != STATIC_VERTEX_TAG || vertexBytes % STATIC_VERTEX_STRIDE != 0) {
+	if (layout.strideBytes == 0 || vertexBytes % layout.strideBytes != 0) {
 	    sLog.exception ("Unsupported MDLV vertex layout (tag ", tag, ") in ", filename);
+	}
+
+	if (mesh.strideBytes == 0) {
+	    mesh.strideBytes = layout.strideBytes;
+	    mesh.positionOffset = layout.positionOffset;
+	    mesh.normalOffset = layout.normalOffset;
+	    mesh.tangentOffset = layout.tangentOffset;
+	    mesh.uvOffset = layout.uvOffset;
+	} else if (
+	    mesh.strideBytes != layout.strideBytes || mesh.positionOffset != layout.positionOffset
+	    || mesh.normalOffset != layout.normalOffset || mesh.tangentOffset != layout.tangentOffset
+	    || mesh.uvOffset != layout.uvOffset
+	) {
+	    sLog.exception ("Mixed MDLV vertex layouts are not supported in ", filename);
 	}
 
 	if (offset + vertexBytes > data.size ()) {
@@ -114,7 +160,7 @@ MdlMesh MdlParser::load (const Project& project, const std::string& filename) {
 
 	offset += indexBytes;
 
-	const uint32_t vertexCount = vertexBytes / STATIC_VERTEX_STRIDE;
+	const uint32_t vertexCount = vertexBytes / mesh.strideBytes;
 	for (const auto index : submesh.indices) {
 	    if (index >= vertexCount) {
 		sLog.exception ("MDLV index out of range in ", filename);
