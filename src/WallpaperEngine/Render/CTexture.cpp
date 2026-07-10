@@ -270,6 +270,20 @@ uint32_t CTexture::getSpritesheetFrames () const { return this->getHeader ().spr
 
 float CTexture::getSpritesheetDuration () const { return this->getHeader ().spritesheetDuration; }
 
+size_t CTexture::getRetainedCpuBytes () const {
+    // image textures free their CPU-side buffers after the GL upload in the constructor,
+    // but the video path keeps the whole file pinned so mpv can stream from memory
+    size_t bytes = 0;
+
+    for (const auto& [index, mipmaps] : this->m_header->images) {
+	for (const auto& mipmap : mipmaps) {
+	    bytes += mipmap->uncompressedSize;
+	}
+    }
+
+    return bytes;
+}
+
 void CTexture::incrementUsageCount () const {
     if (this->m_player) {
 	this->m_player->incrementUsageCount ();

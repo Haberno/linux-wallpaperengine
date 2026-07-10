@@ -6,6 +6,8 @@ using namespace WallpaperEngine::Assets;
 
 AssetLocator::AssetLocator (ContainerUniquePtr filesystem) : m_filesystem (std::move (filesystem)) { }
 
+const std::string& AssetLocator::identity () const { return this->m_filesystem->fingerprint (); }
+
 std::string AssetLocator::shader (const std::filesystem::path& filename) const {
     try {
 	std::filesystem::path shader = filename;

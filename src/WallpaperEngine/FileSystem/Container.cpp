@@ -65,6 +65,11 @@ AdapterSharedPtr Container::mount (const std::filesystem::path& path, const std:
 	    continue;
 	}
 
+	this->m_fingerprint += mountPoint.string ();
+	this->m_fingerprint += '=';
+	this->m_fingerprint += path.string ();
+	this->m_fingerprint += ';';
+
 	return this->m_mountpoints.emplace_back (mountPoint, factory->create (path)).second;
     }
 
@@ -74,6 +79,8 @@ AdapterSharedPtr Container::mount (const std::filesystem::path& path, const std:
 }
 
 VirtualAdapter& Container::getVFS () const { return *this->m_vfs; }
+
+const std::string& Container::fingerprint () const { return this->m_fingerprint; }
 
 Adapter& Container::resolveAdapterForFile (const std::filesystem::path& path) const {
     const auto normalized = normalize_path (path);
