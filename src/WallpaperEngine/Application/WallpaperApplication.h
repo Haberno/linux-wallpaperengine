@@ -190,8 +190,6 @@ private:
 	std::vector<std::pair<std::string, Data::Assets::TextureUniquePtr>> textures {};
 	/** Failure description, empty on success */
 	std::string error {};
-	/** Time the worker spent loading, for the switch timing log */
-	int64_t loadMs = 0;
     };
 
     /**
@@ -276,6 +274,8 @@ private:
     uint64_t m_switchIdCounter = 0;
     /** Set under m_switchMutex to make the loader thread exit */
     bool m_switchWorkerStop = false;
+    /** When set, malloc_trim runs at this point to return post-switch allocator slack to the OS */
+    std::chrono::steady_clock::time_point m_pendingMallocTrim {};
 
     bool m_isPaused = false;
     bool m_screenShotTaken = false;

@@ -91,7 +91,7 @@ CScene::CScene (
 
 	const float zoom = scene->camera.projection.zoom->value->getFloat ();
 	if (zoom != 1.0f) {
-	    // ponytail: zoom untested against real WE output; implement when a wallpaper needs it
+	    // zoom is untested against real WE output; implement when a wallpaper needs it
 	    sLog.error ("Scene camera zoom ", zoom, " is not supported yet and will be ignored");
 	}
 
