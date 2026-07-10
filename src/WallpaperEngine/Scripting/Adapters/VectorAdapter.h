@@ -18,14 +18,11 @@ public:
     JSValue instantiate (Data::Model::DynamicValue& source, bool temporal);
     JSValue instantiate ();
 
-    void free (uint32_t vectorId);
-
 private:
     JSValue m_prototype;
     uint32_t m_instanceId;
     std::string m_name;
     JSClassExoticMethods m_exoticMethods;
-    std::map<uint32_t, Data::Model::DynamicValueUniquePtr> m_values;
 };
 
 extern template class VectorAdapter<2>;
