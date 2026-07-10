@@ -1,5 +1,9 @@
 #include "BrowserApp.h"
 #include "WallpaperEngine/Logging/Log.h"
+#include <sstream>
+
+#include <cstdlib>
+#include <string>
 
 using namespace WallpaperEngine::WebBrowser::CEF;
 
@@ -9,12 +13,11 @@ BrowserApp::BrowserApp (WallpaperEngine::Application::WallpaperApplication& appl
 CefRefPtr<CefBrowserProcessHandler> BrowserApp::GetBrowserProcessHandler () { return this; }
 
 void BrowserApp::OnContextInitialized () {
-    // register all the needed schemes, "wp" + the background id is going to be our scheme
-    for (const auto& [workshopId, factory] : this->getHandlerFactories ()) {
-	CefRegisterSchemeHandlerFactory (
-	    WPSchemeHandlerFactory::generateSchemeName (workshopId), static_cast<const char*> (nullptr), factory
-	);
-    }
+    // one factory for the fixed wp scheme; it resolves the wallpaper from the URL
+    // host per request, so live-swapped backgrounds are served without re-registering
+    CefRegisterSchemeHandlerFactory (
+	WPENGINE_SCHEME, static_cast<const char*> (nullptr), new WPSchemeHandlerFactory (this->getApplication ())
+    );
 }
 
 void BrowserApp::OnBeforeCommandLineProcessing (const CefString& process_type, CefRefPtr<CefCommandLine> command_line) {
@@ -36,6 +39,51 @@ void BrowserApp::OnBeforeCommandLineProcessing (const CefString& process_type, C
     command_line->AppendSwitch ("--disable-breakpad");
     command_line->AppendSwitch ("--disable-field-trial-config");
     command_line->AppendSwitch ("--no-experiments");
+    // CEF Wayland GPU-stability knobs (optional env overrides: WPE_CEF_NO_IPG/OZONE/ANGLE/EXTRA).
+    // In-process GPU avoids the standalone GPU process crashing on Wayland offscreen rendering.
+    if (std::getenv ("WPE_CEF_NO_IPG") == nullptr) {
+	command_line->AppendSwitch ("--in-process-gpu");
+    }
+
+    // On Wayland, the Wayland Ozone platform + EGL ANGLE backend keep offscreen rendering stable.
+    const char* sessionType = std::getenv ("XDG_SESSION_TYPE");
+    const char* waylandDisplay = std::getenv ("WAYLAND_DISPLAY");
+    const bool sessionIsWayland = sessionType != nullptr && std::string (sessionType) == "wayland";
+    const bool hasWaylandDisplay = waylandDisplay != nullptr && waylandDisplay[0] != '\0';
+
+    if (sessionIsWayland || hasWaylandDisplay) {
+	// Overridable for testing which backend gives stable GPU compositing
+	// (needed for CSS backdrop-filter). Defaults match the previous behaviour.
+	const char* ozEnv = std::getenv ("WPE_CEF_OZONE");
+	const char* anEnv = std::getenv ("WPE_CEF_ANGLE");
+	const std::string ozone = ozEnv != nullptr ? ozEnv : "wayland";
+	const std::string angle = anEnv != nullptr ? anEnv : "gl-egl";
+	command_line->AppendSwitchWithValue ("--ozone-platform", ozone);
+	if (angle != "skip") {
+	    command_line->AppendSwitchWithValue ("--use-angle", angle);
+	}
+	command_line->AppendSwitchWithValue ("--enable-features", "UseOzonePlatform");
+    }
+
+    // Extra CEF flags for testing GPU-stability configurations, space separated,
+    // e.g. WPE_CEF_EXTRA="--in-process-gpu --disable-gpu-sandbox".
+    if (const char* extra = std::getenv ("WPE_CEF_EXTRA")) {
+	std::string s = extra, tok;
+	std::stringstream ss (s);
+	while (ss >> tok) {
+	    std::string flag = tok;
+	    while (!flag.empty () && flag[0] == '-') {
+		flag.erase (flag.begin ());
+	    }
+	    const auto eq = flag.find ('=');
+	    if (eq == std::string::npos) {
+		command_line->AppendSwitch (flag);
+	    } else {
+		command_line->AppendSwitchWithValue (flag.substr (0, eq), flag.substr (eq + 1));
+	    }
+	}
+    }
+
     // TODO: ACTIVATE THIS IF WE EVER SUPPORT MACOS OFFICIALLY
     /*
 if (process_type.empty()) {
