@@ -4,6 +4,9 @@
 #include "WallpaperEngine/Application/ApplicationContext.h"
 #include "WallpaperEngine/Application/WallpaperApplication.h"
 #include "WallpaperEngine/Logging/Log.h"
+#include "WallpaperEngine/WebBrowser/WebBrowserContext.h"
+
+#include <cstring>
 
 WallpaperEngine::Application::WallpaperApplication* app;
 
@@ -21,6 +24,15 @@ void initLogging () {
 }
 
 int main (int argc, char* argv[]) {
+    // CEF helper processes re-launch this binary with a "--type=..." switch.
+    // Hand them to CEF before logging, argument parsing, background loading, or
+    // GL/Wayland setup, otherwise inherited CEF resource fds can be invalidated.
+    for (int i = 1; i < argc; i++) {
+	if (strncmp (argv[i], "--type=", 7) == 0) {
+	    return WallpaperEngine::WebBrowser::WebBrowserContext::executeSubprocess (argc, argv);
+	}
+    }
+
     try {
 	// if type parameter is specified, this is a subprocess, so no logging should be enabled from our side
 	bool enableLogging = true;
