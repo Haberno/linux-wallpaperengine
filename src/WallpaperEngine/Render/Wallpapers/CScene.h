@@ -5,6 +5,8 @@
 #include "WallpaperEngine/Render/CWallpaper.h"
 #include "WallpaperEngine/Scripting/ScriptEngine.h"
 
+#include <set>
+
 namespace WallpaperEngine::Render {
 class Camera;
 class CObject;
@@ -113,6 +115,7 @@ private:
     CObject* m_bloomObject = nullptr;
     // Keeps runtime-created layer data (createLayer) alive: CImage holds a const Image& into it.
     std::vector<ObjectUniquePtr> m_runtimeLayerData = {};
+    std::set<int> m_objectsInCreation = {};
     std::map<int, CObject*> m_objects = {};
     std::vector<CObject*> m_objectsByRenderOrder = {};
     std::vector<Objects::CLight*> m_lightObjects = {};
