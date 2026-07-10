@@ -154,8 +154,8 @@ struct PreprocessedIncludes {
 std::mutex sIncludeCacheMutex;
 std::unordered_map<std::string, PreprocessedIncludes> sIncludeCache;
 
-std::string buildIncludeCacheKey (const void* locator, const std::string& file, const std::string& content) {
-    std::string key = std::to_string (reinterpret_cast<uintptr_t> (locator));
+std::string buildIncludeCacheKey (const std::string& locatorIdentity, const std::string& file, const std::string& content) {
+    std::string key = locatorIdentity;
     key += '|';
     key += file;
     key += '|';
@@ -168,9 +168,9 @@ void ShaderUnit::preprocessIncludes () {
     // ponytail: temporary switch-timing instrumentation, remove after measuring
     const auto includeStart_ = std::chrono::steady_clock::now ();
 
-    // check the memo cache first, keyed on the asset locator (include resolution),
-    // the unit's file and its source text (m_preprocessed == m_content at this point)
-    const std::string cacheKey = buildIncludeCacheKey (&this->m_assetLocator, this->m_file, this->m_preprocessed);
+    // check the memo cache first, keyed on the locator's mount fingerprint (stable across
+    // engine restarts of the same project), the unit's file and its source text
+    const std::string cacheKey = buildIncludeCacheKey (this->m_assetLocator.identity (), this->m_file, this->m_preprocessed);
 
     {
 	std::lock_guard lock (sIncludeCacheMutex);

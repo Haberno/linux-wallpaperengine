@@ -66,7 +66,9 @@ size_t estimateTextureBytes (const TextureProvider& texture) {
     // formats overestimate a bit, which is fine for a soft budget
     const size_t base = static_cast<size_t> (texture.getTextureWidth (0)) * texture.getTextureHeight (0) * 4;
 
-    return base + base / 3;
+    // video textures keep the whole source file pinned in RAM for mpv to stream from,
+    // which dwarfs the GPU-side estimate and previously made them look free to cache
+    return base + base / 3 + texture.getRetainedCpuBytes ();
 }
 } // namespace
 

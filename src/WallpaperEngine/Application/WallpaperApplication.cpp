@@ -37,6 +37,7 @@
 #include <climits>
 #include <condition_variable>
 #include <deque>
+#include <malloc.h>
 #include <mutex>
 #include <cstdlib>
 #include <cstring>
@@ -602,6 +603,13 @@ void WallpaperApplication::processControlSocket () {
 		    reply = "ok\n";
 		}
 	    }
+	}
+
+	// memstats - glibc heap counters over the socket so leak hunts can run without ptrace
+	if (command == "memstats") {
+	    const auto info = mallinfo2 ();
+	    reply = "ok inuse=" + std::to_string (info.uordblks) + " free=" + std::to_string (info.fordblks)
+		+ " arena=" + std::to_string (info.arena) + " mmap=" + std::to_string (info.hblkhd) + "\n";
 	}
 
 	if (write (client, reply.c_str (), reply.size ()) < 0) {
