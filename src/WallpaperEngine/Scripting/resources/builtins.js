@@ -39,6 +39,21 @@ globalThis.MediaPlaybackEvent = globalThis.MediaPlaybackEvent || {
     return t * t * (3 - 2 * t);
   }
 
+  globalThis.WEMath = globalThis.WEMath || {
+    smoothStep: smoothStepNum,
+    mix: function (a, b, t) { return a * (1 - t) + b * t; },
+    deg2rad: function (v) { return v * DEG2RAD; },
+    rad2deg: function (v) { return v * RAD2DEG; }
+  };
+
+  globalThis.WEVector = globalThis.WEVector || {
+    vectorAngle2: function (v) { return Math.atan2(v.y, v.x) * RAD2DEG; },
+    angleVector2: function (angle) {
+      var r = angle * DEG2RAD;
+      return new Vec2(Math.cos(r), Math.sin(r));
+    }
+  };
+
   // ---- Vec2 -----------------------------------------------------------------
   if (typeof Vec2 !== 'undefined' && Vec2.prototype) {
     var P2 = Vec2.prototype;

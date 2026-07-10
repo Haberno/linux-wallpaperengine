@@ -4,7 +4,10 @@
 #include "ScriptEngine.h"
 #include "ScriptableObject.h"
 #include "WallpaperEngine/Data/Utils/ScopeGuard.h"
+#include "WallpaperEngine/Render/Camera.h"
 #include "WallpaperEngine/Render/Wallpapers/CScene.h"
+
+#include <cstdlib>
 
 using namespace WallpaperEngine::Scripting;
 
@@ -188,6 +191,30 @@ JSValue get_layer (JSContext* ctx, JSValueConst this_val, int argc, JSValueConst
 }
 
 JSValue scene_set_value (JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) { return JS_EXCEPTION; }
+
+static JSValue make_script_vec3 (JSContext* ctx, const glm::vec3& value) {
+    JSValue result = JS_NewObject (ctx);
+    JS_SetPropertyStr (ctx, result, "x", JS_NewFloat64 (ctx, value.x));
+    JS_SetPropertyStr (ctx, result, "y", JS_NewFloat64 (ctx, value.y));
+    JS_SetPropertyStr (ctx, result, "z", JS_NewFloat64 (ctx, value.z));
+    return result;
+}
+
+JSValue scene_get_camera_transforms (JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    auto* container = get_opaque (this_val);
+    const auto& camera = container->getScene ().getCamera ();
+
+    JSValue result = JS_NewObject (ctx);
+    JS_SetPropertyStr (ctx, result, "eye", make_script_vec3 (ctx, camera.getEye ()));
+    JS_SetPropertyStr (ctx, result, "center", make_script_vec3 (ctx, camera.getCenter ()));
+    JS_SetPropertyStr (ctx, result, "up", make_script_vec3 (ctx, camera.getUp ()));
+    JS_SetPropertyStr (ctx, result, "fov", JS_NewFloat64 (ctx, camera.getFov ()));
+    return result;
+}
+
+JSValue scene_set_camera_transforms (JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    return JS_UNDEFINED;
+}
 
 // thisScene.enumerateLayers() -> array of every scriptable layer in render order.
 JSValue scene_enumerate_layers (JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
@@ -419,6 +446,16 @@ SceneObject::SceneObject (ScriptEngine& engine, Render::Wallpapers::CScene& scen
     JS_DefinePropertyValueStr (
 	this->m_engine.getContext (), this->m_instance, "getLayerByID",
 	JS_NewCFunction (this->m_engine.getContext (), scene_get_layer_by_id, "getLayerByID", 1), JS_PROP_ENUMERABLE
+    );
+    JS_DefinePropertyValueStr (
+	this->m_engine.getContext (), this->m_instance, "getCameraTransforms",
+	JS_NewCFunction (this->m_engine.getContext (), scene_get_camera_transforms, "getCameraTransforms", 0),
+	JS_PROP_ENUMERABLE
+    );
+    JS_DefinePropertyValueStr (
+	this->m_engine.getContext (), this->m_instance, "setCameraTransforms",
+	JS_NewCFunction (this->m_engine.getContext (), scene_set_camera_transforms, "setCameraTransforms", 1),
+	JS_PROP_ENUMERABLE
     );
     JS_DefinePropertyValueStr (
 	this->m_engine.getContext (), this->m_instance, "getLayerIndex",
