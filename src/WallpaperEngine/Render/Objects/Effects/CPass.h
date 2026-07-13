@@ -212,6 +212,12 @@ private:
     std::shared_ptr<const TextureProvider> m_input = nullptr;
     std::shared_ptr<const TextureProvider> m_previousInput = nullptr;
     glm::vec4 m_texture0Resolution = {};
+    /**
+     * Effective object tint uploaded to shaders that use the newer g_Color4 convention.
+     * Those shaders fold opacity into the tint alpha instead of declaring g_UserAlpha,
+     * so keep a stable, pointer-backed value and refresh it before every draw.
+     */
+    glm::vec4 m_effectiveColor4 = {};
 
     GLuint m_programID = GL_NONE;
 

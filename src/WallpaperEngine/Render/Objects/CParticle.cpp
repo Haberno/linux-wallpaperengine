@@ -1744,9 +1744,9 @@ void CParticle::setupPass () {
     m_pass->setModelMatrix (&m_modelMatrix);
     m_pass->setViewProjectionMatrix (&m_viewProjectionMatrix);
 
-    // NOTE: the VAO/VBO/EBO are created lazily in setupVao on the first render: VAOs
-    // are not shared between GL contexts, so they cannot be created here when this
-    // constructor runs on the async switch worker's build context
+    // NOTE: the VAO/VBO/EBO are created lazily by uploadGeometryBuffers() on the first
+    // render: VAOs are not shared between GL contexts, so they cannot be created here
+    // when this constructor runs on the async switch worker's build context
 
     setupGeometryCallbacks ();
     setupParticleUniforms ();
@@ -1754,7 +1754,9 @@ void CParticle::setupPass () {
 
 void CParticle::setupVao () {
     GLint prevVAO = 0;
+    GLint prevArrayBuffer = 0;
     glGetIntegerv (GL_VERTEX_ARRAY_BINDING, &prevVAO);
+    glGetIntegerv (GL_ARRAY_BUFFER_BINDING, &prevArrayBuffer);
 
     glGenVertexArrays (1, &m_vao);
     glGenBuffers (1, &m_vbo);
@@ -1842,6 +1844,32 @@ void CParticle::setupVao () {
     }
 
     glBindVertexArray (prevVAO);
+    glBindBuffer (GL_ARRAY_BUFFER, prevArrayBuffer);
+}
+
+void CParticle::uploadGeometryBuffers (GLsizeiptr vertexBytes, GLsizeiptr indexBytes) {
+    // The first particle may be emitted several frames after setup. Create the GL
+    // objects before uploading; calling glBufferData while m_vbo/m_ebo are still 0
+    // is GL_INVALID_OPERATION in a core profile.
+    if (m_vao == 0) {
+	setupVao ();
+    }
+
+    GLint prevVAO = 0;
+    GLint prevArrayBuffer = 0;
+    glGetIntegerv (GL_VERTEX_ARRAY_BINDING, &prevVAO);
+    glGetIntegerv (GL_ARRAY_BUFFER_BINDING, &prevArrayBuffer);
+
+    // GL_ELEMENT_ARRAY_BUFFER is VAO state. Bind the particle VAO while updating
+    // both buffers so the upload does not detach or replace another pass's EBO.
+    glBindVertexArray (m_vao);
+    glBindBuffer (GL_ARRAY_BUFFER, m_vbo);
+    glBufferData (GL_ARRAY_BUFFER, vertexBytes, m_vertices.data (), GL_DYNAMIC_DRAW);
+    glBindBuffer (GL_ELEMENT_ARRAY_BUFFER, m_ebo);
+    glBufferData (GL_ELEMENT_ARRAY_BUFFER, indexBytes, m_indices.data (), GL_DYNAMIC_DRAW);
+
+    glBindVertexArray (prevVAO);
+    glBindBuffer (GL_ARRAY_BUFFER, prevArrayBuffer);
 }
 
 void CParticle::setupGeometryCallbacks () {
@@ -2103,17 +2131,9 @@ void CParticle::renderSprites () {
     glPushDebugGroup (GL_DEBUG_SOURCE_APPLICATION, 0, -1, str.c_str ());
 #endif
 
-    // Upload vertex and index data
-    glBindBuffer (GL_ARRAY_BUFFER, m_vbo);
-    glBufferData (
-	GL_ARRAY_BUFFER, static_cast<GLsizeiptr> (vertexIndex * SPRITE_FLOATS_PER_VERTEX * sizeof (float)),
-	m_vertices.data (), GL_DYNAMIC_DRAW
-    );
-
-    glBindBuffer (GL_ELEMENT_ARRAY_BUFFER, m_ebo);
-    glBufferData (
-	GL_ELEMENT_ARRAY_BUFFER, static_cast<GLsizeiptr> (indexOffset * sizeof (uint32_t)), m_indices.data (),
-	GL_DYNAMIC_DRAW
+    uploadGeometryBuffers (
+	static_cast<GLsizeiptr> (vertexIndex * SPRITE_FLOATS_PER_VERTEX * sizeof (float)),
+	static_cast<GLsizeiptr> (indexOffset * sizeof (uint32_t))
     );
 
     // Update matrices and uniform data
@@ -2340,17 +2360,9 @@ void CParticle::renderRope () {
     glPushDebugGroup (GL_DEBUG_SOURCE_APPLICATION, 0, -1, str.c_str ());
 #endif
 
-    // Upload vertex and index data
-    glBindBuffer (GL_ARRAY_BUFFER, m_vbo);
-    glBufferData (
-	GL_ARRAY_BUFFER, static_cast<GLsizeiptr> (vertexIndex * ROPE_FLOATS_PER_VERTEX * sizeof (float)),
-	m_vertices.data (), GL_DYNAMIC_DRAW
-    );
-
-    glBindBuffer (GL_ELEMENT_ARRAY_BUFFER, m_ebo);
-    glBufferData (
-	GL_ELEMENT_ARRAY_BUFFER, static_cast<GLsizeiptr> (indexOffset * sizeof (uint32_t)), m_indices.data (),
-	GL_DYNAMIC_DRAW
+    uploadGeometryBuffers (
+	static_cast<GLsizeiptr> (vertexIndex * ROPE_FLOATS_PER_VERTEX * sizeof (float)),
+	static_cast<GLsizeiptr> (indexOffset * sizeof (uint32_t))
     );
 
     // Update matrices and uniform data
