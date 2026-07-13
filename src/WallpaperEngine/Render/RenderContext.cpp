@@ -136,6 +136,8 @@ void RenderContext::storeTexture (const std::string& name, std::shared_ptr<const
     this->m_textureCache->store (name, std::move (texture));
 }
 
+void RenderContext::updateAllTextures () const { this->m_textureCache->updateAll (); }
+
 const std::map<std::string, std::shared_ptr<CWallpaper>>& RenderContext::getWallpapers () const {
     return this->m_wallpapers;
 }
