@@ -60,6 +60,10 @@ CPass::CPass (
 }
 
 CPass::~CPass () {
+    // release the usage counts taken in setupTextureUniforms so videos that are no
+    // longer referenced by any pass can stop decoding
+    this->adjustTextureUsageCounts (false);
+
     glDeleteVertexArrays (1, &m_vao);
     this->m_vao = GL_NONE;
 
@@ -882,6 +886,32 @@ void CPass::setupTextureUniforms () {
     }
 
     this->addUniform ("g_Texture0Resolution", &this->m_texture0Resolution);
+
+    // pin every referenced texture so video-backed effect inputs actually decode
+    this->adjustTextureUsageCounts (true);
+}
+
+void CPass::adjustTextureUsageCounts (const bool increment) const {
+    // idempotent: holds exactly one pin no matter how many times setup runs
+    if (increment == this->m_texturesUsageCounted) {
+	return;
+    }
+
+    this->m_texturesUsageCounted = increment;
+
+    for (const auto& [index, chain] : this->m_textures) {
+	for (auto cur = chain.get (); cur != nullptr; cur = cur->next.get ()) {
+	    if (cur->texture == nullptr) {
+		continue;
+	    }
+
+	    if (increment) {
+		cur->texture->incrementUsageCount ();
+	    } else {
+		cur->texture->decrementUsageCount ();
+	    }
+	}
+    }
 }
 
 void CPass::setupUniforms () {

@@ -19,13 +19,14 @@ static constexpr int InvalidVectorInstanceId = 0;
 #define VEC_OPAQUE_MAGIC 0xdeadbee0
 #define VEC_MAGIC_CHECK_EXCEPTION(container, components)                                                               \
     do {                                                                                                               \
-	if (!container || container->magic != (int)(VEC_OPAQUE_MAGIC + components)) {                                  \
-	    return JS_EXCEPTION;                                                                                       \
+	if (!(container) || (container)->magic != (int)(VEC_OPAQUE_MAGIC + (components))) {                            \
+	    return JS_ThrowTypeError (ctx, "not a Vec%d object", (int) (components));                                  \
 	}                                                                                                              \
     } while (0)
 #define VEC_MAGIC_CHECK_ERROR(container, components)                                                                   \
     do {                                                                                                               \
-	if (!container || container->magic != (int)(VEC_OPAQUE_MAGIC + components)) {                                  \
+	if (!(container) || (container)->magic != (int)(VEC_OPAQUE_MAGIC + (components))) {                            \
+	    JS_ThrowTypeError (ctx, "not a Vec%d object", (int) (components));                                         \
 	    return -1;                                                                                                 \
 	}                                                                                                              \
     } while (0)
@@ -228,7 +229,7 @@ JSValue vector_property_get (JSContext* ctx, JSValueConst obj_val, JSAtom atom, 
 	}
     }
 
-    return JS_EXCEPTION;
+    return JS_ThrowTypeError (ctx, "Vec%d has no property '%s'", (int) (components), name);
 }
 
 template JSValue vector_property_get<2> (JSContext* ctx, JSValueConst obj_val, JSAtom atom, JSValueConst receiver);
@@ -247,6 +248,7 @@ int vector_property_set (
     int tag = JS_VALUE_GET_TAG (val);
 
     if (tag != JS_TAG_INT && !JS_TAG_IS_FLOAT64 (tag)) {
+	JS_ThrowTypeError (ctx, "Vec%d component value must be a number", (int) (components));
 	return -1;
     }
 
@@ -297,6 +299,7 @@ int vector_property_set (
     }
 
     if (into == nullptr) {
+	JS_ThrowTypeError (ctx, "Vec%d has no writable property '%s'", (int) (components), name);
 	return -1;
     }
 
@@ -411,7 +414,7 @@ JSValue vector_constructor (JSContext* ctx, JSValueConst new_target, int argc, J
     auto it = vectorAdapterInstances<components>.find (magic);
 
     if (it == vectorAdapterInstances<components>.end ()) {
-	return JS_EXCEPTION;
+	return JS_ThrowInternalError (ctx, "Vec%d adapter instance not found", (int) (components));
     }
 
     JSValue result = it->second.instantiate ();
@@ -630,11 +633,11 @@ template JSValue vector_cross<3> (JSContext* ctx, JSValueConst this_val, int arg
 
 template <int components> JSValue vector_mix (JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
     if (argc != 2) {
-	return JS_EXCEPTION;
+	return JS_ThrowTypeError (ctx, "mix expects 2 arguments");
     }
 
     if (!JS_IsNumber (argv[1])) {
-	return JS_EXCEPTION;
+	return JS_ThrowTypeError (ctx, "mix amount must be a number");
     }
 
     double amount = 0.0f;
@@ -967,7 +970,7 @@ template <int components> VectorAdapter<components>::~VectorAdapter () {
 }
 
 template <int components> JSValue VectorAdapter<components>::instantiate (ScriptableObject& object) {
-    throw new std::runtime_error ("Cannot create a Vector4 instance from a ScriptableObject");
+    throw std::runtime_error ("Cannot create a vector instance from a ScriptableObject");
 }
 
 template <int components> JSValue VectorAdapter<components>::instantiate (DynamicValue& value) {

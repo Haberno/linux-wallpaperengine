@@ -73,6 +73,10 @@ namespace Render {
 	 * pre-stage textures that were parsed off the render thread.
 	 */
 	void storeTexture (const std::string& name, std::shared_ptr<const TextureProvider> texture) const;
+	/**
+	 * Ticks every texture held by the cache, see TextureCache::updateAll
+	 */
+	void updateAllTextures () const;
 	[[nodiscard]] const std::map<std::string, std::shared_ptr<CWallpaper>>& getWallpapers () const;
 	[[nodiscard]] Media::MediaSource& getMediaSource () const;
 

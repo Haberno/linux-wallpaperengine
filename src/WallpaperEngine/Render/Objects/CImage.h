@@ -118,6 +118,9 @@ private:
 	const glm::vec3& origin, const glm::vec2& size, const glm::vec3& scale, float sceneWidth, float sceneHeight
     );
     void uploadGeometryBuffers (const glm::vec2& size);
+    /** UV offset (u, v) from model.cropoffset for the copy-pass texcoords; (0,0) if unset,
+     *  no texture, or the texture is animated (spritesheet UVs already cover the full atlas). */
+    [[nodiscard]] glm::vec2 getCropOffsetUV () const;
     [[nodiscard]] bool shouldRenderFinalPass (bool isLastPass) const;
     bool configurePassTarget (
 	Effects::CPass* pass, std::shared_ptr<const CFBO>& drawTo,

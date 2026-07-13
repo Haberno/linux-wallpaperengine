@@ -72,6 +72,13 @@ private:
 	std::shared_ptr<TextureChainEntry> next;
     };
 
+    /**
+     * Pins (increment) or releases (decrement) every texture this pass references.
+     * Video textures only decode while something holds a usage count on them and
+     * CImage only pins its main texture, so effect/pass inputs must be pinned here
+     */
+    void adjustTextureUsageCounts (bool increment) const;
+
     enum UniformType {
 	Float = 0,
 	Matrix3 = 1,
@@ -205,6 +212,8 @@ private:
      * Contains the final map of textures to be used
      */
     std::map<int, std::shared_ptr<TextureChainEntry>> m_textures = {};
+    /** Whether this pass currently holds usage counts on m_textures, see adjustTextureUsageCounts */
+    mutable bool m_texturesUsageCounted = false;
 
     Render::Shaders::Shader* m_shader = nullptr;
 

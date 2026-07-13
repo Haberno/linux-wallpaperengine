@@ -124,6 +124,15 @@ void TextureCache::store (const std::string& name, std::shared_ptr<const Texture
     this->trim ();
 }
 
+void TextureCache::updateAll () const {
+    // textures only referenced as effect/pass inputs have no CImage driving their
+    // update, so tick every cached texture; update() is a no-op for static textures
+    // and for videos whose usage count is zero
+    for (const auto& entry : this->m_textureCache | std::views::values) {
+	entry.texture->update ();
+    }
+}
+
 void TextureCache::trim () {
     if (this->m_cacheBytes <= TEXTURE_CACHE_BUDGET_BYTES) {
 	return;

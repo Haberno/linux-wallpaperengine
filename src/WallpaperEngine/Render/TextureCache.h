@@ -42,6 +42,12 @@ public:
      */
     void store (const std::string& name, std::shared_ptr<const TextureProvider> texture);
 
+    /**
+     * Runs a per-frame update on every cached texture so animated textures
+     * (videos, gifs) keep decoding even when nothing else drives their update
+     */
+    void updateAll () const;
+
 private:
     /** Bookkeeping for LRU eviction */
     struct CacheEntry {
