@@ -47,12 +47,12 @@
                 "state": {
                   "type": "markdown",
                   "state": {
-                    "file": "MDL File Format.md",
+                    "file": "TODO.md",
                     "mode": "source",
                     "source": false
                   },
                   "icon": "lucide-file",
-                  "title": "MDL File Format"
+                  "title": "TODO"
                 }
               }
             ],
@@ -102,7 +102,7 @@
                   },
                   "pinned": true,
                   "icon": "terminal",
-                  "title": "Terminal: ✳ Claude Code"
+                  "title": "Terminal: sh"
                 }
               }
             ]
@@ -273,9 +273,10 @@
   },
   "active": "3969526abd643ded",
   "lastOpenFiles": [
+    "MDL File Format.md",
+    "TODO.md",
     "Shader Translation.md",
     "Parallax System.md",
-    "MDL File Format.md",
     "Home.md",
     "index.md",
     "Debugging Workflow.md",

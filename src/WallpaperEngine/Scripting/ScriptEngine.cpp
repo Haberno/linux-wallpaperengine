@@ -78,6 +78,7 @@ JSModuleDef* scriptengine_module_loader (JSContext* ctx, const char* module, voi
     const auto it = modules.find (module);
 
     if (it == modules.end ()) {
+	JS_ThrowReferenceError (ctx, "could not find module '%s'", module);
 	return nullptr;
     }
 

@@ -37,7 +37,7 @@ int wevector_init (JSContext* ctx, JSModuleDef* m) {
 // Vec2 or any {x,y}). Wallpaper Engine uses this for the camera's heading angle.
 JSValue wevector_angle2 (JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv, int magic) {
     if (argc != 1) {
-	return JS_EXCEPTION;
+	return JS_ThrowTypeError (ctx, "vectorAngle2() expects 1 argument");
     }
 
     double x = 0.0;
@@ -55,7 +55,7 @@ JSValue wevector_angle2 (JSContext* ctx, JSValueConst this_val, int argc, JSValu
 // angleVector2(angleDegrees) -> unit Vec2 pointing along that heading. Inverse of vectorAngle2.
 JSValue wevector_anglevector2 (JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv, int magic) {
     if (argc != 1) {
-	return JS_EXCEPTION;
+	return JS_ThrowTypeError (ctx, "angleVector2() expects 1 argument");
     }
 
     double angle = 0.0;

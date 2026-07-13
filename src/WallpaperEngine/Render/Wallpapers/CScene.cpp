@@ -411,26 +411,18 @@ void CScene::renderFrame (const glm::ivec4& viewport) {
     // refresh light uniform state after scripts have moved the lights
     this->updateLightState ();
 
-    // update main textures for images
-    for (const auto& cur : this->m_objectsByRenderOrder) {
-	if (!cur->is<Objects::CImage> ()) {
-	    continue;
-	}
-
-	const Objects::CImage* image = cur->as<Objects::CImage> ();
-
+    // update every cached texture instead of walking image objects: textures that
+    // are only referenced as effect/pass inputs have no CImage driving them, so
+    // video-backed effect inputs never decoded a single frame (upstream c3f526f)
 #if !NDEBUG
-	const std::string message = "Updating texture " + image->getImage ().model->filename;
-
-	glPushDebugGroup (GL_DEBUG_SOURCE_APPLICATION, 0, -1, message.c_str ());
+    glPushDebugGroup (GL_DEBUG_SOURCE_APPLICATION, 0, -1, "Updating textures");
 #endif
 
-	image->getTexture ()->update ();
+    this->getContext ().updateAllTextures ();
 
 #if !NDEBUG
-	glPopDebugGroup ();
+    glPopDebugGroup ();
 #endif
-    }
 
     // bind the vertex array
     glBindVertexArray (this->m_vaoBuffer);

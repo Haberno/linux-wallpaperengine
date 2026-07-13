@@ -108,6 +108,21 @@ private:
      * Adjusts fragment shaders that use wide texture coordinates as vec2 values in Wallpaper Engine effects.
      */
     [[nodiscard]] std::string applyFragmentTexCoordCompatibility (std::string source) const;
+    /**
+     * Makes v_TexCoord writable in fragment shaders by injecting a local variable alias at the
+     * top of main() that shadows the read-only varying input.
+     */
+    [[nodiscard]] std::string applyFragmentWritableVaryings (std::string source) const;
+    /**
+     * HLSL allows float/int values as ternary conditions; GLSL 330 requires bool.
+     * Wraps bare-identifier ternary conditions in bool() in assignment and argument contexts.
+     */
+    [[nodiscard]] std::string applyFloatTernaryCompatibility (std::string source) const;
+    /**
+     * Removes unmatched #endif directives (workshop shaders sometimes emit one extra #endif
+     * that HLSL's preprocessor silently ignores but GLSL's does not).
+     */
+    void stripOrphanedEndifs ();
 
     /**
      * Parses a COMBO value to add the proper define to the code

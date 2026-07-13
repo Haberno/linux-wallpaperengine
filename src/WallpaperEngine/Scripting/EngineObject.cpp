@@ -5,7 +5,7 @@
 #include "WallpaperEngine/Logging/Log.h"
 #include "WallpaperEngine/Render/Wallpapers/CScene.h"
 
-#include <ranges>
+#include <vector>
 
 using namespace WallpaperEngine::Scripting;
 
@@ -16,7 +16,9 @@ extern float g_Daytime;
 static uint32_t EngineInstanceId = 0;
 std::map<uint32_t, EngineObject&> engineInstances;
 
-JSValue engine_set_value (JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) { return JS_EXCEPTION; }
+JSValue engine_set_value (JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    return JS_ThrowTypeError (ctx, "Cannot assign to read-only property");
+}
 
 JSValue engine_open_user_shortcut (JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
     return JS_UNDEFINED;
@@ -59,53 +61,46 @@ JSValue engine_get_canvas_size (JSContext* ctx, JSValueConst this_val, int argc,
     return result;
 }
 
+// setTimeout/setInterval return this callable as their cancel closure (built via
+// JS_NewCFunctionData below): the timer id is captured in func_data[0] and the engine
+// instance id in the function's magic. Calling it -- real WE's documented `if (t) t();`
+// idiom -- cancels the pending timer. Called with no arguments, so it must not read argv[].
 JSValue engine_stop_interval (
     JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv, int magic, JSValueConst* func_data
 ) {
-    if (argc != 1) {
-	return JS_EXCEPTION;
-    }
+    int id = 0;
+
+    JS_ToInt32 (ctx, &id, func_data[0]);
 
     const auto it = engineInstances.find (magic);
 
-    if (it == engineInstances.end ()) {
-	return JS_EXCEPTION;
+    if (it != engineInstances.end ()) {
+	it->second.clearInterval (id);
     }
-
-    int id = 0;
-
-    JS_ToInt32 (ctx, &id, argv[0]);
-
-    it->second.clearInterval (id);
 
     return JS_UNDEFINED;
 }
 
+// mirror of engine_stop_interval for setTimeout's returned cancel closure
 JSValue engine_stop_timeout (
     JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv, int magic, JSValueConst* func_data
 ) {
-    if (argc != 1) {
-	return JS_EXCEPTION;
-    }
+    int id = 0;
+
+    JS_ToInt32 (ctx, &id, func_data[0]);
 
     const auto it = engineInstances.find (magic);
 
-    if (it == engineInstances.end ()) {
-	return JS_EXCEPTION;
+    if (it != engineInstances.end ()) {
+	it->second.clearTimeout (id);
     }
-
-    int id = 0;
-
-    JS_ToInt32 (ctx, &id, argv[0]);
-
-    it->second.clearTimeout (id);
 
     return JS_UNDEFINED;
 }
 
 JSValue engine_set_interval (JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv, int magic) {
     if (argc < 1) {
-	return JS_EXCEPTION;
+	return JS_ThrowTypeError (ctx, "setInterval() requires at least 1 argument (callback)");
     }
 
     int delay = 0;
@@ -117,13 +112,13 @@ JSValue engine_set_interval (JSContext* ctx, JSValueConst this_val, int argc, JS
     JSValue function = argv[0];
 
     if (!JS_IsFunction (ctx, function)) {
-	return JS_EXCEPTION;
+	return JS_ThrowTypeError (ctx, "setInterval() argument 1 must be a function");
     }
 
     const auto it = engineInstances.find (magic);
 
     if (it == engineInstances.end ()) {
-	return JS_EXCEPTION;
+	return JS_ThrowReferenceError (ctx, "Could not find engine instance '%d' for setInterval", magic);
     }
 
     // the callback is stored past this call, so it needs its own reference
@@ -138,7 +133,7 @@ JSValue engine_register_audio_buffers (JSContext* ctx, JSValueConst this_val, in
     const auto it = engineInstances.find (magic);
 
     if (it == engineInstances.end ()) {
-	return JS_EXCEPTION;
+	return JS_ThrowReferenceError (ctx, "Could not find engine instance '%d' for registerAudioBuffers", magic);
     }
 
     int resolution = 16;
@@ -183,7 +178,7 @@ JSValue engine_register_audio_buffers (JSContext* ctx, JSValueConst this_val, in
 
 JSValue engine_set_timeout (JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv, int magic) {
     if (argc < 1) {
-	return JS_EXCEPTION;
+	return JS_ThrowTypeError (ctx, "setTimeout() requires at least 1 argument (callback)");
     }
 
     int delay = 0;
@@ -195,13 +190,13 @@ JSValue engine_set_timeout (JSContext* ctx, JSValueConst this_val, int argc, JSV
     JSValue function = argv[0];
 
     if (!JS_IsFunction (ctx, function)) {
-	return JS_EXCEPTION;
+	return JS_ThrowTypeError (ctx, "setTimeout() argument 1 must be a function");
     }
 
     const auto it = engineInstances.find (magic);
 
     if (it == engineInstances.end ()) {
-	return JS_EXCEPTION;
+	return JS_ThrowReferenceError (ctx, "Could not find engine instance '%d' for setTimeout", magic);
     }
 
     // the callback is stored past this call, so it needs its own reference
@@ -357,37 +352,64 @@ void EngineObject::clearTimeout (uint32_t id) {
 void EngineObject::tick () {
     const auto now = std::chrono::steady_clock::now ();
 
-    // check any interval and run them if needed
-    for (auto& timeout : this->m_intervals | std::views::values) {
-	if (timeout.next > now) {
-	    continue;
+    JSContext* ctx = this->m_engine.getContext ();
+
+    // Snapshot which intervals/timeouts are due *before* calling into any JS, since a callback
+    // can reentrantly call engine.setInterval/setTimeout/clearInterval/clearTimeout on this
+    // same EngineObject (a common self-rescheduling pattern), mutating m_intervals/m_timeouts
+    // while we'd otherwise still be iterating them -- erasing the entry currently being visited
+    // (e.g. a timeout clearing itself) leaves a dangling reference and crashes on next access.
+    std::vector<uint32_t> dueIntervals;
+    for (const auto& [id, timeout] : this->m_intervals) {
+	if (timeout.next <= now) {
+	    dueIntervals.push_back (id);
 	}
-
-	timeout.next = now + timeout.duration;
-
-	JS_FreeValue (
-	    this->m_engine.getContext (), JS_Call (this->m_engine.getContext (), timeout.callback, JS_NULL, 0, nullptr)
-	);
     }
 
-    std::vector<uint32_t> removeTimeouts;
+    // check any interval and run them if needed
+    for (auto id : dueIntervals) {
+	const auto it = this->m_intervals.find (id);
+
+	if (it == this->m_intervals.end ()) {
+	    continue; // cleared reentrantly by an earlier callback this tick
+	}
+
+	it->second.next = now + it->second.duration;
+
+	// keep the callback alive across its own call: a reentrant clearInterval from within
+	// the callback would otherwise free the JSValue we're still executing
+	const JSValue callback = JS_DupValue (ctx, it->second.callback);
+	JS_FreeValue (ctx, JS_Call (ctx, callback, JS_NULL, 0, nullptr));
+	JS_FreeValue (ctx, callback);
+    }
+
+    std::vector<uint32_t> dueTimeouts;
+    for (const auto& [id, timeout] : this->m_timeouts) {
+	if (timeout.next <= now) {
+	    dueTimeouts.push_back (id);
+	}
+    }
 
     // check any timeout and run them if needed
-    for (auto& [id, timeout] : this->m_timeouts) {
-	if (timeout.next > now) {
-	    continue;
+    for (auto id : dueTimeouts) {
+	const auto it = this->m_timeouts.find (id);
+
+	if (it == this->m_timeouts.end ()) {
+	    continue; // cleared reentrantly by an earlier callback this tick
 	}
 
-	JS_FreeValue (
-	    this->m_engine.getContext (), JS_Call (this->m_engine.getContext (), timeout.callback, JS_NULL, 0, nullptr)
-	);
+	const JSValue callback = JS_DupValue (ctx, it->second.callback);
+	JS_FreeValue (ctx, JS_Call (ctx, callback, JS_NULL, 0, nullptr));
+	JS_FreeValue (ctx, callback);
 
-	JS_FreeValue (this->m_engine.getContext (), timeout.callback);
+	// the callback may have already cleared this exact timeout (self-clearing pattern);
+	// re-lookup rather than reusing `it`, which erase() may have invalidated, and only
+	// free/erase what's still actually there
+	const auto current = this->m_timeouts.find (id);
 
-	removeTimeouts.push_back (id);
-    }
-
-    for (auto id : removeTimeouts) {
-	this->m_timeouts.erase (id);
+	if (current != this->m_timeouts.end ()) {
+	    JS_FreeValue (ctx, current->second.callback);
+	    this->m_timeouts.erase (current);
+	}
     }
 }
