@@ -509,6 +509,12 @@ void CPass::render () {
 
     this->setupRenderFramebuffer ();
     this->setupRenderTexture ();
+    // genericimage3/4 (and VERSION-enabled genericimage2) encode object opacity in
+    // g_Color4.a and do not expose g_UserAlpha. Refresh the combined value here so
+    // live property changes affect those shaders without double-applying alpha to
+    // older shaders that consume g_UserAlpha directly.
+    this->m_effectiveColor4 = this->m_renderable.getColor4 ();
+    this->m_effectiveColor4.a *= this->m_renderable.getUserAlpha ();
     this->setupRenderUniforms ();
     this->setupRenderReferenceUniforms ();
     this->setupRenderAttributes ();
@@ -903,14 +909,19 @@ void CPass::setupUniforms () {
 	this->addUniform ("g_LPoint_Origin", lights.pointOrigins.data (), lights.pointCount);
 	this->addUniform ("g_LPoint_Color", lights.pointColors.data (), lights.pointCount);
     }
-    // register variables like brightness and alpha with some default value
-    this->addUniform ("g_Brightness", renderable.getBrightness ());
-    this->addUniform ("g_UserAlpha", renderable.getUserAlpha ());
-    this->addUniform ("g_Alpha", renderable.getAlpha ());
-    this->addUniform ("g_Color", renderable.getColor ());
-    this->addUniform ("g_Color4", renderable.getColor4 ());
+    // register variables like brightness and alpha by pointer so the values are re-read every
+    // frame: they can be driven by user-property bindings (e.g. alpha bound to a "brightness"
+    // slider) that are applied after pass construction, so a by-value copy here would freeze the
+    // pre-binding defaults (alpha = 1.0) and render e.g. darkening overlays fully opaque
+    this->addUniform ("g_Brightness", &renderable.getBrightness ());
+    this->addUniform ("g_UserAlpha", &renderable.getUserAlpha ());
+    this->addUniform ("g_Alpha", &renderable.getAlpha ());
+    this->addUniform ("g_Color", &renderable.getColor ());
+    this->m_effectiveColor4 = renderable.getColor4 ();
+    this->m_effectiveColor4.a *= renderable.getUserAlpha ();
+    this->addUniform ("g_Color4", &this->m_effectiveColor4);
     if (!this->m_uniforms.contains ("g_CompositeColor")) {
-	this->addUniform ("g_CompositeColor", renderable.getCompositeColor ());
+	this->addUniform ("g_CompositeColor", &renderable.getCompositeColor ());
     }
     // add some external variables
     this->addUniform ("g_Time", &g_Time);
