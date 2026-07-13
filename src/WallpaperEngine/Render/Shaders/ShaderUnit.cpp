@@ -4,6 +4,7 @@
 #include <exception>
 #include <mutex>
 #include <regex>
+#include <set>
 #include <stack>
 #include <string>
 #include <unordered_map>
@@ -86,6 +87,7 @@ void ShaderUnit::preprocess () {
     this->preprocessRequires ();
     this->preprocessVariables ();
     this->resolveComboRequires ();
+    this->stripOrphanedEndifs ();
 
     // replace gl_FragColor with the equivalent
     const std::string from = "gl_FragColor";
@@ -494,10 +496,23 @@ std::string ShaderUnit::applyLinkedVaryingCompatibility (std::string source) con
 	linkedOffset += varyingMatch.position () + varyingMatch.length ();
 
 	const std::regex vertexVec2Decl ("\\bvarying\\s+vec2\\s+" + name + "\\s*;");
-	if (!std::regex_search (source, vertexVec2Decl)) {
+	const std::regex vertexVec4Decl ("\\bvarying\\s+vec4\\s+" + name + "\\s*;");
+	const bool vertexHasVec2 = std::regex_search (source, vertexVec2Decl);
+	const bool vertexHasVec4 = std::regex_search (source, vertexVec4Decl);
+
+	// Skip entirely if this varying isn't declared in the vertex shader at all.
+	if (!vertexHasVec2 && !vertexHasVec4) {
 	    continue;
 	}
 
+	// If the vertex shader already declares this varying as vec4 (even inside a combo
+	// branch), the shader handles its own type variants — leave it untouched. The
+	// second pass below handles any vec4->vec2 read contexts independently.
+	if (vertexHasVec4) {
+	    continue;
+	}
+
+	// Upgrade vec2 declaration to vec4 and wrap bare assignments.
 	source = std::regex_replace (source, vertexVec2Decl, "varying vec4 " + name + ";");
 
 	const std::regex assignment ("(^|\\n)([ \\t]*)" + name + "\\s*=\\s*([^;\\n]+);");
@@ -511,6 +526,85 @@ std::string ShaderUnit::applyLinkedVaryingCompatibility (std::string source) con
 	    const size_t position = offset + assignmentMatch.position ();
 	    source.replace (position, assignmentMatch.length (), replacement);
 	    offset = position + replacement.length ();
+	}
+
+	// After upgrading the declaration and wrapping assignments, any remaining
+	// unswizzled read of `name` in an arithmetic expression is now a vec4
+	// where the surrounding code expects a vec2. Add .xy to each such read.
+	//
+	// A "read context" occurrence is: \bname\b NOT followed by [.([=]
+	// (which would indicate a swizzle, index, call, or assignment LHS)
+	// and NOT immediately preceded by a GLSL type keyword (declaration).
+	static const auto isWordChar = [] (char c) {
+	    return std::isalnum (static_cast<unsigned char> (c)) || c == '_';
+	};
+	static const auto isGlslType = [] (const std::string& w) {
+	    static const std::set<std::string> types = {
+		"vec2", "vec3", "vec4", "float", "int", "uint", "bool",
+		"mat2", "mat3", "mat4", "mat4x3", "mat3x3",
+		"sampler2D", "uvec4", "ivec2", "ivec3", "ivec4",
+		"varying", "uniform", "attribute", "in", "out",
+	    };
+	    return types.count (w) > 0;
+	};
+
+	size_t pos = 0;
+	while ((pos = source.find (name, pos)) != std::string::npos) {
+	    const size_t afterName = pos + name.size ();
+
+	    // Must be a word boundary on both sides
+	    if ((pos > 0 && isWordChar (source[pos - 1])) ||
+		(afterName < source.size () && isWordChar (source[afterName]))) {
+		pos = afterName;
+		continue;
+	    }
+
+	    // Skip if followed by swizzle '.', index '[', call '(', or assignment '='
+	    size_t j = afterName;
+	    while (j < source.size () && source[j] == ' ') j++;
+	    const char nextChar = j < source.size () ? source[j] : '\0';
+	    if (nextChar == '.' || nextChar == '[' || nextChar == '(' || nextChar == '=') {
+		pos = afterName;
+		continue;
+	    }
+
+	    // Skip if immediately preceded by a GLSL type keyword (it's a declaration)
+	    size_t k = pos;
+	    while (k > 0 && source[k - 1] == ' ') k--;
+	    if (k > 0 && isWordChar (source[k - 1])) {
+		size_t wordEnd = k;
+		while (k > 0 && isWordChar (source[k - 1])) k--;
+		if (isGlslType (source.substr (k, wordEnd - k))) {
+		    pos = afterName;
+		    continue;
+		}
+	    }
+
+	    source.insert (afterName, ".xy");
+	    pos = afterName + 3;
+	}
+    }
+
+    // SECOND PASS: fix unswizzled reads of vec4 identifiers in vec2 assignment contexts.
+    // Covers: (1) varyings already declared as vec4 in the vertex shader,
+    //         (2) local vec4 variables (e.g. from mat4 multiply results).
+    // WE's own GLSL compiler permits implicit vec4->vec2 truncation; standard glslang
+    // does not — so we must insert explicit .xy swizzles.
+    {
+	static const std::regex anyVec4Re (R"(\bvec4\s+([A-Za-z_][A-Za-z0-9_]*)\b)");
+	std::sregex_iterator it (source.cbegin (), source.cend (), anyVec4Re);
+	std::sregex_iterator end;
+	std::set<std::string> processed;
+	for (; it != end; ++it) {
+	    const std::string vname = (*it)[1].str ();
+	    if (!processed.insert (vname).second) continue;
+	    // Find lines of the form "vec2 var = ... vname ..." where vname has no swizzle.
+	    // Lazy [^\n]*? so we find the first unswizzled occurrence after the '='.
+	    const std::regex vec2Line ("(vec2\\s+\\w+\\s*=[^\\n]*?)\\b(" + vname + ")\\b(?![.\\[\\(])");
+	    const std::string patched = std::regex_replace (source, vec2Line, "$1$2.xy");
+	    if (patched != source) {
+		source = patched;
+	    }
 	}
     }
 
@@ -556,6 +650,123 @@ std::string ShaderUnit::applyFragmentTexCoordCompatibility (std::string source) 
     }
 
     return source;
+}
+
+std::string ShaderUnit::applyFragmentWritableVaryings (std::string source) const {
+    if (this->m_type != GLSLContext::UnitType_Fragment) {
+	return source;
+    }
+
+    // Only apply when the fragment shader actually WRITES to v_TexCoord
+    // (matches v_TexCoord = and v_TexCoord.xy = etc., but not ==).
+    // Shaders that only read v_TexCoord don't need the writable local alias.
+    static const std::regex writePattern (R"(\bv_TexCoord(?:\.[xyzwrgba]+)?\s*=[^=])");
+    if (!std::regex_search (source, writePattern)) {
+	return source;
+    }
+
+    // Build an uppercase combo map so we can evaluate #if/#ifdef/#ifndef guards the same way
+    // the GLSL compiler does (combos are emitted as uppercase #defines). Insertion order follows
+    // this unit's own combo precedence (see resolveComboRequires's `effective` lambda): promoted
+    // > override > material > discovered, since emplace keeps the first value seen per key.
+    std::map<std::string, int> upperCombos;
+    const auto insertUpper = [&] (const ComboMap& map) {
+	for (const auto& [k, v] : map) {
+	    std::string up;
+	    std::ranges::transform (k, std::back_inserter (up), ::toupper);
+	    upperCombos.emplace (up, v);
+	}
+    };
+    insertUpper (this->m_promotedCombos);
+    insertUpper (this->m_overrideCombos);
+    insertUpper (this->m_combos);
+    insertUpper (this->m_discoveredCombos);
+
+    // Walk the source line-by-line tracking #if/#else/#endif to find the
+    // varying <type> v_TexCoord declaration in the ACTIVE combo branch.
+    static const std::regex ifRe     (R"(^\s*#if\s+(\w+))");
+    static const std::regex ifdefRe  (R"(^\s*#ifdef\s+(\w+))");
+    static const std::regex ifndefRe (R"(^\s*#ifndef\s+(\w+))");
+    static const std::regex elseRe   (R"(^\s*#else\b)");
+    static const std::regex endifRe  (R"(^\s*#endif\b)");
+    static const std::regex varyDecl (R"(\bvarying\s+(\S+)\s+v_TexCoord\s*;)");
+
+    std::vector<bool> activeStack = {true};
+    std::string foundType;
+    size_t pos = 0;
+
+    while (pos < source.size () && foundType.empty ()) {
+	const size_t lineEnd = source.find ('\n', pos);
+	const size_t end     = (lineEnd == std::string::npos) ? source.size () : lineEnd;
+	const std::string line = source.substr (pos, end - pos);
+	std::smatch m;
+
+	if (std::regex_search (line, m, ifRe)) {
+	    std::string up;
+	    std::ranges::transform (m[1].str (), std::back_inserter (up), ::toupper);
+	    const int val = upperCombos.count (up) ? upperCombos.at (up) : 0;
+	    activeStack.push_back (activeStack.back () && (val != 0));
+	} else if (std::regex_search (line, m, ifdefRe)) {
+	    std::string up;
+	    std::ranges::transform (m[1].str (), std::back_inserter (up), ::toupper);
+	    activeStack.push_back (activeStack.back () && (upperCombos.count (up) > 0));
+	} else if (std::regex_search (line, m, ifndefRe)) {
+	    std::string up;
+	    std::ranges::transform (m[1].str (), std::back_inserter (up), ::toupper);
+	    activeStack.push_back (activeStack.back () && (upperCombos.count (up) == 0));
+	} else if (std::regex_search (line, elseRe)) {
+	    if (activeStack.size () >= 2) {
+		const bool parentActive = activeStack[activeStack.size () - 2];
+		activeStack.back () = parentActive && !activeStack.back ();
+	    }
+	} else if (std::regex_search (line, endifRe)) {
+	    if (activeStack.size () > 1) {
+		activeStack.pop_back ();
+	    }
+	} else if (activeStack.back () && std::regex_search (line, m, varyDecl)) {
+	    foundType = m[1].str ();
+	}
+
+	pos = (lineEnd == std::string::npos) ? source.size () : lineEnd + 1;
+    }
+
+    if (foundType.empty ()) {
+	return source;
+    }
+
+    // Inject a local writable alias at the top of main().
+    // GLSL scoping: the RHS v_TexCoord resolves to the outer-scope (read-only) input
+    // before the local variable enters scope — the local copy is then freely writable.
+    const size_t mainPos = source.find ("void main");
+    if (mainPos == std::string::npos) {
+	return source;
+    }
+    const size_t bracePos = source.find ('{', mainPos);
+    if (bracePos == std::string::npos) {
+	return source;
+    }
+
+    source.insert (bracePos + 1, "\n    " + foundType + " v_TexCoord = v_TexCoord;");
+    return source;
+}
+
+std::string ShaderUnit::applyFloatTernaryCompatibility (std::string source) const {
+    // HLSL allows float/int as ternary conditions; GLSL 330 requires bool.
+    // Match a bare identifier (no operators before it) used as a ternary condition in:
+    //   assignment:    = ident ?
+    //   return:        return ident ?
+    //   argument:      ( ident ?
+    //   comma-sep:     , ident ?
+    // and wrap it with bool() so GLSL accepts it.  bool(bool_val) is a no-op, so
+    // wrapping an already-bool identifier is harmless.
+    static const std::regex floatTernaryRe (
+        R"(((?:=\s*|return\s+|,\s*|\(\s*))([A-Za-z_][A-Za-z0-9_]*)\s*\?)"
+    );
+    const std::string patched = std::regex_replace (source, floatTernaryRe, "$1bool($2) ?");
+    if (patched != source) {
+	sLog.out ("Applied float-ternary bool() cast in ", this->m_file);
+    }
+    return patched;
 }
 
 void ShaderUnit::parseComboConfiguration (const std::string& content, const int defaultValue) {
@@ -812,6 +1023,40 @@ void ShaderUnit::parseParameterConfiguration (
     }
 }
 
+void ShaderUnit::stripOrphanedEndifs () {
+    // Workshop shaders (authored for HLSL's lenient preprocessor) sometimes emit one extra
+    // #endif that has no matching #if.  GLSL's preprocessor rejects these.  Walk the shader
+    // line-by-line, track depth, and blank-out any #endif whose depth would underflow.
+    int depth = 0;
+    size_t pos = 0;
+
+    while (pos < this->m_preprocessed.size ()) {
+        const size_t lineEnd = this->m_preprocessed.find ('\n', pos);
+        const size_t end = (lineEnd == std::string::npos) ? this->m_preprocessed.size () : lineEnd;
+
+        // Trim leading whitespace for the directive check only
+        size_t tok = pos;
+        while (tok < end && (this->m_preprocessed [tok] == ' ' || this->m_preprocessed [tok] == '\t')) {
+            tok++;
+        }
+
+        const size_t remaining = end - tok;
+        if (remaining >= 3 && this->m_preprocessed.substr (tok, 3) == "#if") {
+            depth++;
+        } else if (remaining >= 6 && this->m_preprocessed.substr (tok, 6) == "#endif") {
+            if (depth == 0) {
+                // orphaned #endif — comment it out
+                this->m_preprocessed [tok] = '/';
+                this->m_preprocessed [tok + 1] = '/';
+            } else {
+                depth--;
+            }
+        }
+
+        pos = (lineEnd == std::string::npos) ? this->m_preprocessed.size () : lineEnd + 1;
+    }
+}
+
 const ComboMap& ShaderUnit::getCombos () const { return this->m_combos; }
 
 const ComboMap& ShaderUnit::getDiscoveredCombos () const { return this->m_discoveredCombos; }
@@ -914,7 +1159,7 @@ const std::string& ShaderUnit::compile () {
     }
 
     // this should be the rest of the shader
-    // both compat passes are pure functions of (unit type, preprocessed source,
+    // all compat passes are pure functions of (unit type, preprocessed source,
     // linked preprocessed source); memoized like GLSLContext::toGlsl so stock
     // shaders shared between wallpapers and switch-backs skip the regex passes.
     // Guarded by a mutex so a future worker-thread caller stays safe.
@@ -940,7 +1185,10 @@ const std::string& ShaderUnit::compile () {
     }
 
     std::string compatResult =
-	this->applyFragmentTexCoordCompatibility (this->applyLinkedVaryingCompatibility (this->m_preprocessed));
+	this->applyFragmentTexCoordCompatibility (
+	    this->applyFragmentWritableVaryings (
+		this->applyFloatTernaryCompatibility (
+		    this->applyLinkedVaryingCompatibility (this->m_preprocessed))));
     this->m_final += compatResult;
 
     {

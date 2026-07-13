@@ -1,11 +1,13 @@
 #include "ColorModule.h"
 
+#include "WallpaperEngine/Data/Utils/ScopeGuard.h"
 #include "WallpaperEngine/Scripting/ScriptEngine.h"
 
 #include <algorithm>
 #include <cmath>
 
 using namespace WallpaperEngine::Scripting::Modules;
+using WallpaperEngine::Data::Utils::ScopeGuard;
 
 #define min_f(a, b, c) (fminf (a, fminf (b, c)))
 #define max_f(a, b, c) (fmaxf (a, fmaxf (b, c)))
@@ -49,16 +51,22 @@ int wecolor_init (JSContext* ctx, JSModuleDef* m) {
 
 JSValue wecolor_rgb2hsv (JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv, int magic) {
     if (argc != 1) {
-	return JS_EXCEPTION;
+	return JS_ThrowTypeError (ctx, "rgb2hsv() expects 1 argument");
     }
 
     if (JS_VALUE_GET_TAG (argv[0]) != JS_TAG_OBJECT) {
-	return JS_EXCEPTION;
+	return JS_ThrowTypeError (ctx, "rgb2hsv() expects an object with x, y, z properties");
     }
 
     JSValue x = JS_GetPropertyStr (ctx, argv[0], "x");
     JSValue y = JS_GetPropertyStr (ctx, argv[0], "y");
     JSValue z = JS_GetPropertyStr (ctx, argv[0], "z");
+
+    ScopeGuard guard ([ctx, x, y, z] () {
+	JS_FreeValue (ctx, x);
+	JS_FreeValue (ctx, y);
+	JS_FreeValue (ctx, z);
+    });
 
     double xVal = 0.0f, yVal = 0.0f, zVal = 0.0f;
 
@@ -116,16 +124,22 @@ JSValue wecolor_rgb2hsv (JSContext* ctx, JSValueConst this_val, int argc, JSValu
 
 JSValue wecolor_hsv2rgb (JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv, int magic) {
     if (argc != 1) {
-	return JS_EXCEPTION;
+	return JS_ThrowTypeError (ctx, "hsv2rgb() expects 1 argument");
     }
 
     if (JS_VALUE_GET_TAG (argv[0]) != JS_TAG_OBJECT) {
-	return JS_EXCEPTION;
+	return JS_ThrowTypeError (ctx, "hsv2rgb() expects an object with x, y, z properties");
     }
 
     JSValue x = JS_GetPropertyStr (ctx, argv[0], "x");
     JSValue y = JS_GetPropertyStr (ctx, argv[0], "y");
     JSValue z = JS_GetPropertyStr (ctx, argv[0], "z");
+
+    ScopeGuard guard ([ctx, x, y, z] () {
+	JS_FreeValue (ctx, x);
+	JS_FreeValue (ctx, y);
+	JS_FreeValue (ctx, z);
+    });
 
     double xVal = 0.0f, yVal = 0.0f, zVal = 0.0f;
 
@@ -189,11 +203,11 @@ JSValue wecolor_hsv2rgb (JSContext* ctx, JSValueConst this_val, int argc, JSValu
 
 JSValue wecolor_normalizecolor (JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv, int magic) {
     if (argc != 1) {
-	return JS_EXCEPTION;
+	return JS_ThrowTypeError (ctx, "normalizeColor() expects 1 argument");
     }
 
     if (JS_VALUE_GET_TAG (argv[0]) != JS_TAG_OBJECT) {
-	return JS_EXCEPTION;
+	return JS_ThrowTypeError (ctx, "normalizeColor() expects an object with x, y, z properties");
     }
 
     const auto it = colorModules.find (magic);
@@ -206,8 +220,14 @@ JSValue wecolor_normalizecolor (JSContext* ctx, JSValueConst this_val, int argc,
     JSValue y = JS_GetPropertyStr (ctx, argv[0], "y");
     JSValue z = JS_GetPropertyStr (ctx, argv[0], "z");
 
+    ScopeGuard guard ([ctx, x, y, z] () {
+	JS_FreeValue (ctx, x);
+	JS_FreeValue (ctx, y);
+	JS_FreeValue (ctx, z);
+    });
+
     if (!JS_IsNumber (x) || !JS_IsNumber (y) || !JS_IsNumber (z)) {
-	return JS_EXCEPTION;
+	return JS_ThrowTypeError (ctx, "normalizeColor() argument must have numeric x, y, z properties");
     }
 
     double xVal = 0.0f, yVal = 0.0f, zVal = 0.0f;
@@ -227,11 +247,11 @@ JSValue wecolor_normalizecolor (JSContext* ctx, JSValueConst this_val, int argc,
 
 JSValue wecolor_expandcolor (JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv, int magic) {
     if (argc != 1) {
-	return JS_EXCEPTION;
+	return JS_ThrowTypeError (ctx, "expandColor() expects 1 argument");
     }
 
     if (JS_VALUE_GET_TAG (argv[0]) != JS_TAG_OBJECT) {
-	return JS_EXCEPTION;
+	return JS_ThrowTypeError (ctx, "expandColor() expects an object with x, y, z properties");
     }
 
     const auto it = colorModules.find (magic);
@@ -244,8 +264,14 @@ JSValue wecolor_expandcolor (JSContext* ctx, JSValueConst this_val, int argc, JS
     JSValue y = JS_GetPropertyStr (ctx, argv[0], "y");
     JSValue z = JS_GetPropertyStr (ctx, argv[0], "z");
 
+    ScopeGuard guard ([ctx, x, y, z] () {
+	JS_FreeValue (ctx, x);
+	JS_FreeValue (ctx, y);
+	JS_FreeValue (ctx, z);
+    });
+
     if (!JS_IsNumber (x) || !JS_IsNumber (y) || !JS_IsNumber (z)) {
-	return JS_EXCEPTION;
+	return JS_ThrowTypeError (ctx, "expandColor() argument must have numeric x, y, z properties");
     }
 
     double xVal = 0.0f, yVal = 0.0f, zVal = 0.0f;

@@ -540,6 +540,7 @@ ParticleUniquePtr ObjectParser::parseParticle (const JSON& it, const Project& pr
 		    .nopadding = false,
 		    .width = std::nullopt,
 		    .height = std::nullopt,
+		    .cropoffset = std::nullopt,
 		    .puppet = std::nullopt,
 		});
 	    } catch (std::runtime_error& e) {

@@ -51,7 +51,7 @@ JSValue scriptableobject_property_get (JSContext* ctx, JSValueConst obj_val, JSA
     auto* container = static_cast<OpaqueScriptableObjectAdapter*> (JS_GetAnyOpaque (obj_val, &classId));
 
     if (!container || container->magic != SCRIPTABLE_OPAQUE_MAGIC) {
-	return JS_EXCEPTION;
+	return JS_ThrowTypeError (ctx, "invalid receiver for property access");
     }
 
     const char* name = JS_AtomToCString (ctx, atom);
@@ -93,6 +93,7 @@ int scriptableobject_property_set (
     auto* container = static_cast<OpaqueScriptableObjectAdapter*> (JS_GetAnyOpaque (obj_val, &classId));
 
     if (!container || container->magic != SCRIPTABLE_OPAQUE_MAGIC) {
+	JS_ThrowTypeError (ctx, "invalid receiver for property assignment");
 	return -1;
     }
 

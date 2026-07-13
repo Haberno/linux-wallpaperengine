@@ -138,7 +138,7 @@ JSValue get_cameraparallaxmouseinfluence (JSContext* ctx, JSValueConst this_val,
 
 JSValue get_layer (JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
     if (argc != 1) {
-	return JS_EXCEPTION;
+	return JS_ThrowTypeError (ctx, "getLayer() expects exactly one argument");
     }
 
     auto* container = get_opaque (this_val);
@@ -187,10 +187,12 @@ JSValue get_layer (JSContext* ctx, JSValueConst this_val, int argc, JSValueConst
 	}
     }
 
-    return JS_EXCEPTION;
+    return JS_ThrowTypeError (ctx, "getLayer() argument must be a number or string");
 }
 
-JSValue scene_set_value (JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) { return JS_EXCEPTION; }
+JSValue scene_set_value (JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    return JS_ThrowTypeError (ctx, "Cannot assign to read-only property");
+}
 
 static JSValue make_script_vec3 (JSContext* ctx, const glm::vec3& value) {
     JSValue result = JS_NewObject (ctx);
@@ -237,7 +239,7 @@ JSValue scene_enumerate_layers (JSContext* ctx, JSValueConst this_val, int argc,
 // thisScene.getLayerByID(id) -> the layer whose object id matches (id given as a string), or undefined.
 JSValue scene_get_layer_by_id (JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
     if (argc != 1) {
-	return JS_EXCEPTION;
+	return JS_ThrowTypeError (ctx, "getLayerByID() expects exactly one argument");
     }
 
     auto* container = get_opaque (this_val);
@@ -265,7 +267,7 @@ JSValue scene_get_layer_by_id (JSContext* ctx, JSValueConst this_val, int argc, 
 // thisScene.getLayerIndex(layer) -> index of the layer in the scriptable render order, or -1.
 JSValue scene_get_layer_index (JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
     if (argc != 1) {
-	return JS_EXCEPTION;
+	return JS_ThrowTypeError (ctx, "getLayerIndex() expects one argument");
     }
 
     auto* container = get_opaque (this_val);

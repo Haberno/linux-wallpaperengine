@@ -35,7 +35,9 @@ JSValue get_cursor_left_down (JSContext* ctx, JSValueConst this_val, int argc, J
     return JS_NewBool (ctx, false);
 }
 
-JSValue input_set_value (JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) { return JS_EXCEPTION; }
+JSValue input_set_value (JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    return JS_ThrowTypeError (ctx, "Cannot assign to read-only property");
+}
 
 InputObject::InputObject (ScriptEngine& engine, Render::Wallpapers::CScene& scene) :
     m_scene (scene), m_engine (engine), m_classId (0) {
