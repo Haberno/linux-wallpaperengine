@@ -206,6 +206,7 @@ private:
      * them on the render thread instead of the worker's build context.
      */
     void setupVao ();
+    void uploadGeometryBuffers (GLsizeiptr vertexBytes, GLsizeiptr indexBytes);
 
     // OpenGL buffers
     GLuint m_vao { 0 };

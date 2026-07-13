@@ -210,6 +210,12 @@ void WaylandOpenGLDriver::initEGL () {
 	3,
 	EGL_CONTEXT_OPENGL_PROFILE_MASK_KHR,
 	EGL_CONTEXT_OPENGL_CORE_PROFILE_BIT_KHR,
+#if !NDEBUG
+	// debug context so KHR_debug messages carry the driver's explanation for each GL error;
+	// NVIDIA generates no messages at all on non-debug contexts
+	EGL_CONTEXT_FLAGS_KHR,
+	EGL_CONTEXT_OPENGL_DEBUG_BIT_KHR,
+#endif
 	EGL_NONE,
     };
 
@@ -239,6 +245,10 @@ bool WaylandOpenGLDriver::makeBuildContextCurrent () {
 	    3,
 	    EGL_CONTEXT_OPENGL_PROFILE_MASK_KHR,
 	    EGL_CONTEXT_OPENGL_CORE_PROFILE_BIT_KHR,
+#if !NDEBUG
+	    EGL_CONTEXT_FLAGS_KHR,
+	    EGL_CONTEXT_OPENGL_DEBUG_BIT_KHR,
+#endif
 	    EGL_NONE,
 	};
 

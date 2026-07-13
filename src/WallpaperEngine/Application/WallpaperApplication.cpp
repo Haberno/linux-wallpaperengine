@@ -1070,6 +1070,17 @@ void WallpaperApplication::takeScreenshot (const std::filesystem::path& filename
 	const auto bufferSize = readWidth * readHeight * 3;
 	auto* buffer = new uint8_t[bufferSize];
 
+	// drain any errors accumulated during rendering: glGetError reports anything raised
+	// since the last check, so a stale error from a draw call earlier in the frame would
+	// otherwise be misattributed to the readback below and silently discard the capture
+	for (int i = 0; i < 8; i++) {
+	    const GLenum pending = glGetError ();
+	    if (pending == GL_NO_ERROR) {
+		break;
+	    }
+	    sLog.error ("Pending OpenGL error raised during rendering (not readback): ", pending);
+	}
+
 	// read the FBO data into the pixel buffer
 	glPixelStorei (GL_PACK_ALIGNMENT, 1);
 	if (GLEW_VERSION_4_5) {
@@ -1302,6 +1313,9 @@ void WallpaperApplication::prepareOutputs () {
 void WallpaperApplication::setupOpenGLDebugging () {
 #if !NDEBUG
     glDebugMessageCallback (CustomGLDebugCallback, nullptr);
+    // GL_DEBUG_OUTPUT defaults to disabled in non-debug contexts (and our EGL context is not
+    // created with the debug flag), so the callback never fires without enabling it explicitly
+    glEnable (GL_DEBUG_OUTPUT);
     glEnable (GL_DEBUG_OUTPUT_SYNCHRONOUS);
 #endif
 }
