@@ -39,13 +39,6 @@ public:
     void update () const override;
     bool isReady () const override;
 
-    /**
-     * Reallocates this FBO's texture storage in place, keeping the same GL texture/framebuffer
-     * IDs (and thus the same identity for anyone holding a shared_ptr<const CFBO> to this
-     * object, e.g. CPass destinations captured at setup time). No-op if the size is unchanged.
-     */
-    void resize (uint32_t realWidth, uint32_t realHeight, uint32_t textureWidth, uint32_t textureHeight);
-
 private:
     /**
      * Creates the framebuffer object on first use. Framebuffers are container objects
