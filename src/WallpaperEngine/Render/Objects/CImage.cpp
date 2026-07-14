@@ -277,13 +277,8 @@ CImage::CImage (Wallpapers::CScene& scene, const Image& image) :
 	size.y = static_cast<float> (this->getImage ().model->height.value ());
     }
 
-    // autosize: mesh quad uses the texture's native pixel dimensions
-    if (this->getImage ().model->autosize && this->m_texture != nullptr) {
-	size.x = static_cast<float> (this->m_texture->getRealWidth ());
-	size.y = static_cast<float> (this->m_texture->getRealHeight ());
-    }
-
     // fullscreen layers should use the whole projection's size
+    // TODO: WHAT SHOULD AUTOSIZE DO?
     if (this->getImage ().model->fullscreen) {
 	size = { scene_width, scene_height };
 	origin = { scene_width / 2, scene_height / 2, 0 };
@@ -375,12 +370,6 @@ CImage::CImage (Wallpapers::CScene& scene, const Image& image) :
 	width = 1.0f;
 	height = 1.0f;
     }
-
-    const glm::vec2 cropOffset = this->getCropOffsetUV ();
-    x += cropOffset.x;
-    y += cropOffset.y;
-    width += cropOffset.x;
-    height += cropOffset.y;
 
     GLfloat realWidth = size.x;
     GLfloat realHeight = size.y;
@@ -1470,13 +1459,6 @@ void CImage::uploadGeometryBuffers (const glm::vec2& size) {
 
     float x = 0.0f;
     float y = 0.0f;
-
-    const glm::vec2 cropOffset = this->getCropOffsetUV ();
-    x += cropOffset.x;
-    y += cropOffset.y;
-    width += cropOffset.x;
-    height += cropOffset.y;
-
     GLfloat realWidth = size.x;
     GLfloat realHeight = size.y;
     GLfloat realX = 0.0f;
@@ -1525,18 +1507,7 @@ CImage::ResolvedTransform CImage::updateGeometryBuffers () {
     glm::vec3 origin = transform.origin;
     const glm::vec3 scale = transform.scale;
     const glm::vec2 size = this->resolveGeometrySize (sceneWidth, sceneHeight, origin);
-    const glm::vec2 previousSize = this->m_size;
     this->m_size = size;
-
-    if (size != previousSize) {
-	// m_mainFBO/m_subFBO are allocated once at construction time and captured by shared_ptr
-	// value in each CPass's destination/input at setupPasses() time, so they must be resized
-	// in place (same GL texture/framebuffer IDs) rather than recreated -- otherwise already
-	// configured passes would keep rendering into the stale-size FBO.
-	const_cast<CFBO&> (*this->m_mainFBO).resize (size.x, size.y, size.x, size.y);
-	const_cast<CFBO&> (*this->m_subFBO).resize (size.x, size.y, size.x, size.y);
-    }
-
     this->updateScenePosition (origin, size, scale, sceneWidth, sceneHeight);
     this->uploadGeometryBuffers (size);
 
@@ -1644,23 +1615,6 @@ glm::vec2 CImage::getSize () const {
     }
 
     return { this->m_texture->getRealWidth (), this->m_texture->getRealHeight () };
-}
-
-glm::vec2 CImage::getCropOffsetUV () const {
-    if (!this->getImage ().model->cropoffset.has_value () || this->getTexture () == nullptr
-	|| this->getTexture ()->isAnimated ()) {
-	return { 0.0f, 0.0f };
-    }
-
-    const glm::vec2& co = *this->getImage ().model->cropoffset;
-    const float tw = static_cast<float> (this->getTexture ()->getTextureWidth (0));
-    const float th = static_cast<float> (this->getTexture ()->getTextureHeight (0));
-
-    if (tw <= 0.0f || th <= 0.0f) {
-	return { 0.0f, 0.0f };
-    }
-
-    return { co.x / tw, co.y / th };
 }
 
 GLuint CImage::getSceneSpacePosition () const { return this->m_sceneSpacePosition; }
