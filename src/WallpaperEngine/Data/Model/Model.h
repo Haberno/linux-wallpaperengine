@@ -3,7 +3,6 @@
 #include <optional>
 #include <string>
 
-#include <glm/vec2.hpp>
 #include "Types.h"
 
 namespace WallpaperEngine::Data::Model {
@@ -27,8 +26,6 @@ struct ModelStruct {
     std::optional<int> width;
     /** Not sure what's used for */
     std::optional<int> height;
-    /** UV pixel offset into the texture when autosize is true (sprite-sheet crop origin) */
-    std::optional<glm::vec2> cropoffset;
     /** Model file for puppet */
     std::optional<std::string> puppet;
 };
