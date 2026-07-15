@@ -358,10 +358,15 @@ ImageAnimationLayerUniquePtr ObjectParser::parseAnimationLayer (const JSON& it, 
 
     return std::make_unique<ImageAnimationLayer> (ImageAnimationLayer {
 	.id = it.require<int> ("id", "Animation layer must have an id"),
+	.name = it.optional<std::string> ("name").value_or (""),
 	.rate = it.user ("rate", properties, 1.0f),
 	.visible = it.user ("visible", properties, false),
 	.blend = it.user ("blend", properties, 1.0f),
 	.animation = it.user ("animation", properties, 0),
+	.additive = it.user ("additive", properties, false),
+	.blendIn = it.user ("blendin", properties, false),
+	.blendOut = it.user ("blendout", properties, false),
+	.blendTime = it.user ("blendtime", properties, 0.5f),
     });
 }
 

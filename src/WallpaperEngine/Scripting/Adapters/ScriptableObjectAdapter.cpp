@@ -6,6 +6,7 @@
 
 #include "WallpaperEngine/Data/Model/DynamicValue.h"
 #include "WallpaperEngine/Data/Utils/ScopeGuard.h"
+#include "WallpaperEngine/Render/Objects/CImage.h"
 #include "WallpaperEngine/Scripting/ScriptEngine.h"
 #include "WallpaperEngine/Scripting/ScriptableObject.h"
 
@@ -25,24 +26,145 @@ static JSValue scriptable_noop (JSContext* ctx, JSValueConst this_val, int argc,
     return JS_UNDEFINED;
 }
 
-static JSValue scriptable_false (JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
-    return JS_FALSE;
+enum AnimationCommand {
+    AnimationCommand_Play,
+    AnimationCommand_Pause,
+    AnimationCommand_Stop,
+    AnimationCommand_IsPlaying,
+};
+
+static OpaqueScriptableObjectAdapter* scriptable_container (JSValueConst value) {
+    JSClassID classId = 0;
+    auto* container = static_cast<OpaqueScriptableObjectAdapter*> (JS_GetAnyOpaque (value, &classId));
+    return container != nullptr && container->magic == SCRIPTABLE_OPAQUE_MAGIC ? container : nullptr;
 }
 
-static JSValue scriptable_animation_stub (JSContext* ctx);
+static WallpaperEngine::Render::Objects::CImage* scriptable_image (JSValueConst value) {
+    OpaqueScriptableObjectAdapter* container = scriptable_container (value);
+    return container != nullptr ? dynamic_cast<WallpaperEngine::Render::Objects::CImage*> (&container->object)
+				: nullptr;
+}
+
+static JSValue scriptable_animation_command (
+    JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv, int magic, JSValueConst* functionData
+) {
+    int64_t imagePointer = 0;
+    int32_t layerIndex = -1;
+    if (JS_ToBigInt64 (ctx, &imagePointer, functionData[0]) < 0 || JS_ToInt32 (ctx, &layerIndex, functionData[1]) < 0) {
+	return JS_EXCEPTION;
+    }
+
+    auto* image = reinterpret_cast<WallpaperEngine::Render::Objects::CImage*> (imagePointer);
+    if (image == nullptr) {
+	return JS_UNDEFINED;
+    }
+    const std::optional<size_t> index
+	= layerIndex >= 0 ? std::optional<size_t> (static_cast<size_t> (layerIndex)) : std::nullopt;
+
+    switch (magic) {
+	case AnimationCommand_Play:
+	    image->playPuppetAnimationLayer (index);
+	    return JS_UNDEFINED;
+	case AnimationCommand_Pause:
+	    image->pausePuppetAnimationLayer (index);
+	    return JS_UNDEFINED;
+	case AnimationCommand_Stop:
+	    image->stopPuppetAnimationLayer (index);
+	    return JS_UNDEFINED;
+	case AnimationCommand_IsPlaying:
+	    return JS_NewBool (ctx, image->isPuppetAnimationLayerPlaying (index));
+	default:
+	    return JS_UNDEFINED;
+    }
+}
+
+static JSValue scriptable_animation_controller (
+    JSContext* ctx, WallpaperEngine::Render::Objects::CImage& image, const std::optional<size_t> index
+) {
+    const int32_t layerIndex = index.has_value () ? static_cast<int32_t> (*index) : -1;
+    JSValue functionData[] = {
+	JS_NewBigInt64 (ctx, reinterpret_cast<int64_t> (&image)),
+	JS_NewInt32 (ctx, layerIndex),
+    };
+    JSValue result = JS_NewObject (ctx);
+
+    JS_SetPropertyStr (
+	ctx, result, "play",
+	JS_NewCFunctionData (ctx, scriptable_animation_command, 0, AnimationCommand_Play, 2, functionData)
+    );
+    JS_SetPropertyStr (
+	ctx, result, "pause",
+	JS_NewCFunctionData (ctx, scriptable_animation_command, 0, AnimationCommand_Pause, 2, functionData)
+    );
+    JS_SetPropertyStr (
+	ctx, result, "stop",
+	JS_NewCFunctionData (ctx, scriptable_animation_command, 0, AnimationCommand_Stop, 2, functionData)
+    );
+    JS_SetPropertyStr (
+	ctx, result, "isPlaying",
+	JS_NewCFunctionData (ctx, scriptable_animation_command, 0, AnimationCommand_IsPlaying, 2, functionData)
+    );
+    JS_FreeValue (ctx, functionData[0]);
+    JS_FreeValue (ctx, functionData[1]);
+    return result;
+}
 
 static JSValue scriptable_get_animation (JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
-    return scriptable_animation_stub (ctx);
+    auto* image = scriptable_image (this_val);
+    if (image == nullptr) {
+	return JS_UNDEFINED;
+    }
+    if (argc < 1) {
+	return scriptable_animation_controller (ctx, *image, std::nullopt);
+    }
+
+    std::optional<size_t> index;
+    if (JS_IsNumber (argv[0])) {
+	int32_t numericIndex = -1;
+	if (JS_ToInt32 (ctx, &numericIndex, argv[0]) < 0) {
+	    return JS_EXCEPTION;
+	}
+	index = image->findPuppetAnimationLayer (numericIndex);
+    } else if (JS_IsString (argv[0])) {
+	const char* name = JS_ToCString (ctx, argv[0]);
+	if (name == nullptr) {
+	    return JS_EXCEPTION;
+	}
+	index = image->findPuppetAnimationLayer (name);
+	JS_FreeCString (ctx, name);
+    }
+
+    return index.has_value () ? scriptable_animation_controller (ctx, *image, index) : JS_UNDEFINED;
 }
 
-static JSValue scriptable_animation_stub (JSContext* ctx) {
-    JSValue result = JS_NewObject (ctx);
-    JS_SetPropertyStr (ctx, result, "play", JS_NewCFunction (ctx, scriptable_noop, "play", 0));
-    JS_SetPropertyStr (ctx, result, "pause", JS_NewCFunction (ctx, scriptable_noop, "pause", 0));
-    JS_SetPropertyStr (ctx, result, "stop", JS_NewCFunction (ctx, scriptable_noop, "stop", 0));
-    JS_SetPropertyStr (ctx, result, "isPlaying", JS_NewCFunction (ctx, scriptable_false, "isPlaying", 0));
-    JS_SetPropertyStr (ctx, result, "getAnimation", JS_NewCFunction (ctx, scriptable_get_animation, "getAnimation", 1));
-    return result;
+static JSValue
+scriptable_object_animation_command (JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv, int magic) {
+    auto* image = scriptable_image (this_val);
+    if (image == nullptr) {
+	return magic == AnimationCommand_IsPlaying ? JS_FALSE : JS_UNDEFINED;
+    }
+
+    switch (magic) {
+	case AnimationCommand_Play:
+	    image->playPuppetAnimationLayer ();
+	    return JS_UNDEFINED;
+	case AnimationCommand_Pause:
+	    image->pausePuppetAnimationLayer ();
+	    return JS_UNDEFINED;
+	case AnimationCommand_Stop:
+	    image->stopPuppetAnimationLayer ();
+	    return JS_UNDEFINED;
+	case AnimationCommand_IsPlaying:
+	    return JS_NewBool (ctx, image->isPuppetAnimationLayerPlaying ());
+	default:
+	    return JS_UNDEFINED;
+    }
+}
+
+static JSValue
+scriptable_get_animation_layer_count (JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    auto* image = scriptable_image (this_val);
+    return JS_NewInt64 (ctx, image != nullptr ? static_cast<int64_t> (image->getPuppetAnimationLayerCount ()) : 0);
 }
 
 JSValue scriptableobject_property_get (JSContext* ctx, JSValueConst obj_val, JSAtom atom, JSValueConst receiver) {
@@ -66,13 +188,35 @@ JSValue scriptableobject_property_get (JSContext* ctx, JSValueConst obj_val, JSA
 	return JS_NewString (ctx, container->object.getObject ().name.c_str ());
     }
 
-    if (std::strcmp (name, "play") == 0 || std::strcmp (name, "pause") == 0 || std::strcmp (name, "stop") == 0
-	|| std::strcmp (name, "getParent") == 0) {
+    if (std::strcmp (name, "play") == 0) {
+	return JS_NewCFunctionMagic (
+	    ctx, scriptable_object_animation_command, name, 0, JS_CFUNC_generic_magic, AnimationCommand_Play
+	);
+    }
+    if (std::strcmp (name, "pause") == 0) {
+	return JS_NewCFunctionMagic (
+	    ctx, scriptable_object_animation_command, name, 0, JS_CFUNC_generic_magic, AnimationCommand_Pause
+	);
+    }
+    if (std::strcmp (name, "stop") == 0) {
+	return JS_NewCFunctionMagic (
+	    ctx, scriptable_object_animation_command, name, 0, JS_CFUNC_generic_magic, AnimationCommand_Stop
+	);
+    }
+    if (std::strcmp (name, "isPlaying") == 0) {
+	return JS_NewCFunctionMagic (
+	    ctx, scriptable_object_animation_command, name, 0, JS_CFUNC_generic_magic, AnimationCommand_IsPlaying
+	);
+    }
+    if (std::strcmp (name, "getParent") == 0) {
 	return JS_NewCFunction (ctx, scriptable_noop, name, 0);
     }
 
     if (std::strcmp (name, "getAnimation") == 0 || std::strcmp (name, "getAnimationLayer") == 0) {
 	return JS_NewCFunction (ctx, scriptable_get_animation, name, 1);
+    }
+    if (std::strcmp (name, "getAnimationLayerCount") == 0) {
+	return JS_NewCFunction (ctx, scriptable_get_animation_layer_count, name, 0);
     }
 
     try {

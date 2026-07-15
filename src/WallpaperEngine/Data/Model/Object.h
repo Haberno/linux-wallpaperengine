@@ -96,10 +96,15 @@ struct ImageEffect {
  */
 struct ImageAnimationLayer {
     int id;
+    std::string name;
     UserSettingUniquePtr rate;
     UserSettingUniquePtr visible;
     UserSettingUniquePtr blend;
     UserSettingUniquePtr animation;
+    UserSettingUniquePtr additive;
+    UserSettingUniquePtr blendIn;
+    UserSettingUniquePtr blendOut;
+    UserSettingUniquePtr blendTime;
 };
 
 struct ImageData {
