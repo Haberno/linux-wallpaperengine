@@ -24,13 +24,11 @@ void initLogging () {
 }
 
 int main (int argc, char* argv[]) {
-    // CEF helper processes re-launch this binary with a "--type=..." switch.
-    // Hand them to CEF before logging, argument parsing, background loading, or
-    // GL/Wayland setup, otherwise inherited CEF resource fds can be invalidated.
-    for (int i = 1; i < argc; i++) {
-	if (strncmp (argv[i], "--type=", 7) == 0) {
-	    return WallpaperEngine::WebBrowser::WebBrowserContext::executeSubprocess (argc, argv);
-	}
+    // CEF process bootstrap must be the first operation in every process. Helper processes run to
+    // completion here; the browser process returns -1 and continues with normal engine startup.
+    const int cefExitCode = WallpaperEngine::WebBrowser::WebBrowserContext::executeSubprocess (argc, argv);
+    if (cefExitCode >= 0) {
+	return cefExitCode;
     }
 
     try {

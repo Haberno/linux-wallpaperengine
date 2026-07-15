@@ -703,6 +703,15 @@ add_executable(linux-wallpaperengine
 
 target_link_libraries (linux-wallpaperengine PUBLIC linux-wallpaperengine-lib)
 
+# CEF resolves icudtl.dat and its other runtime resources relative to the loaded libcef.so.
+# Prefer the staged output directory over CEF's internal Release directory so the build-tree
+# executable loads the library beside the resources copied by COPY_FILES. Keep the same portable
+# layout after installation.
+set_target_properties(linux-wallpaperengine linux-wallpaperengine-lib PROPERTIES
+    BUILD_RPATH "$ORIGIN"
+    INSTALL_RPATH "$ORIGIN"
+)
+
 # Install the main executable and shared library via install(TARGETS)
 # so that CMake automatically strips/replaces the build-time RPATH.
 install(TARGETS linux-wallpaperengine
