@@ -210,6 +210,9 @@ private:
     std::shared_ptr<const CFBO> m_currentSubFBO = nullptr;
 
     const Image& m_image;
+    // Stable storage is required because effect-pass uniforms keep pointers to
+    // getAlpha()/getUserAlpha() for the lifetime of the image.
+    float m_resolvedAlpha = 1.0f;
 
     std::vector<Effects::CPass*> m_passes = {};
     std::vector<MaterialPassUniquePtr> m_virtualPassess = {};
