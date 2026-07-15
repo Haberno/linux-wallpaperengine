@@ -46,7 +46,7 @@ void RenderContext::render (Drivers::Output::OutputViewport* viewport) {
 	    } else {
 		transition->second.from->render (
 		    viewport->viewport, this->getOutput ().renderVFlip (), viewport->globalPosition,
-		    viewport->logicalSize
+		    viewport->logicalSize, false
 		);
 		ref->second->setTransition (transition->second.mode, progress, transition->second.center);
 	    }
