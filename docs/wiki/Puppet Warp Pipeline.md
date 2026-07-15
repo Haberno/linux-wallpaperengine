@@ -10,9 +10,9 @@ timestamp: 2026-07-06T20:00:00-04:00
 # Puppet Warp Pipeline
 
 Puppet warp is Wallpaper Engine's 2D skeletal animation. A puppet image's
-texture is a **disassembled parts atlas** (sword here, head there); the mesh's
-rest pose mirrors that atlas exactly (`u = 0.5 + x/size`, verified residual
-~1e-8). The character only exists once the skeleton poses it.
+texture may be a **disassembled parts atlas** (sword here, head there), while
+MDLV vertices already describe the assembled model-space rest pose. MDLS and
+MDLA deform that mesh; MDAT attaches separate child layers to its bones.
 
 Implementation lives in `src/WallpaperEngine/Render/Objects/CImage.cpp`.
 
@@ -20,7 +20,8 @@ Implementation lives in `src/WallpaperEngine/Render/Objects/CImage.cpp`.
 
 1. `loadPuppetMesh` — parses the [[MDL File Format]]: vertices (positions,
    blend indices/weights at offsets 40/56, UVs at 72), indices, then
-   `loadPuppetBones` (MDLS) and `loadPuppetAnimations` (MDLA).
+   `loadPuppetBones` (MDLS), `loadPuppetAttachments` (MDAT), and
+   `loadPuppetAnimations` (MDLA).
 2. `selectPuppetAnimation` — matches the scene object's `animationlayers[]`
    entries (by `animation` id) against the file's animations; all visible
    layers become active, each with its own `rate`.
@@ -32,6 +33,9 @@ Implementation lives in `src/WallpaperEngine/Render/Objects/CImage.cpp`.
      model-space position onto the object's scene quad (`m_pos`).
 4. `setupPuppetGeometryCallback` — binds the puppet VBOs and draws indexed
    triangles in place of the standard quad.
+5. `resolveTransform` — for a child with `scene.json.attachment`, composes
+   its parent's live `boneWorld * attachmentLocal` transform before the
+   child's own origin/scale/angles. Attachment chains may be nested.
 
 ## Invariants (each fixed a real bug — see [[Wallpaper Case Studies]])
 
@@ -53,6 +57,9 @@ Implementation lives in `src/WallpaperEngine/Render/Objects/CImage.cpp`.
   assembly; composing against bind applies the assembly once per layer.
 - **Frame rate:** the header float is **fps**, not duration
   (`frame = time * fps * rate`).
+- **Attachments are live bone transforms.** Applying only ordinary scene
+  parenting leaves attached child layers at their unbound offsets; adding a
+  static per-wallpaper correction also fails as soon as the bone animates.
 
 ## Not yet implemented
 - Bone constraint JSON in MDLS names (`"tp"`/`"tm"` translation limits) —

@@ -29,7 +29,7 @@ WORD indices[...]        // triangles
 VERTEX (stride 80):
 | offset | field |
 |---|---|
-| 0 | position vec3 — model space; rest pose IS the parts atlas (`u = 0.5 + x/w`, `v = 0.5 − y/h`) |
+| 0 | position vec3 — assembled model-space rest pose; it does not generally mirror the texture atlas |
 | 12 | 16 bytes unknown (mostly 0/1 constants) |
 | 40 | blend indices uvec4 |
 | 56 | blend weights vec4 (sum to 1) |
@@ -45,23 +45,44 @@ system we don't consume yet.
 ## MDLS — skeleton
 
 ```
-"MDLS000X\0", DWORD byteLength, DWORD boneCount
+"MDLS000X\0", DWORD absoluteNextSectionOffset, DWORD boneCount
 per bone:
-  BYTE unknown
+  // MDLS0004: name (NUL) here
+  // MDLS0001/0002/0003: one leading byte here, name (NUL) after the matrix
   DWORD type            // 0/1 observed
   DWORD parent (i32)    // always an earlier bone; -1 = root
   DWORD matrixBytes     // 64
   float[16]             // row-major local bind, translation in row 3
                         // (byte-identical to column-major w/ translation in last column)
-  name (NUL-terminated) // may contain constraint JSON: "tp"/"tm" limits
+  // MDLS0004: BYTE zero separator
+  // MDLS0001/0002/0003: name (NUL), often constraint JSON with "tp"/"tm"
 ```
 
 World bind = walk hierarchy. Skinning uses `inverse(worldBind)`.
 
+## MDAT — named attachments
+
+`scene.json` children may specify `"attachment": "name"`. MDAT binds that
+name to a puppet bone and a local transform:
+
+```
+"MDAT0001\0", DWORD absoluteNextSectionOffset, WORD attachmentCount
+per attachment:
+  WORD boneIndex
+  name (NUL-terminated)
+  float[16] localTransform
+```
+
+The live attachment transform is
+`animatedBoneWorld[boneIndex] * localTransform`. It is composed between the
+parent object's transform and the attached child's local transform every
+frame. This supports nested attachment chains and makes child layers follow
+their parent's puppet animation.
+
 ## MDLA — animations
 
 ```
-"MDLA000X\0", DWORD byteLength, DWORD animationCount
+"MDLA000X\0", DWORD absoluteNextSectionOffset, DWORD animationCount
 per animation:
   DWORD id              // matches scene.json animationlayers[].animation
   DWORD unknown
@@ -72,8 +93,10 @@ per animation:
     DWORD zero, DWORD frameBytes
     frames of 9 floats: T3 R3 S3 (rotation about z only)
     // frameCount+1 entries; last == first for loops
-  10 zero bytes footer  // required to reach the next animation
+  zero footer           // MDLA0001: 4; MDLA0004: 10; MDLA0006: 35 bytes
 ```
 
-Animations store **absolute** poses (atlas→body assembly included). Additive
-layers must be composed as deltas from their own frame 0.
+Animation frames store absolute bone poses. Additive layers must be composed
+as deltas from their own frame 0. MDLA0006 stores Z rotations with the
+opposite sign from MDLA0001/0004; normalize that sign while parsing rather
+than changing the scene-space transform convention globally.

@@ -41,10 +41,32 @@ Workshop wallpapers that drove fixes; useful as a regression suite.
 
 ## 3135984503 — One Piece (Luffy & Zoro)
 - MDLV0017, Luffy 25 bones/1 anim, Zoro 31 bones/2 anims.
-- Drove: **MDLV0017 acceptance**, **10-byte animation footer** (Zoro's second
-  animation failed to parse), **multi-layer additive composition as deltas
+- Drove: **MDLV0017 acceptance**, **MDLS0002's post-matrix bone names**,
+  **MDLA0004's 10-byte animation footer**
+  (Zoro's second animation failed to parse), **multi-layer additive composition as deltas
   from each layer's own frame 0** (hair/arm double-assembled otherwise),
   removal of the locktransforms parallax exclusion.
+
+## 3463520581 — Sword Art Online (Asuna & Kirito)
+- MDLV0023 with nested scene children bound through MDAT attachment names:
+  `Attachment` → `Attachment bottom` → `head`, plus two back-hair levels.
+- Drove: **MDLS named-bone parsing**, **MDLA0006's 35-byte footer**, and full
+  **MDAT puppet attachments**. Ignoring MDAT left every mesh assembled in
+  isolation but placed Asuna's hair and upper body down-left of their bones.
+- Regression: all attachment levels must use the parent's live animated bone
+  pose, so the assembled character remains intact during hair/breathing motion.
+
+## 3294687155 — Elden Ring (Midra)
+- MDLV0021 with MDLS0003 skeletons and MDLA0006 animations across the head,
+  cape, arm, body, and weapon puppet meshes.
+- Regression: MDLS0003 uses the legacy post-matrix bone-name layout, while
+  MDLA0006 uses the newer inverted Z-rotation convention. It verifies that
+  skeleton layout and animation rotation are selected independently.
+
+## 2639381674 — Halloween puppet
+- MDLV0013 compact vertices with MDLS0001 and MDLA0001.
+- Regression: MDLS0001 uses the legacy post-matrix bone-name layout;
+  MDLA0001 keeps the original rotation sign and a four-byte footer.
 
 ## 3100265648 — Gojo (Jujutsu Kaisen)
 - MDLV0017, 2182 verts, 21 bones, 3 simultaneous animation layers.
