@@ -15,10 +15,10 @@ CFBO::CFBO (
     glGenTextures (1, &this->m_texture);
     // bind the new texture to set settings on it
     glBindTexture (GL_TEXTURE_2D, this->m_texture);
-    // give OpenGL an empty image. Use a 16-bit float internal format so the render
-    // targets are HDR: shaders can emit values above 1.0 (e.g. a model's bright rim) and
-    // the bloom pass can pick them up. The final blit to the 8-bit screen clamps for us.
-    glTexImage2D (GL_TEXTURE_2D, 0, GL_RGBA16F, textureWidth, textureHeight, 0, GL_RGBA, GL_HALF_FLOAT, nullptr);
+    // Wallpaper Engine declares these render targets as ARGB8888. Keeping them at
+    // eight bits per channel halves their color-storage footprint compared with
+    // RGBA16F and avoids paying the HDR cost for every intermediate effect surface.
+    glTexImage2D (GL_TEXTURE_2D, 0, GL_RGBA8, textureWidth, textureHeight, 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
     // label stuff for debugging
 #if !NDEBUG
     glObjectLabel (GL_TEXTURE, this->m_texture, -1, this->m_name.c_str ());

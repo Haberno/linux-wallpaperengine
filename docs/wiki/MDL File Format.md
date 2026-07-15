@@ -93,10 +93,18 @@ per animation:
     DWORD zero, DWORD frameBytes
     frames of 9 floats: T3 R3 S3 (rotation about z only)
     // frameCount+1 entries; last == first for loops
-  zero footer           // MDLA0001: 4; MDLA0004: 10; MDLA0006: 35 bytes
+  version footer:
+    MDLA0001: 4 zero bytes
+    MDLA0004: DWORD extensionCount; per extension DWORD type, DWORD byteLength,
+              byte payload[byteLength]; then 6 zero bytes
+    MDLA0006: 35 zero bytes
 ```
 
+An MDLA0004 animation with no extensions therefore has the commonly observed
+ten-byte footer. Extensions are length-prefixed and must be skipped before the
+next animation record; treating the footer as unconditionally ten bytes breaks
+puppets that carry this metadata.
+
 Animation frames store absolute bone poses. Additive layers must be composed
-as deltas from their own frame 0. MDLA0006 stores Z rotations with the
-opposite sign from MDLA0001/0004; normalize that sign while parsing rather
-than changing the scene-space transform convention globally.
+as deltas from their own frame 0. Rotation values retain their serialized sign;
+the model-to-scene Y conversion happens after skinning.

@@ -771,12 +771,11 @@ void CImage::loadPuppetAnimations (const std::vector<char>& data, size_t mdlaOff
 
     try {
 	const std::string version (data.data () + mdlaOffset, strlen ("MDLA0006"));
-	const float rotationZSign = version == "MDLA0006" ? -1.0f : 1.0f;
 	size_t footerBytes = 0;
 	if (version == "MDLA0006") {
 	    footerBytes = 35;
 	} else if (version == "MDLA0004") {
-	    footerBytes = 10;
+	    // MDLA0004 has a variable-size extension table instead of a fixed footer.
 	} else if (version == "MDLA0001") {
 	    footerBytes = 4;
 	} else {
@@ -784,7 +783,10 @@ void CImage::loadPuppetAnimations (const std::vector<char>& data, size_t mdlaOff
 	}
 
 	size_t offset = mdlaOffset + strlen ("MDLA0006") + 1;
-	puppetRead<uint32_t> (data, offset); // section byte length
+	const size_t sectionEnd = puppetRead<uint32_t> (data, offset);
+	if (sectionEnd < offset || sectionEnd > data.size ()) {
+	    throw std::runtime_error ("invalid animation section boundary");
+	}
 	const uint32_t animationCount = puppetRead<uint32_t> (data, offset);
 
 	for (uint32_t index = 0; index < animationCount; index++) {
@@ -823,7 +825,6 @@ void CImage::loadPuppetAnimations (const std::vector<char>& data, size_t mdlaOff
 		    for (int component = 0; component < 3; component++) {
 			frame.rotation[component] = puppetRead<float> (data, offset);
 		    }
-		    frame.rotation.z *= rotationZSign;
 		    for (int component = 0; component < 3; component++) {
 			frame.scale[component] = puppetRead<float> (data, offset);
 		    }
@@ -832,11 +833,27 @@ void CImage::loadPuppetAnimations (const std::vector<char>& data, size_t mdlaOff
 
 	    this->m_puppetAnimations.push_back (std::move (animation));
 
-	    // MDLA0006 places 35 zero bytes after every animation (MDLA0001 uses
-	    // four). Skipping only ten starts the next record inside the padding, so
-	    // multi-animation puppets report a bogus bone count and lose all skinning.
-	    if (offset + footerBytes > data.size ()) {
-		throw std::runtime_error ("animation footer extends past end of file");
+	    if (version == "MDLA0004") {
+		// The first DWORD is an extension count. A zero count produces the
+		// familiar ten-byte footer (the count plus a six-byte trailer), but some
+		// puppets store one or more length-prefixed blocks between them.
+		const uint32_t extensionCount = puppetRead<uint32_t> (data, offset);
+		for (uint32_t extension = 0; extension < extensionCount; extension++) {
+		    if (offset > sectionEnd || sectionEnd - offset < sizeof (uint32_t) * 2) {
+			throw std::runtime_error ("animation extension header extends past section boundary");
+		    }
+		    puppetRead<uint32_t> (data, offset); // extension type
+		    const uint32_t extensionBytes = puppetRead<uint32_t> (data, offset);
+		    if (offset > sectionEnd || extensionBytes > sectionEnd - offset) {
+			throw std::runtime_error ("animation extension extends past section boundary");
+		    }
+		    offset += extensionBytes;
+		}
+		footerBytes = 6;
+	    }
+
+	    if (offset > sectionEnd || footerBytes > sectionEnd - offset) {
+		throw std::runtime_error ("animation footer extends past section boundary");
 	    }
 	    for (size_t byte = 0; byte < footerBytes; byte++) {
 		if (data[offset + byte] != '\0') {
@@ -844,6 +861,10 @@ void CImage::loadPuppetAnimations (const std::vector<char>& data, size_t mdlaOff
 		}
 	    }
 	    offset += footerBytes;
+	}
+
+	if (offset != sectionEnd) {
+	    throw std::runtime_error ("animation records do not reach the next section");
 	}
 
 	sLog.out (
