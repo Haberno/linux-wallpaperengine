@@ -37,6 +37,7 @@ ObjectUniquePtr ObjectParser::parse (const JSON& it, const Project& project) {
 	    .name = it.require<std::string> ("name", "Object must have a name"),
 	    .dependencies = parseDependencies (it),
 	    .parent = it.optional<int> ("parent"),
+	    .attachment = it.optional<std::string> ("attachment"),
 	    .origin = it.user ("origin", project.properties, glm::vec3 (0.0f)),
 	    .locktransforms = it.optional ("locktransforms", false),
 	    .authoredParallaxDepth = it.find ("parallaxDepth") != it.end ()
@@ -64,6 +65,7 @@ ObjectUniquePtr ObjectParser::parse (const JSON& it, const Project& project) {
 	    .name = name,
 	    .dependencies = parseDependencies (it),
 	    .parent = it.optional<int> ("parent"),
+	    .attachment = it.optional<std::string> ("attachment"),
 	    .origin = it.user ("origin", project.properties, glm::vec3 (0.0f)),
 	    .locktransforms = it.optional ("locktransforms", false),
 	    .authoredParallaxDepth = it.find ("parallaxDepth") != it.end ()
@@ -153,17 +155,16 @@ TextUniquePtr ObjectParser::parseText (const JSON& it, const Project& project, O
 	    .verticalalign = it.optional ("verticalalign", std::string ("center")),
 	    // padding is authored as a single number by older scenes and as an "x y" vector
 	    // string by newer editors (e.g. workshop 3758354038)
-	    .padding =
-		[&] () -> glm::vec2 {
-		    const auto raw = it.optional ("padding");
-		    if (!raw.has_value ()) {
-			return glm::vec2 (0.0f);
-		    }
-		    if (raw->is_number ()) {
-			return glm::vec2 (raw->get<float> ());
-		    }
-		    return it.optional ("padding", glm::vec2 (0.0f));
-		}(),
+	    .padding = [&] () -> glm::vec2 {
+		const auto raw = it.optional ("padding");
+		if (!raw.has_value ()) {
+		    return glm::vec2 (0.0f);
+		}
+		if (raw->is_number ()) {
+		    return glm::vec2 (raw->get<float> ());
+		}
+		return it.optional ("padding", glm::vec2 (0.0f));
+	    }(),
 	    .brightness = it.user ("brightness", project.properties, 1.0f),
 	    .effects = effects.has_value () ? parseEffects (*effects, project) : std::vector<ImageEffectUniquePtr> {},
 	}
@@ -193,7 +194,8 @@ ObjectUniquePtr ObjectParser::parseModel3D (const Project& project, ObjectData b
     }
 }
 
-LightUniquePtr ObjectParser::parseLight (const JSON& it, const Project& project, ObjectData base, const std::string& light) {
+LightUniquePtr
+ObjectParser::parseLight (const JSON& it, const Project& project, ObjectData base, const std::string& light) {
     const auto& properties = project.properties;
     LightData::Type type = LightData::Type_Point;
 
@@ -852,6 +854,7 @@ ParticleRenderer ObjectParser::parseParticleRenderer (const JSON& it) {
 	.minLength = it.optional ("minlength", 0.0f),
 	.subdivision = it.optional ("subdivision", subdivisionDefault),
 	.segments = it.optional ("segments", 4.0f),
+	.segmentsExplicit = it.contains ("segments"),
 	.uvScale = it.optional ("uvscale", 1.0f),
 	.uvScrolling = it.optional ("uvscrolling", false),
 	.uvSmoothing = it.optional ("uvsmoothing", true),

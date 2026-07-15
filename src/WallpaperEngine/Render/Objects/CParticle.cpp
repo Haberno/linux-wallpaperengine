@@ -43,8 +43,19 @@ CParticle::CParticle (Wallpapers::CScene& scene, const Particle& particle) :
 
 	    if (renderer.name == "ropetrail") {
 		m_useTrailRenderer = true;
+		m_useRopeTrailRenderer = true;
 		m_trailLength = renderer.length;
-		m_ropeSegments = std::max (2, static_cast<int> (renderer.segments));
+		if (renderer.segmentsExplicit) {
+		    m_ropeSegments = std::max (2, static_cast<int> (renderer.segments));
+		} else {
+		    // Wallpaper Engine omits the default segment count from JSON. Four
+		    // samples made long trails visibly step at 1-5 Hz, so derive a smooth
+		    // bounded history rate from the authored duration instead.
+		    m_ropeSegments
+			= std::clamp (static_cast<int> (std::ceil (std::max (m_trailLength, 0.001f) * 30.0f)), 8, 96);
+		}
+		m_ropeFadeAlpha = renderer.fadeAlpha;
+		m_ropeFadeSize = renderer.fadeSize;
 	    }
 	} else if (renderer.name == "spritetrail") {
 	    // spritetrail uses genericparticle with TRAILRENDERER combo
@@ -66,9 +77,13 @@ CParticle::CParticle (Wallpapers::CScene& scene, const Particle& particle) :
 
     // Calculate buffer sizes based on renderer type
     if (m_useRopeRenderer) {
-	// Rope: connects N particles with (N-1) segments, each subdivided into sub-segments
 	const int subdivision = std::max (1, m_ropeSubdivision);
-	const int maxSubSegments = std::max (1, static_cast<int> (m_maxParticles - 1)) * subdivision;
+	// A rope connects the particle pool once. A rope trail builds an independent
+	// history for every particle and must never bridge two particle instances.
+	const int maxSegments = m_useRopeTrailRenderer
+	    ? std::max (1, static_cast<int> (m_maxParticles)) * m_ropeSegments
+	    : std::max (1, static_cast<int> (m_maxParticles - 1));
+	const int maxSubSegments = maxSegments * subdivision;
 	m_vertices.resize (maxSubSegments * 4 * ROPE_FLOATS_PER_VERTEX);
 	m_indices.resize (maxSubSegments * 6);
     } else {
@@ -343,13 +358,13 @@ void CParticle::update (float dt) {
 		    float cyclePos = timeInCycle / m_spritesheetDuration;
 		    p.frame = std::fmod (cyclePos * m_spritesheetFrames, static_cast<float> (m_spritesheetFrames));
 		} else {
-		    p.frame = std::fmod (
-			lifetimePos * m_spritesheetFrames, static_cast<float> (m_spritesheetFrames)
-		    );
+		    p.frame = std::fmod (lifetimePos * m_spritesheetFrames, static_cast<float> (m_spritesheetFrames));
 		}
 	    }
 	}
     }
+
+    updateRopeTrailHistory (dt);
 
     // Remove dead particles with order-preserving compaction.
     // Particles only die from natural lifetime expiry (age >= lifetime).
@@ -365,6 +380,68 @@ void CParticle::update (float dt) {
 	}
     }
     m_particleCount = writeIdx;
+}
+
+void CParticle::updateRopeTrailHistory (float dt) {
+    if (!m_useRopeTrailRenderer || dt <= 0.0f) {
+	return;
+    }
+
+    const int maxSegments = std::max (2, m_ropeSegments);
+    const float historyLength = std::max (m_trailLength, 0.001f);
+    const float sampleInterval = historyLength / static_cast<float> (maxSegments);
+    const float timerBeforeFrame = m_ropeHistoryTimer;
+    const float accumulatedTime = timerBeforeFrame + dt;
+    const int sampleCount = static_cast<int> (std::floor (accumulatedTime / sampleInterval));
+    const int firstSample = std::max (0, sampleCount - maxSegments);
+
+    auto snapshot = [] (const ParticleInstance& particle) {
+	return ParticleInstance::TrailPoint {
+	    .position = particle.position,
+	    .color = particle.color,
+	    .alpha = particle.alpha,
+	    .size = particle.size,
+	};
+    };
+
+    auto interpolate = [] (const ParticleInstance::TrailPoint& from, const ParticleInstance::TrailPoint& to, float t) {
+	return ParticleInstance::TrailPoint {
+	    .position = glm::mix (from.position, to.position, t),
+	    .color = glm::mix (from.color, to.color, t),
+	    .alpha = glm::mix (from.alpha, to.alpha, t),
+	    .size = glm::mix (from.size, to.size, t),
+	};
+    };
+
+    for (uint32_t i = 0; i < m_particleCount; i++) {
+	auto& particle = m_particles[i];
+	if (!particle.isAlive ()) {
+	    continue;
+	}
+
+	const auto current = snapshot (particle);
+	if (!particle.trailLastFrameValid) {
+	    particle.trailHistory.clear ();
+	    particle.trailHistory.reserve (static_cast<size_t> (maxSegments));
+	    particle.trailHistory.push_back (current);
+	    particle.trailLastFrame = current;
+	    particle.trailLastFrameValid = true;
+	    continue;
+	}
+
+	for (int sample = firstSample; sample < sampleCount; sample++) {
+	    const float sampleOffset = sampleInterval - timerBeforeFrame + static_cast<float> (sample) * sampleInterval;
+	    const float frameFraction = std::clamp (sampleOffset / dt, 0.0f, 1.0f);
+	    particle.trailHistory.push_back (interpolate (particle.trailLastFrame, current, frameFraction));
+	    if (static_cast<int> (particle.trailHistory.size ()) > maxSegments) {
+		particle.trailHistory.erase (particle.trailHistory.begin ());
+	    }
+	}
+
+	particle.trailLastFrame = current;
+    }
+
+    m_ropeHistoryTimer = std::fmod (accumulatedTime, sampleInterval);
 }
 
 const Particle& CParticle::getParticle () const { return m_particle; }
@@ -555,6 +632,8 @@ EmitterFunc CParticle::createBoxEmitter (const ParticleEmitter& emitter) {
 		p.oscillateAlpha = {};
 		p.oscillateSize = {};
 		p.oscillatePosition = {};
+		p.trailHistory.clear ();
+		p.trailLastFrameValid = false;
 
 		// Apply initializers
 		for (auto& init : m_initializers) {
@@ -704,6 +783,8 @@ EmitterFunc CParticle::createSphereEmitter (const ParticleEmitter& emitter) {
 	    p.oscillateAlpha = {};
 	    p.oscillateSize = {};
 	    p.oscillatePosition = {};
+	    p.trailHistory.clear ();
+	    p.trailLastFrameValid = false;
 
 	    for (auto& init : m_initializers) {
 		init (p);
@@ -1990,7 +2071,11 @@ void CParticle::updateParticleViewProjection () {
 }
 
 void CParticle::updateParticleRenderVars () {
-    m_renderVar0 = glm::vec4 (m_trailLength, m_trailMaxLength, m_trailMinLength, 0.0f);
+    // Rope-trail geometry already contains the current, partially completed segment.
+    // A time offset of one maps every independent history from tail UV 0 to head UV 1.
+    // Sprite trails use the authored length limits directly in genericparticle.
+    m_renderVar0 = m_useRopeTrailRenderer ? glm::vec4 (0.0f, 0.0f, 1.0f, 0.0f)
+					  : glm::vec4 (m_trailLength, m_trailMaxLength, m_trailMinLength, 0.0f);
 
     if (m_spritesheetFrames > 0 && m_spritesheetCols > 0 && m_spritesheetRows > 0) {
 	float frameWidth = 1.0f / static_cast<float> (m_spritesheetCols);
@@ -2168,7 +2253,221 @@ void CParticle::renderSprites () {
 #endif
 }
 
+void CParticle::renderRopeTrail () {
+    if (m_particleCount == 0 || m_pass == nullptr) {
+	return;
+    }
+
+    const int subdivision = std::max (1, m_ropeSubdivision);
+    uint32_t vertexIndex = 0;
+    uint32_t indexOffset = 0;
+    bool bufferFull = false;
+    std::vector<ParticleInstance::TrailPoint> points;
+    std::vector<glm::vec3> splinePositions;
+    std::vector<float> splineSizes;
+    std::vector<glm::vec4> splineColors;
+    points.reserve (static_cast<size_t> (m_ropeSegments + 1));
+
+    auto catmullRom = [] (const glm::vec3& p0, const glm::vec3& p1, const glm::vec3& p2, const glm::vec3& p3,
+			  float t) -> glm::vec3 {
+	const float t2 = t * t;
+	const float t3 = t2 * t;
+	return 0.5f
+	    * ((2.0f * p1) + (-p0 + p2) * t + (2.0f * p0 - 5.0f * p1 + 4.0f * p2 - p3) * t2
+	       + (-p0 + 3.0f * p1 - 3.0f * p2 + p3) * t3);
+    };
+
+    for (uint32_t particleIndex = 0; particleIndex < m_particleCount && !bufferFull; particleIndex++) {
+	const auto& particle = m_particles[particleIndex];
+	if (!particle.isAlive () || !particle.trailLastFrameValid) {
+	    continue;
+	}
+
+	points.clear ();
+
+	auto appendPoint = [&] (const ParticleInstance::TrailPoint& point) {
+	    if (!std::isfinite (point.position.x) || !std::isfinite (point.position.y)
+		|| !std::isfinite (point.position.z) || !std::isfinite (point.size)) {
+		return;
+	    }
+
+	    if (!points.empty ()) {
+		const glm::vec3 delta = point.position - points.back ().position;
+		if (glm::dot (delta, delta) <= 0.000001f) {
+		    // Preserve the newest visual state without emitting a zero-length
+		    // segment, whose normalized tangent would be undefined in the shader.
+		    points.back () = point;
+		    return;
+		}
+	    }
+	    points.push_back (point);
+	};
+
+	for (const auto& point : particle.trailHistory) {
+	    appendPoint (point);
+	}
+	appendPoint (
+	    ParticleInstance::TrailPoint {
+		.position = particle.position,
+		.color = particle.color,
+		.alpha = particle.alpha,
+		.size = particle.size,
+	    }
+	);
+
+	if (points.size () < 2) {
+	    continue;
+	}
+
+	const uint32_t segmentCount = static_cast<uint32_t> (points.size () - 1);
+	const uint32_t totalPoints = segmentCount * subdivision + 1;
+	splinePositions.resize (totalPoints);
+	splineSizes.resize (totalPoints);
+	splineColors.resize (totalPoints);
+
+	for (uint32_t segment = 0; segment < segmentCount; segment++) {
+	    const auto& point1 = points[segment];
+	    const auto& point2 = points[segment + 1];
+	    const auto& point0 = (segment > 0) ? points[segment - 1] : point1;
+	    const auto& point3 = (segment + 2 < points.size ()) ? points[segment + 2] : point2;
+
+	    for (int step = 0; step < subdivision; step++) {
+		const float t = static_cast<float> (step) / static_cast<float> (subdivision);
+		const uint32_t index = segment * subdivision + step;
+		splinePositions[index]
+		    = catmullRom (point0.position, point1.position, point2.position, point3.position, t);
+		splineSizes[index] = glm::mix (point1.size, point2.size, t);
+		splineColors[index]
+		    = glm::mix (glm::vec4 (point1.color, point1.alpha), glm::vec4 (point2.color, point2.alpha), t);
+	    }
+	}
+
+	const auto& lastPoint = points.back ();
+	splinePositions.back () = lastPoint.position;
+	splineSizes.back () = lastPoint.size;
+	splineColors.back () = glm::vec4 (lastPoint.color, lastPoint.alpha);
+
+	if (m_ropeFadeAlpha || m_ropeFadeSize) {
+	    const float denominator = static_cast<float> (totalPoints - 1);
+	    for (uint32_t pointIndex = 0; pointIndex < totalPoints; pointIndex++) {
+		const float tailFade = static_cast<float> (pointIndex) / denominator;
+		if (m_ropeFadeAlpha) {
+		    splineColors[pointIndex].a *= tailFade;
+		}
+		if (m_ropeFadeSize) {
+		    splineSizes[pointIndex] *= tailFade;
+		}
+	    }
+	}
+
+	const uint32_t subSegmentCount = totalPoints - 1;
+	const float uvScale = (m_ropeUVScale > 0.0f) ? m_ropeUVScale : 1.0f;
+	const float trailLength = static_cast<float> (subSegmentCount) / uvScale + 1.0f;
+
+	for (uint32_t segment = 0; segment < subSegmentCount; segment++) {
+	    if ((vertexIndex + 4) * ROPE_FLOATS_PER_VERTEX > m_vertices.size ()
+		|| indexOffset + 6 > m_indices.size ()) {
+		bufferFull = true;
+		break;
+	    }
+
+	    const glm::vec3& positionStart = splinePositions[segment];
+	    const glm::vec3& positionEnd = splinePositions[segment + 1];
+	    const glm::vec3& positionPrevious = (segment > 0) ? splinePositions[segment - 1] : positionStart;
+	    const glm::vec3& positionAfter = (segment + 2 < totalPoints) ? splinePositions[segment + 2] : positionEnd;
+	    const float sizeStart = splineSizes[segment];
+	    const float sizeEnd = splineSizes[segment + 1];
+	    const glm::vec4& colorStart = splineColors[segment];
+	    const glm::vec4& colorEnd = splineColors[segment + 1];
+
+	    auto addVertex = [&] (float uvX, float uvY) {
+		const uint32_t base = vertexIndex * ROPE_FLOATS_PER_VERTEX;
+		m_vertices[base + 0] = positionStart.x;
+		m_vertices[base + 1] = positionStart.y;
+		m_vertices[base + 2] = positionStart.z;
+		m_vertices[base + 3] = sizeStart;
+		m_vertices[base + 4] = positionEnd.x;
+		m_vertices[base + 5] = positionEnd.y;
+		m_vertices[base + 6] = positionEnd.z;
+		m_vertices[base + 7] = trailLength;
+		m_vertices[base + 8] = positionPrevious.x;
+		m_vertices[base + 9] = positionPrevious.y;
+		m_vertices[base + 10] = positionPrevious.z;
+		m_vertices[base + 11] = static_cast<float> (segment);
+		m_vertices[base + 12] = positionAfter.x;
+		m_vertices[base + 13] = positionAfter.y;
+		m_vertices[base + 14] = positionAfter.z;
+		m_vertices[base + 15] = sizeEnd;
+		m_vertices[base + 16] = colorEnd.r;
+		m_vertices[base + 17] = colorEnd.g;
+		m_vertices[base + 18] = colorEnd.b;
+		m_vertices[base + 19] = colorEnd.a;
+		m_vertices[base + 20] = uvX;
+		m_vertices[base + 21] = uvY;
+		m_vertices[base + 22] = colorStart.r;
+		m_vertices[base + 23] = colorStart.g;
+		m_vertices[base + 24] = colorStart.b;
+		m_vertices[base + 25] = colorStart.a;
+		vertexIndex++;
+	    };
+
+	    const uint32_t baseVertex = vertexIndex;
+	    addVertex (0.0f, 0.0f);
+	    addVertex (1.0f, 0.0f);
+	    addVertex (1.0f, 1.0f);
+	    addVertex (0.0f, 1.0f);
+
+	    m_indices[indexOffset++] = baseVertex + 0;
+	    m_indices[indexOffset++] = baseVertex + 1;
+	    m_indices[indexOffset++] = baseVertex + 2;
+	    m_indices[indexOffset++] = baseVertex + 2;
+	    m_indices[indexOffset++] = baseVertex + 3;
+	    m_indices[indexOffset++] = baseVertex + 0;
+	}
+    }
+
+    m_activeIndexCount = static_cast<GLsizei> (indexOffset);
+    if (m_activeIndexCount == 0) {
+	return;
+    }
+
+#if !NDEBUG
+    std::string debugName = "Rope trail particles ";
+    debugName += this->getParticle ().name + " (" + std::to_string (this->getId ()) + ", "
+	+ this->getParticle ().particleFile + ")";
+    glPushDebugGroup (GL_DEBUG_SOURCE_APPLICATION, 0, -1, debugName.c_str ());
+#endif
+
+    uploadGeometryBuffers (
+	static_cast<GLsizeiptr> (vertexIndex * ROPE_FLOATS_PER_VERTEX * sizeof (float)),
+	static_cast<GLsizeiptr> (indexOffset * sizeof (uint32_t))
+    );
+    updateMatrices ();
+
+    if (m_hasRefract && m_refractFBO) {
+	auto sceneFBO = getScene ().getFBO ();
+	const GLint width = static_cast<GLint> (sceneFBO->getRealWidth ());
+	const GLint height = static_cast<GLint> (sceneFBO->getRealHeight ());
+	glBindFramebuffer (GL_READ_FRAMEBUFFER, sceneFBO->getFramebuffer ());
+	glBindFramebuffer (GL_DRAW_FRAMEBUFFER, m_refractFBO->getFramebuffer ());
+	glBlitFramebuffer (0, 0, width, height, 0, 0, width, height, GL_COLOR_BUFFER_BIT, GL_NEAREST);
+    }
+
+    glEnable (GL_DEPTH_CLAMP);
+    m_pass->render ();
+    glDisable (GL_DEPTH_CLAMP);
+
+#if !NDEBUG
+    glPopDebugGroup ();
+#endif
+}
+
 void CParticle::renderRope () {
+    if (m_useRopeTrailRenderer) {
+	renderRopeTrail ();
+	return;
+    }
+
     if (m_particleCount < 2 || m_pass == nullptr) {
 	return;
     }

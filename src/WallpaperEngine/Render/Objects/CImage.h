@@ -10,7 +10,11 @@
 #include "../TextureProvider.h"
 #include "WallpaperEngine/Scripting/ScriptableObject.h"
 
+#include <array>
 #include <glm/vec3.hpp>
+#include <map>
+#include <optional>
+#include <string>
 #include <vector>
 
 using namespace WallpaperEngine;
@@ -75,14 +79,20 @@ protected:
      * Computes the object's own transform (origin/scale/angle) without walking the
      * parent chain. Used as the per-node step of resolveTransform.
      */
-    [[nodiscard]] static ResolvedTransform localTransform (const WallpaperEngine::Data::Model::Object& object, float time);
+    [[nodiscard]] static ResolvedTransform
+    localTransform (const WallpaperEngine::Data::Model::Object& object, float time);
 
 private:
     struct PuppetBone {
 	int32_t parent = -1;
-	/** inverse of the composed bind-pose transform; the rest mesh is the parts atlas,
-	 *  so posed vertex = animWorld * inverseBindWorld * vertex */
+	/** inverse of the composed bind-pose transform; posed vertex is
+	 *  animWorld * inverseBindWorld * the already-assembled rest vertex */
 	glm::mat4 inverseBindWorld = glm::mat4 (1.0f);
+    };
+
+    struct PuppetAttachment {
+	uint16_t bone = 0;
+	glm::mat4 local = glm::mat4 (1.0f);
     };
 
     struct PuppetBoneFrame {
@@ -108,9 +118,11 @@ private:
 
     bool loadPuppetMesh (const glm::vec2& size);
     bool loadPuppetBones (const std::vector<char>& data, size_t mdlsOffset);
+    void loadPuppetAttachments (const std::vector<char>& data, size_t mdatOffset);
     void loadPuppetAnimations (const std::vector<char>& data, size_t mdlaOffset);
     void selectPuppetAnimation ();
     void updatePuppetPositionBuffer (const glm::vec2& size);
+    [[nodiscard]] std::optional<ResolvedTransform> puppetAttachmentTransform (const std::string& name) const;
     void setupPuppetGeometryCallback (Effects::CPass* pass, bool samplesSourceTexture) const;
     ResolvedTransform updateGeometryBuffers ();
     [[nodiscard]] glm::vec2 resolveGeometrySize (float sceneWidth, float sceneHeight, glm::vec3& origin) const;
@@ -140,6 +152,10 @@ private:
     std::vector<uint32_t> m_puppetBlendIndices = {};
     std::vector<GLfloat> m_puppetBlendWeights = {};
     std::vector<PuppetBone> m_puppetBones = {};
+    std::vector<glm::mat4> m_puppetWorldBones = {};
+    std::vector<glm::mat4> m_puppetSkinBones = {};
+    std::vector<GLfloat> m_puppetPositions = {};
+    std::map<std::string, PuppetAttachment> m_puppetAttachments = {};
     std::vector<PuppetAnimation> m_puppetAnimations = {};
     std::vector<PuppetActiveLayer> m_puppetActiveLayers = {};
 
@@ -172,6 +188,11 @@ private:
     glm::vec4 m_pos = {};
     glm::vec3 m_sceneCenter = {};
     glm::vec2 m_size = {};
+
+    std::array<GLfloat, 18> m_cachedSceneSpacePosition = {};
+    std::array<GLfloat, 18> m_cachedCopySpacePosition = {};
+    std::array<GLfloat, 12> m_cachedTexcoordCopy = {};
+    bool m_geometryBufferCacheValid = false;
 
     bool m_initialized = false;
 

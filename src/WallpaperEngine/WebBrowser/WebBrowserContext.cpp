@@ -18,13 +18,11 @@ using namespace WallpaperEngine::WebBrowser;
 int WebBrowserContext::executeSubprocess (int argc, char* argv[]) {
     CefMainArgs main_args (argc, argv);
 
-    // Subprocess only registers the fixed wp scheme; avoid any file IO here — it would close the
-    // inherited ICU data descriptor before CefExecuteProcess reads it.
+    // Run CEF's process bootstrap before the engine performs any file IO or graphics setup. For
+    // the browser process this returns -1 and main continues; helper processes run here and return
+    // their exit code.
     const CefRefPtr<CefApp> app = new CEF::SubprocessApp ();
-    const int exitCode = CefExecuteProcess (main_args, app, nullptr);
-    // A helper process always terminates here; CefExecuteProcess returns its exit
-    // code (>= 0). Guard against -1 just in case so we still exit cleanly.
-    return exitCode < 0 ? 0 : exitCode;
+    return CefExecuteProcess (main_args, app, nullptr);
 }
 
 // TODO: THIS IS USED TO GENERATE A RANDOM FOLDER FOR THE CHROME PROFILE, MAYBE A DIFFERENT APPROACH WOULD BE BETTER?
@@ -68,8 +66,8 @@ WebBrowserContext::WebBrowserContext (WallpaperEngine::Application::WallpaperApp
 	this->m_wallpaperApplication.getContext ().getArgc (), this->m_wallpaperApplication.getContext ().getArgv ()
     );
 
-    // Only the browser process reaches here (helpers are handled in executeSubprocess), so never call
-    // CefExecuteProcess here: it puts the ICU loader into "child" mode and fails to find its data fd.
+    // Only the browser process reaches here. CEF process bootstrap already ran at the top of main,
+    // before the engine opened files or initialized graphics.
     this->m_browserApplication = new CEF::BrowserApp (wallpaperApplication);
 
     // Configurate Chromium
