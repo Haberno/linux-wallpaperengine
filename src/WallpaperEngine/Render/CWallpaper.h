@@ -48,11 +48,14 @@ public:
     virtual ~CWallpaper () override;
 
     /**
-     * Performs a render pass of the wallpaper
+     * Performs a render pass of the wallpaper.
+     *
+     * @param updateScene false composites the last completed scene framebuffer without
+     *                    advancing the scene, used to freeze outgoing transitions
      */
     void render (
 	const glm::ivec4& viewport, const bool vflip, const glm::ivec2& globalPosition = { 0, 0 },
-	const glm::ivec2& logicalSize = { 0, 0 }
+	const glm::ivec2& logicalSize = { 0, 0 }, bool updateScene = true
     );
 
     /**
