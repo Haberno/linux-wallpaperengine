@@ -48,16 +48,16 @@ public:
      * assets; everything else (amount, delay, influence, per-object depth, locktransforms)
      * comes from scene.json.
      */
-    /** Converts the authored cameraparallaxdelay value into the smoothing time constant in
-     * seconds: tc = cameraparallaxdelay * this. Measured against real Wallpaper Engine by
-     * capturing g_ParallaxPosition motion on "Slow down" (delay=2.0): WE's tc = 233ms
-     * (0.83s to 95%), a clean single-pole exponential — the same model this code uses. That
-     * puts WE's constant at 233ms/2.0 = 0.117, so this matches WE. (Low-delay scenes like
-     * Gojo at delay~0.1 stay effectively instant regardless.) */
-    static constexpr float PARALLAX_DELAY_TO_SECONDS = 0.117f;
+    /** Official camera-delay response recovered from wallpaper64.exe. A positive authored
+     * delay maps to alpha = (1 - delay / limit) * rate * dt, clamped to [0,1]; zero snaps. */
+    static constexpr float PARALLAX_DELAY_LIMIT = 3.0f;
+    static constexpr float PARALLAX_DELAY_RATE = 10.0f;
     /** Fraction of each axis' extent a unit-depth layer travels over a full mouse swing
      * (applied per-axis: width for x, height for y) */
     static constexpr float PARALLAX_TRANSLATION_SPAN = 0.5f;
+
+    [[nodiscard]] static float calculateParallaxSmoothingAlpha (float delay, float deltaTime);
+    [[nodiscard]] static glm::vec2 calculateShaderParallaxPosition (const glm::vec2& displacement);
 
     const glm::vec2* getMousePosition () const;
     const glm::vec2* getMousePositionLast () const;
@@ -132,7 +132,7 @@ private:
     glm::vec2 m_mousePositionNormalized = {};
     glm::vec2 m_parallaxDisplacement = {};
     /** Parallax position fed to shaders via g_ParallaxPosition, 0.5,0.5 = centered */
-    glm::vec2 m_parallaxPosition = {0.5f, 0.5f};
+    glm::vec2 m_parallaxPosition = { 0.5f, 0.5f };
     std::shared_ptr<const CFBO> _rt_4FrameBuffer = nullptr;
     std::shared_ptr<const CFBO> _rt_8FrameBuffer = nullptr;
     std::shared_ptr<const CFBO> _rt_Bloom = nullptr;

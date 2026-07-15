@@ -58,25 +58,36 @@ glm::vec2 CObject::resolveParallaxDepth () const {
     constexpr int kMaxParentDepth = 32;
     const Object* current = &this->m_object;
 
-    for (int depth = 0; current != nullptr && depth <= kMaxParentDepth; depth++) {
-	if (current->authoredParallaxDepth.has_value ()) {
-	    return *current->authoredParallaxDepth;
-	}
-
-	if (!current->parent.has_value ()) {
+    // Wallpaper Engine applies camera parallax while rendering a root layer and then
+    // renders the complete child subtree under that translated transform. Consequently,
+    // only the root-most layer's depth controls the subtree; a child-authored depth does
+    // not override its parent (3367988661 pins a date/clock subtree this way).
+    for (int depth = 0; current->parent.has_value () && depth <= kMaxParentDepth; depth++) {
+	const auto* parentObject = this->m_scene.getObject (current->parent.value ());
+	if (parentObject == nullptr) {
 	    break;
 	}
-
-	const auto* parentObject = this->m_scene.getObject (current->parent.value ());
-	current = parentObject != nullptr ? &parentObject->getObject () : nullptr;
+	current = &parentObject->getObject ();
     }
 
-    // Unauthored layers are pinned (WE zero-inits parallaxDepth). A 1.0 default made
-    // unauthored backgrounds drift the full base amount, and any whose art has less
-    // overscan than that drift (e.g. Gojo's "gojo background left", 15px margin vs 52px
-    // travel) slid off and exposed the gray clear plane. Authored backgrounds already
-    // use 0 to pin (Sea, Slow down, One Piece), so 0 is the matching default.
-    return glm::vec2 (0.0f);
+    if (current->authoredParallaxDepth.has_value ()) {
+	// Read the live typed property so user settings and SceneScript changes keep working.
+	if (current->is<Image> ()) {
+	    return current->as<Image> ()->parallaxDepth->value->getVec2 ();
+	}
+	if (current->is<Particle> ()) {
+	    return current->as<Particle> ()->parallaxDepth->value->getVec2 ();
+	}
+	if (current->is<Text> ()) {
+	    return current->as<Text> ()->parallaxDepth->value->getVec2 ();
+	}
+	return *current->authoredParallaxDepth;
+    }
+
+    // The official Layer constructor initializes parallaxDepth to 1,1. Older workshop
+    // scenes often omit the field and depend on that default (Gojo 3100265648 and the
+    // puppet/window layer in 3487328036). Explicit 0,0 is the authored pin value.
+    return glm::vec2 (1.0f);
 }
 
 bool CObject::isVisibleThroughParents () const {
