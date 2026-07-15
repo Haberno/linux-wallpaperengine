@@ -174,9 +174,9 @@ private:
     };
 
     /**
-     * A background switch staged by the loader thread. The heavy CPU work (project parse,
-     * texture reads + decompression) happens off the render thread; only the GL work
-     * (texture uploads, shader compilation) runs on the main thread when it is applied.
+     * A background switch staged by the loader thread. Project parsing, texture decode
+     * and static texture uploads happen off the render thread. Media-backed textures and
+     * the final scene install remain on the render thread.
      */
     struct PreparedSwitch {
 	/** Monotonic id used to drop requests superseded by a newer one for the same screen */
@@ -186,7 +186,9 @@ private:
 	Render::TransitionMode transition = Render::TransitionMode_Fade;
 	/** Parsed project, set by the worker on success */
 	ProjectUniquePtr project = nullptr;
-	/** Textures pre-parsed by the worker; the main thread only uploads them to the GPU */
+	/** Static textures uploaded through the worker's shared GL context */
+	std::vector<std::pair<std::string, std::shared_ptr<const Render::TextureProvider>>> readyTextures {};
+	/** Media textures, or parsed textures left over when no shared build context is available */
 	std::vector<std::pair<std::string, Data::Assets::TextureUniquePtr>> textures {};
 	/** Failure description, empty on success */
 	std::string error {};
@@ -206,7 +208,7 @@ private:
     /** Applies a background switch the loader thread finished preparing, if any */
     void processPreparedSwitches ();
     /**
-     * GL-thread part of a background switch: texture uploads, wallpaper build and swap
+     * Render-thread part of a background switch: media/fallback uploads, scene build and swap
      *
      * @return whether the switch succeeded
      */

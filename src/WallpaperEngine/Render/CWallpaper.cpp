@@ -315,11 +315,17 @@ void CWallpaper::updateUVs (const glm::ivec4& viewport, const bool vflip) {
 }
 
 void CWallpaper::render (
-    const glm::ivec4& viewport, const bool vflip, const glm::ivec2& globalPosition, const glm::ivec2& logicalSize
+    const glm::ivec4& viewport, const bool vflip, const glm::ivec2& globalPosition, const glm::ivec2& logicalSize,
+    const bool updateScene
 ) {
     // Get current frame counter from the driver to avoid redundant scene renders
     const uint32_t currentFrame = this->getContext ().getDriver ().getFrameCounter ();
-    const bool needsSceneRender = (currentFrame != this->m_lastRenderedFrame);
+    // During a transition the outgoing wallpaper is visually frozen. Reuse the scene
+    // framebuffer it rendered immediately before the switch instead of running a third
+    // full scene at the engine frame rate. An outgoing scene that has never rendered
+    // still gets one initialization frame.
+    const bool needsSceneRender
+	= this->m_lastRenderedFrame == UINT32_MAX || (updateScene && currentFrame != this->m_lastRenderedFrame);
     const glm::ivec4 sceneViewport = this->m_spanInfo.has_value ()
 	? glm::ivec4 { 0, 0, this->m_spanInfo->totalBounds.z, this->m_spanInfo->totalBounds.w }
 	: viewport;
