@@ -79,33 +79,31 @@ socket command, video (MPV), honest crash-tolerance on authored JSON drift.
 
 14. Puppet bone constraints (`"tp"`/`"tm"`) — mouse-interactive puppets.
 15. Animation layer `blend` weights (currently full strength).
-16. Parallax response-curve calibration vs real WE (span constant +
-    smoothing shape are tuned by eye) → [[Parallax System]].
-17. Puppet effect chain flags: `clampuvs`, `copybackground`, `solid`.
+16. Puppet effect chain flags: `clampuvs`, `copybackground`, `solid`.
 
 ## Parity gaps — scripting/engine API
 
-18. ILayer expansion: getParent/getChildren/rotateObjectSpace, lookAt/
+17. ILayer expansion: getParent/getChildren/rotateObjectSpace, lookAt/
     getTransformMatrix/setParent, engine.registerAsset (beingsuz c209500,
     bb73165).
-19. Camera-transform scripting (`get/setCameraTransforms`) — needs a Camera
+18. Camera-transform scripting (`get/setCameraTransforms`) — needs a Camera
     base/override API (beingsuz's Camera.cpp changes).
-20. IEngine context queries: isWallpaper/isDesktopDevice/isPortrait/...
+19. IEngine context queries: isWallpaper/isDesktopDevice/isPortrait/...
     (08f2a41).
-21. `input.cursorWorldPosition` is a zero stub; `thisScene.getLayer(name)`
+20. `input.cursorWorldPosition` is a zero stub; `thisScene.getLayer(name)`
     coverage for overlay scripts.
-22. Structural rebuild on property change (visibility-gating properties need
+21. Structural rebuild on property change (visibility-gating properties need
     a scene rebuild; `prop` socket command only fires applyUserProperties) —
     beingsuz 61d3528.
 
 ## Remaining beingsuz ports (non-scripting)
 
-23. `--render-scale` supersampling (8947ec6).
-24. Control-socket extras: live screenshot (a83347a), live renderscale/
+22. `--render-scale` supersampling (8947ec6).
+23. Control-socket extras: live screenshot (a83347a), live renderscale/
     audiodevice apply.
-25. `--audio-device` capture-source override for the recorder.
-26. Cold-build switch optimizations (739e9c6).
-27. Web/CEF fix batch (1150c42, c700c2f, ed032bb, e4ca729, 0d127f9) — only
+24. `--audio-device` capture-source override for the recorder.
+25. Cold-build switch optimizations (739e9c6).
+26. Web/CEF fix batch (1150c42, c700c2f, ed032bb, e4ca729, 0d127f9) — only
     if web wallpapers enter use.
 
 ## Code health

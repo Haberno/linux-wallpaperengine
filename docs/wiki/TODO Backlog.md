@@ -109,8 +109,9 @@ over-engineering audit, and an in-code TODO/FIXME scan. Ordered by priority.
 26. **Puppet bone constraints** (`"tp"`/`"tm"`) — mouse-interactive puppets.
 27. **Animation layer blend weights** — layers currently apply at full
     strength.
-28. **Parallax response-curve calibration** — span constant + smoothing
-    shape are eyeballed; needs a reference recording of real WE.
+28. ~~Parallax response-curve calibration~~ — **done 2026-07-15**: exact
+    delay response, half-canvas magnitude, root depth ownership/default, and
+    shader input semantics recovered from `wallpaper64.exe`.
     → [[Parallax System]].
 29. **Puppet effect chain flags** — `clampuvs`, `copybackground`, `solid`
     unhandled on puppet objects. → [[Puppet Warp Pipeline]].

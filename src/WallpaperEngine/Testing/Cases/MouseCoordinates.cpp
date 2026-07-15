@@ -1,6 +1,17 @@
+#include "WallpaperEngine/Render/Wallpapers/CScene.h"
+
+// CEF exposes its own CHECK macro through CScene's renderer includes. Catch must own the
+// test assertion macro in this translation unit.
+#ifdef CHECK
+#undef CHECK
+#endif
+
+#include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
 #include <cmath>
 #include <glm/glm.hpp>
+
+using WallpaperEngine::Render::Wallpapers::CScene;
 
 /**
  * Test GLFW to OpenGL coordinate conversion
@@ -153,4 +164,17 @@ TEST_CASE ("Coordinate conversion with different viewport sizes") {
 	double openglY = static_cast<double> (height) - glfwY;
 	CHECK (openglY == 600.0);
     }
+}
+
+TEST_CASE ("Wallpaper Engine camera parallax delay response") {
+    CHECK (CScene::calculateParallaxSmoothingAlpha (0.0f, 1.0f / 60.0f) == 1.0f);
+    CHECK (CScene::calculateParallaxSmoothingAlpha (1.0f, 1.0f / 60.0f) == Catch::Approx (1.0f / 9.0f));
+    CHECK (CScene::calculateParallaxSmoothingAlpha (2.0f, 1.0f / 60.0f) == Catch::Approx (1.0f / 18.0f));
+    CHECK (CScene::calculateParallaxSmoothingAlpha (3.0f, 1.0f / 60.0f) == 0.0f);
+}
+
+TEST_CASE ("Shader parallax position is independent of camera translation amount") {
+    CHECK (CScene::calculateShaderParallaxPosition ({ 0.0f, 0.0f }) == glm::vec2 (0.5f));
+    CHECK (CScene::calculateShaderParallaxPosition ({ -1.0f, 1.0f }) == glm::vec2 (0.0f, 1.0f));
+    CHECK (CScene::calculateShaderParallaxPosition ({ -0.15f, 0.15f }) == glm::vec2 (0.425f, 0.575f));
 }

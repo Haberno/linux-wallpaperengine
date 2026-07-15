@@ -106,9 +106,9 @@ SceneUniquePtr WallpaperParser::parseScene (const JSON& file, Project& project) 
                 },
                 .parallax = {
                     .enabled = general.user ("cameraparallax", properties, false),
-                    .amount = general.user ("cameraparallaxamount", properties, 1.0f),
-                    .delay = general.user ("cameraparallaxdelay", properties, 0.0f),
-                    .mouseInfluence = general.user ("cameraparallaxmouseinfluence", properties, 1.0f),
+                    .amount = general.user ("cameraparallaxamount", properties, 0.5f),
+                    .delay = general.user ("cameraparallaxdelay", properties, 0.1f),
+                    .mouseInfluence = general.user ("cameraparallaxmouseinfluence", properties, 0.5f),
                 },
                 .shake = {
                     .enabled = general.user ("camerashake", properties, false),

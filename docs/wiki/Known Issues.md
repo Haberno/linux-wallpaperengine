@@ -66,12 +66,6 @@ queue), see [[Current Status]]. This page keeps the durable issue records.
 ## Deferred / not implemented
 - Puppet bone constraint JSON (`"tp"`/`"tm"`) — mouse-interactive puppets.
 - Animation layer `blend` weights (layers currently apply at full strength).
-- Parallax response curve (magnitude constant `PARALLAX_TRANSLATION_SPAN =
-  0.5` and the exponential-decay smoothing shape) is uncalibrated against
-  real WE — both are tuned-by-eye heuristics, not derived from a spec. The
-  smoothing has no ease-in (snaps to full filter speed on direction change),
-  unlike WE's likely damped-spring feel. Needs a reference wallpaper
-  recording to calibrate against → [[Parallax System]].
 - Puppet effect chain: `clampuvs`, `copybackground`, and the `solid` flag are
   unhandled on puppet objects.
 

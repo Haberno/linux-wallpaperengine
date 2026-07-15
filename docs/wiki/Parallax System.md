@@ -12,17 +12,18 @@ timestamp: 2026-07-06T20:00:00-04:00
 Camera parallax shifts layers with the mouse. Config comes from scene.json
 `general`: `cameraparallax`, `cameraparallaxamount`, `cameraparallaxdelay`,
 `cameraparallaxmouseinfluence`; per-object `parallaxDepth`.
+When individual camera fields are omitted, Wallpaper Engine defaults amount to
+`0.5`, delay to `0.1`, and mouse influence to `0.5`.
 
 ## Depth resolution (hierarchical)
 
-`CObject::resolveParallaxDepth()` — shared by CImage, CParticle, CText:
-
-1. If the object authored `parallaxDepth`, use it.
-2. Else inherit from the **nearest ancestor** that authored one.
-3. Else default **1.0** (Wallpaper Engine's root default).
-
-Authors pin layers with an explicit `0`; children pinned via a parent's `0`
-(MyGO character). Unauthored root layers drift at depth 1 (Gojo backgrounds).
+`CObject::resolveParallaxDepth()` — shared by CImage, CParticle, CText —
+walks to the **root-most layer** and uses that layer's depth for the complete
+subtree. Child-authored depths do not override it. The official Layer
+constructor defaults the depth to **1.0**; authors pin a subtree with an
+explicit root depth of `0` (MyGO character, 3367988661 clock/date container).
+Unauthored root layers therefore drift at depth 1 (Gojo backgrounds and
+3487328036's puppet/window layer).
 
 **`locktransforms` is only an editor-UI lock** — it never affects parallax or
 rendering. An earlier exclusion based on it broke wallpapers that author every
@@ -30,29 +31,36 @@ layer locked (One Piece 3135984503 has locked layers with depths 1.1–1.35).
 
 ## Displacement convention
 
-`CScene` smooths mouse displacement (`delay * 0.1` s time constant, mix per
-frame) and exposes it; each renderer applies:
+`CScene` smooths mouse displacement using Wallpaper Engine's frame update:
+
+```
+alpha = delay <= 0 ? 1 : clamp((1 - delay / 3) * 10 * dt, 0, 1)
+smoothed = mix(smoothed, target, alpha)
+```
+
+Each renderer then applies:
 
 ```
 offset.x = -depth.x * amount * displacement.x * (sceneWidth * 0.5)
-offset.y =  depth.y * amount * displacement.y * (sceneWidth * 0.5)
+offset.y =  depth.y * amount * displacement.y * (sceneHeight * 0.5)
 ```
 
-`PARALLAX_TRANSLATION_SPAN = 0.5` (fraction of scene width a unit-depth layer
-travels over a full mouse swing) is a calibrated guess — recalibrate against a
-reference wallpaper if strength feels off. Fullscreen layers are excluded
-(they always cover the projection).
+`PARALLAX_TRANSLATION_SPAN = 0.5` converts this fork's centered `[-1,1]`
+displacement into Wallpaper Engine's half-canvas cursor delta. It is therefore
+part of the coordinate conversion, not a tuning constant. Fullscreen layers
+are excluded (they always cover the projection).
 
-Shader-driven parallax (`depthparallax` etc.) instead reads
-`g_ParallaxPosition` = `0.5 + displacement * amount`.
+Shader-driven parallax (`depthparallax` etc.) instead reads the influenced,
+smoothed mouse position remapped to `[0,1]`:
+`g_ParallaxPosition = 0.5 + displacement * 0.5`. Camera `amount` does not
+scale this shader input.
 
 See [[Wallpaper Case Studies]] for the evidence trail.
 
 ## Divergence from upstream (Almamu/linux-wallpaperengine)
 
-Compared against `upstream/main` (2026-07-07). Two of the three differences
-are deliberate, evidenced fixes; the third is where remaining "feel" drift
-most likely lives.
+Compared against `upstream/main` (2026-07-07). The camera formula and response
+were subsequently recovered from `wallpaper64.exe` (2026-06-29 build).
 
 1. **Formula shape — multiplicative, not additive.** Upstream:
    `x = (depth.x + amount) * displacement.x * sceneWidth` — every layer
@@ -68,23 +76,12 @@ most likely lives.
    multiplies by `rotModel`, keeping the parallax drift in scene space.
    Fixes spinning/rotating layers dragging their parallax offset around with
    them. **Correct, keep.**
-3. **Response curve — unverified on both sides, likely source of residual
-   "feel" mismatch:**
-   - *Magnitude:* upstream centers the mouse as `pos - 0.5` (range ±0.5);
-     this fork uses `pos*2 - 1` (range ±1.0) and halves the reference size via
-     `PARALLAX_TRANSLATION_SPAN` to compensate. Net scale roughly cancels,
-     but it's two constants tuned together by eye, not one formula derived
-     from a spec — see the existing `PARALLAX_TRANSLATION_SPAN` note above.
-   - *Smoothing:* this fork's `alpha = 1 - exp(-dt / (delay * 0.1))` is a
-     single-pole exponential low-pass — framerate-independent, but with no
-     ease-in: a mouse direction change starts moving the layer at full filter
-     speed immediately, then decays into the new target. Upstream instead
-     uses a linear-clamped mix (`delay * dt`, clamped to 1), also invented.
-     Neither has been checked against WE's actual camera-lag curve, which
-     more plausibly behaves like a damped spring (continuous acceleration,
-     no instantaneous velocity kick). This is the most likely remaining
-     cause of subtle "feel" differences even when pinning/direction/magnitude
-     are all correct.
+3. **Response curve — binary-confirmed.** Wallpaper Engine computes
+   `alpha = clamp((1 - delay / 3) * 10 * dt, 0, 1)` and linearly mixes the
+   influenced cursor toward its target. This replaces the fork's earlier
+   exponential approximation. Its whole-layer transform uses a half-canvas
+   cursor delta, exactly equivalent to this fork's `[-1,1]` displacement
+   multiplied by `PARALLAX_TRANSLATION_SPAN = 0.5`.
 
 ## Depth-map parallax occlusion effect (`depthparallax`)
 
@@ -108,15 +105,12 @@ wrong."
 
 Two things confirmed while tracing this:
 
-1. **The shader shares the same input as per-object parallax.**
+1. **The shader shares the smoothed cursor, but not camera `amount`.**
    `depthparallax.vert` computes `prlxInput = g_ParallaxPosition * 2 - 1`,
-   and `g_ParallaxPosition` (`CScene.cpp`: `0.5 + m_parallaxDisplacement *
-   amount`) is the exact same per-frame value that feeds `CImage`/`CText`/
-   `CParticle` translation. This means the response-curve calibration
-   question above (mouse-displacement magnitude, exponential-decay
-   smoothing) doesn't just affect layer panning — it directly scales the
-   strength of every `depthparallax`-style effect in the engine. Broadens
-   the earlier finding rather than being a separate bug.
+   and `g_ParallaxPosition` is `0.5 + m_parallaxDisplacement * 0.5`.
+   Wallpaper Engine applies camera `amount` later, only in whole-layer
+   translation. Keeping it out of this uniform is essential for depth-map-only
+   scenes such as 3751020128, which intentionally authors `amount = 0`.
 2. **`g_EffectTextureProjectionMatrix`/`...Inverse` were hardcoded identity —
    fixed.** Was `CPass.cpp:882-883`, `addUniform (..., glm::mat4 (1.0))`
    (same in upstream, pre-existing, not fork-introduced).
@@ -145,5 +139,5 @@ Two things confirmed while tracing this:
 Not yet checked: whether the ray-march math itself
 (`ParallaxMapping`/`g_Scale`/`g_Center` handling) round-trips correctly
 through the HLSL→GLSL translation — the shader source itself is unmodified
-stock WE GLSL, so if there's a magnitude bug it's upstream of the shader, in
-the `g_ParallaxPosition` value fed into it (point 1 above).
+stock WE GLSL. The input semantics feeding that shader are now
+binary-confirmed.
