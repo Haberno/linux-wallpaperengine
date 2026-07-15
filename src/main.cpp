@@ -19,8 +19,13 @@ void signalhandler (const int sig) {
 }
 
 void initLogging () {
-    sLog.addOutput (new std::ostream (std::cout.rdbuf ()));
-    sLog.addError (new std::ostream (std::cerr.rdbuf ()));
+    // Keep independent stream formatting state without heap-allocating objects that the
+    // non-owning logger cannot release. Function-local statics outlive the logger singleton.
+    static std::ostream output (std::cout.rdbuf ());
+    static std::ostream error (std::cerr.rdbuf ());
+
+    sLog.addOutput (&output);
+    sLog.addError (&error);
 }
 
 int main (int argc, char* argv[]) {
