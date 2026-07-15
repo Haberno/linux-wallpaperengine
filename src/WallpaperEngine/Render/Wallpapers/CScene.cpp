@@ -383,14 +383,8 @@ void CScene::renderFrame (const glm::ivec4& viewport) {
     if (this->getScene ().camera.parallax.enabled->value->getBool ()
 	&& !this->getContext ().getApp ().getContext ().settings.mouse.disableparallax) {
 	const float influence = this->getScene ().camera.parallax.mouseInfluence->value->getFloat ();
-	const float amount = this->getScene ().camera.parallax.amount->value->getFloat ();
-	// delay is the smoothing lag: 0 snaps instantly, larger values follow the mouse slower,
-	// framerate-independent so the feel doesn't change with fps
-	const float timeConstant
-	    = this->getScene ().camera.parallax.delay->value->getFloat () * PARALLAX_DELAY_TO_SECONDS;
-	const float alpha = timeConstant > 0.0f
-	    ? 1.0f - std::exp (-(g_Time - g_TimeLast) / timeConstant)
-	    : 1.0f;
+	const float delay = this->getScene ().camera.parallax.delay->value->getFloat ();
+	const float alpha = calculateParallaxSmoothingAlpha (delay, g_Time - g_TimeLast);
 
 	// per-object depth and the global parallax amount are applied by each renderable,
 	// this only tracks the smoothed mouse offset (-1 to 1 across the screen) scaled by
@@ -401,8 +395,10 @@ void CScene::renderFrame (const glm::ivec4& viewport) {
 	    1.0f - this->m_mousePosition.y * 2.0f,
 	};
 	this->m_parallaxDisplacement = glm::mix (this->m_parallaxDisplacement, centeredMouse * influence, alpha);
-	// shader-driven parallax effects (e.g. depthparallax) expect a 0-1 position centered at 0.5
-	this->m_parallaxPosition = glm::vec2 (0.5f, 0.5f) + this->m_parallaxDisplacement * amount;
+	// Shader-driven parallax effects consume the influenced mouse position directly.
+	// cameraparallaxamount belongs only to whole-layer camera translation; multiplying the
+	// shader input by it suppresses depth-map-only scenes whose camera amount is zero.
+	this->m_parallaxPosition = calculateShaderParallaxPosition (this->m_parallaxDisplacement);
     }
 
     // run a tick in the javascript logic
@@ -449,6 +445,19 @@ void CScene::renderFrame (const glm::ivec4& viewport) {
 
 	cur->render ();
     }
+}
+
+float CScene::calculateParallaxSmoothingAlpha (const float delay, const float deltaTime) {
+    if (delay <= 0.0f) {
+	return 1.0f;
+    }
+
+    return glm::clamp ((1.0f - delay / PARALLAX_DELAY_LIMIT) * PARALLAX_DELAY_RATE * deltaTime, 0.0f, 1.0f);
+}
+
+glm::vec2 CScene::calculateShaderParallaxPosition (const glm::vec2& displacement) {
+    // displacement uses [-1,1], whereas g_ParallaxPosition uses [0,1].
+    return glm::vec2 (0.5f) + displacement * 0.5f;
 }
 
 void CScene::updateMouse (const glm::ivec4& viewport) {

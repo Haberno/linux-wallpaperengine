@@ -23,8 +23,8 @@ public:
     [[nodiscard]] const AssetLocator& getAssetLocator () const;
     [[nodiscard]] int getId () const;
     [[nodiscard]] const Object& getObject () const;
-    /** effective parallax depth: the object's own if authored, else inherited from the
-     *  nearest ancestor that authored one, else 1 (Wallpaper Engine's root default) */
+    /** Effective parallax depth: the root-most layer controls its entire subtree; an
+     *  unauthored root defaults to 1 (Wallpaper Engine's Layer constructor default). */
     [[nodiscard]] glm::vec2 resolveParallaxDepth () const;
 
     /** true when no ancestor in the parent chain is hidden — a hidden container hides its

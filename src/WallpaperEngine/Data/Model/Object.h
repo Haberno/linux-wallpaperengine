@@ -32,7 +32,7 @@ struct ObjectData {
     UserSettingUniquePtr origin;
     /** Whether the object's transform is locked in the editor UI (no effect on rendering) */
     bool locktransforms;
-    /** Parallax depth as authored; unset means inherit from the parent chain (1 at the root) */
+    /** Parallax depth as authored; the root-most layer controls its subtree and defaults to 1 */
     std::optional<glm::vec2> authoredParallaxDepth;
     /** Transform fields for generic scene/group objects. Typed objects keep their own transform fields. */
     UserSettingUniquePtr groupScale;
