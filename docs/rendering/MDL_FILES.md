@@ -104,12 +104,15 @@ per animation:
     DWORD unknown
     DWORD frameBytes
     frames of 9 floats: translation vec3, rotation vec3, scale vec3
-  version-specific zero footer
+  version-specific footer
 ```
 
-MDLA0001 uses a four-byte footer, MDLA0004 uses ten bytes, and MDLA0006 uses
-35 bytes. The files usually contain `frameCount + 1` records per bone, with a
-repeated final record for a loop. Animation layers are absolute poses, so
-later additive layers are composed as deltas from their own first frames.
-MDLA0006 also stores Z rotation with the opposite sign from MDLA0001/0004;
-the loader normalizes it as frames are read.
+MDLA0001 uses a four-byte zero footer and MDLA0006 uses 35 zero bytes.
+MDLA0004 stores a DWORD extension count, followed by entries containing a
+DWORD type, DWORD byte length, and that many payload bytes, then a six-byte
+zero trailer. With no extensions this is the commonly observed ten-byte
+footer. The files usually contain `frameCount + 1` records per bone, with a
+repeated final record for a loop. Animation layers are absolute poses, so later
+additive layers are composed as deltas from their own first frames. Rotation
+values retain their serialized sign; model space is converted to scene space
+after skinning.
