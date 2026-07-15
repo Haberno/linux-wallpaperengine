@@ -26,6 +26,13 @@ constexpr uint32_t DEFAULT_MAX_PARTICLES = 1000;
  * Runtime particle instance state
  */
 struct ParticleInstance {
+    struct TrailPoint {
+	glm::vec3 position { 0.0f };
+	glm::vec3 color { 1.0f };
+	float alpha { 1.0f };
+	float size { 20.0f };
+    };
+
     // Position and movement
     glm::vec3 position { 0.0f };
     glm::vec3 velocity { 0.0f };
@@ -72,6 +79,12 @@ struct ParticleInstance {
     } initial;
 
     bool alive { false };
+
+    // Rope trails follow one particle through time. Keeping the history on the
+    // particle also makes order-preserving compaction move it with its owner.
+    std::vector<TrailPoint> trailHistory;
+    TrailPoint trailLastFrame;
+    bool trailLastFrameValid { false };
 
     // Get normalized lifetime position (0.0 to 1.0)
     float getLifetimePos () const { return lifetime > 0.0f ? (age / lifetime) : 1.0f; }
@@ -163,6 +176,8 @@ protected:
     // Rendering
     void renderSprites ();
     void renderRope ();
+    void renderRopeTrail ();
+    void updateRopeTrailHistory (float dt);
     void setupPass ();
     void setupGeometryCallbacks ();
     void setupParticleUniforms ();
@@ -246,12 +261,16 @@ private:
     float m_trailMinLength { 0.0f };
     // Rope renderer (rope + ropetrail both use genericropeparticle shader)
     bool m_useRopeRenderer { false };
+    bool m_useRopeTrailRenderer { false };
     int m_ropeSubdivision { 4 }; // Catmull-Rom subdivisions between points (smoothing)
-    int m_ropeSegments { 4 }; // ropetrail: historical position snapshots per particle
+    int m_ropeSegments { 8 }; // ropetrail: historical position snapshots per particle
     float m_ropeUVScale { 1.0f };
     bool m_ropeUVScrolling { false };
     bool m_ropeUVSmoothing { true }; // rope only
+    bool m_ropeFadeAlpha { false };
+    bool m_ropeFadeSize { false };
     bool m_uniformLifetimes { false }; // true when lifetime min==max (enables UV smoothing)
+    float m_ropeHistoryTimer { 0.0f };
 
     // Per-vertex float counts for different renderer types
     static constexpr int SPRITE_FLOATS_PER_VERTEX = 17;
