@@ -11,10 +11,12 @@
 #include "WallpaperEngine/Scripting/ScriptableObject.h"
 
 #include <array>
+#include <glm/gtc/quaternion.hpp>
 #include <glm/vec3.hpp>
 #include <map>
 #include <optional>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 using namespace WallpaperEngine;
@@ -52,6 +54,14 @@ public:
     [[nodiscard]] const glm::vec4& getColor4 () const override;
     [[nodiscard]] const glm::vec3& getCompositeColor () const override;
 
+    [[nodiscard]] size_t getPuppetAnimationLayerCount () const;
+    [[nodiscard]] std::optional<size_t> findPuppetAnimationLayer (int index) const;
+    [[nodiscard]] std::optional<size_t> findPuppetAnimationLayer (const std::string& name) const;
+    void playPuppetAnimationLayer (std::optional<size_t> index = std::nullopt);
+    void pausePuppetAnimationLayer (std::optional<size_t> index = std::nullopt);
+    void stopPuppetAnimationLayer (std::optional<size_t> index = std::nullopt);
+    [[nodiscard]] bool isPuppetAnimationLayerPlaying (std::optional<size_t> index = std::nullopt) const;
+
     /**
      * Performs a ping-pong on the available framebuffers to be able to continue rendering things to them
      *
@@ -84,7 +94,10 @@ protected:
 
 private:
     struct PuppetBone {
+	std::string name = {};
+	uint32_t type = 0;
 	int32_t parent = -1;
+	glm::mat4 bindLocal = glm::mat4 (1.0f);
 	/** inverse of the composed bind-pose transform; posed vertex is
 	 *  animWorld * inverseBindWorld * the already-assembled rest vertex */
 	glm::mat4 inverseBindWorld = glm::mat4 (1.0f);
@@ -97,7 +110,7 @@ private:
 
     struct PuppetBoneFrame {
 	glm::vec3 translation = glm::vec3 (0.0f);
-	glm::vec3 rotation = glm::vec3 (0.0f);
+	glm::quat rotation = glm::quat (1.0f, 0.0f, 0.0f, 0.0f);
 	glm::vec3 scale = glm::vec3 (1.0f);
     };
 
@@ -107,20 +120,34 @@ private:
 	std::string mode = {};
 	float fps = 0.0f;
 	uint32_t frameCount = 0;
+	std::vector<uint32_t> boneFlags = {};
 	/** boneFrames[bone][frame], usually frameCount + 1 entries with the last matching the first */
 	std::vector<std::vector<PuppetBoneFrame>> boneFrames = {};
     };
 
     struct PuppetActiveLayer {
 	const PuppetAnimation* animation = nullptr;
-	float rate = 1.0f;
+	float time = 0.0f;
+	float weight = 1.0f;
+	bool additive = false;
+    };
+
+    struct PuppetLayerPlayback {
+	bool initialized = false;
+	bool playing = true;
+	bool stopped = false;
+	bool visible = false;
+	uint32_t animation = 0;
+	float time = 0.0f;
+	float lastSceneTime = 0.0f;
+	float visibilityWeight = 0.0f;
     };
 
     bool loadPuppetMesh (const glm::vec2& size);
     bool loadPuppetBones (const std::vector<char>& data, size_t mdlsOffset);
     void loadPuppetAttachments (const std::vector<char>& data, size_t mdatOffset);
     void loadPuppetAnimations (const std::vector<char>& data, size_t mdlaOffset);
-    void selectPuppetAnimation ();
+    void selectPuppetAnimations (float sceneTime);
     void updatePuppetPositionBuffer (const glm::vec2& size);
     [[nodiscard]] std::optional<ResolvedTransform> puppetAttachmentTransform (const std::string& name) const;
     void setupPuppetGeometryCallback (Effects::CPass* pass, bool samplesSourceTexture) const;
@@ -143,6 +170,7 @@ private:
     GLuint m_texcoordCopy;
     GLuint m_texcoordPass;
     GLuint m_puppetSpacePosition = GL_NONE;
+    size_t m_puppetPositionBufferBytes = 0;
     GLuint m_puppetTexCoord = GL_NONE;
     GLuint m_puppetTexCoordFirstPass = GL_NONE;
     GLuint m_puppetIndices = GL_NONE;
@@ -158,6 +186,7 @@ private:
     std::map<std::string, PuppetAttachment> m_puppetAttachments = {};
     std::vector<PuppetAnimation> m_puppetAnimations = {};
     std::vector<PuppetActiveLayer> m_puppetActiveLayers = {};
+    std::unordered_map<int, PuppetLayerPlayback> m_puppetLayerPlayback = {};
 
     glm::mat4 m_modelViewProjectionScreen = {};
     glm::mat4 m_modelViewProjectionPass = {};
