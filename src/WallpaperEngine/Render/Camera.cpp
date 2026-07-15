@@ -46,7 +46,14 @@ void Camera::setOrthogonalProjection (const float width, const float height) {
     float nearz = this->m_camera.projection.nearz->value->getFloat ();
     float farz = this->m_camera.projection.farz->value->getFloat ();
 
-    this->m_projection = glm::ortho<float> (-width / 2.0, width / 2.0, -height / 2.0, height / 2.0, nearz, farz);
+    // Scene wallpapers use signed Z coordinates for otherwise-2D layers, and X/Y
+    // rotations can make a single quad cross Z=0.  A conventional positive near
+    // plane clips the half that rotates towards the camera.  Wallpaper Engine's
+    // orthographic scene volume needs to cover both sides of the authoring plane;
+    // nearz remains relevant to perspective cameras only.
+    const float depth = glm::max (glm::abs (nearz), glm::abs (farz));
+    this->m_projection
+	= glm::ortho<float> (-width / 2.0, width / 2.0, -height / 2.0, height / 2.0, -depth, depth);
     this->m_projection = glm::translate (this->m_projection, this->getEye ());
     this->m_isOrthogonal = true;
 }

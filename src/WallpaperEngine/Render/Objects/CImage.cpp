@@ -95,6 +95,13 @@ struct PuppetMeshBlock {
     uint32_t indexBytes = 0;
 };
 
+struct PuppetVertexLayout {
+    uint32_t formatMask = 0;
+    size_t stride = 0;
+    size_t blendIndicesOffset = 0;
+    size_t uvOffset = 0;
+};
+
 template <typename T> T puppetRead (const std::vector<char>& data, size_t& offset) {
     if (offset + sizeof (T) > data.size ()) {
 	throw std::runtime_error ("puppet data ends unexpectedly");
@@ -137,18 +144,25 @@ size_t findPuppetSection (const std::vector<char>& data, const char* marker, siz
     return data.size ();
 }
 
-// the MDLV header layout varies between versions, so scan for a block whose
-// vertex/index byte lengths are self-consistent instead of parsing it structurally
+// The official loader uses the serialized vertex-format mask, not the MDLV version,
+// to calculate the record stride. Scan for a known mask whose vertex/index byte
+// lengths are also self-consistent; this accepts versions such as MDLV0019 without
+// treating an unknown format as the newest layout.
 std::optional<PuppetMeshBlock> findPuppetMeshBlock (
-    const std::vector<char>& data, size_t markerSize, size_t mdlsOffset, size_t meshHeaderSize, size_t vertexStride
+    const std::vector<char>& data, size_t markerSize, size_t mdlsOffset, const PuppetVertexLayout& layout
 ) {
+    constexpr size_t meshHeaderSize = sizeof (uint32_t) * 2;
     for (size_t offset = markerSize; offset + meshHeaderSize + sizeof (uint32_t) < mdlsOffset; offset++) {
-	size_t cursor = offset + sizeof (uint32_t);
+	size_t cursor = offset;
+	const auto candidateFormatMask = puppetRead<uint32_t> (data, cursor);
+	if (candidateFormatMask != layout.formatMask) {
+	    continue;
+	}
 	const auto candidateVertexBytes = puppetRead<uint32_t> (data, cursor);
 	const size_t verticesOffset = offset + meshHeaderSize;
 	const size_t indexLengthOffset = verticesOffset + candidateVertexBytes;
 
-	if (candidateVertexBytes == 0 || candidateVertexBytes % vertexStride != 0
+	if (candidateVertexBytes == 0 || candidateVertexBytes % layout.stride != 0
 	    || indexLengthOffset + sizeof (uint32_t) > mdlsOffset) {
 	    continue;
 	}
@@ -166,6 +180,115 @@ std::optional<PuppetMeshBlock> findPuppetMeshBlock (
     }
 
     return std::nullopt;
+}
+
+bool puppetAnimationRecordFits (
+    const std::vector<char>& data, size_t recordOffset, size_t sectionEnd, size_t expectedBoneCount
+) {
+    try {
+	size_t offset = recordOffset;
+	const auto ensure = [&] (size_t byteCount) {
+	    if (offset > sectionEnd || byteCount > sectionEnd - offset) {
+		throw std::runtime_error ("animation candidate extends past section boundary");
+	    }
+	};
+	const auto readU32 = [&] () {
+	    ensure (sizeof (uint32_t));
+	    return puppetRead<uint32_t> (data, offset);
+	};
+	const auto readString = [&] () {
+	    const auto end = std::find (
+		data.begin () + static_cast<ptrdiff_t> (offset),
+		data.begin () + static_cast<ptrdiff_t> (sectionEnd), '\0'
+	    );
+	    if (end == data.begin () + static_cast<ptrdiff_t> (sectionEnd)) {
+		throw std::runtime_error ("animation candidate has an unterminated string");
+	    }
+	    std::string value (data.begin () + static_cast<ptrdiff_t> (offset), end);
+	    offset = std::distance (data.begin (), end) + 1;
+	    return value;
+	};
+
+	readU32 (); // id
+	readU32 (); // flags/unknown
+	readString (); // name
+	const std::string mode = readString ();
+	if (mode != "loop" && mode != "mirror" && mode != "single") {
+	    return false;
+	}
+	ensure (sizeof (float));
+	const float fps = puppetRead<float> (data, offset);
+	if (!std::isfinite (fps) || fps <= 0.0f || fps > 1000.0f) {
+	    return false;
+	}
+	const uint32_t frameCount = readU32 ();
+	readU32 (); // flags/unknown
+	const uint32_t boneCount = readU32 ();
+	if (frameCount == 0 || boneCount != expectedBoneCount) {
+	    return false;
+	}
+
+	for (uint32_t bone = 0; bone < boneCount; bone++) {
+	    readU32 (); // bone flags
+	    const uint32_t frameBytes = readU32 ();
+	    if (frameBytes % (sizeof (float) * 9) != 0) {
+		return false;
+	    }
+	    ensure (frameBytes);
+	    offset += frameBytes;
+	}
+	return true;
+    } catch (const std::exception&) {
+	return false;
+    }
+}
+
+// MDLA versions append optional per-track metadata after each core animation
+// record. We do not consume that metadata yet, but we must cross it to reach the
+// next animation. Locate the next strongly validated record through its mode
+// string and complete bone/frame structure rather than assuming an empty footer.
+std::optional<size_t> findNextPuppetAnimationRecord (
+    const std::vector<char>& data, size_t searchFrom, size_t sectionEnd, size_t expectedBoneCount
+) {
+    constexpr std::array<const char*, 3> modes { "loop", "mirror", "single" };
+    size_t best = sectionEnd;
+
+    for (const char* mode : modes) {
+	const size_t modeLength = strlen (mode);
+	auto search = data.begin () + static_cast<ptrdiff_t> (searchFrom);
+	const auto end = data.begin () + static_cast<ptrdiff_t> (sectionEnd);
+	while (search != end) {
+	    const auto found = std::search (search, end, mode, mode + modeLength);
+	    if (found == end) {
+		break;
+	    }
+	    const size_t modeOffset = std::distance (data.begin (), found);
+	    search = found + 1;
+	    if (modeOffset == 0 || data[modeOffset - 1] != '\0'
+		|| modeOffset + modeLength >= sectionEnd || data[modeOffset + modeLength] != '\0') {
+		continue;
+	    }
+
+	    // Walk backwards over the NUL-terminated animation name. The preceding
+	    // byte belongs to the fixed eight-byte id/flags header.
+	    size_t nameStart = modeOffset - 1;
+	    while (nameStart > searchFrom && data[nameStart - 1] != '\0') {
+		nameStart--;
+	    }
+	    if (nameStart < sizeof (uint32_t) * 2) {
+		continue;
+	    }
+	    const size_t recordOffset = nameStart - sizeof (uint32_t) * 2;
+	    if (recordOffset < searchFrom || recordOffset >= best) {
+		continue;
+	    }
+	    if (puppetAnimationRecordFits (data, recordOffset, sectionEnd, expectedBoneCount)) {
+		best = recordOffset;
+	    }
+	}
+    }
+
+    return best < sectionEnd ? std::optional<size_t> { best } : std::nullopt;
 }
 }
 
@@ -258,7 +381,8 @@ CImage::CImage (Wallpapers::CScene& scene, const Image& image) :
     m_texcoordCopy (GL_NONE), m_texcoordPass (GL_NONE), m_modelViewProjectionScreen (),
     m_modelViewProjectionPass (glm::mat4 (1.0)), m_modelViewProjectionCopy (), m_modelViewProjectionScreenInverse (),
     m_modelViewProjectionPassInverse (glm::inverse (m_modelViewProjectionPass)), m_modelViewProjectionCopyInverse (),
-    m_modelMatrix (), m_viewProjectionMatrix (), m_image (image), m_pos (), m_initialized (false) {
+    m_modelMatrix (), m_viewProjectionMatrix (), m_image (image), m_resolvedAlpha (image.alpha->value->getFloat ()),
+    m_pos (), m_initialized (false) {
     // register any properties in use on this object
     this->registerProperty ("origin", *image.origin->value);
     this->registerProperty ("scale", *image.scale->value);
@@ -520,8 +644,18 @@ bool CImage::loadPuppetMesh (const glm::vec2& size) {
 	std::vector<char> data { std::istreambuf_iterator<char> (*stream), std::istreambuf_iterator<char> () };
 
 	constexpr size_t markerSize = 9;
-	constexpr size_t meshHeaderSize = sizeof (uint32_t) * 2;
 	constexpr size_t positionOffset = 0;
+	constexpr std::array vertexLayouts {
+	    // Newer weighted layout with one additional packed vertex field. Observed
+	    // in MDLV0023 files that also carry MDMP/MDLE sections.
+	    PuppetVertexLayout { .formatMask = 0x0181000e, .stride = 84, .blendIndicesOffset = 44, .uvOffset = 76 },
+	    // Current weighted puppet layout. Observed in MDLV0017/0019/0021/0023.
+	    PuppetVertexLayout { .formatMask = 0x0180000f, .stride = 80, .blendIndicesOffset = 40, .uvOffset = 72 },
+	    // Compact weighted layout as serialized by MDLV0016.
+	    PuppetVertexLayout { .formatMask = 0x01800009, .stride = 52, .blendIndicesOffset = 12, .uvOffset = 44 },
+	    // Legacy compact weighted layout. Observed in MDLV0013/0014.
+	    PuppetVertexLayout { .formatMask = 0x00000000, .stride = 52, .blendIndicesOffset = 12, .uvOffset = 44 },
+	};
 
 	const std::string puppetVersion
 	    = data.size () >= markerSize ? std::string (data.data (), strlen ("MDLV0021")) : "";
@@ -529,31 +663,26 @@ bool CImage::loadPuppetMesh (const glm::vec2& size) {
 	    sLog.error ("Unsupported puppet model header ", puppetVersion, " in ", *this->getImage ().model->puppet);
 	    return false;
 	}
-	// Per-vertex stride and attribute offsets vary by MDLV version. v0013 packs tightly
-	// (52-byte stride: pos@0, bone indices@12, weights@28, uv@44); v0017/0021/0023 carry extra
-	// per-vertex data (80-byte stride: pos@0, indices@40, weights@56, uv@72). Blend weights
-	// always follow the four uint32 indices contiguously. Without the v0013 branch its mesh was
-	// scanned at stride 80, matched a garbage block, and the parts flew apart. (Almamu PR #625.)
-	const bool isCompactLayout = puppetVersion == "MDLV0013";
-	const bool isExpandedLayout
-	    = puppetVersion == "MDLV0017" || puppetVersion == "MDLV0021" || puppetVersion == "MDLV0023";
-	if (!isCompactLayout && !isExpandedLayout) {
-	    sLog.error ("Unsupported puppet vertex layout ", puppetVersion, " in ", *this->getImage ().model->puppet);
-	    return false;
-	}
-	const size_t vertexStride = isCompactLayout ? 52 : 80;
-	const size_t blendIndicesOffset = isCompactLayout ? 12 : 40;
-	const size_t uvOffset = isCompactLayout ? 44 : 72;
-
 	const size_t mdlsOffset = findPuppetSection (data, "MDLS", markerSize);
-	const auto meshBlock = findPuppetMeshBlock (data, markerSize, mdlsOffset, meshHeaderSize, vertexStride);
+	const PuppetVertexLayout* vertexLayout = nullptr;
+	std::optional<PuppetMeshBlock> meshBlock;
+	for (const auto& candidate : vertexLayouts) {
+	    meshBlock = findPuppetMeshBlock (data, markerSize, mdlsOffset, candidate);
+	    if (meshBlock.has_value ()) {
+		vertexLayout = &candidate;
+		break;
+	    }
+	}
 	if (!meshBlock.has_value ()) {
-	    sLog.error ("Could not find a usable MDLV mesh block in ", *this->getImage ().model->puppet);
+	    sLog.error (
+		"Unsupported or malformed puppet vertex format ", puppetVersion, " in ",
+		*this->getImage ().model->puppet
+	    );
 	    return false;
 	}
 
-	const size_t vertexCount = meshBlock->vertexBytes / vertexStride;
-	const size_t verticesOffset = meshBlock->headerOffset + meshHeaderSize;
+	const size_t vertexCount = meshBlock->vertexBytes / vertexLayout->stride;
+	const size_t verticesOffset = meshBlock->headerOffset + sizeof (uint32_t) * 2;
 	const size_t indicesOffset = verticesOffset + meshBlock->vertexBytes + sizeof (uint32_t);
 	const size_t indexCount = meshBlock->indexBytes / sizeof (uint16_t);
 	std::vector<GLfloat> texcoords;
@@ -569,7 +698,7 @@ bool CImage::loadPuppetMesh (const glm::vec2& size) {
 	indices.reserve (indexCount);
 
 	for (size_t index = 0; index < vertexCount; index++) {
-	    const size_t vertexOffset = verticesOffset + index * vertexStride;
+	    const size_t vertexOffset = verticesOffset + index * vertexLayout->stride;
 	    size_t cursor = vertexOffset + positionOffset;
 	    const glm::vec3 position {
 		puppetRead<float> (data, cursor),
@@ -582,7 +711,7 @@ bool CImage::loadPuppetMesh (const glm::vec2& size) {
 	    this->m_puppetRawPositions.insert (
 		this->m_puppetRawPositions.end (), { position.x, position.y, position.z }
 	    );
-	    cursor = vertexOffset + blendIndicesOffset;
+	    cursor = vertexOffset + vertexLayout->blendIndicesOffset;
 	    for (int component = 0; component < 4; component++) {
 		this->m_puppetBlendIndices.push_back (puppetRead<uint32_t> (data, cursor));
 	    }
@@ -593,7 +722,7 @@ bool CImage::loadPuppetMesh (const glm::vec2& size) {
 		}
 		this->m_puppetBlendWeights.push_back (weight);
 	    }
-	    cursor = vertexOffset + uvOffset;
+	    cursor = vertexOffset + vertexLayout->uvOffset;
 	    const float u = puppetRead<float> (data, cursor);
 	    const float v = puppetRead<float> (data, cursor);
 	    if (!std::isfinite (u) || !std::isfinite (v)) {
@@ -665,8 +794,9 @@ bool CImage::loadPuppetMesh (const glm::vec2& size) {
 
 	this->m_puppetIndexCount = static_cast<GLsizei> (indices.size ());
 	sLog.out (
-	    "Loaded puppet mesh ", *this->getImage ().model->puppet, " version=", puppetVersion,
-	    " vertices=", vertexCount, " indices=", this->m_puppetIndexCount
+	    "Loaded puppet mesh ", *this->getImage ().model->puppet, " version=", puppetVersion, " format=0x", std::hex,
+	    vertexLayout->formatMask, std::dec, " stride=", vertexLayout->stride, " vertices=", vertexCount,
+	    " indices=", this->m_puppetIndexCount
 	);
 
 	return true;
@@ -744,10 +874,10 @@ bool CImage::loadPuppetBones (const std::vector<char>& data, size_t mdlsOffset) 
 		// Older skeleton versions keep the bone name/constraint descriptor here.
 		this->m_puppetBones.back ().name = puppetReadString (data, offset);
 	    } else {
-		if (offset >= data.size () || data[offset] != '\0') {
-		    throw std::runtime_error ("missing bone transform separator");
-		}
-		offset++; // separator after the MDLS0004 bind matrix
+		// MDLS0004 keeps the display name before the transform, but still has a
+		// constraint descriptor afterwards. It is commonly empty (and therefore
+		// looks like a one-byte separator), while newer files store JSON here.
+		puppetReadString (data, offset);
 	    }
 	    if (offset > sectionEnd) {
 		throw std::runtime_error ("bone record extends past skeleton section boundary");
@@ -818,14 +948,8 @@ void CImage::loadPuppetAnimations (const std::vector<char>& data, size_t mdlaOff
 
     try {
 	const std::string version (data.data () + mdlaOffset, strlen ("MDLA0006"));
-	size_t footerBytes = 0;
-	if (version == "MDLA0006") {
-	    footerBytes = 35;
-	} else if (version == "MDLA0004") {
-	    // MDLA0004 has a variable-size extension table instead of a fixed footer.
-	} else if (version == "MDLA0001") {
-	    footerBytes = 4;
-	} else {
+	if (version != "MDLA0001" && version != "MDLA0002" && version != "MDLA0003"
+	    && version != "MDLA0004" && version != "MDLA0005" && version != "MDLA0006") {
 	    throw std::runtime_error ("unsupported animation header " + version);
 	}
 
@@ -885,35 +1009,18 @@ void CImage::loadPuppetAnimations (const std::vector<char>& data, size_t mdlaOff
 	    }
 
 	    this->m_puppetAnimations.push_back (std::move (animation));
-
-	    if (version == "MDLA0004") {
-		// The first DWORD is an extension count. A zero count produces the
-		// familiar ten-byte footer (the count plus a six-byte trailer), but some
-		// puppets store one or more length-prefixed blocks between them.
-		const uint32_t extensionCount = puppetRead<uint32_t> (data, offset);
-		for (uint32_t extension = 0; extension < extensionCount; extension++) {
-		    if (offset > sectionEnd || sectionEnd - offset < sizeof (uint32_t) * 2) {
-			throw std::runtime_error ("animation extension header extends past section boundary");
-		    }
-		    puppetRead<uint32_t> (data, offset); // extension type
-		    const uint32_t extensionBytes = puppetRead<uint32_t> (data, offset);
-		    if (offset > sectionEnd || extensionBytes > sectionEnd - offset) {
-			throw std::runtime_error ("animation extension extends past section boundary");
-		    }
-		    offset += extensionBytes;
+	    if (index + 1 < animationCount) {
+		const auto next = findNextPuppetAnimationRecord (
+		    data, offset, sectionEnd, this->m_puppetBones.size ()
+		);
+		if (!next.has_value ()) {
+		    throw std::runtime_error ("could not locate the next animation record after versioned metadata");
 		}
-		footerBytes = 6;
+		offset = *next;
+	    } else {
+		// The final record's optional metadata reaches the next MDL section.
+		offset = sectionEnd;
 	    }
-
-	    if (offset > sectionEnd || footerBytes > sectionEnd - offset) {
-		throw std::runtime_error ("animation footer extends past section boundary");
-	    }
-	    for (size_t byte = 0; byte < footerBytes; byte++) {
-		if (data[offset + byte] != '\0') {
-		    throw std::runtime_error ("unexpected animation footer data");
-		}
-	    }
-	    offset += footerBytes;
 	}
 
 	if (offset != sectionEnd) {
@@ -1703,6 +1810,17 @@ void CImage::render () {
 	return;
     }
 
+    // Image opacity can be keyframed independently of its texture animation.
+    // Keep the evaluated value in stable member storage because CPass uniforms
+    // retain a pointer returned by getAlpha()/getUserAlpha(). This is especially
+    // important for authored opening overlays that fade away to reveal the live
+    // scene below them.
+    this->m_resolvedAlpha = this->m_image.alpha->value->getFloat ();
+    if (this->m_image.alpha->animation != nullptr) {
+	this->m_resolvedAlpha
+	    = this->m_image.alpha->animation->evaluateFloat (this->m_resolvedAlpha, this->getScene ().getTime ());
+    }
+
     glColorMask (true, true, true, true);
 
     // Always update screen transform (handles rotation + parallax dynamically);
@@ -1745,9 +1863,9 @@ void CImage::render () {
 
 const float& CImage::getBrightness () const { return this->m_image.brightness->value->getFloat (); }
 
-const float& CImage::getUserAlpha () const { return this->m_image.alpha->value->getFloat (); }
+const float& CImage::getUserAlpha () const { return this->m_resolvedAlpha; }
 
-const float& CImage::getAlpha () const { return this->m_image.alpha->value->getFloat (); }
+const float& CImage::getAlpha () const { return this->m_resolvedAlpha; }
 
 const glm::vec3& CImage::getColor () const { return this->m_image.color->value->getVec3 (); }
 
@@ -2053,6 +2171,11 @@ void CImage::updateScreenSpacePosition () {
     }
 
     glm::mat4 mvp = this->getScene ().getCamera ().getProjection () * this->getScene ().getCamera ().getLookAt ();
+
+    // The 2D geometry buffer stores authoring-space X/Y only. Preserve the
+    // resolved Z origin in the model transform so tilted image layers remain at
+    // their authored depth instead of being forced onto the camera plane.
+    mvp = glm::translate (mvp, { 0.0f, 0.0f, transform.origin.z });
 
     // Apply parallax displacement if enabled — folded into the matrix before the rotation,
     // so the offset stays in scene space instead of being rotated with the object (PR #479)

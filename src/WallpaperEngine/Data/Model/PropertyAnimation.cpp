@@ -45,6 +45,11 @@ float PropertyAnimation::evaluateChannel (int channel, float time, float fallbac
     return keyframes.back ().value;
 }
 
+float PropertyAnimation::evaluateFloat (const float base, const float time) const {
+    const float value = this->evaluateChannel (0, time, this->relative ? 0.0f : base);
+    return this->relative ? base + value : value;
+}
+
 glm::vec3 PropertyAnimation::evaluateVec3 (const glm::vec3& base, float time) const {
     glm::vec3 result = base;
 
