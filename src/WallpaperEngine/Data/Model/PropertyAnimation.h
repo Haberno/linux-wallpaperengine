@@ -41,6 +41,12 @@ struct PropertyAnimation {
     [[nodiscard]] float evaluateChannel (int channel, float time, float fallback) const;
 
     /**
+     * Samples channel 0 for a scalar property. Relative animations offset the
+     * property's base value; absolute animations replace it.
+     */
+    [[nodiscard]] float evaluateFloat (float base, float time) const;
+
+    /**
      * Samples channels 0-2 at the given time and combines them with the base value,
      * either as an offset (relative) or a replacement per animated channel.
      */

@@ -9,24 +9,34 @@ timestamp: 2026-07-06T20:00:00-04:00
 
 # MDL File Format
 
-Reverse-engineered July 2026; verified against MDLV0017, MDLV0021, MDLV0023
-(all share the layout). Canonical copy also in `docs/rendering/MDL_FILES.md`.
-Consumed by the [[Puppet Warp Pipeline]].
+Reverse-engineered July 2026 and checked against all MDL files in the installed
+Workshop library. The official loader derives the vertex stride from the
+format mask, not the MDLV version. Canonical copy also in
+`docs/rendering/MDL_FILES.md`. Consumed by the [[Puppet Warp Pipeline]].
 
 ## MDLV — mesh
 
 ```
 "MDLV00XX\0"
-3 DWORDs
+version-specific fields
 material json path (NUL-terminated), zero padding
-tag DWORD
+DWORD vertexFormatMask
 DWORD vertexByteLength
-VERTEX[vertexByteLength / 80]
+VERTEX[vertexByteLength / stride]
 DWORD indicesByteLength
 WORD indices[...]        // triangles
 ```
 
-VERTEX (stride 80):
+Observed layouts:
+
+| mask | stride | versions | blend indices | weights | UV |
+|---|---:|---|---:|---:|---:|
+| `0x00000000` | 52 | 0013, 0014 | 12 | 28 | 44 |
+| `0x01800009` | 52 | 0016 | 12 | 28 | 44 |
+| `0x0180000f` | 80 | 0017, 0019, 0021, 0023 | 40 | 56 | 72 |
+| `0x0181000e` | 84 | 0023 | 44 | 60 | 76 |
+
+VERTEX (stride 80) detail:
 | offset | field |
 |---|---|
 | 0 | position vec3 — assembled model-space rest pose; it does not generally mirror the texture atlas |
@@ -54,7 +64,7 @@ per bone:
   DWORD matrixBytes     // 64
   float[16]             // row-major local bind, translation in row 3
                         // (byte-identical to column-major w/ translation in last column)
-  // MDLS0004: BYTE zero separator
+  // MDLS0004: constraint descriptor (NUL), often empty but sometimes JSON
   // MDLS0001/0002/0003: name (NUL), often constraint JSON with "tp"/"tm"
 ```
 
@@ -90,21 +100,38 @@ per animation:
   float fps             // NOT duration
   DWORD frameCount, DWORD unknown, DWORD boneCount
   per bone:
-    DWORD zero, DWORD frameBytes
-    frames of 9 floats: T3 R3 S3 (rotation about z only)
+    DWORD boneFlags, DWORD frameBytes
+    frames of 9 floats: T3 R3 S3
     // frameCount+1 entries; last == first for loops
-  version footer:
-    MDLA0001: 4 zero bytes
-    MDLA0004: DWORD extensionCount; per extension DWORD type, DWORD byteLength,
-              byte payload[byteLength]; then 6 zero bytes
-    MDLA0006: 35 zero bytes
+  versioned optional track metadata
 ```
 
-An MDLA0004 animation with no extensions therefore has the commonly observed
-ten-byte footer. Extensions are length-prefixed and must be skipped before the
-next animation record; treating the footer as unconditionally ten bytes breaks
-puppets that carry this metadata.
+With no optional metadata, the trailing encodings are 4 bytes for MDLA0001/2,
+9 for MDLA0003, 10 for MDLA0004, 34 for MDLA0005, and 35 for MDLA0006. They
+must not be treated as fixed zero padding: newer files store large
+length-prefixed per-track blocks there. The renderer skips metadata it does not
+yet consume by locating and fully validating the next core animation record.
 
-Animation frames store absolute bone poses. Additive layers must be composed
-as deltas from their own frame 0. Rotation values retain their serialized sign;
-the model-to-scene Y conversion happens after skinning.
+Animation frames store absolute bone poses. All XYZ Euler components are
+converted to quaternions before interpolation. Rotation values retain their
+serialized sign; the model-to-scene Y conversion happens after skinning.
+Empty/`loop` modes wrap, `mirror` ping-pongs, and `single` clamps.
+
+The first authored animation's frame 0 is the assembled visual baseline; MDLS
+is the skinning bind transform and cannot safely replace that baseline. The
+first layer's blend weights motion from its frame 0. Later additive layers are
+composed as weighted deltas from their own frame 0, while later non-additive
+layers blend toward their sampled absolute pose. Layer visibility, animation,
+rate, blend, additive, and blend-transition properties are live values and are
+re-evaluated while rendering.
+
+## Other observed sections
+
+`MDMP0001` and `MDLE0002` appear after the core sections in some MDLV0023
+files and are also named by the current official binary. `CImage` does not yet
+consume them; they remain documented as unknown rather than being parsed with
+guessed semantics.
+
+`MDLVS001` is another binary literal, but its single code reference writes it
+to an output buffer in a separate serializer path. It is not dispatched as a
+puppet section by the main MDL loader.
