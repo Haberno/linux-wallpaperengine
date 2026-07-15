@@ -26,6 +26,8 @@ struct ObjectData {
     std::string name;
     std::vector<int> dependencies;
     std::optional<int> parent;
+    /** Named puppet attachment on the parent model, when this object is bone-attached. */
+    std::optional<std::string> attachment;
     /** The point of origin of the object */
     UserSettingUniquePtr origin;
     /** Whether the object's transform is locked in the editor UI (no effect on rendering) */
@@ -514,6 +516,7 @@ struct ParticleRenderer {
     float minLength;
     float subdivision;
     float segments; // ropetrail: number of history segments per particle
+    bool segmentsExplicit;
     float uvScale;
     bool uvScrolling;
     bool uvSmoothing; // rope only: reduces flickering when lifetimes are identical
