@@ -475,6 +475,14 @@ WaylandOpenGLDriver::~WaylandOpenGLDriver () {
     // stop EGL
     eglMakeCurrent (EGL_NO_DISPLAY, EGL_NO_SURFACE, EGL_NO_SURFACE, EGL_NO_CONTEXT);
 
+    if (m_buildSurface != EGL_NO_SURFACE) {
+	eglDestroySurface (m_eglContext.display, m_buildSurface);
+    }
+
+    if (m_buildContext != EGL_NO_CONTEXT) {
+	eglDestroyContext (m_eglContext.display, m_buildContext);
+    }
+
     if (m_eglContext.context != EGL_NO_CONTEXT) {
 	eglDestroyContext (m_eglContext.display, m_eglContext.context);
     }

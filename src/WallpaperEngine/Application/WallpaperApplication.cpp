@@ -94,9 +94,18 @@ WallpaperApplication::WallpaperApplication (ApplicationContext& context) : m_con
 }
 
 WallpaperApplication::~WallpaperApplication () {
+    // A prepared result can own shared-context GL textures. Stop the producer and
+    // destroy queued results while the render context is still current and alive.
+    this->stopSwitchWorker ();
+    this->makeAnyViewportCurrent ();
+    {
+	std::lock_guard lock (this->m_switchMutex);
+	this->m_switchRequests.clear ();
+	this->m_switchResults.clear ();
+    }
+
     // CEF-backed wallpapers must be destroyed while their browser and GL contexts still exist.
     if (this->m_renderContext) {
-	this->makeAnyViewportCurrent ();
 	this->m_renderContext.reset ();
     }
     this->m_backgrounds.clear ();
@@ -697,6 +706,24 @@ std::set<std::string> collectProjectTextures (const Project& project) {
 
     return result;
 }
+
+/** Finishes queued uploads and releases the worker's shared GL context on every exit path. */
+class BuildContextGuard {
+public:
+    explicit BuildContextGuard (WallpaperEngine::Render::Drivers::VideoDriver& driver) : m_driver (driver) { }
+    ~BuildContextGuard () {
+	// The render context must never observe a partially uploaded shared texture.
+	// Waiting here blocks only the loader thread, not frame dispatch.
+	glFinish ();
+	m_driver.releaseBuildContext ();
+    }
+
+    BuildContextGuard (const BuildContextGuard&) = delete;
+    BuildContextGuard& operator= (const BuildContextGuard&) = delete;
+
+private:
+    WallpaperEngine::Render::Drivers::VideoDriver& m_driver;
+};
 } // namespace
 
 void WallpaperApplication::requestBackgroundSwitch (
@@ -748,8 +775,7 @@ void WallpaperApplication::switchWorkerMain () {
 	try {
 	    job.project = this->loadProject (job.path);
 
-	    // pre-parse the textures (file read + decompression) so the render thread
-	    // only has to upload them to the GPU
+	    // Read and decompress textures away from the render loop first.
 	    for (const auto& name : collectProjectTextures (*job.project)) {
 		try {
 		    const auto contents = job.project->assetLocator->texture (name);
@@ -768,6 +794,44 @@ void WallpaperApplication::switchWorkerMain () {
 		} catch (const std::exception&) {
 		    // ignored, the render thread falls back to loading it synchronously
 		}
+	    }
+
+	    {
+		std::lock_guard lock (this->m_switchMutex);
+		// Avoid spending GPU time on a selection the user has already replaced.
+		if (this->m_latestSwitchIds[job.screen] != job.id) {
+		    continue;
+		}
+	    }
+
+	    // Static GL textures are shareable between EGL contexts, so upload them here.
+	    // Video textures initialize mpv and stay in the main-thread fallback list.
+	    if (!job.textures.empty () && this->m_videoDriver != nullptr && this->m_renderContext != nullptr
+		&& this->m_videoDriver->makeBuildContextCurrent ()) {
+		BuildContextGuard buildContext (*this->m_videoDriver);
+		std::vector<std::pair<std::string, Data::Assets::TextureUniquePtr>> fallbackTextures {};
+		fallbackTextures.reserve (job.textures.size ());
+
+		for (auto& [name, texture] : job.textures) {
+		    const bool mediaBacked = texture->isVideoMp4 || (texture->flags & TextureFlags_Video);
+
+		    if (mediaBacked) {
+			fallbackTextures.emplace_back (std::move (name), std::move (texture));
+			continue;
+		    }
+
+		    try {
+			job.readyTextures.emplace_back (
+			    std::move (name),
+			    std::make_shared<Render::CTexture> (*this->m_renderContext, std::move (texture))
+			);
+		    } catch (const std::exception& e) {
+			// resolveTexture will load this asset normally during the scene build.
+			sLog.error ("Async texture upload failed for ", name, ": ", e.what ());
+		    }
+		}
+
+		job.textures = std::move (fallbackTextures);
 	    }
 	} catch (const std::exception& e) {
 	    job.error = e.what ();
@@ -807,11 +871,16 @@ void WallpaperApplication::processPreparedSwitches () {
 
 	    // a newer request for the same screen is already on the way, drop this one
 	    if (this->m_latestSwitchIds[job.screen] != job.id) {
+		// readyTextures owns GL objects. Ensure its destructor runs with a context.
+		this->makeAnyViewportCurrent ();
 		continue;
 	    }
 	}
 
 	if (!job.error.empty ()) {
+	    if (!job.readyTextures.empty ()) {
+		this->makeAnyViewportCurrent ();
+	    }
 	    sLog.error ("Failed to load wallpaper ", job.path, " for ", job.screen, ": ", job.error);
 	    this->markPlaylistItemFailed (job.screen, job.path);
 	    continue;
@@ -856,8 +925,12 @@ bool WallpaperApplication::applyPreparedSwitch (PreparedSwitch& job) {
 	    : this->m_context.settings.render.window.clamp;
 
 	if (this->m_renderContext) {
-	    // hand the pre-parsed textures to the cache; the wallpaper build below then
-	    // finds them there and only pays for the GPU upload
+	    // Shared-context uploads are already complete; cache insertion is only a pointer move.
+	    for (auto& [name, texture] : job.readyTextures) {
+		this->m_renderContext->storeTexture (name, std::move (texture));
+	    }
+
+	    // Media textures and non-Wayland fallbacks still need main-context construction.
 	    for (auto& [name, texture] : job.textures) {
 		this->m_renderContext->storeTexture (
 		    name, std::make_shared<Render::CTexture> (*this->m_renderContext, std::move (texture))
