@@ -1,10 +1,10 @@
 #pragma once
 
 #include "PlaybackRecorder.h"
-#include "kiss_fftr.h"
+#include "WallpaperEngineSpectrumAnalyzer.h"
+#include <cstdint>
 #include <pulse/pulseaudio.h>
-
-#define WAVE_BUFFER_SIZE 1024
+#include <vector>
 
 namespace WallpaperEngine::Audio::Drivers::Recorders {
 class PlaybackRecorder;
@@ -15,12 +15,15 @@ public:
      * Struct that contains all the required data for the PulseAudio callbacks
      */
     struct PulseAudioData {
-	kiss_fftr_cfg kisscfg;
-	uint8_t* audioBuffer;
-	uint8_t* audioBufferTmp;
-	size_t currentWritePointer;
-	bool fullFrameReady;
-	pa_stream* captureStream;
+	std::vector<float> audioBuffer;
+	std::vector<float> writeBuffer;
+	std::size_t currentWriteFrame = 0;
+	std::size_t frameCount = WallpaperEngineSpectrumAnalyzer::BaseFrameCount;
+	uint32_t sampleRate = 44100;
+	unsigned int channelCount = 2;
+	uint64_t formatGeneration = 0;
+	bool fullFrameReady = false;
+	pa_stream* captureStream = nullptr;
     };
 
     PulseAudioPlaybackRecorder ();
@@ -29,17 +32,11 @@ public:
     void update () override;
 
 private:
-    pa_mainloop* m_mainloop;
-    pa_mainloop_api* m_mainloopApi;
-    pa_context* m_context;
+    pa_mainloop* m_mainloop = nullptr;
+    pa_mainloop_api* m_mainloopApi = nullptr;
+    pa_context* m_context = nullptr;
     PulseAudioData m_captureData;
-
-    float m_audioFFTbuffer[WAVE_BUFFER_SIZE] = { 0.0f };
-    kiss_fft_cpx m_FFTinfo[WAVE_BUFFER_SIZE / 2 + 1] = { { .r = 0.0f, .i = 0.0f } };
-    float m_FFTdestination64[64] = { 0 };
-    float m_FFTdestination32[32] = { 0 };
-    float m_FFTdestination16[16] = { 0 };
-    /** Hann window, computed once — unwindowed FFT leakage smears the bands */
-    float m_hannWindow[WAVE_BUFFER_SIZE] = { 0.0f };
+    WallpaperEngineSpectrumAnalyzer m_spectrumAnalyzer;
+    uint64_t m_configuredGeneration = 0;
 };
 } // namespace WallpaperEngine::Audio::Drivers::Recorders

@@ -333,6 +333,8 @@ set(COMMON_SOURCES
     src/WallpaperEngine/Audio/Drivers/Recorders/PulseAudioPlaybackRecorder.h
     src/WallpaperEngine/Audio/Drivers/Recorders/PlaybackRecorder.cpp
     src/WallpaperEngine/Audio/Drivers/Recorders/PlaybackRecorder.h
+    src/WallpaperEngine/Audio/Drivers/Recorders/WallpaperEngineSpectrumAnalyzer.cpp
+    src/WallpaperEngine/Audio/Drivers/Recorders/WallpaperEngineSpectrumAnalyzer.h
 
     src/WallpaperEngine/Audio/Drivers/Detectors/PulseAudioPlayingDetector.cpp
     src/WallpaperEngine/Audio/Drivers/Detectors/PulseAudioPlayingDetector.h
@@ -578,7 +580,8 @@ if(BUILD_TESTING)
         src/WallpaperEngine/Testing/Cases/MouseCoordinates.cpp
         src/WallpaperEngine/Testing/Cases/PropertyParser.cpp
         src/WallpaperEngine/Testing/Cases/Utf8Text.cpp
-        src/WallpaperEngine/Testing/Cases/JsonTolerance.cpp)
+        src/WallpaperEngine/Testing/Cases/JsonTolerance.cpp
+        src/WallpaperEngine/Testing/Cases/AudioSpectrum.cpp)
 endif()
 
 add_library(
