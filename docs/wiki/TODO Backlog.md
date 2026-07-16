@@ -4,7 +4,7 @@ title: TODO Backlog
 description: Consolidated audit of open bugs, pending verifications, unported fixes, missing features, and code-health items for the linux-wallpaperengine fork.
 resource: file:///home/admin/repos/linux-wallpaperengine
 tags: [linux-wallpaperengine, backlog, todo, audit]
-timestamp: 2026-07-08T05:30:00-04:00
+timestamp: 2026-07-16T00:00:00-04:00
 ---
 
 # TODO Backlog
@@ -27,11 +27,18 @@ over-engineering audit, and an in-code TODO/FIXME scan. Ordered by priority.
    UTF-8 codepoint decoding + `Testing/Cases/Utf8Text.cpp`. CJK font
    *fallback* (fonts lacking the glyphs show .notdef boxes) remains a P2
    nicety.
-5. ~~MyGO audio bars invisible~~ — **fixed 2026-07-08** in two stages:
-   capture drain (998386a — one fragment/frame was slower than realtime) and
-   band normalization (5b548f4 — clamped log-power saturated every bar;
-   now auto-gained linear magnitudes + noise gate). Pending final user
-   confirmation of bar dynamics.
+5. **Close audio-visualizer parity** — the old hand-tuned auto-gain/noise-gate
+   path was replaced 2026-07-16 with the recovered Wallpaper Engine float-stereo
+   FFT, frequency mapping, magnitude scaling, normalization envelopes, and
+   time smoothing. Remaining:
+   - [ ] Recover or independently validate the exact closed-provider 64→32/16
+     reduction. Peak-preserving pooling is currently used because the inspected
+     executable and SceneScript DLL expose the resolutions but not that provider
+     implementation.
+   - [ ] Run a live A/B comparison on familiar 16/32/64-band wallpapers against
+     Wallpaper Engine, checking peak placement, levels, attack/decay, stereo
+     separation, and silence behavior. Confirm the local PulseAudio/PipeWire
+     monitor supplies nonzero samples during the comparison.
 6. **Verify the media-update segfault fix** — the ported album-art listener
    deregistration (af82084) very likely fixes the Gojo (3100265648)
    track-change crash. Play music, swap wallpapers, change tracks. If it

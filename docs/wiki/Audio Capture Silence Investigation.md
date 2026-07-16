@@ -9,6 +9,12 @@ timestamp: 2026-07-08T19:55:00-04:00
 
 # Audio Capture Silence Investigation (2026-07-08, OPEN)
 
+> **DSP update (2026-07-16):** the recorder no longer uses the auto-gain/noise-gate
+> implementation described below. It now publishes raw 64-band stereo data for web
+> wallpapers and native-normalized, smoothed left/right/average spectra for scenes.
+> The PulseAudio-shim silence evidence remains relevant when the captured samples
+> themselves are zero.
+
 **Symptom:** audio-visualizer content ("audio visualizer stuff") does not render
 at all — bars/audio-responsive layers stay flat/invisible on audio-responsive
 wallpapers. Reported while Shin Godzilla `3094637759` was live. Playback audio
@@ -52,15 +58,12 @@ around the automute-ignore / "auto unmute for specific window" work.
    `AUDIOPROCESSING` combo and `g_AudioSpectrum{16,32,64}{Left,Right}` +
    `audioamount/audiobounds/audioexponent` properties.
 3. **Render wiring is intact.** `CPass::setupUniforms` binds
-   `g_AudioSpectrum16/32/64 Left+Right` straight to `recorder.audio16/32/64`
-   (CPass.cpp:926–931), same live-pointer mechanism as `g_Time` etc.
-4. **Recorder gate behavior (and a debug gotcha).** In
-   `PulseAudioPlaybackRecorder.cpp`: RMS noise gate (default 2.0, env
-   `WPE_AUDIO_GATE`) zeroes all 16/32/64 bands and **early-returns before the
-   `WPE_AUDIO_DEBUG` logging block** — so a fully-silent capture writes *no*
-   debug lines at all. Empty `/tmp/we-audio-debug.log` therefore means
-   "capture silent", not "debug broken". (Candidate small fix: log rms even
-   when gated.)
+   `g_AudioSpectrum16/32/64 Left+Right` to the recorder's independent left and
+   right scene spectra, using the same live-pointer mechanism as `g_Time` etc.
+4. **Historical recorder behavior.** At the time of this investigation,
+   `PulseAudioPlaybackRecorder.cpp` had an RMS noise gate (`WPE_AUDIO_GATE`)
+   that could return before debug logging. That gate has since been removed;
+   `WPE_AUDIO_DEBUG` now reports RMS and raw bands even for silent frames.
 5. **Windowed test instance with `WPE_AUDIO_DEBUG=1` (9 s):** no debug log →
    capture callback sees silence. Engine log otherwise benign (GLEW/GLX
    warning under Wayland, `Simple_Audio_Bars` zcompat shader replacement for
