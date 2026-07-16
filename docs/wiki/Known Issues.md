@@ -4,7 +4,7 @@ title: Known Issues
 description: Open bugs, deferred rendering features, and house rules for the linux-wallpaperengine fork.
 resource: file:///home/admin/repos/linux-wallpaperengine
 tags: [linux-wallpaperengine, bugs, deferred-work, rendering]
-timestamp: 2026-07-08T13:30:00-04:00
+timestamp: 2026-07-16T00:00:00-04:00
 ---
 
 # Known Issues
@@ -56,12 +56,13 @@ queue), see [[Current Status]]. This page keeps the durable issue records.
   coordinator in AudioContext (a1693e7) — one wallpaper's audio at a time,
   round-robin rotation at end-of-track across wallpapers with music,
   duplicates silent, migration on switch-away.
-- **Visualizer bars saturated** (flicker-only response): band reduction was
-  `0.35·log10(mag²)` clamped to 1 — real music pegged nearly every bar.
-  Replaced with linear magnitudes + slow-decay auto-gain + sqrt shaping +
-  noise gate (5b548f4). `WPE_AUDIO_GATE` / `WPE_AUDIO_DEBUG=1`
-  (→ `/tmp/we-audio-debug.log`). *Pending final user confirmation of
-  bar dynamics.*
+- **Visualizer bars saturated** (flicker-only response): the hand-tuned
+  log-magnitude/auto-gain/noise-gate pipeline was replaced with the recovered
+  Wallpaper Engine capture path: float stereo input, native FFT sizing and
+  fourth-root band mapping, native magnitude scaling, per-channel normalization,
+  and time smoothing. `WPE_AUDIO_DEBUG=1` logs to
+  `/tmp/we-audio-debug.log`. *Pending final user confirmation of parity; the
+  closed 64→32/16 provider reduction remains inferred as peak pooling.*
 
 ## Deferred / not implemented
 - Puppet bone constraint JSON (`"tp"`/`"tm"`) — mouse-interactive puppets.

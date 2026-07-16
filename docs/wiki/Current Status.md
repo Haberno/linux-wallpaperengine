@@ -4,7 +4,7 @@ title: Current Status
 description: Live dashboard — what works, what needs verification, and every issue or parity gap still open, ranked. Start here each session.
 resource: file:///home/admin/repos/linux-wallpaperengine
 tags: [linux-wallpaperengine, status, parity, dashboard]
-timestamp: 2026-07-08T13:30:00-04:00
+timestamp: 2026-07-16T00:00:00-04:00
 ---
 
 # Current Status
@@ -23,15 +23,17 @@ alignment/padding, UTF-8, 300-DPI sizing, parent chains, effect chains),
 scripting (WEColor/WEMath/WEVector, builtins parity layer, runtime layer API,
 enumerateLayers/getLayerByID, applyUserProperties, setTimeout/Interval,
 registerAudioBuffers), audio (playback with per-wallpaper dedupe + round-robin
-soundtrack rotation across monitors, realtime capture, auto-gained visualizer
-spectrum, noise gate), runtime switching with transitions + live `prop`
+soundtrack rotation across monitors, realtime float-stereo capture, native-compatible
+64-band FFT mapping and scene-spectrum smoothing), runtime switching with transitions + live `prop`
 socket command, video (MPV), honest crash-tolerance on authored JSON drift.
 
 ## Verification queue (user eyes/ears needed)
 
-1. **Visualizer bar dynamics** after the auto-gain rework (5b548f4) — bars
-   should pump with the music, settle in silence. `WPE_AUDIO_DEBUG=1` logs to
-   `/tmp/we-audio-debug.log`.
+1. **Visualizer parity** after the native DSP port — verify familiar 16/32/64-band
+   wallpapers against Wallpaper Engine. The recovered 64-band FFT, stereo split,
+   normalization envelopes, and time smoothing are implemented; 64→32/16 peak
+   reduction is inferred at the closed provider boundary. `WPE_AUDIO_DEBUG=1`
+   logs to `/tmp/we-audio-debug.log`.
 2. **Media-update segfault** (af82084 port) — needs days of track changes on
    a media-widget wallpaper (Gojo 3100265648) without a crash.
 3. **HDR RGBA16F render targets** (3c5145e port) — watch familiar wallpapers
