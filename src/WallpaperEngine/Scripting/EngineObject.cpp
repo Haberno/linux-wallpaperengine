@@ -139,39 +139,67 @@ JSValue engine_register_audio_buffers (JSContext* ctx, JSValueConst this_val, in
     int resolution = 16;
 
     if (argc > 0) {
-	JS_ToInt32 (ctx, &resolution, argv[0]);
+	if (JS_ToInt32 (ctx, &resolution, argv[0]) < 0) {
+	    return JS_EXCEPTION;
+	}
     }
 
     auto& recorder = it->second.getScene ().getAudioContext ().getRecorder ();
-    float* data;
+    float* left;
+    float* right;
+    float* average;
 
     switch (resolution) {
-	case 32: data = recorder.audio32; break;
-	case 64: data = recorder.audio64; break;
-	default:
-	    resolution = 16;
-	    data = recorder.audio16;
+	case 16:
+	    left = recorder.audio16Left;
+	    right = recorder.audio16Right;
+	    average = recorder.audio16Average;
 	    break;
+	case 32:
+	    left = recorder.audio32Left;
+	    right = recorder.audio32Right;
+	    average = recorder.audio32Average;
+	    break;
+	case 64:
+	    left = recorder.audio64Left;
+	    right = recorder.audio64Right;
+	    average = recorder.audio64Average;
+	    break;
+	default:
+	    return JS_ThrowRangeError (ctx, "Audio buffer resolution must be 16, 32, or 64");
     }
 
-    // Float32Array views over the recorder's live spectrum: scripts read fresh values every
-    // frame without any per-tick copying. The recorder outlives the script engine, so the
-    // buffer memory stays valid for the runtime's whole lifetime.
-    JSValue buffer = JS_NewArrayBuffer (
-	ctx, reinterpret_cast<uint8_t*> (data), resolution * sizeof (float), nullptr, nullptr, false
-    );
-    JSValue view = JS_NewTypedArray (ctx, 1, &buffer, JS_TYPED_ARRAY_FLOAT32);
-    JS_FreeValue (ctx, buffer);
-
-    if (JS_IsException (view)) {
+    // Live Float32Array views match the native DLL's three independent buffers. The
+    // recorder outlives the script engine, so their backing memory remains valid.
+    const auto makeView = [ctx, resolution] (float* data) {
+	JSValue buffer = JS_NewArrayBuffer (
+	    ctx, reinterpret_cast<uint8_t*> (data), resolution * sizeof (float), nullptr, nullptr, false
+	);
+	JSValue view = JS_NewTypedArray (ctx, 1, &buffer, JS_TYPED_ARRAY_FLOAT32);
+	JS_FreeValue (ctx, buffer);
 	return view;
+    };
+
+    JSValue leftView = makeView (left);
+    if (JS_IsException (leftView)) {
+	return leftView;
+    }
+    JSValue rightView = makeView (right);
+    if (JS_IsException (rightView)) {
+	JS_FreeValue (ctx, leftView);
+	return rightView;
+    }
+    JSValue averageView = makeView (average);
+    if (JS_IsException (averageView)) {
+	JS_FreeValue (ctx, leftView);
+	JS_FreeValue (ctx, rightView);
+	return averageView;
     }
 
-    // the recorder keeps a mono spectrum, so both channels and the average share it
     JSValue result = JS_NewObject (ctx);
-    JS_SetPropertyStr (ctx, result, "left", JS_DupValue (ctx, view));
-    JS_SetPropertyStr (ctx, result, "right", JS_DupValue (ctx, view));
-    JS_SetPropertyStr (ctx, result, "average", view);
+    JS_SetPropertyStr (ctx, result, "left", leftView);
+    JS_SetPropertyStr (ctx, result, "right", rightView);
+    JS_SetPropertyStr (ctx, result, "average", averageView);
 
     return result;
 }

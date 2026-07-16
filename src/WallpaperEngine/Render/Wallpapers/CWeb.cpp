@@ -234,10 +234,10 @@ void CWeb::pushBridgeData () {
     const auto& recorder = this->getAudioContext ().getRecorder ();
     std::string audio = "window.__wpAudio&&window.__wpAudio([";
     audio.reserve (1300);
-    for (int ch = 0; ch < 2; ch++) {
+    for (const float* channel : { recorder.rawAudio64Left, recorder.rawAudio64Right }) {
 	for (int i = 0; i < 64; i++) {
 	    char b[16];
-	    snprintf (b, sizeof (b), "%.4f,", recorder.audio64[i]);
+	    snprintf (b, sizeof (b), "%.4f,", channel[i]);
 	    audio += b;
 	}
     }
