@@ -2,6 +2,7 @@
 
 #include <cstdint>
 #include <map>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -62,5 +63,8 @@ class MdlAnimationEvaluator {
 public:
     [[nodiscard]] static MdlPose
     evaluate (const MdlAnimationData& animationData, const std::vector<MdlActiveAnimation>& activeAnimations);
+    [[nodiscard]] static std::optional<glm::mat4> attachmentTransform (
+	const MdlAnimationData& animationData, const std::vector<glm::mat4>& worldBones, const std::string& name
+    );
 };
 } // namespace WallpaperEngine::Data::Model

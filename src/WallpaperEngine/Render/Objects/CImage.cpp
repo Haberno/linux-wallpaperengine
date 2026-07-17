@@ -863,25 +863,24 @@ void CImage::updatePuppetPositionBuffer (const glm::vec2& size) {
 }
 
 std::optional<CImage::ResolvedTransform> CImage::puppetAttachmentTransform (const std::string& name) const {
-    const auto attachment = this->m_puppetAnimation.attachments.find (name);
-    if (attachment == this->m_puppetAnimation.attachments.end ()
-	|| attachment->second.bone >= this->m_puppetWorldBones.size ()) {
+    const auto model
+	= MdlAnimationEvaluator::attachmentTransform (this->m_puppetAnimation, this->m_puppetWorldBones, name);
+    if (!model.has_value ()) {
 	return std::nullopt;
     }
 
     // Attachment matrices and scene object origins use the same authoring-space axes.
     // The scene render path performs its Y flip later, when it builds screen geometry;
     // flipping here as well would send every attached child in the opposite direction.
-    const glm::mat4 model = this->m_puppetWorldBones[attachment->second.bone] * attachment->second.local;
     glm::vec3 scale {
-	glm::length (glm::vec3 (model[0])),
-	glm::length (glm::vec3 (model[1])),
-	glm::length (glm::vec3 (model[2])),
+	glm::length (glm::vec3 ((*model)[0])),
+	glm::length (glm::vec3 ((*model)[1])),
+	glm::length (glm::vec3 ((*model)[2])),
     };
     glm::mat3 rotation (1.0f);
     for (int column = 0; column < 3; column++) {
 	if (scale[column] > 1e-8f) {
-	    rotation[column] = glm::vec3 (model[column]) / scale[column];
+	    rotation[column] = glm::vec3 ((*model)[column]) / scale[column];
 	}
     }
     if (glm::determinant (rotation) < 0.0f) {
@@ -891,7 +890,7 @@ std::optional<CImage::ResolvedTransform> CImage::puppetAttachmentTransform (cons
     const glm::vec3 angles = glm::eulerAngles (glm::normalize (glm::quat_cast (rotation)));
 
     return ResolvedTransform {
-	.origin = { model[3][0], model[3][1], model[3][2] },
+	.origin = { (*model)[3][0], (*model)[3][1], (*model)[3][2] },
 	.scale = scale,
 	.angles = angles,
     };
