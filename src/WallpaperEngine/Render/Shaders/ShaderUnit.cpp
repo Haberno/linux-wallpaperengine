@@ -436,6 +436,8 @@ std::string ShaderUnit::generateLightingV1 () const {
 
     const int directionalLights = comboValue ("LIGHTS_DIRECTIONAL");
     const int pointLights = comboValue ("LIGHTS_POINT");
+    const int spotLights = comboValue ("LIGHTS_SPOT");
+    const int tubeLights = comboValue ("LIGHTS_TUBE");
 
     std::string code = "// begin of generated module LightingV1\n";
 
@@ -447,6 +449,19 @@ std::string ShaderUnit::generateLightingV1 () const {
     if (pointLights > 0) {
 	code += "uniform vec4 g_LPoint_Origin[" + std::to_string (pointLights) + "];\n";
 	code += "uniform vec4 g_LPoint_Color[" + std::to_string (pointLights) + "];\n";
+    }
+
+    if (spotLights > 0) {
+	code += "uniform vec4 g_LSpot_Origin[" + std::to_string (spotLights) + "];\n";
+	code += "uniform vec4 g_LSpot_Direction[" + std::to_string (spotLights) + "];\n";
+	code += "uniform vec4 g_LSpot_Color[" + std::to_string (spotLights) + "];\n";
+	code += "uniform vec4 g_LSpot_Exponent[" + std::to_string (spotLights) + "];\n";
+    }
+
+    if (tubeLights > 0) {
+	code += "uniform vec4 g_LTube_OriginA[" + std::to_string (tubeLights) + "];\n";
+	code += "uniform vec4 g_LTube_OriginB[" + std::to_string (tubeLights) + "];\n";
+	code += "uniform vec4 g_LTube_Color[" + std::to_string (tubeLights) + "];\n";
     }
 
     code += "vec3 PerformLighting_V1(vec3 worldPos, vec3 albedo, vec3 normal, vec3 viewDir,\n"
@@ -462,6 +477,34 @@ std::string ShaderUnit::generateLightingV1 () const {
 		"        light += ComputePBRLightShadow(normal, lightDelta, viewDir, albedo,\n"
 		"            g_LPoint_Color[" + index + "].rgb, g_LPoint_Color[" + index + "].w,\n"
 		"            g_LPoint_Origin[" + index + "].w, specularTint, baseReflectance,\n"
+		"            roughness, metallic, 1.0);\n"
+		"    }\n";
+    }
+
+    for (int i = 0; i < spotLights; i++) {
+	const std::string index = std::to_string (i);
+
+	code += "    {\n"
+		"        vec3 lightDelta = g_LSpot_Origin[" + index + "].xyz - worldPos;\n"
+		"        float spotCookie = -dot(normalize(lightDelta), g_LSpot_Direction[" + index + "].xyz);\n"
+		"        spotCookie = smoothstep(g_LSpot_Direction[" + index + "].w,\n"
+		"            g_LSpot_Origin[" + index + "].w, spotCookie);\n"
+		"        light += ComputePBRLightShadow(normal, lightDelta, viewDir, albedo,\n"
+		"            g_LSpot_Color[" + index + "].rgb * spotCookie, g_LSpot_Color[" + index + "].w,\n"
+		"            g_LSpot_Exponent[" + index + "].x, specularTint, baseReflectance,\n"
+		"            roughness, metallic, 1.0);\n"
+		"    }\n";
+    }
+
+    for (int i = 0; i < tubeLights; i++) {
+	const std::string index = std::to_string (i);
+
+	code += "    {\n"
+		"        vec3 lightDelta = PointSegmentDelta(worldPos, g_LTube_OriginA[" + index
+		+ "].xyz, g_LTube_OriginB[" + index + "].xyz);\n"
+		"        light += ComputePBRLightShadow(normal, lightDelta, viewDir, albedo,\n"
+		"            g_LTube_Color[" + index + "].rgb, g_LTube_Color[" + index + "].w,\n"
+		"            g_LTube_OriginA[" + index + "].w, specularTint, baseReflectance,\n"
 		"            roughness, metallic, 1.0);\n"
 		"    }\n";
     }

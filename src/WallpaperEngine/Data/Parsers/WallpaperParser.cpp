@@ -1,8 +1,10 @@
 #include "WallpaperParser.h"
 
 #include <glm/gtc/matrix_transform.hpp>
+#include <map>
 
 #include "ObjectParser.h"
+#include "CameraPathParser.h"
 #include "WallpaperEngine/Data/Model/Project.h"
 #include "WallpaperEngine/Data/Model/Wallpaper.h"
 #include "WallpaperEngine/FileSystem/Container.h"
@@ -50,7 +52,51 @@ SceneUniquePtr WallpaperParser::parseScene (const JSON& file, Project& project) 
     glm::vec3 eye = camera.require<glm::vec3> ("eye", "Camera must have an eye position");
     glm::vec3 center = camera.require<glm::vec3> ("center", "Camera must have a center position");
     glm::vec3 up = camera.require<glm::vec3> ("up", "Camera must have an up position");
+    std::vector<CameraPathSource> cameraPaths;
+    std::map<std::string, std::vector<CameraPath>> parsedPathFiles;
+    const auto loadCameraPathFile = [&project, &parsedPathFiles] (const std::string& path) -> const std::vector<CameraPath>& {
+	const auto existing = parsedPathFiles.find (path);
+	if (existing != parsedPathFiles.end ()) {
+	    return existing->second;
+	}
+
+	std::vector<CameraPath> paths;
+	try {
+	    paths = CameraPathParser::parse (JSON::parse (project.assetLocator->readString (path)));
+	} catch (const std::exception& e) {
+	    sLog.error ("Cannot parse camera path file ", path, ": ", e.what ());
+	}
+	return parsedPathFiles.emplace (path, std::move (paths)).first->second;
+    };
+
+    for (const auto& path : camera.optional<std::vector<std::string>> ("paths").value_or (
+	     std::vector<std::string> {}
+         )) {
+	const auto& paths = loadCameraPathFile (path);
+	if (!paths.empty ()) {
+	    cameraPaths.push_back (CameraPathSource { .objectId = std::nullopt, .queueMode = "sequence", .paths = paths });
+	}
+    }
     auto cameraObject = std::optional<JSON> {};
+
+    // Camera paths exist in two scene formats: older/global scenes list path files
+    // in camera.paths, while newer editor output attaches a path directly to one
+    // or more camera objects. Both forms enable the renderer's camera fade.
+    for (const auto& cur : objects) {
+	if (!cur.is_object () || cur.find ("camera") == cur.end ()) {
+	    continue;
+	}
+	if (const auto path = cur.optional<std::string> ("path"); path.has_value ()) {
+	    const auto& paths = loadCameraPathFile (*path);
+	    if (!paths.empty ()) {
+		cameraPaths.push_back (CameraPathSource {
+		    .objectId = cur.optional<int> ("id"),
+		    .queueMode = cur.optional<std::string> ("queuemode", "sequence"),
+		    .paths = paths,
+		});
+	    }
+	}
+    }
 
     if (isPerspective) {
 	for (const auto& cur : objects) {
@@ -72,10 +118,6 @@ SceneUniquePtr WallpaperParser::parseScene (const JSON& file, Project& project) 
 	    up = glm::vec3 (rotation * glm::vec4 (0.0f, 1.0f, 0.0f, 0.0f));
 	    cameraObject = cur;
 
-	    if (cur.find ("path") != cur.end ()) {
-		sLog.error ("Camera path animations are not supported yet, using the camera's resting pose");
-	    }
-
 	    break;
 	}
     }
@@ -91,14 +133,35 @@ SceneUniquePtr WallpaperParser::parseScene (const JSON& file, Project& project) 
             .filename = "",
             .project = project
         }, SceneData {
+            .transparentSorting = general.optional ("transparentsorting", false),
+            .customSortOrder = general.optional ("customsortorder", false),
             .colors = {
                 .ambient  = general.user ("ambientcolor", properties, glm::vec3 (0.0f)),
                 .skylight = general.user ("skylightcolor", properties, glm::vec3 (0.0f)),
                 .clear = general.user ("clearcolor", properties, glm::vec3 (1.0f)),
             },
+	    .fog = {
+		.distance = {
+		    .enabled = general.user ("fogdistance", properties, false),
+		    .color = general.user ("fogdistancecolor", properties, glm::vec3 (0.0f)),
+		    .start = general.user ("fogdistancestart", properties, 0.0f),
+		    .end = general.user ("fogdistanceend", properties, 1.0f),
+		    .startDensity = general.user ("fogdistancestartdensity", properties, 0.0f),
+		    .endDensity = general.user ("fogdistanceenddensity", properties, 1.0f),
+		},
+		.height = {
+		    .enabled = general.user ("fogheight", properties, false),
+		    .color = general.user ("fogheightcolor", properties, glm::vec3 (0.0f)),
+		    .start = general.user ("fogheightstart", properties, 0.0f),
+		    .end = general.user ("fogheightend", properties, 1.0f),
+		    .startDensity = general.user ("fogheightstartdensity", properties, 0.0f),
+		    .endDensity = general.user ("fogheightenddensity", properties, 1.0f),
+		},
+	    },
             .camera = {
                 .fade = general.user ("camerafade", properties, false),
                 .preview = general.optional ("camerapreview", false),
+                .paths = std::move (cameraPaths),
                 .bloom = {
                     .enabled = general.user ("bloom", properties, false),
                     .strength = general.user ("bloomstrength", properties, 0.0f),

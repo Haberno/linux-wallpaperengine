@@ -2,6 +2,8 @@
 #include "ScriptEngine.h"
 #include "WallpaperEngine/Audio/AudioContext.h"
 #include "WallpaperEngine/Audio/Drivers/Recorders/PlaybackRecorder.h"
+#include "WallpaperEngine/Data/Model/Project.h"
+#include "WallpaperEngine/Data/Model/Property.h"
 #include "WallpaperEngine/Logging/Log.h"
 #include "WallpaperEngine/Render/Wallpapers/CScene.h"
 
@@ -57,6 +59,18 @@ JSValue engine_get_canvas_size (JSContext* ctx, JSValueConst this_val, int argc,
 
     JS_SetPropertyStr (ctx, result, "x", JS_NewFloat64 (ctx, engine->getScene ().getWidth ()));
     JS_SetPropertyStr (ctx, result, "y", JS_NewFloat64 (ctx, engine->getScene ().getHeight ()));
+
+    return result;
+}
+
+JSValue engine_get_user_properties (JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    JSClassID classId;
+    auto* engine = static_cast<EngineObject*> (JS_GetAnyOpaque (this_val, &classId));
+    JSValue result = JS_NewObject (ctx);
+
+    for (const auto& [name, property] : engine->getScene ().getScene ().project.properties) {
+	JS_SetPropertyStr (ctx, result, name.c_str (), engine->getEngine ().dynamicToJs (*property));
+    }
 
     return result;
 }
@@ -270,6 +284,11 @@ EngineObject::EngineObject (ScriptEngine& engine, Render::Wallpapers::CScene& sc
     JS_DefinePropertyGetSet (
 	this->m_engine.getContext (), this->m_instance, JS_NewAtom (this->m_engine.getContext (), "canvasSize"),
 	JS_NewCFunction (this->m_engine.getContext (), engine_get_canvas_size, "get", 0),
+	JS_NewCFunction (this->m_engine.getContext (), engine_set_value, "set", 1), JS_PROP_ENUMERABLE
+    );
+    JS_DefinePropertyGetSet (
+	this->m_engine.getContext (), this->m_instance, JS_NewAtom (this->m_engine.getContext (), "userProperties"),
+	JS_NewCFunction (this->m_engine.getContext (), engine_get_user_properties, "get", 0),
 	JS_NewCFunction (this->m_engine.getContext (), engine_set_value, "set", 1), JS_PROP_ENUMERABLE
     );
     JS_DefinePropertyValueStr (
