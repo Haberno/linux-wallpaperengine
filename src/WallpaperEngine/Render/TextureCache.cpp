@@ -110,6 +110,40 @@ std::shared_ptr<const TextureProvider> TextureCache::resolve (const std::string&
     throw AssetLoadException ("Cannot find file", filename, std::error_code ());
 }
 
+std::shared_ptr<const TextureProvider>
+TextureCache::resolve (const std::string& filename, const AssetLocator& assetLocator) {
+    // Runtime-provided textures (album art and other explicitly stored aliases)
+    // remain global; authored assets are isolated by the locator's mount identity.
+    if (filename.starts_with ('$')) {
+	if (const auto found = this->m_textureCache.find (filename); found != this->m_textureCache.end ()) {
+	    found->second.lastUsed = ++this->m_useCounter;
+	    return found->second.texture;
+	}
+    }
+
+    const std::string key = scopedKey (filename, assetLocator);
+    if (const auto found = this->m_textureCache.find (key); found != this->m_textureCache.end ()) {
+	found->second.lastUsed = ++this->m_useCounter;
+	return found->second.texture;
+    }
+
+    const auto contents = assetLocator.texture (filename);
+    auto stream = BinaryReader (contents);
+    auto metadataLoader = [&assetLocator] (const std::string& metaFilename) -> std::string {
+	return assetLocator.readString (std::filesystem::path ("materials") / metaFilename);
+    };
+
+    auto parsedTexture = TextureParser::parse (stream, filename, metadataLoader);
+    auto texture = std::make_shared<CTexture> (this->getContext (), std::move (parsedTexture));
+
+#if !NDEBUG
+    glObjectLabel (GL_TEXTURE, texture->getTextureID (0), -1, filename.c_str ());
+#endif
+
+    this->store (key, texture);
+    return texture;
+}
+
 void TextureCache::store (const std::string& name, std::shared_ptr<const TextureProvider> texture) {
     const size_t bytes = estimateTextureBytes (*texture);
 
@@ -122,6 +156,16 @@ void TextureCache::store (const std::string& name, std::shared_ptr<const Texture
 
     this->m_cacheBytes += bytes;
     this->trim ();
+}
+
+void TextureCache::store (
+    const std::string& name, const AssetLocator& assetLocator, std::shared_ptr<const TextureProvider> texture
+) {
+    this->store (scopedKey (name, assetLocator), std::move (texture));
+}
+
+std::string TextureCache::scopedKey (const std::string& name, const AssetLocator& assetLocator) {
+    return assetLocator.identity () + '\x1f' + name;
 }
 
 void TextureCache::updateAll () const {

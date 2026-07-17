@@ -132,8 +132,20 @@ std::shared_ptr<const TextureProvider> RenderContext::resolveTexture (const std:
     return this->m_textureCache->resolve (name);
 }
 
+std::shared_ptr<const TextureProvider>
+RenderContext::resolveTexture (const std::string& name, const Assets::AssetLocator& assetLocator) const {
+    return this->m_textureCache->resolve (name, assetLocator);
+}
+
 void RenderContext::storeTexture (const std::string& name, std::shared_ptr<const TextureProvider> texture) const {
     this->m_textureCache->store (name, std::move (texture));
+}
+
+void RenderContext::storeTexture (
+    const std::string& name, const Assets::AssetLocator& assetLocator,
+    std::shared_ptr<const TextureProvider> texture
+) const {
+    this->m_textureCache->store (name, assetLocator, std::move (texture));
 }
 
 void RenderContext::updateAllTextures () const { this->m_textureCache->updateAll (); }

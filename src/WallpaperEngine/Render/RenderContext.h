@@ -67,12 +67,18 @@ namespace Render {
 	 */
 	[[nodiscard]] glm::ivec2 getStableOutputSize () const;
 	[[nodiscard]] std::shared_ptr<const TextureProvider> resolveTexture (const std::string& name) const;
+	[[nodiscard]] std::shared_ptr<const TextureProvider>
+	resolveTexture (const std::string& name, const Assets::AssetLocator& assetLocator) const;
 	/**
 	 * Registers a ready texture under the given name so resolveTexture returns it instead
 	 * of loading the file synchronously. Used by asynchronous background switches to
 	 * pre-stage textures that were parsed off the render thread.
 	 */
 	void storeTexture (const std::string& name, std::shared_ptr<const TextureProvider> texture) const;
+	void storeTexture (
+	    const std::string& name, const Assets::AssetLocator& assetLocator,
+	    std::shared_ptr<const TextureProvider> texture
+	) const;
 	/**
 	 * Ticks every texture held by the cache, see TextureCache::updateAll
 	 */

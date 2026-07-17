@@ -1,6 +1,7 @@
 #include "CTexture.h"
 #include "WallpaperEngine/Logging/Log.h"
 
+#include <algorithm>
 #include <lz4.h>
 
 #define STB_IMAGE_IMPLEMENTATION
@@ -137,6 +138,24 @@ CTexture::~CTexture () {
     delete[] this->m_textureID;
 }
 
+bool CTexture::isBlockCompressedPayload (
+    const TextureFormat format, const uint32_t width, const uint32_t height, const size_t byteCount
+) {
+    size_t bytesPerBlock = 0;
+
+    switch (format) {
+	case TextureFormat_DXT1: bytesPerBlock = 8; break;
+	case TextureFormat_DXT3:
+	case TextureFormat_DXT5:
+	case TextureFormat_BC7: bytesPerBlock = 16; break;
+	default: return false;
+    }
+
+    const size_t blocksWide = std::max<size_t> (1, (static_cast<size_t> (width) + 3) / 4);
+    const size_t blocksHigh = std::max<size_t> (1, (static_cast<size_t> (height) + 3) / 4);
+    return byteCount == blocksWide * blocksHigh * bytesPerBlock;
+}
+
 void CTexture::setupResolution () {
     if (this->isAnimated ()) {
 	this->m_resolution = { this->m_header->textureWidth, this->m_header->textureHeight, this->m_header->gifWidth,
@@ -163,14 +182,37 @@ GLint CTexture::setupInternalFormat () const {
 	return GL_RGBA8;
     }
 
+    const auto firstImage = this->m_header->images.find (0);
+    if (firstImage == this->m_header->images.end () || firstImage->second.empty ()) {
+	sLog.exception ("Cannot determine texture format without mipmap data");
+    }
+
+    const auto& firstMipmap = *firstImage->second.front ();
+    const bool blockCompressed = isBlockCompressedPayload (
+	this->m_header->format, firstMipmap.width, firstMipmap.height,
+	static_cast<size_t> (std::max (firstMipmap.uncompressedSize, 0))
+    );
+
+    const bool dxtAuthored = this->m_header->format == TextureFormat_DXT1
+	|| this->m_header->format == TextureFormat_DXT3 || this->m_header->format == TextureFormat_DXT5;
+    const size_t rawRgbaBytes
+	= static_cast<size_t> (firstMipmap.width) * static_cast<size_t> (firstMipmap.height) * 4;
+    if (dxtAuthored && !blockCompressed
+	&& static_cast<size_t> (std::max (firstMipmap.uncompressedSize, 0)) != rawRgbaBytes) {
+	sLog.exception (
+	    "Unsupported DXT texture payload size: ", firstMipmap.uncompressedSize,
+	    " for ", firstMipmap.width, "x", firstMipmap.height
+	);
+    }
+
     // detect the image format and hand it to openGL to be used
     switch (this->m_header->format) {
 	case TextureFormat_DXT5:
-	    return GL_COMPRESSED_RGBA_S3TC_DXT5_EXT;
+	    return blockCompressed ? GL_COMPRESSED_RGBA_S3TC_DXT5_EXT : GL_RGBA8;
 	case TextureFormat_DXT3:
-	    return GL_COMPRESSED_RGBA_S3TC_DXT3_EXT;
+	    return blockCompressed ? GL_COMPRESSED_RGBA_S3TC_DXT3_EXT : GL_RGBA8;
 	case TextureFormat_DXT1:
-	    return GL_COMPRESSED_RGBA_S3TC_DXT1_EXT;
+	    return blockCompressed ? GL_COMPRESSED_RGBA_S3TC_DXT1_EXT : GL_RGBA8;
 	case TextureFormat_ARGB8888:
 	    return GL_RGBA8;
 	case TextureFormat_R8:

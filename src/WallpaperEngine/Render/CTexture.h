@@ -6,6 +6,7 @@
 #include "WallpaperEngine/VideoPlayback/MPV/GLPlayer.h"
 
 #include <GL/glew.h>
+#include <cstddef>
 #include <glm/vec4.hpp>
 #include <memory>
 #include <mpv/client.h>
@@ -24,6 +25,15 @@ class CTexture final : public TextureProvider, public Helpers::ContextAware {
 public:
     explicit CTexture (RenderContext& context, TextureUniquePtr header);
     ~CTexture () override;
+
+    /**
+     * TEXI records the authored/target texture format, but newer TEXB containers
+     * can store DXT-authored images as expanded RGBA8888 pixels. Distinguish the
+     * actual payload layout from the authored format before choosing the GL upload.
+     */
+    [[nodiscard]] static bool isBlockCompressedPayload (
+	TextureFormat format, uint32_t width, uint32_t height, size_t byteCount
+    );
 
     [[nodiscard]] GLuint getTextureID (uint32_t imageIndex) const override;
     [[nodiscard]] uint32_t getTextureWidth (uint32_t imageIndex) const override;
