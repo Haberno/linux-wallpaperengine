@@ -46,6 +46,38 @@ TEST_CASE ("Spot shadow projection covers the authored cone and radius") {
     CHECK (centerNdc.z < 1.0f);
 }
 
+TEST_CASE ("Point shadow projections cover all six native atlas faces") {
+    const glm::vec3 origin (3.0f, -2.0f, 5.0f);
+    const auto projections = CLight::calculatePointShadowViewProjections (origin, 20.0f);
+    const std::array<glm::vec3, 6> directions = {
+	glm::vec3 (1.0f, 0.0f, 0.0f), glm::vec3 (-1.0f, 0.0f, 0.0f),
+	glm::vec3 (0.0f, 1.0f, 0.0f), glm::vec3 (0.0f, -1.0f, 0.0f),
+	glm::vec3 (0.0f, 0.0f, 1.0f), glm::vec3 (0.0f, 0.0f, -1.0f),
+    };
+
+    for (size_t face = 0; face < projections.size (); face++) {
+	const glm::vec4 clip = projections[face] * glm::vec4 (origin + directions[face] * 10.0f, 1.0f);
+	const glm::vec3 ndc = glm::vec3 (clip) / clip.w;
+	CHECK (std::isfinite (ndc.x));
+	CHECK (std::isfinite (ndc.y));
+	CHECK (std::isfinite (ndc.z));
+	CHECK (ndc.x == Catch::Approx (0.0f).margin (0.000001f));
+	CHECK (ndc.y == Catch::Approx (0.0f).margin (0.000001f));
+	CHECK (ndc.z > -1.0f);
+	CHECK (ndc.z < 1.0f);
+    }
+}
+
+TEST_CASE ("Point shadow projection info reconstructs the raster depth projection") {
+    const glm::vec4 info = CLight::calculatePointShadowProjectionInfo (20.0f);
+    const glm::mat4 expected = glm::perspective (glm::half_pi<float> (), 1.0f, 0.02f, 20.0f);
+
+    CHECK (info.x == Catch::Approx (expected[2][2]));
+    CHECK (info.y == Catch::Approx (expected[3][2]));
+    CHECK (info.z == Catch::Approx (expected[2][3]));
+    CHECK (info.w == Catch::Approx (expected[3][3]));
+}
+
 TEST_CASE ("Vertical spot shadow projections remain finite") {
     const glm::mat4 projection = CLight::calculateSpotShadowViewProjection (
 	glm::vec3 (0.0f), glm::vec3 (0.0f, 1.0f, 0.0f), 30.0f, 10.0f
