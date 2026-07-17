@@ -16,6 +16,11 @@ constexpr uint32_t STATIC_VERTEX_STRIDE = 48;
 constexpr uint32_t SKINNED_VERTEX_TAG = 0x0180000f;
 constexpr uint32_t SKINNED_VERTEX_STRIDE = 80;
 
+/** Bit zero selects 32-bit indices. BoostModel assets also set the independent 0x400 bit. */
+constexpr uint32_t INDEX_32_BIT_FLAG = 0x1;
+constexpr uint32_t AUXILIARY_SUBMESH_FLAG = 0x400;
+constexpr uint32_t KNOWN_SUBMESH_FLAGS = INDEX_32_BIT_FLAG | AUXILIARY_SUBMESH_FLAG;
+
 struct VertexLayout {
     uint32_t tag = 0;
     uint32_t strideBytes = 0;
@@ -67,6 +72,10 @@ MdlMesh MdlParser::load (const Project& project, const std::string& filename) {
     const auto stream = project.assetLocator->read (filename);
     const std::vector<char> data { std::istreambuf_iterator<char> (*stream), std::istreambuf_iterator<char> () };
 
+    return parse (data, filename);
+}
+
+MdlMesh MdlParser::parse (const std::vector<char>& data, const std::string& filename) {
     constexpr size_t markerSize = 9; // "MDLV00XX\0"
     if (data.size () < markerSize || std::memcmp (data.data (), "MDLV00", 6) != 0) {
 	sLog.exception ("Not an MDLV model file: ", filename);
@@ -98,12 +107,14 @@ MdlMesh MdlParser::load (const Project& project, const std::string& filename) {
 	submesh.materialPath = std::string (data.data () + offset, materialEnd - offset);
 	offset = materialEnd + 1;
 
-	// 1 marks 32-bit indices (meshes with more than 65535 vertices), 0 marks 16-bit
-	const auto wideIndices = readValue<uint32_t> (data, offset, filename);
+	// Bit zero marks 32-bit indices. Other known bits describe the submesh but do not
+	// change the index payload width; BoostModel assets set 0x400 and still store u16.
+	const auto submeshFlags = readValue<uint32_t> (data, offset, filename);
 
-	if (wideIndices > 1) {
-	    sLog.exception ("Unsupported MDLV index width flag ", wideIndices, " in ", filename);
+	if ((submeshFlags & ~KNOWN_SUBMESH_FLAGS) != 0) {
+	    sLog.exception ("Unsupported MDLV submesh flags ", submeshFlags, " in ", filename);
 	}
+	const bool wideIndices = (submeshFlags & INDEX_32_BIT_FLAG) != 0;
 
 	// bounding box min/max, unused
 	offset += sizeof (float) * 6;
@@ -139,7 +150,7 @@ MdlMesh MdlParser::load (const Project& project, const std::string& filename) {
 	offset += vertexBytes;
 
 	const auto indexBytes = readValue<uint32_t> (data, offset, filename);
-	const uint32_t indexWidth = wideIndices == 1 ? sizeof (uint32_t) : sizeof (uint16_t);
+	const uint32_t indexWidth = wideIndices ? sizeof (uint32_t) : sizeof (uint16_t);
 
 	if (indexBytes % indexWidth != 0 || offset + indexBytes > data.size ()) {
 	    sLog.exception ("Unexpected end of MDLV index data in ", filename);
@@ -148,7 +159,7 @@ MdlMesh MdlParser::load (const Project& project, const std::string& filename) {
 	const size_t indexCount = indexBytes / indexWidth;
 	submesh.indices.resize (indexCount);
 
-	if (wideIndices == 1) {
+	if (wideIndices) {
 	    std::memcpy (submesh.indices.data (), data.data () + offset, indexBytes);
 	} else {
 	    for (size_t i = 0; i < indexCount; i++) {
