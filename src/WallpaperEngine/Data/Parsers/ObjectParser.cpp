@@ -1,6 +1,7 @@
 #include "ObjectParser.h"
 #include "EffectParser.h"
 #include "MaterialParser.h"
+#include "MdlAnimationParser.h"
 #include "MdlParser.h"
 #include "ModelParser.h"
 
@@ -86,7 +87,7 @@ ObjectUniquePtr ObjectParser::parse (const JSON& it, const Project& project) {
     } else if (textIt != it.end ()) {
 	return parseText (it, project, std::move (basedata));
     } else if (modelIt != it.end () && modelIt->is_string ()) {
-	return parseModel3D (project, std::move (basedata), *modelIt);
+	return parseModel3D (it, project, std::move (basedata), *modelIt);
     } else if (lightIt != it.end () && lightIt->is_string ()) {
 	return parseLight (it, project, std::move (basedata), *lightIt);
     } else if (shapeIt != it.end ()) {
@@ -171,20 +172,32 @@ TextUniquePtr ObjectParser::parseText (const JSON& it, const Project& project, O
     );
 }
 
-ObjectUniquePtr ObjectParser::parseModel3D (const Project& project, ObjectData base, const std::string& model) {
+ObjectUniquePtr
+ObjectParser::parseModel3D (const JSON& it, const Project& project, ObjectData base, const std::string& model) {
     try {
 	auto mesh = MdlParser::load (project, model);
+	MdlAnimationData animationData;
+	try {
+	    animationData = MdlAnimationParser::load (project, model);
+	} catch (const std::exception& e) {
+	    sLog.error ("Cannot load model animation data ", model, ": ", e.what ());
+	}
 	std::vector<MaterialUniquePtr> materials;
 
 	for (const auto& submesh : mesh.submeshes) {
 	    materials.push_back (MaterialParser::load (project, submesh.materialPath));
 	}
+	const auto& animationLayersIt = it.optional ("animationlayers");
+	auto animationLayers = animationLayersIt.has_value () ? parseAnimationLayers (*animationLayersIt, project)
+							      : std::vector<ImageAnimationLayerUniquePtr> {};
 
 	return std::make_unique<Model3D> (
 	    std::move (base),
 	    Model3DData {
 		.filename = model,
 		.mesh = std::move (mesh),
+		.animationData = std::move (animationData),
+		.animationLayers = std::move (animationLayers),
 		.materials = std::move (materials),
 	    }
 	);

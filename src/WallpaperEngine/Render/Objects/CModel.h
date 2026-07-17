@@ -40,11 +40,14 @@ private:
     };
 
     void setupGeometryCallback (Effects::CPass* pass, size_t submeshIndex);
+    void updateAnimationPose ();
     void updateMatrices ();
 
     const Model3D& m_model;
 
     std::vector<SubmeshBuffers> m_submeshes = {};
+    std::vector<glm::mat4> m_worldBones = {};
+    std::vector<glm::mat4> m_skinBones = {};
 
     glm::mat4 m_modelMatrix = glm::mat4 (1.0f);
     glm::mat4 m_viewProjectionMatrix = glm::mat4 (1.0f);
