@@ -666,6 +666,13 @@ void CPass::setupShaders () {
 	this->m_combos.insert_or_assign ("LIGHTS_DIRECTIONAL", lights.directionalCount);
     }
 
+    if (lights.directionalShadowCount > 0) {
+	this->m_combos.insert_or_assign ("LIGHTS_DIRECTIONAL_SHADOW", lights.directionalShadowCount);
+	this->m_combos.insert_or_assign (
+	    "LIGHTS_DIRECTIONAL_SHADOW_MASK", static_cast<int> (lights.directionalShadowMask)
+	);
+    }
+
     if (lights.pointCount > 0) {
 	this->m_combos.insert_or_assign ("LIGHTS_POINT", lights.pointCount);
     }
@@ -676,6 +683,11 @@ void CPass::setupShaders () {
 
     if (lights.spotShadowCount > 0) {
 	this->m_combos.insert_or_assign ("LIGHTS_SPOT_SHADOW", lights.spotShadowCount);
+	this->m_combos.insert_or_assign ("LIGHTS_SPOT_SHADOW_MASK", static_cast<int> (lights.spotShadowMask));
+    }
+
+    if (lights.shadowFeatureCount > 0) {
+	this->m_combos.insert_or_assign ("LIGHTS_SHADOW_FEATURES", lights.shadowFeatureCount);
 	this->m_combos.insert_or_assign ("LIGHTS_SHADOW_MAPPING", 1);
 	this->m_combos.insert_or_assign ("LIGHTS_SHADOW_MAPPING_QUALITY", 2);
     }
@@ -989,6 +1001,11 @@ void CPass::setupUniforms () {
     if (lights.directionalCount > 0) {
 	this->addUniform ("g_LDirectional_Direction", lights.directionalDirections.data (), lights.directionalCount);
 	this->addUniform ("g_LDirectional_Color", lights.directionalColors.data (), lights.directionalCount);
+	if (lights.directionalShadowCount > 0) {
+	    this->addUniform (
+		"g_LDirectional_ShadowEnabled", lights.directionalShadowEnabled.data (), lights.directionalCount
+	    );
+	}
     }
 
     if (lights.pointCount > 0) {
@@ -1002,14 +1019,17 @@ void CPass::setupUniforms () {
 	this->addUniform ("g_LSpot_Color", lights.spotColors.data (), lights.spotCount);
 	this->addUniform ("g_LSpot_Exponent", lights.spotExponents.data (), lights.spotCount);
 	if (lights.spotShadowCount > 0) {
-	    this->addUniform (
-		"g_LFeature_ShadowProjection", lights.spotShadowMatrices.data (), lights.spotCount
-	    );
-	    this->addUniform (
-		"g_LFeature_ShadowProjectionTransform", lights.spotShadowTransforms.data (), lights.spotCount
-	    );
 	    this->addUniform ("g_LSpot_ShadowEnabled", lights.spotShadowEnabled.data (), lights.spotCount);
 	}
+    }
+
+    if (lights.shadowFeatureCount > 0) {
+	this->addUniform (
+	    "g_LFeature_ShadowProjection", lights.shadowMatrices.data (), lights.shadowFeatureCount
+	);
+	this->addUniform (
+	    "g_LFeature_ShadowProjectionTransform", lights.shadowTransforms.data (), lights.shadowFeatureCount
+	);
     }
 
     if (lights.tubeCount > 0) {

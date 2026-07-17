@@ -101,11 +101,17 @@ CScene::CScene (
 		continue;
 	    }
 
-	    switch (object->as<Data::Model::Light> ()->type) {
-		case LightData::Type_Directional: this->m_lights.directionalCount++; break;
+	    const auto* light = object->as<Data::Model::Light> ();
+	    switch (light->type) {
+		case LightData::Type_Directional:
+		    this->m_lights.directionalCount++;
+		    if (light->castShadow) {
+			this->m_lights.directionalShadowCount++;
+		    }
+		    break;
 		case LightData::Type_Spot:
 		    this->m_lights.spotCount++;
-		    if (object->as<Data::Model::Light> ()->castShadow) {
+		    if (light->castShadow) {
 			this->m_lights.spotShadowCount++;
 		    }
 		    break;
@@ -114,21 +120,78 @@ CScene::CScene (
 	    }
 	}
 
+	this->m_lights.shadowFeatureCount
+	    = this->m_lights.directionalShadowCount * 3 + this->m_lights.spotShadowCount;
 	this->m_lights.directionalDirections.resize (this->m_lights.directionalCount, glm::vec4 (0.0f));
 	this->m_lights.directionalColors.resize (this->m_lights.directionalCount, glm::vec4 (0.0f));
+	this->m_lights.directionalShadowFeatures.resize (this->m_lights.directionalCount, glm::ivec3 (-1));
+	this->m_lights.directionalShadowEnabled.resize (this->m_lights.directionalCount, 0.0f);
 	this->m_lights.pointOrigins.resize (this->m_lights.pointCount, glm::vec4 (0.0f));
 	this->m_lights.pointColors.resize (this->m_lights.pointCount, glm::vec4 (0.0f));
 	this->m_lights.spotOrigins.resize (this->m_lights.spotCount, glm::vec4 (0.0f));
 	this->m_lights.spotDirections.resize (this->m_lights.spotCount, glm::vec4 (0.0f));
 	this->m_lights.spotColors.resize (this->m_lights.spotCount, glm::vec4 (0.0f));
 	this->m_lights.spotExponents.resize (this->m_lights.spotCount, glm::vec4 (0.0f));
-	this->m_lights.spotShadowMatrices.resize (this->m_lights.spotCount, glm::mat4 (1.0f));
-	this->m_lights.spotShadowTransforms.resize (this->m_lights.spotCount, glm::vec4 (0.0f));
+	this->m_lights.spotShadowFeatures.resize (this->m_lights.spotCount, -1);
 	this->m_lights.spotShadowEnabled.resize (this->m_lights.spotCount, 0.0f);
-	this->m_lights.spotShadowViewports.resize (this->m_lights.spotCount, glm::ivec4 (0));
+	this->m_lights.shadowMatrices.resize (this->m_lights.shadowFeatureCount, glm::mat4 (1.0f));
+	this->m_lights.shadowTransforms.resize (this->m_lights.shadowFeatureCount, glm::vec4 (0.0f));
+	this->m_lights.shadowFeatureEnabled.resize (this->m_lights.shadowFeatureCount, 0.0f);
+	this->m_lights.shadowViewports.resize (this->m_lights.shadowFeatureCount, glm::ivec4 (0));
 	this->m_lights.tubeOriginsA.resize (this->m_lights.tubeCount, glm::vec4 (0.0f));
 	this->m_lights.tubeOriginsB.resize (this->m_lights.tubeCount, glm::vec4 (0.0f));
 	this->m_lights.tubeColors.resize (this->m_lights.tubeCount, glm::vec4 (0.0f));
+
+	int directional = 0;
+	int spot = 0;
+	int directionalFeature = 0;
+	int spotFeature = this->m_lights.directionalShadowCount * 3;
+	for (const auto& object : scene->objects) {
+	    if (!object->is<Data::Model::Light> ()) {
+		continue;
+	    }
+
+	    const auto* light = object->as<Data::Model::Light> ();
+	    if (light->type == LightData::Type_Directional) {
+		if (light->castShadow) {
+		    this->m_lights.directionalShadowFeatures[directional]
+			= glm::ivec3 (directionalFeature, directionalFeature + 1, directionalFeature + 2);
+		    directionalFeature += 3;
+		    if (directional < 32) {
+			this->m_lights.directionalShadowMask |= uint32_t (1) << directional;
+		    }
+		}
+		directional++;
+	    } else if (light->type == LightData::Type_Spot) {
+		if (light->castShadow) {
+		    this->m_lights.spotShadowFeatures[spot] = spotFeature++;
+		    if (spot < 32) {
+			this->m_lights.spotShadowMask |= uint32_t (1) << spot;
+		    }
+		}
+		spot++;
+	    }
+	}
+
+	if (this->m_lights.shadowFeatureCount > 0) {
+	    const int grid = static_cast<int> (std::ceil (std::sqrt (this->m_lights.shadowFeatureCount)));
+	    const int tileSize = SHADOW_ATLAS_SIZE / glm::max (grid, 1);
+	    for (int feature = 0; feature < this->m_lights.shadowFeatureCount; feature++) {
+		const int tileX = feature % grid;
+		const int tileY = feature / grid;
+		const glm::ivec4 viewport (
+		    tileX * tileSize + SHADOW_ATLAS_GUARD, tileY * tileSize + SHADOW_ATLAS_GUARD,
+		    tileSize - SHADOW_ATLAS_GUARD * 2, tileSize - SHADOW_ATLAS_GUARD * 2
+		);
+		this->m_lights.shadowViewports[feature] = viewport;
+		this->m_lights.shadowTransforms[feature] = glm::vec4 (
+		    static_cast<float> (viewport.x) / SHADOW_ATLAS_SIZE,
+		    static_cast<float> (viewport.y) / SHADOW_ATLAS_SIZE,
+		    static_cast<float> (viewport.z) / SHADOW_ATLAS_SIZE,
+		    static_cast<float> (viewport.w) / SHADOW_ATLAS_SIZE
+		);
+	    }
+	}
     } else {
 	// TODO: CONVERSION
 	this->m_camera->setOrthogonalProjection (width, height);
@@ -141,7 +204,7 @@ CScene::CScene (
     const uint32_t sceneWidth = this->m_camera->getWidth ();
     const uint32_t sceneHeight = this->m_camera->getHeight ();
 
-    if (this->m_lights.spotShadowCount > 0) {
+    if (this->m_lights.shadowFeatureCount > 0) {
 	this->_rt_shadowAtlas = this->create (
 	    "_rt_shadowAtlas", TextureFormat_ARGB8888, TextureFlags_ClampUVsBorder, 1.0,
 	    { SHADOW_ATLAS_SIZE, SHADOW_ATLAS_SIZE }, { SHADOW_ATLAS_SIZE, SHADOW_ATLAS_SIZE }, false, true
@@ -445,7 +508,7 @@ void CScene::renderFrame (const glm::ivec4& viewport) {
     this->updateLightState ();
 
     // Render light-space depth before any material pass samples _rt_shadowAtlas.
-    this->renderSpotShadows ();
+    this->renderShadowAtlas ();
 
     // update every cached texture instead of walking image objects: textures that
     // are only referenced as effect/pass inputs have no CImage driving them, so
@@ -740,7 +803,6 @@ void CScene::updateLightState () {
     int directional = 0;
     int point = 0;
     int spot = 0;
-    int spotShadow = 0;
     int tube = 0;
 
     for (const auto* light : this->m_lightObjects) {
@@ -750,6 +812,34 @@ void CScene::updateLightState () {
 	    // the shader expects the direction towards the light
 	    this->m_lights.directionalDirections[directional] = glm::vec4 (-light->getWorldDirection (), 0.0f);
 	    this->m_lights.directionalColors[directional] = glm::vec4 (light->getPremultipliedColor (), 0.0f);
+	    this->m_lights.directionalShadowEnabled[directional] = 0.0f;
+
+	    const glm::ivec3 features = this->m_lights.directionalShadowFeatures[directional];
+	    if (data.castShadow && features.x >= 0) {
+		const float enabled
+		    = data.groupVisible->value->getBool () && light->isVisibleThroughParents () ? 1.0f : 0.0f;
+		this->m_lights.directionalShadowEnabled[directional] = enabled;
+
+		const Camera& camera = this->getCamera ();
+		const float cameraNear = std::max (camera.getNearZ (), 0.0001f);
+		const float cameraFar = std::max (camera.getFarZ (), cameraNear + 0.0001f);
+		glm::vec3 cascadeFar = glm::abs (data.cascadeDistances);
+		cascadeFar.x = glm::clamp (cascadeFar.x, cameraNear + 0.0001f, cameraFar);
+		cascadeFar.y = glm::clamp (cascadeFar.y, cascadeFar.x, cameraFar);
+		cascadeFar.z = glm::clamp (cascadeFar.z, cascadeFar.y, cameraFar);
+
+		for (int cascade = 0; cascade < 3; cascade++) {
+		    const int feature = features[cascade];
+		    this->m_lights.shadowMatrices[feature]
+			= Objects::CLight::calculateDirectionalShadowViewProjection (
+			    camera.getEye (), camera.getCenter (), camera.getUp (), camera.getFov (),
+			    camera.getWidth () / std::max (camera.getHeight (), 1.0f), camera.getZoom (), cameraNear,
+			    cascadeFar[cascade], light->getWorldDirection (),
+			    this->m_lights.shadowViewports[feature].z
+			);
+		    this->m_lights.shadowFeatureEnabled[feature] = enabled;
+		}
+	    }
 	    directional++;
 	} else if (data.type == LightData::Type_Point && point < this->m_lights.pointCount) {
 	    this->m_lights.pointOrigins[point]
@@ -767,30 +857,15 @@ void CScene::updateLightState () {
 		= glm::vec4 (light->getPremultipliedColor (), data.radius->value->getFloat ());
 	    this->m_lights.spotExponents[spot] = glm::vec4 (data.exponent->value->getFloat (), 0.0f, 0.0f, 0.0f);
 
-	    if (data.castShadow) {
-		const int grid = static_cast<int> (std::ceil (std::sqrt (this->m_lights.spotShadowCount)));
-		const int tileSize = SHADOW_ATLAS_SIZE / glm::max (grid, 1);
-		const int tileX = spotShadow % grid;
-		const int tileY = spotShadow / grid;
-		const glm::ivec4 viewport (
-		    tileX * tileSize + SHADOW_ATLAS_GUARD, tileY * tileSize + SHADOW_ATLAS_GUARD,
-		    tileSize - SHADOW_ATLAS_GUARD * 2, tileSize - SHADOW_ATLAS_GUARD * 2
-		);
-
-		this->m_lights.spotShadowMatrices[spot] = Objects::CLight::calculateSpotShadowViewProjection (
+	    const int feature = this->m_lights.spotShadowFeatures[spot];
+	    if (data.castShadow && feature >= 0) {
+		this->m_lights.shadowMatrices[feature] = Objects::CLight::calculateSpotShadowViewProjection (
 		    light->getWorldPosition (), light->getWorldDirection (), data.outerCone->value->getFloat (),
 		    data.radius->value->getFloat ()
 		);
-		this->m_lights.spotShadowTransforms[spot] = glm::vec4 (
-		    static_cast<float> (viewport.x) / SHADOW_ATLAS_SIZE,
-		    static_cast<float> (viewport.y) / SHADOW_ATLAS_SIZE,
-		    static_cast<float> (viewport.z) / SHADOW_ATLAS_SIZE,
-		    static_cast<float> (viewport.w) / SHADOW_ATLAS_SIZE
-		);
-		this->m_lights.spotShadowViewports[spot] = viewport;
 		this->m_lights.spotShadowEnabled[spot]
 		    = data.groupVisible->value->getBool () && light->isVisibleThroughParents () ? 1.0f : 0.0f;
-		spotShadow++;
+		this->m_lights.shadowFeatureEnabled[feature] = this->m_lights.spotShadowEnabled[spot];
 	    } else {
 		this->m_lights.spotShadowEnabled[spot] = 0.0f;
 	    }
@@ -806,13 +881,13 @@ void CScene::updateLightState () {
     }
 }
 
-void CScene::renderSpotShadows () {
-    if (this->m_lights.spotShadowCount == 0 || this->_rt_shadowAtlas == nullptr) {
+void CScene::renderShadowAtlas () {
+    if (this->m_lights.shadowFeatureCount == 0 || this->_rt_shadowAtlas == nullptr) {
 	return;
     }
 
 #if !NDEBUG
-    glPushDebugGroup (GL_DEBUG_SOURCE_APPLICATION, 0, -1, "Spotlight shadow atlas");
+    glPushDebugGroup (GL_DEBUG_SOURCE_APPLICATION, 0, -1, "Scene shadow atlas");
 #endif
 
     glBindFramebuffer (GL_FRAMEBUFFER, this->_rt_shadowAtlas->getFramebuffer ());
@@ -827,17 +902,17 @@ void CScene::renderSpotShadows () {
     glEnable (GL_POLYGON_OFFSET_FILL);
     glPolygonOffset (2.0f, 4.0f);
 
-    for (int spot = 0; spot < this->m_lights.spotCount; spot++) {
-	if (this->m_lights.spotShadowEnabled[spot] < 0.5f) {
+    for (int feature = 0; feature < this->m_lights.shadowFeatureCount; feature++) {
+	if (this->m_lights.shadowFeatureEnabled[feature] < 0.5f) {
 	    continue;
 	}
 
-	const glm::ivec4& viewport = this->m_lights.spotShadowViewports[spot];
+	const glm::ivec4& viewport = this->m_lights.shadowViewports[feature];
 	glViewport (viewport.x, viewport.y, viewport.z, viewport.w);
 
 	for (auto* object : this->m_objectsByRenderOrder) {
 	    if (auto* model = dynamic_cast<Objects::CModel*> (object); model != nullptr) {
-		model->renderShadow (this->m_lights.spotShadowMatrices[spot]);
+		model->renderShadow (this->m_lights.shadowMatrices[feature]);
 	    }
 	}
     }

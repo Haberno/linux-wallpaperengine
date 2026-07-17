@@ -107,14 +107,22 @@ public:
      */
     struct SceneLights {
 	int directionalCount = 0;
+	int directionalShadowCount = 0;
 	int pointCount = 0;
 	int spotCount = 0;
 	int spotShadowCount = 0;
 	int tubeCount = 0;
+	/** Three features per shadowed directional light and one per shadowed spot. */
+	int shadowFeatureCount = 0;
+	uint32_t directionalShadowMask = 0;
+	uint32_t spotShadowMask = 0;
 	/** xyz = world-space direction towards the light, w unused */
 	std::vector<glm::vec4> directionalDirections = {};
 	/** rgb = color premultiplied by intensity, w unused */
 	std::vector<glm::vec4> directionalColors = {};
+	/** Three atlas feature indices per directional light, or -1 when unshadowed. */
+	std::vector<glm::ivec3> directionalShadowFeatures = {};
+	std::vector<float> directionalShadowEnabled = {};
 	/** xyz = world-space position, w = falloff exponent */
 	std::vector<glm::vec4> pointOrigins = {};
 	/** rgb = color premultiplied by intensity, w = radius */
@@ -127,12 +135,15 @@ public:
 	std::vector<glm::vec4> spotColors = {};
 	/** x = falloff exponent, yzw unused */
 	std::vector<glm::vec4> spotExponents = {};
-	/** Light-space projection and atlas data, indexed like the spot arrays above. */
-	std::vector<glm::mat4> spotShadowMatrices = {};
-	std::vector<glm::vec4> spotShadowTransforms = {};
+	/** Atlas feature index per spotlight, or -1 when the light does not cast shadows. */
+	std::vector<int> spotShadowFeatures = {};
 	std::vector<float> spotShadowEnabled = {};
-	/** Pixel viewport inside the depth atlas; not uploaded to material shaders. */
-	std::vector<glm::ivec4> spotShadowViewports = {};
+	/** Unified feature arrays uploaded under Wallpaper Engine's g_LFeature contract. */
+	std::vector<glm::mat4> shadowMatrices = {};
+	std::vector<glm::vec4> shadowTransforms = {};
+	std::vector<float> shadowFeatureEnabled = {};
+	/** Pixel viewports inside the depth atlas; not uploaded to material shaders. */
+	std::vector<glm::ivec4> shadowViewports = {};
 	/** xyz = first world-space endpoint, w = falloff exponent */
 	std::vector<glm::vec4> tubeOriginsA = {};
 	/** xyz = second world-space endpoint, w unused */
@@ -179,7 +190,7 @@ private:
     Render::CObject* dispatchObjectType (const Object& object);
     void addObjectToRenderOrder (const Object& object);
     void updateLightState ();
-    void renderSpotShadows ();
+    void renderShadowAtlas ();
     void registerFogScripts ();
     void updateFogState ();
     void updateCameraPath (float deltaTime);

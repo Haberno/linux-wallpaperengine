@@ -33,6 +33,12 @@ public:
     [[nodiscard]] static glm::mat4 calculateSpotShadowViewProjection (
 	const glm::vec3& origin, const glm::vec3& direction, float outerDegrees, float radius
     );
+    /** Stable orthographic light-space matrix enclosing a nested camera-frustum cascade. */
+    [[nodiscard]] static glm::mat4 calculateDirectionalShadowViewProjection (
+	const glm::vec3& cameraEye, const glm::vec3& cameraCenter, const glm::vec3& cameraUp,
+	float fieldOfViewDegrees, float aspectRatio, float zoom, float nearDistance, float farDistance,
+	const glm::vec3& lightDirection, int shadowResolution
+    );
     /** Transform a tube's authored local control point into its world-space endpoint. */
     [[nodiscard]] static glm::vec3
     calculateTubeEndPosition (const glm::mat4& worldMatrix, const glm::vec3& controlPoint);

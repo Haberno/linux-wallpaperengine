@@ -695,6 +695,8 @@ struct LightData {
     UserSettingUniquePtr outerCone;
     /** Tube light's second endpoint in the light's local coordinate system */
     UserSettingUniquePtr controlPoint;
+    /** Far distances of the three nested directional-light shadow cascades. */
+    glm::vec3 cascadeDistances;
     /** Whether this light renders and samples a scene shadow map. */
     bool castShadow;
 };
