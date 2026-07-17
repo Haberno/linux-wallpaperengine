@@ -6,8 +6,16 @@
 #include "WallpaperEngine/Scripting/ScriptEngine.h"
 
 #include <set>
+#include <optional>
+#include <random>
 
 namespace WallpaperEngine::Render {
+enum class RenderSortClass {
+    Opaque = 0,
+    Translucent = 1,
+    Additive = 2,
+};
+
 class Camera;
 class CObject;
 }
@@ -56,8 +64,32 @@ public:
      * (applied per-axis: width for x, height for y) */
     static constexpr float PARALLAX_TRANSLATION_SPAN = 0.5f;
 
+    /** fade.json is fully opaque at a path boundary and clears over 0.5 seconds. */
+    static constexpr float CAMERA_FADE_DURATION = 0.5f;
+
     [[nodiscard]] static float calculateParallaxSmoothingAlpha (float delay, float deltaTime);
     [[nodiscard]] static glm::vec2 calculateShaderParallaxPosition (const glm::vec2& displacement);
+    /** Pack the authoring start/end values into common_fog.h's
+     * {start, range, startDensity, densityRange} uniform layout. */
+    [[nodiscard]] static glm::vec4
+    calculateFogParams (float start, float end, float startDensity, float endDensity);
+    [[nodiscard]] static float calculateCameraFadeAlpha (float elapsedTime, float duration);
+    [[nodiscard]] static size_t chooseCameraPathIndex (
+	std::optional<size_t> current, size_t count, const std::string& queueMode, uint32_t randomValue
+    );
+
+    struct TransparentSortKey {
+	bool sortable = false;
+	RenderSortClass renderClass = RenderSortClass::Opaque;
+	/** View-space Z: more-negative values are farther from the camera. */
+	float cameraDepth = 0.0f;
+    };
+
+    /** Return source indices in their per-frame draw slots. Non-sortable entries
+     * remain fixed; opaque entries stay stable, followed by blended entries
+     * ordered back-to-front and additive entries last. */
+    [[nodiscard]] static std::vector<size_t>
+    calculateTransparentSortPermutation (const std::vector<TransparentSortKey>& keys);
 
     const glm::vec2* getMousePosition () const;
     const glm::vec2* getMousePositionLast () const;
@@ -76,6 +108,8 @@ public:
     struct SceneLights {
 	int directionalCount = 0;
 	int pointCount = 0;
+	int spotCount = 0;
+	int tubeCount = 0;
 	/** xyz = world-space direction towards the light, w unused */
 	std::vector<glm::vec4> directionalDirections = {};
 	/** rgb = color premultiplied by intensity, w unused */
@@ -84,9 +118,32 @@ public:
 	std::vector<glm::vec4> pointOrigins = {};
 	/** rgb = color premultiplied by intensity, w = radius */
 	std::vector<glm::vec4> pointColors = {};
+	/** xyz = world-space position, w = cos(inner cone angle) */
+	std::vector<glm::vec4> spotOrigins = {};
+	/** xyz = direction the spotlight points, w = cos(outer cone angle) */
+	std::vector<glm::vec4> spotDirections = {};
+	/** rgb = color premultiplied by intensity, w = radius */
+	std::vector<glm::vec4> spotColors = {};
+	/** x = falloff exponent, yzw unused */
+	std::vector<glm::vec4> spotExponents = {};
+	/** xyz = first world-space endpoint, w = falloff exponent */
+	std::vector<glm::vec4> tubeOriginsA = {};
+	/** xyz = second world-space endpoint, w unused */
+	std::vector<glm::vec4> tubeOriginsB = {};
+	/** rgb = color premultiplied by intensity, w = radius */
+	std::vector<glm::vec4> tubeColors = {};
     };
 
     [[nodiscard]] const SceneLights& getLights () const;
+
+    struct SceneFog {
+	bool distanceEnabled = false;
+	bool heightEnabled = false;
+	glm::vec4 distanceParams = {};
+	glm::vec4 heightParams = {};
+    };
+
+    [[nodiscard]] const SceneFog& getFog () const;
 
     // Runtime layer API — backs thisScene.createLayer()/getLayerIndex()/sortLayer() in the
     // scripting engine. Audio visualizers (and other generative scripts) spawn their bar layers
@@ -106,6 +163,7 @@ public:
 protected:
     void renderFrame (const glm::ivec4& viewport) override;
     void updateMouse (const glm::ivec4& viewport);
+    [[nodiscard]] float getSceneFadeAlpha () const override;
 
     friend class CWallpaper;
 
@@ -114,6 +172,11 @@ private:
     Render::CObject* dispatchObjectType (const Object& object);
     void addObjectToRenderOrder (const Object& object);
     void updateLightState ();
+    void registerFogScripts ();
+    void updateFogState ();
+    void updateCameraPath (float deltaTime);
+    [[nodiscard]] const CameraPathSource* findActiveCameraPathSource () const;
+    [[nodiscard]] std::vector<CObject*> buildFrameRenderOrder () const;
 
     std::unique_ptr<Scripting::ScriptEngine> m_scriptEngine;
     std::unique_ptr<Camera> m_camera;
@@ -126,6 +189,7 @@ private:
     std::vector<CObject*> m_objectsByRenderOrder = {};
     std::vector<Objects::CLight*> m_lightObjects = {};
     SceneLights m_lights = {};
+    SceneFog m_fog = {};
     std::vector<DynamicValue*> m_scriptedValues = {};
     glm::vec2 m_mousePosition = {};
     glm::vec2 m_mousePositionLast = {};
@@ -133,6 +197,10 @@ private:
     glm::vec2 m_parallaxDisplacement = {};
     /** Parallax position fed to shaders via g_ParallaxPosition, 0.5,0.5 = centered */
     glm::vec2 m_parallaxPosition = { 0.5f, 0.5f };
+    const CameraPathSource* m_activeCameraPathSource = nullptr;
+    std::optional<size_t> m_activeCameraPathIndex = std::nullopt;
+    float m_cameraPathElapsed = 0.0f;
+    std::mt19937 m_cameraPathRandom { std::random_device {} () };
     std::shared_ptr<const CFBO> _rt_4FrameBuffer = nullptr;
     std::shared_ptr<const CFBO> _rt_8FrameBuffer = nullptr;
     std::shared_ptr<const CFBO> _rt_Bloom = nullptr;

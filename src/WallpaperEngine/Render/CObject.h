@@ -36,6 +36,9 @@ public:
      *  accumulation in CImage::resolveTransform */
     [[nodiscard]] glm::mat4 resolveWorldMatrix () const;
 
+    /** Classify a 3D model's authored material passes for render ordering. */
+    [[nodiscard]] RenderSortClass getRenderSortClass () const;
+
 private:
     Wallpapers::CScene& m_scene;
     const Object& m_object;

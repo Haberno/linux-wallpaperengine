@@ -674,15 +674,22 @@ public:
 struct LightData {
     enum Type {
 	Type_Point = 0,
-	Type_Directional = 1,
+	Type_Spot = 1,
+	Type_Tube = 2,
+	Type_Directional = 3,
     };
 
     Type type;
     UserSettingUniquePtr color;
     UserSettingUniquePtr intensity;
     UserSettingUniquePtr radius;
-    /** Falloff exponent for point lights */
+    /** Falloff exponent for local (point, spot, and tube) lights */
     UserSettingUniquePtr exponent;
+    /** Spot cone angles in degrees, packed as cosines for the shader */
+    UserSettingUniquePtr innerCone;
+    UserSettingUniquePtr outerCone;
+    /** Tube light's second endpoint in the light's local coordinate system */
+    UserSettingUniquePtr controlPoint;
     /** Stored for later shadow support; unused while shadows are not implemented */
     bool castShadow;
 };

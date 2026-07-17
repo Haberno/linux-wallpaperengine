@@ -1,3 +1,4 @@
+#include "WallpaperEngine/Render/Camera.h"
 #include "WallpaperEngine/Render/Wallpapers/CScene.h"
 
 // CEF exposes its own CHECK macro through CScene's renderer includes. Catch must own the
@@ -10,7 +11,9 @@
 #include <catch2/catch_test_macros.hpp>
 #include <cmath>
 #include <glm/glm.hpp>
+#include <glm/gtc/matrix_transform.hpp>
 
+using WallpaperEngine::Render::Camera;
 using WallpaperEngine::Render::Wallpapers::CScene;
 
 /**
@@ -136,6 +139,48 @@ TEST_CASE ("Complete coordinate flow: GLFW to normalized") {
     CHECK (normalizedY == 0.0); // Bottom should normalize to 0.0
 }
 
+TEST_CASE ("SceneScript cursor world position uses orthographic canvas coordinates") {
+    const glm::mat4 identity (1.0f);
+
+    const glm::vec3 bottomLeft
+	= Camera::projectScreenPosition ({ 0.0f, 0.0f }, true, 343.0f, 193.0f, identity, identity, false);
+    const glm::vec3 center
+	= Camera::projectScreenPosition ({ 0.5f, 0.5f }, true, 343.0f, 193.0f, identity, identity, false);
+    const glm::vec3 topRight
+	= Camera::projectScreenPosition ({ 1.0f, 1.0f }, true, 343.0f, 193.0f, identity, identity, false);
+
+    CHECK (bottomLeft == glm::vec3 (0.0f, 0.0f, 0.0f));
+    CHECK (center == glm::vec3 (171.5f, 96.5f, 0.0f));
+    CHECK (topRight == glm::vec3 (343.0f, 193.0f, 0.0f));
+}
+
+TEST_CASE ("SceneScript cursor world position intersects the perspective authoring plane") {
+    constexpr float fov = 50.0f;
+    constexpr float aspect = 16.0f / 9.0f;
+    constexpr float cameraDistance = 2.3f;
+    const glm::mat4 view
+	= glm::lookAt (glm::vec3 (0.0f, 0.0f, cameraDistance), glm::vec3 (0.0f), glm::vec3 (0.0f, 1.0f, 0.0f));
+    glm::mat4 projection = glm::perspective (glm::radians (fov), aspect, 0.01f, 100.0f);
+
+    const glm::vec3 center
+	= Camera::projectScreenPosition ({ 0.5f, 0.5f }, false, 1920.0f, 1080.0f, projection, view, false);
+    const glm::vec3 right
+	= Camera::projectScreenPosition ({ 1.0f, 0.5f }, false, 1920.0f, 1080.0f, projection, view, false);
+    const glm::vec3 top
+	= Camera::projectScreenPosition ({ 0.5f, 1.0f }, false, 1920.0f, 1080.0f, projection, view, false);
+
+    const float expectedY = cameraDistance * std::tan (glm::radians (fov) * 0.5f);
+    CHECK (center.x == Catch::Approx (0.0f).margin (0.0001f));
+    CHECK (center.y == Catch::Approx (0.0f).margin (0.0001f));
+    CHECK (right.x == Catch::Approx (expectedY * aspect).margin (0.0001f));
+    CHECK (top.y == Catch::Approx (expectedY).margin (0.0001f));
+
+    projection[1][1] *= -1.0f;
+    const glm::vec3 flippedTop
+	= Camera::projectScreenPosition ({ 0.5f, 1.0f }, false, 1920.0f, 1080.0f, projection, view, true);
+    CHECK (flippedTop.y == Catch::Approx (expectedY).margin (0.0001f));
+}
+
 /**
  * Test coordinate conversion with different viewport sizes
  * Ensures conversion works with non-standard viewport dimensions
@@ -171,6 +216,55 @@ TEST_CASE ("Wallpaper Engine camera parallax delay response") {
     CHECK (CScene::calculateParallaxSmoothingAlpha (1.0f, 1.0f / 60.0f) == Catch::Approx (1.0f / 9.0f));
     CHECK (CScene::calculateParallaxSmoothingAlpha (2.0f, 1.0f / 60.0f) == Catch::Approx (1.0f / 18.0f));
     CHECK (CScene::calculateParallaxSmoothingAlpha (3.0f, 1.0f / 60.0f) == 0.0f);
+}
+
+TEST_CASE ("Wallpaper Engine fog authoring values map to shader parameters") {
+    const glm::vec4 distance = CScene::calculateFogParams (1.0f, 24.65f, 0.54f, 0.97f);
+    CHECK (distance.x == 1.0f);
+    CHECK (distance.y == Catch::Approx (23.65f));
+    CHECK (distance.z == 0.54f);
+    CHECK (distance.w == Catch::Approx (0.43f));
+
+    const glm::vec4 height = CScene::calculateFogParams (-8.35f, 75.0f, 0.0f, 0.6f);
+    CHECK (height.x == -8.35f);
+    CHECK (height.y == Catch::Approx (83.35f));
+    CHECK (height.z == 0.0f);
+    CHECK (height.w == 0.6f);
+}
+
+TEST_CASE ("Wallpaper Engine camera path startup fade envelope") {
+    CHECK (CScene::calculateCameraFadeAlpha (0.0f, 10.0f) == 1.0f);
+    CHECK (CScene::calculateCameraFadeAlpha (0.25f, 10.0f) == Catch::Approx (0.5f));
+    CHECK (CScene::calculateCameraFadeAlpha (0.5f, 10.0f) == 0.0f);
+    CHECK (CScene::calculateCameraFadeAlpha (9.5f, 10.0f) == 0.0f);
+    CHECK (CScene::calculateCameraFadeAlpha (9.75f, 10.0f) == Catch::Approx (0.5f));
+    CHECK (CScene::calculateCameraFadeAlpha (10.0f, 10.0f) == 1.0f);
+    CHECK (CScene::calculateCameraFadeAlpha (1.0f, 0.0f) == 0.0f);
+}
+
+TEST_CASE ("Camera path queue selection supports sequence and no-repeat random") {
+    CHECK (CScene::chooseCameraPathIndex (std::nullopt, 3, "sequence", 2) == 0);
+    CHECK (CScene::chooseCameraPathIndex (0, 3, "sequence", 2) == 1);
+    CHECK (CScene::chooseCameraPathIndex (2, 3, "sequence", 2) == 0);
+    CHECK (CScene::chooseCameraPathIndex (std::nullopt, 3, "random", 5) == 2);
+    CHECK (CScene::chooseCameraPathIndex (1, 3, "random", 1) == 2);
+    CHECK (CScene::chooseCameraPathIndex (2, 3, "random", 1) == 1);
+}
+
+TEST_CASE ("3D transparent sorting preserves fixed slots and orders blended models back to front") {
+    using SortClass = WallpaperEngine::Render::RenderSortClass;
+    const std::vector<CScene::TransparentSortKey> keys = {
+	{ .sortable = true, .renderClass = SortClass::Translucent, .cameraDepth = -2.0f },
+	{ .sortable = false, .renderClass = SortClass::Translucent, .cameraDepth = -100.0f },
+	{ .sortable = true, .renderClass = SortClass::Opaque, .cameraDepth = -20.0f },
+	{ .sortable = true, .renderClass = SortClass::Additive, .cameraDepth = -10.0f },
+	{ .sortable = true, .renderClass = SortClass::Translucent, .cameraDepth = -9.0f },
+	{ .sortable = true, .renderClass = SortClass::Opaque, .cameraDepth = -1.0f },
+    };
+
+    const std::vector<size_t> permutation = CScene::calculateTransparentSortPermutation (keys);
+    REQUIRE (permutation.size () == keys.size ());
+    CHECK (permutation == std::vector<size_t> { 2, 1, 5, 4, 0, 3 });
 }
 
 TEST_CASE ("Shader parallax position is independent of camera translation amount") {

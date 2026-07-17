@@ -118,6 +118,7 @@ void CWallpaper::setupShaders () {
 		    "uniform int g_TransitionMode;\n"
 		    "uniform float g_TransitionProgress;\n"
 		    "uniform vec2 g_TransitionCenter;\n"
+		    "uniform float g_SceneFadeAlpha;\n"
 		    "in vec2 v_TexCoord;\n"
 		    "in vec2 v_ScreenPos;\n"
 		    "out vec4 out_FragColor;\n"
@@ -222,7 +223,13 @@ void CWallpaper::setupShaders () {
 		    "return 1.0;\n"
 		    "}\n"
 		    "void main () {\n"
-		    "out_FragColor = vec4 (texture (g_Texture0, v_TexCoord).rgb, transitionAlpha ());\n"
+		    "vec3 sceneColor = texture (g_Texture0, v_TexCoord).rgb;\n"
+		    // materials/util/fade.json uses the fade shader's default tint (0.315,
+		    // 0.135, 0.1125), multiplied by 0.7 in fade.frag. Scheme-color overrides
+		    // can replace this once Linux-side desktop scheme integration exists.
+		    "vec3 fadeColor = vec3 (0.2205, 0.0945, 0.07875);\n"
+		    "sceneColor = mix (sceneColor, fadeColor, g_SceneFadeAlpha);\n"
+		    "out_FragColor = vec4 (sceneColor, transitionAlpha ());\n"
 		    "}";
 
     glShaderSource (fragmentShaderID, 1, &sourcePointer, nullptr);
@@ -288,6 +295,7 @@ void CWallpaper::setupShaders () {
     this->g_TransitionMode = glGetUniformLocation (this->m_shader, "g_TransitionMode");
     this->g_TransitionProgress = glGetUniformLocation (this->m_shader, "g_TransitionProgress");
     this->g_TransitionCenter = glGetUniformLocation (this->m_shader, "g_TransitionCenter");
+    this->g_SceneFadeAlpha = glGetUniformLocation (this->m_shader, "g_SceneFadeAlpha");
     this->a_Position = glGetAttribLocation (this->m_shader, "a_Position");
     this->a_TexCoord = glGetAttribLocation (this->m_shader, "a_TexCoord");
 }
@@ -441,6 +449,7 @@ void CWallpaper::render (
     glUniform1i (this->g_TransitionMode, transitionActive ? this->m_transitionMode : TransitionMode_None);
     glUniform1f (this->g_TransitionProgress, this->m_transitionProgress);
     glUniform2f (this->g_TransitionCenter, this->m_transitionCenter.x, this->m_transitionCenter.y);
+    glUniform1f (this->g_SceneFadeAlpha, this->getSceneFadeAlpha ());
     // write the framebuffer as is to the screen
     glBindBuffer (GL_ARRAY_BUFFER, this->m_texCoordBuffer);
     glDrawArrays (GL_TRIANGLES, 0, 6);
@@ -451,6 +460,8 @@ void CWallpaper::render (
 }
 
 void CWallpaper::setPause (bool newState) { }
+
+float CWallpaper::getSceneFadeAlpha () const { return 0.0f; }
 
 void CWallpaper::setupFramebuffers (bool sceneDepthBuffer) {
     const uint32_t width = this->getWidth ();

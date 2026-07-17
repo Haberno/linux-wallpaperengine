@@ -688,6 +688,14 @@ JSValue ScriptEngine::call (JSValue module, int argc, JSValue argv[], const char
 }
 
 void ScriptEngine::queueScript (const std::string& key, DynamicValue& currentValue, ScriptableObject& object) {
+    this->queueScript (key, currentValue, &object);
+}
+
+void ScriptEngine::queueSceneScript (const std::string& key, DynamicValue& currentValue) {
+    this->queueScript (key, currentValue, nullptr);
+}
+
+void ScriptEngine::queueScript (const std::string& key, DynamicValue& currentValue, ScriptableObject* object) {
     const auto source = currentValue.getScriptSource ();
 
     if (!source.has_value ()) {
@@ -708,9 +716,8 @@ void ScriptEngine::queueScript (const std::string& key, DynamicValue& currentVal
     // would otherwise overwrite.
     std::string body = normalizeSceneScriptModuleSyntax (*source);
 
-    JS_SetPropertyStr (
-	this->m_context, this->m_globalThis, "__propScriptLayer", this->m_adapters.object->instantiate (object)
-    );
+    JSValue layer = object == nullptr ? JS_UNDEFINED : this->m_adapters.object->instantiate (*object);
+    JS_SetPropertyStr (this->m_context, this->m_globalThis, "__propScriptLayer", layer);
 
     // seed the user-property values bound to this setting so scriptProperties.X resolves to
     // the configured value (same seeding approach as createLayerScript)

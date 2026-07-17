@@ -631,6 +631,18 @@ void CPass::setupShaders () {
 	"SCENE_ORTHO", this->m_renderable.getScene ().getScene ().camera.projection.isPerspective ? 0 : 1
     );
 
+    // FOG_DIST/FOG_HEIGHT are scene-global. FOG_COMPUTED is Wallpaper Engine's
+    // per-material gate: the native model path enables it only when the authored
+    // FOG combo exists and is non-zero.
+    const auto& fog = this->m_renderable.getScene ().getFog ();
+    const auto fogOverride = this->m_override.combos.find ("FOG");
+    const auto fogMaterial = this->m_pass.combos.find ("FOG");
+    const bool materialFogEnabled = fogOverride != this->m_override.combos.end () ? fogOverride->second != 0
+	: fogMaterial != this->m_pass.combos.end () && fogMaterial->second != 0;
+    this->m_combos.insert_or_assign ("FOG_DIST", fog.distanceEnabled ? 1 : 0);
+    this->m_combos.insert_or_assign ("FOG_HEIGHT", fog.heightEnabled ? 1 : 0);
+    this->m_combos.insert_or_assign ("FOG_COMPUTED", materialFogEnabled ? 1 : 0);
+
     // scenes with lights need LightingV1 modules compiled with matching uniform array sizes;
     // 2D scenes have no light objects, keeping their shader compilation untouched
     const auto& lights = this->m_renderable.getScene ().getLights ();
@@ -641,6 +653,14 @@ void CPass::setupShaders () {
 
     if (lights.pointCount > 0) {
 	this->m_combos.insert_or_assign ("LIGHTS_POINT", lights.pointCount);
+    }
+
+    if (lights.spotCount > 0) {
+	this->m_combos.insert_or_assign ("LIGHTS_SPOT", lights.spotCount);
+    }
+
+    if (lights.tubeCount > 0) {
+	this->m_combos.insert_or_assign ("LIGHTS_TUBE", lights.tubeCount);
     }
 
     // TODO: THE VALUES ARE THE SAME AS THE ENUMERATION, SO MAYBE IT HAS TO BE SPECIFIED FOR THE TEXTURE 0 OF ALL
@@ -927,6 +947,12 @@ void CPass::setupUniforms () {
     this->addUniform ("g_LightSkylightColor", sceneData.colors.skylight->value->getVec3 ());
     this->addUniform ("g_EyePosition", &scene.getCamera ().getEye ());
 
+    const auto& fog = scene.getFog ();
+    this->addUniform ("g_FogDistanceColor", &sceneData.fog.distance.color->value->getVec3 ());
+    this->addUniform ("g_FogDistanceParams", &fog.distanceParams);
+    this->addUniform ("g_FogHeightColor", &sceneData.fog.height.color->value->getVec3 ());
+    this->addUniform ("g_FogHeightParams", &fog.heightParams);
+
     // dynamic light state, refreshed by CScene::updateLightState every frame
     const auto& lights = scene.getLights ();
 
@@ -938,6 +964,19 @@ void CPass::setupUniforms () {
     if (lights.pointCount > 0) {
 	this->addUniform ("g_LPoint_Origin", lights.pointOrigins.data (), lights.pointCount);
 	this->addUniform ("g_LPoint_Color", lights.pointColors.data (), lights.pointCount);
+    }
+
+    if (lights.spotCount > 0) {
+	this->addUniform ("g_LSpot_Origin", lights.spotOrigins.data (), lights.spotCount);
+	this->addUniform ("g_LSpot_Direction", lights.spotDirections.data (), lights.spotCount);
+	this->addUniform ("g_LSpot_Color", lights.spotColors.data (), lights.spotCount);
+	this->addUniform ("g_LSpot_Exponent", lights.spotExponents.data (), lights.spotCount);
+    }
+
+    if (lights.tubeCount > 0) {
+	this->addUniform ("g_LTube_OriginA", lights.tubeOriginsA.data (), lights.tubeCount);
+	this->addUniform ("g_LTube_OriginB", lights.tubeOriginsB.data (), lights.tubeCount);
+	this->addUniform ("g_LTube_Color", lights.tubeColors.data (), lights.tubeCount);
     }
     // register variables like brightness and alpha by pointer so the values are re-read every
     // frame: they can be driven by user-property bindings (e.g. alpha bound to a "brightness"
