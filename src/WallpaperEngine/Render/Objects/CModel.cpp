@@ -327,6 +327,18 @@ void CModel::updateMatrices () {
     this->m_modelViewProjectionMatrix = this->m_viewProjectionMatrix * this->m_modelMatrix;
     this->m_modelViewProjectionMatrixInverse = glm::inverse (this->m_modelViewProjectionMatrix);
     this->m_normalMatrix = glm::inverseTranspose (glm::mat3 (this->m_modelMatrix));
+
+    // Wallpaper Engine's generic model shaders use the normal matrix to build
+    // the tangent basis but do not normalize its tangent/bitangent outputs.
+    // Keep the inverse-transpose orientation while removing object scale from
+    // each basis vector. Small authored model scales (commonly 0.01) otherwise
+    // magnify tangent-space normals by 100 and create clipped, noisy lighting.
+    for (int column = 0; column < 3; column++) {
+	const float length = glm::length (this->m_normalMatrix[column]);
+	if (length > 1e-6f) {
+	    this->m_normalMatrix[column] /= length;
+	}
+    }
 }
 
 void CModel::render () {
