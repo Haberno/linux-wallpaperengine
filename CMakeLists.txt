@@ -588,6 +588,7 @@ if(BUILD_TESTING)
         src/WallpaperEngine/Testing/Cases/PropertyParser.cpp
         src/WallpaperEngine/Testing/Cases/Utf8Text.cpp
         src/WallpaperEngine/Testing/Cases/JsonTolerance.cpp
+        src/WallpaperEngine/Testing/Cases/MdlParser.cpp
         src/WallpaperEngine/Testing/Cases/AudioSpectrum.cpp)
 endif()
 
