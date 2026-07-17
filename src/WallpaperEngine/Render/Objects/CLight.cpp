@@ -1,5 +1,6 @@
 #include "CLight.h"
 
+#include <cmath>
 #include <glm/geometric.hpp>
 
 using namespace WallpaperEngine;
@@ -10,6 +11,10 @@ CLight::CLight (Wallpapers::CScene& scene, const Light& light) :
     this->registerProperty ("color", *light.color->value);
     this->registerProperty ("intensity", *light.intensity->value);
     this->registerProperty ("radius", *light.radius->value);
+    this->registerProperty ("exponent", *light.exponent->value);
+    this->registerProperty ("innercone", *light.innerCone->value);
+    this->registerProperty ("outercone", *light.outerCone->value);
+    this->registerProperty ("controlpoint", *light.controlPoint->value);
 }
 
 const Light& CLight::getLight () const { return this->m_light; }
@@ -24,10 +29,26 @@ glm::vec3 CLight::getWorldDirection () const {
     return glm::normalize (glm::mat3 (this->resolveWorldMatrix ()) * glm::vec3 (1.0f, 0.0f, 0.0f));
 }
 
+glm::vec3 CLight::getTubeEndPosition () const {
+    return calculateTubeEndPosition (
+	this->resolveWorldMatrix (), this->m_light.controlPoint->value->getVec3 ()
+    );
+}
+
 glm::vec3 CLight::getPremultipliedColor () const {
     if (!this->m_light.groupVisible->value->getBool ()) {
 	return glm::vec3 (0.0f);
     }
 
     return this->m_light.color->value->getVec3 () * this->m_light.intensity->value->getFloat ();
+}
+
+glm::vec2 CLight::calculateSpotConeCosines (const float innerDegrees, const float outerDegrees) {
+    constexpr float degreesToRadians = 0.01745329251994329577f;
+    return { std::cos (innerDegrees * degreesToRadians), std::cos (outerDegrees * degreesToRadians) };
+}
+
+glm::vec3
+CLight::calculateTubeEndPosition (const glm::mat4& worldMatrix, const glm::vec3& controlPoint) {
+    return glm::vec3 (worldMatrix * glm::vec4 (controlPoint, 1.0f));
 }
