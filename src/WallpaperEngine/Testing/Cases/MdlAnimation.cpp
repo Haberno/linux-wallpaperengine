@@ -147,9 +147,10 @@ TEST_CASE ("MDL animation evaluator interpolates and composes parent bones") {
     CHECK (pose.skinBones[1][3].x == Catch::Approx (1.0f));
     CHECK (pose.skinBones[1][3].y == Catch::Approx (1.0f));
 
-    const auto& attachment = animationData.attachments.at ("tip");
-    const glm::mat4 attachmentWorld = pose.worldBones[attachment.bone] * attachment.local;
-    CHECK (attachmentWorld[3].x == Catch::Approx (1.0f));
-    CHECK (attachmentWorld[3].y == Catch::Approx (1.0f));
-    CHECK (attachmentWorld[3].z == Catch::Approx (3.0f));
+    const auto attachmentWorld = MdlAnimationEvaluator::attachmentTransform (animationData, pose.worldBones, "tip");
+    REQUIRE (attachmentWorld.has_value ());
+    CHECK ((*attachmentWorld)[3].x == Catch::Approx (1.0f));
+    CHECK ((*attachmentWorld)[3].y == Catch::Approx (1.0f));
+    CHECK ((*attachmentWorld)[3].z == Catch::Approx (3.0f));
+    CHECK_FALSE (MdlAnimationEvaluator::attachmentTransform (animationData, pose.worldBones, "missing").has_value ());
 }
