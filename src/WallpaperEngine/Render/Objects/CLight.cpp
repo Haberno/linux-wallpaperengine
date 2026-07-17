@@ -5,6 +5,7 @@
 #include <cmath>
 #include <limits>
 #include <glm/geometric.hpp>
+#include <glm/gtc/constants.hpp>
 #include <glm/gtc/matrix_transform.hpp>
 
 using namespace WallpaperEngine;
@@ -169,6 +170,39 @@ glm::mat4 CLight::calculateDirectionalShadowViewProjection (
     lightProjection[3][0] += roundingOffset.x;
     lightProjection[3][1] += roundingOffset.y;
     return lightProjection * lightView;
+}
+
+std::array<glm::mat4, 6>
+CLight::calculatePointShadowViewProjections (const glm::vec3& origin, const float radius) {
+    const float farPlane = std::max (std::abs (radius), 1.01f);
+    const float nearPlane = std::clamp (farPlane * 0.001f, 0.01f, farPlane * 0.1f);
+    const glm::mat4 projection = glm::perspective (glm::half_pi<float> (), 1.0f, nearPlane, farPlane);
+
+    // This is the face order hard-coded by CalculateProjectedCoordsPoint:
+    // +X/-X on row 0, +Y/-Y on row 1, and +Z/-Z on row 2.
+    static constexpr std::array<glm::vec3, 6> directions = {
+	glm::vec3 (1.0f, 0.0f, 0.0f), glm::vec3 (-1.0f, 0.0f, 0.0f),
+	glm::vec3 (0.0f, 1.0f, 0.0f), glm::vec3 (0.0f, -1.0f, 0.0f),
+	glm::vec3 (0.0f, 0.0f, 1.0f), glm::vec3 (0.0f, 0.0f, -1.0f),
+    };
+    static constexpr std::array<glm::vec3, 6> up = {
+	glm::vec3 (0.0f, 1.0f, 0.0f), glm::vec3 (0.0f, 1.0f, 0.0f),
+	glm::vec3 (0.0f, 0.0f, 1.0f), glm::vec3 (0.0f, 0.0f, -1.0f),
+	glm::vec3 (0.0f, 1.0f, 0.0f), glm::vec3 (0.0f, 1.0f, 0.0f),
+    };
+
+    std::array<glm::mat4, 6> result {};
+    for (size_t face = 0; face < result.size (); face++) {
+	result[face] = projection * glm::lookAt (origin, origin + directions[face], up[face]);
+    }
+    return result;
+}
+
+glm::vec4 CLight::calculatePointShadowProjectionInfo (const float radius) {
+    const float farPlane = std::max (std::abs (radius), 1.01f);
+    const float nearPlane = std::clamp (farPlane * 0.001f, 0.01f, farPlane * 0.1f);
+    const glm::mat4 projection = glm::perspective (glm::half_pi<float> (), 1.0f, nearPlane, farPlane);
+    return glm::vec4 (projection[2][2], projection[3][2], projection[2][3], projection[3][3]);
 }
 
 glm::vec3
