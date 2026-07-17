@@ -1,6 +1,7 @@
 #pragma once
 
 #include "CRenderable.h"
+#include "WallpaperEngine/Data/Model/MdlAnimation.h"
 #include "WallpaperEngine/Render/CObject.h"
 #include "WallpaperEngine/Render/Objects/Effects/CPass.h"
 #include "WallpaperEngine/Render/Wallpapers/CScene.h"
@@ -11,7 +12,6 @@
 #include "WallpaperEngine/Scripting/ScriptableObject.h"
 
 #include <array>
-#include <glm/gtc/quaternion.hpp>
 #include <glm/vec3.hpp>
 #include <map>
 #include <optional>
@@ -93,45 +93,6 @@ protected:
     localTransform (const WallpaperEngine::Data::Model::Object& object, float time);
 
 private:
-    struct PuppetBone {
-	std::string name = {};
-	uint32_t type = 0;
-	int32_t parent = -1;
-	glm::mat4 bindLocal = glm::mat4 (1.0f);
-	/** inverse of the composed bind-pose transform; posed vertex is
-	 *  animWorld * inverseBindWorld * the already-assembled rest vertex */
-	glm::mat4 inverseBindWorld = glm::mat4 (1.0f);
-    };
-
-    struct PuppetAttachment {
-	uint16_t bone = 0;
-	glm::mat4 local = glm::mat4 (1.0f);
-    };
-
-    struct PuppetBoneFrame {
-	glm::vec3 translation = glm::vec3 (0.0f);
-	glm::quat rotation = glm::quat (1.0f, 0.0f, 0.0f, 0.0f);
-	glm::vec3 scale = glm::vec3 (1.0f);
-    };
-
-    struct PuppetAnimation {
-	uint32_t id = 0;
-	std::string name = {};
-	std::string mode = {};
-	float fps = 0.0f;
-	uint32_t frameCount = 0;
-	std::vector<uint32_t> boneFlags = {};
-	/** boneFrames[bone][frame], usually frameCount + 1 entries with the last matching the first */
-	std::vector<std::vector<PuppetBoneFrame>> boneFrames = {};
-    };
-
-    struct PuppetActiveLayer {
-	const PuppetAnimation* animation = nullptr;
-	float time = 0.0f;
-	float weight = 1.0f;
-	bool additive = false;
-    };
-
     struct PuppetLayerPlayback {
 	bool initialized = false;
 	bool playing = true;
@@ -144,9 +105,6 @@ private:
     };
 
     bool loadPuppetMesh (const glm::vec2& size);
-    bool loadPuppetBones (const std::vector<char>& data, size_t mdlsOffset);
-    void loadPuppetAttachments (const std::vector<char>& data, size_t mdatOffset);
-    void loadPuppetAnimations (const std::vector<char>& data, size_t mdlaOffset);
     void selectPuppetAnimations (float sceneTime);
     void updatePuppetPositionBuffer (const glm::vec2& size);
     [[nodiscard]] std::optional<ResolvedTransform> puppetAttachmentTransform (const std::string& name) const;
@@ -179,13 +137,11 @@ private:
     std::vector<GLfloat> m_puppetRawPositions = {};
     std::vector<uint32_t> m_puppetBlendIndices = {};
     std::vector<GLfloat> m_puppetBlendWeights = {};
-    std::vector<PuppetBone> m_puppetBones = {};
+    WallpaperEngine::Data::Model::MdlAnimationData m_puppetAnimation = {};
     std::vector<glm::mat4> m_puppetWorldBones = {};
     std::vector<glm::mat4> m_puppetSkinBones = {};
     std::vector<GLfloat> m_puppetPositions = {};
-    std::map<std::string, PuppetAttachment> m_puppetAttachments = {};
-    std::vector<PuppetAnimation> m_puppetAnimations = {};
-    std::vector<PuppetActiveLayer> m_puppetActiveLayers = {};
+    std::vector<WallpaperEngine::Data::Model::MdlActiveAnimation> m_puppetActiveLayers = {};
     std::unordered_map<int, PuppetLayerPlayback> m_puppetLayerPlayback = {};
 
     glm::mat4 m_modelViewProjectionScreen = {};

@@ -25,8 +25,10 @@ private:
     static ParticleUniquePtr parseParticle (const JSON& it, const Project& project, ObjectData base);
     static TextUniquePtr parseText (const JSON& it, const Project& project, ObjectData base);
     /** Returns a plain Object as placeholder when the mdl or its material cannot be loaded */
-    static ObjectUniquePtr parseModel3D (const Project& project, ObjectData base, const std::string& model);
-    static LightUniquePtr parseLight (const JSON& it, const Project& project, ObjectData base, const std::string& light);
+    static ObjectUniquePtr
+    parseModel3D (const JSON& it, const Project& project, ObjectData base, const std::string& model);
+    static LightUniquePtr
+    parseLight (const JSON& it, const Project& project, ObjectData base, const std::string& light);
     static std::vector<ImageEffectUniquePtr> parseEffects (const JSON& it, const Project& project);
     static ImageEffectUniquePtr parseEffect (const JSON& it, const Project& project);
     static std::vector<ImageEffectPassOverrideUniquePtr>

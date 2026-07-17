@@ -1,7 +1,10 @@
 #include "CModel.h"
 
+#include <algorithm>
+
 #include <glm/gtc/matrix_inverse.hpp>
 
+#include "WallpaperEngine/Data/Model/MdlAnimation.h"
 #include "WallpaperEngine/Logging/Log.h"
 
 using namespace WallpaperEngine;
@@ -35,6 +38,18 @@ void CModel::setup () {
     }
 
     CRenderable::setup ();
+
+    if (!this->m_model.animationData.bones.empty ()) {
+	const auto pose = MdlAnimationEvaluator::evaluate (this->m_model.animationData, {});
+	this->m_worldBones = pose.worldBones;
+	this->m_skinBones = pose.skinBones;
+	sLog.out (
+	    "Loaded 3D model animation data ", this->m_model.filename,
+	    " bones=", this->m_model.animationData.bones.size (),
+	    " attachments=", this->m_model.animationData.attachments.size (),
+	    " clips=", this->m_model.animationData.animations.size ()
+	);
+    }
 
     for (size_t submeshIndex = 0; submeshIndex < this->m_model.mesh.submeshes.size (); submeshIndex++) {
 	const auto& submesh = this->m_model.mesh.submeshes[submeshIndex];
@@ -140,6 +155,47 @@ void CModel::setupGeometryCallback (Effects::CPass* pass, size_t submeshIndex) {
     );
 }
 
+void CModel::updateAnimationPose () {
+    const auto& animationData = this->m_model.animationData;
+    if (animationData.bones.empty ()) {
+	return;
+    }
+
+    std::vector<MdlActiveAnimation> activeAnimations;
+    const float sceneTime = this->getScene ().getTime ();
+
+    if (this->m_model.animationLayers.empty ()) {
+	if (!animationData.animations.empty ()) {
+	    activeAnimations.push_back ({ .animation = &animationData.animations.front (), .time = sceneTime });
+	}
+    } else {
+	for (const auto& layer : this->m_model.animationLayers) {
+	    const auto animationId = static_cast<uint32_t> (layer->animation->value->getInt ());
+	    const auto found = std::find_if (
+		animationData.animations.begin (), animationData.animations.end (),
+		[animationId] (const MdlAnimationClip& animation) { return animation.id == animationId; }
+	    );
+	    if (found == animationData.animations.end ()) {
+		continue;
+	    }
+
+	    const bool visible = layer->visible->value->getBool ();
+	    activeAnimations.push_back (
+		{
+		    .animation = &*found,
+		    .time = sceneTime * layer->rate->value->getFloat (),
+		    .weight = visible ? std::clamp (layer->blend->value->getFloat (), 0.0f, 1.0f) : 0.0f,
+		    .additive = layer->additive->value->getBool (),
+		}
+	    );
+	}
+    }
+
+    auto pose = MdlAnimationEvaluator::evaluate (animationData, activeAnimations);
+    this->m_worldBones = std::move (pose.worldBones);
+    this->m_skinBones = std::move (pose.skinBones);
+}
+
 void CModel::updateMatrices () {
     const auto& camera = this->getScene ().getCamera ();
 
@@ -159,11 +215,12 @@ void CModel::render () {
 	return;
     }
 
+    this->updateAnimationPose ();
     this->updateMatrices ();
 
 #if !NDEBUG
-    const std::string debugName = "Model " + this->m_model.name + " (" + std::to_string (this->getId ()) + ", "
-	+ this->m_model.filename + ")";
+    const std::string debugName
+	= "Model " + this->m_model.name + " (" + std::to_string (this->getId ()) + ", " + this->m_model.filename + ")";
 
     glPushDebugGroup (GL_DEBUG_SOURCE_APPLICATION, 0, -1, debugName.c_str ());
 #endif /* DEBUG */
