@@ -768,6 +768,7 @@ void ScriptEngine::queueScript (const std::string& key, DynamicValue& currentVal
 	LoadedModule {
 	    .value = currentValue,
 	    .module = module,
+	    .initialized = false,
 	}
     );
 
@@ -775,15 +776,25 @@ void ScriptEngine::queueScript (const std::string& key, DynamicValue& currentVal
 	return;
     }
 
-    // script properties do not need update as they're connected directly to the source data
-    this->m_runningModule = &inserted.first->second;
+    if (this->m_sceneLayersReady) {
+	this->initializeModule (key, inserted.first->second);
+    }
+}
+
+void ScriptEngine::initializeModule (const std::string& key, LoadedModule& loaded) {
+    if (loaded.initialized) {
+	return;
+    }
+
+    loaded.initialized = true;
+    this->m_runningModule = &loaded;
 
     // run the script's init hook (if any) followed by the first update, mirroring WE's lifecycle
     const bool angles = isAnglesProperty (key);
 
     for (const auto* hook : { "init", "update" }) {
-	JSValue args[] = { angles ? anglesToJs (this->m_context, currentValue) : this->dynamicToJs (currentValue) };
-	JSValue result = this->call (module, 1, args, hook);
+	JSValue args[] = { angles ? anglesToJs (this->m_context, loaded.value) : this->dynamicToJs (loaded.value) };
+	JSValue result = this->call (loaded.module, 1, args, hook);
 
 	ScopeGuard guard2 ([this, args, result] () {
 	    JS_FreeValue (this->m_context, result);
@@ -796,10 +807,17 @@ void ScriptEngine::queueScript (const std::string& key, DynamicValue& currentVal
 	}
 
 	if (angles) {
-	    jsToAngles (this->m_context, result, args[0], currentValue);
+	    jsToAngles (this->m_context, result, args[0], loaded.value);
 	} else {
-	    jsToDynamicValue (this->m_context, result, currentValue);
+	    jsToDynamicValue (this->m_context, result, loaded.value);
 	}
+    }
+}
+
+void ScriptEngine::initializeQueuedScripts () {
+    this->m_sceneLayersReady = true;
+    for (auto& [key, module] : this->m_scriptModules) {
+	this->initializeModule (key, module);
     }
 }
 
@@ -856,6 +874,9 @@ void ScriptEngine::tick () {
 
     // run all update methods
     for (auto& [key, module] : this->m_scriptModules) {
+	if (!module.initialized) {
+	    continue;
+	}
 	this->m_runningModule = &module;
 
 	const bool angles = isAnglesProperty (key);

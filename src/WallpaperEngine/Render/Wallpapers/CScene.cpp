@@ -329,6 +329,11 @@ CScene::CScene (
 	this->addObjectToRenderOrder (*object);
     }
 
+    // Property-script init hooks commonly resolve other layers by name. Construction can
+    // follow dependency order rather than authored order, so wait until both registries are
+    // complete before allowing those hooks to cache their targets.
+    this->m_scriptEngine->initializeQueuedScripts ();
+
     // create extra framebuffers for the bloom effect
     this->_rt_4FrameBuffer = this->create (
 	"_rt_4FrameBuffer", TextureFormat_ARGB8888, TextureFlags_ClampUVs, 1.0, { sceneWidth / 4, sceneHeight / 4 },
