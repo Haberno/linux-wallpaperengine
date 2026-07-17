@@ -484,6 +484,8 @@ set(COMMON_SOURCES
     src/WallpaperEngine/Data/Model/Effect.h
     src/WallpaperEngine/Data/Model/Model.h
     src/WallpaperEngine/Data/Model/MdlMesh.h
+    src/WallpaperEngine/Data/Model/MdlAnimation.cpp
+    src/WallpaperEngine/Data/Model/MdlAnimation.h
     src/WallpaperEngine/Data/Model/UserSetting.h
     src/WallpaperEngine/Data/Model/PropertyAnimation.h
     src/WallpaperEngine/Data/Model/PropertyAnimation.cpp
@@ -511,6 +513,8 @@ set(COMMON_SOURCES
     src/WallpaperEngine/Data/Parsers/MaterialParser.h
     src/WallpaperEngine/Data/Parsers/MdlParser.cpp
     src/WallpaperEngine/Data/Parsers/MdlParser.h
+    src/WallpaperEngine/Data/Parsers/MdlAnimationParser.cpp
+    src/WallpaperEngine/Data/Parsers/MdlAnimationParser.h
     src/WallpaperEngine/Data/Parsers/ModelParser.cpp
     src/WallpaperEngine/Data/Parsers/ModelParser.h
     src/WallpaperEngine/Data/Parsers/ShaderConstantParser.cpp
@@ -589,6 +593,7 @@ if(BUILD_TESTING)
         src/WallpaperEngine/Testing/Cases/Utf8Text.cpp
         src/WallpaperEngine/Testing/Cases/JsonTolerance.cpp
         src/WallpaperEngine/Testing/Cases/MdlParser.cpp
+        src/WallpaperEngine/Testing/Cases/MdlAnimation.cpp
         src/WallpaperEngine/Testing/Cases/AudioSpectrum.cpp)
 endif()
 
