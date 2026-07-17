@@ -47,6 +47,7 @@ public:
     struct LoadedModule {
 	DynamicValue& value;
 	JSValue module;
+	bool initialized = false;
     };
     struct JSObjectAdapters {
 	std::unique_ptr<Adapters::VectorAdapter<4>> vec4;
@@ -84,6 +85,9 @@ public:
     /** Queue a script-backed scene setting such as fog color. Scene settings have
      * thisScene/engine globals but intentionally no thisLayer object. */
     void queueSceneScript (const std::string& key, DynamicValue& currentValue);
+
+    /** Run init/first-update after the scene has registered every authored layer. */
+    void initializeQueuedScripts ();
 
     /**
      * Runs a frame tick in the javascript engine. Dispatches any pending events,
@@ -151,6 +155,7 @@ public:
 private:
     JSValue call (JSValue module, int argc, JSValueConst argv[], const char* name);
     void queueScript (const std::string& key, DynamicValue& currentValue, ScriptableObject* object);
+    void initializeModule (const std::string& key, LoadedModule& module);
 
     void installBuiltins ();
 
@@ -173,6 +178,7 @@ private:
     std::map<std::string, LoadedModule> m_scriptModules = {};
 
     LoadedModule* m_runningModule = nullptr;
+    bool m_sceneLayersReady = false;
 
     ScriptLayerHandle m_nextLayerId = 1;
     bool m_layerRegistryReady = false;
