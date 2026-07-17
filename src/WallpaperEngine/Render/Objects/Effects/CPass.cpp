@@ -133,6 +133,10 @@ void CPass::setupRenderFramebuffer () const {
     // set proper viewport based on what we're drawing to
     glViewport (0, 0, this->m_drawTo->getRealWidth (), this->m_drawTo->getRealHeight ());
 
+    // Alpha-to-coverage is sticky OpenGL state, so always reset it before
+    // selecting the pass' blending mode.
+    glDisable (GL_SAMPLE_ALPHA_TO_COVERAGE);
+
     // set texture blending
     switch (this->getBlendingMode ()) {
 	case BlendingMode_Translucent:
@@ -146,6 +150,10 @@ void CPass::setupRenderFramebuffer () const {
 	case BlendingMode_Normal:
 	    glEnable (GL_BLEND);
 	    glBlendFuncSeparate (GL_ONE, GL_ZERO, GL_ONE, GL_ZERO);
+	    break;
+	case BlendingMode_AlphaToCoverage:
+	    glDisable (GL_BLEND);
+	    glEnable (GL_SAMPLE_ALPHA_TO_COVERAGE);
 	    break;
 	default:
 	    glDisable (GL_BLEND);
@@ -639,6 +647,13 @@ void CPass::setupShaders () {
 	this->m_combos.insert_or_assign (name, value);
     }
 
+    // genericimage3/4 use this combo to perform the authored cutout/discard.
+    // GL_SAMPLE_ALPHA_TO_COVERAGE then adds multisample edge smoothing when the
+    // target supports it; the shader discard remains correct without MSAA.
+    this->m_combos.insert_or_assign (
+	"ALPHATOCOVERAGE", this->m_pass.blending == BlendingMode_AlphaToCoverage ? 1 : 0
+    );
+
     // WE compiles every scene shader with SCENE_ORTHO describing the camera type; lit shaders
     // (genericimage3/4) use it to pick a fixed view vector on 2D scenes vs. the perspective
     // view direction on 3D scenes (combo list mined from wallpaper64.exe)
@@ -701,15 +716,50 @@ void CPass::setupShaders () {
 	this->m_combos.insert_or_assign ("LIGHTS_TUBE", lights.tubeCount);
     }
 
-    // TODO: THE VALUES ARE THE SAME AS THE ENUMERATION, SO MAYBE IT HAS TO BE SPECIFIED FOR THE TEXTURE 0 OF ALL
-    // ELEMENTS?
-    if (texture0 != nullptr) {
-	if (texture0->getFormat () == TextureFormat_RG88) {
-	    this->m_combos.insert_or_assign ("TEX0FORMAT", 8);
-	} else if (texture0->getFormat () == TextureFormat_R8) {
-	    this->m_combos.insert_or_assign ("TEX0FORMAT", 9);
+    // Wallpaper Engine exposes the concrete format of every bound sampler as
+    // TEX<n>FORMAT. This is required for packed normal maps: DecompressNormal
+    // reads RG88 from .rg, while DXT normals are stored in .ay. Treating an
+    // RG88 normal as RGBA forces one axis to 1 and produces extreme lighting.
+    // The high texture flag nibble is the matching packed-component occupancy
+    // mask consumed by sampler metadata's `components` array.
+    const auto registerTextureMetadata = [this] (
+	const int index, const std::shared_ptr<const TextureProvider>& texture
+    ) {
+	if (texture == nullptr) {
+	    return;
 	}
-    }
+
+	const std::string prefix = "TEX" + std::to_string (index);
+	this->m_combos.insert_or_assign (prefix + "FORMAT", static_cast<int> (texture->getFormat ()));
+	this->m_combos.insert_or_assign (
+	    prefix + "COMPONENTS", static_cast<int> ((texture->getFlags () & TextureFlags_ComponentMask) >> 20)
+	);
+    };
+
+    const auto registerAuthoredTextures = [this, &registerTextureMetadata] (const TextureMap& textures) {
+	for (const auto& [index, name] : textures) {
+	    if (name.starts_with ("_rt_") || name.starts_with ("_alias_")) {
+		continue;
+	    }
+
+	    try {
+		registerTextureMetadata (
+		    index, this->getContext ().resolveTexture (
+			       name, this->m_renderable.getScene ().getAssetLocator ()
+			   )
+		);
+	    } catch (const std::runtime_error&) {
+		// setupTextureUniforms reports unresolved authored textures later;
+		// metadata discovery should not turn that recoverable path into a fatal one.
+	    }
+	}
+    };
+
+    registerTextureMetadata (0, texture0);
+    registerAuthoredTextures (this->m_pass.textures);
+    registerAuthoredTextures (this->m_pass.usertextures);
+    registerAuthoredTextures (this->m_override.textures);
+    registerAuthoredTextures (this->m_override.usertextures);
 
     // TODO: REVIEW THE SHADER TEXTURES HERE, THE ONES PASSED ON TO THE SHADER SHOULD NOT BE IN THE LIST
     // TODO: USED TO BUILD THE TEXTURES LATER
@@ -722,9 +772,14 @@ void CPass::setupShaders () {
 	passTextures.insert_or_assign (index, texture);
     }
 
+    TextureMap overrideTextures = this->m_override.textures;
+    for (const auto& [index, texture] : this->m_override.usertextures) {
+	overrideTextures.insert_or_assign (index, texture);
+    }
+
     this->m_shader = new Render::Shaders::Shader (
 	this->m_renderable.getAssetLocator (), shaderName, this->m_combos, this->m_override.combos, passTextures,
-	this->m_override.textures, this->m_override.constants
+	overrideTextures, this->m_override.constants
     );
 
     const auto [vertex, fragment]
@@ -804,7 +859,7 @@ void CPass::setupTextureUniforms () {
 	try {
 	    auto texture = textureName.find ("_rt_") == 0 || textureName.find ("_alias_") == 0
 		? this->resolveFBO (textureName)
-		: this->getContext ().resolveTexture (textureName);
+		: this->getContext ().resolveTexture (textureName, this->m_renderable.getScene ().getAssetLocator ());
 
 	    // create chain entry
 	    this->m_textures[index] = std::make_shared<TextureChainEntry> (TextureChainEntry {
@@ -820,7 +875,7 @@ void CPass::setupTextureUniforms () {
 	try {
 	    auto texture = textureName.find ("_rt_") == 0 || textureName.find ("_alias_") == 0
 		? this->resolveFBO (textureName)
-		: this->getContext ().resolveTexture (textureName);
+		: this->getContext ().resolveTexture (textureName, this->m_renderable.getScene ().getAssetLocator ());
 
 	    const auto it = this->m_textures.find (index);
 	    const auto chain = std::make_shared<TextureChainEntry> (TextureChainEntry {
@@ -838,7 +893,7 @@ void CPass::setupTextureUniforms () {
 	try {
 	    auto texture = textureName.find ("_rt_") == 0 || textureName.find ("_alias_") == 0
 		? this->resolveFBO (textureName)
-		: this->getContext ().resolveTexture (textureName);
+		: this->getContext ().resolveTexture (textureName, this->m_renderable.getScene ().getAssetLocator ());
 
 	    const auto it = this->m_textures.find (index);
 	    const auto chain = std::make_shared<TextureChainEntry> (TextureChainEntry {
@@ -856,7 +911,7 @@ void CPass::setupTextureUniforms () {
 	try {
 	    auto texture = textureName.find ("_rt_") == 0 || textureName.find ("_alias_") == 0
 		? this->resolveFBO (textureName)
-		: this->getContext ().resolveTexture (textureName);
+		: this->getContext ().resolveTexture (textureName, this->m_renderable.getScene ().getAssetLocator ());
 
 	    const auto it = this->m_textures.find (index);
 	    const auto chain = std::make_shared<TextureChainEntry> (TextureChainEntry {
@@ -875,7 +930,7 @@ void CPass::setupTextureUniforms () {
 	try {
 	    auto texture = textureName.find ("_rt_") == 0 || textureName.find ("_alias_") == 0
 		? this->resolveFBO (textureName)
-		: this->getContext ().resolveTexture (textureName);
+		: this->getContext ().resolveTexture (textureName, this->m_renderable.getScene ().getAssetLocator ());
 
 	    const auto it = this->m_textures.find (index);
 	    const auto chain = std::make_shared<TextureChainEntry> (TextureChainEntry {
@@ -893,7 +948,7 @@ void CPass::setupTextureUniforms () {
 	try {
 	    auto texture = textureName.find ("_rt_") == 0 || textureName.find ("_alias_") == 0
 		? this->resolveFBO (textureName)
-		: this->getContext ().resolveTexture (textureName);
+		: this->getContext ().resolveTexture (textureName, this->m_renderable.getScene ().getAssetLocator ());
 
 	    const auto it = this->m_textures.find (index);
 	    const auto chain = std::make_shared<TextureChainEntry> (TextureChainEntry {
