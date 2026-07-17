@@ -677,6 +677,11 @@ void CPass::setupShaders () {
 	this->m_combos.insert_or_assign ("LIGHTS_POINT", lights.pointCount);
     }
 
+    if (lights.pointShadowCount > 0) {
+	this->m_combos.insert_or_assign ("LIGHTS_POINT_SHADOW", lights.pointShadowCount);
+	this->m_combos.insert_or_assign ("LIGHTS_POINT_SHADOW_MASK", static_cast<int> (lights.pointShadowMask));
+    }
+
     if (lights.spotCount > 0) {
 	this->m_combos.insert_or_assign ("LIGHTS_SPOT", lights.spotCount);
     }
@@ -686,7 +691,7 @@ void CPass::setupShaders () {
 	this->m_combos.insert_or_assign ("LIGHTS_SPOT_SHADOW_MASK", static_cast<int> (lights.spotShadowMask));
     }
 
-    if (lights.shadowFeatureCount > 0) {
+    if (lights.shadowViewCount > 0) {
 	this->m_combos.insert_or_assign ("LIGHTS_SHADOW_FEATURES", lights.shadowFeatureCount);
 	this->m_combos.insert_or_assign ("LIGHTS_SHADOW_MAPPING", 1);
 	this->m_combos.insert_or_assign ("LIGHTS_SHADOW_MAPPING_QUALITY", 2);
@@ -1011,6 +1016,16 @@ void CPass::setupUniforms () {
     if (lights.pointCount > 0) {
 	this->addUniform ("g_LPoint_Origin", lights.pointOrigins.data (), lights.pointCount);
 	this->addUniform ("g_LPoint_Color", lights.pointColors.data (), lights.pointCount);
+	if (lights.pointShadowCount > 0) {
+	    this->addUniform (
+		"g_LFeature_ShadowPointProjection", lights.pointShadowProjections.data (), lights.pointCount
+	    );
+	    this->addUniform (
+		"g_LFeature_ShadowPointProjectionTransform", lights.pointShadowTransforms.data (),
+		lights.pointCount
+	    );
+	    this->addUniform ("g_LPoint_ShadowEnabled", lights.pointShadowEnabled.data (), lights.pointCount);
+	}
     }
 
     if (lights.spotCount > 0) {
