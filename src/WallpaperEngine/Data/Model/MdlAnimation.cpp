@@ -147,3 +147,13 @@ MdlPose MdlAnimationEvaluator::evaluate (
 
     return pose;
 }
+
+std::optional<glm::mat4> MdlAnimationEvaluator::attachmentTransform (
+    const MdlAnimationData& animationData, const std::vector<glm::mat4>& worldBones, const std::string& name
+) {
+    const auto attachment = animationData.attachments.find (name);
+    if (attachment == animationData.attachments.end () || attachment->second.bone >= worldBones.size ()) {
+	return std::nullopt;
+    }
+    return worldBones[attachment->second.bone] * attachment->second.local;
+}
