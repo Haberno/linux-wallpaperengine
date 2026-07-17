@@ -5,6 +5,7 @@
 #include "WallpaperEngine/Scripting/ScriptableObject.h"
 
 #include <glm/mat3x3.hpp>
+#include <glm/mat4x3.hpp>
 #include <limits>
 #include <vector>
 
@@ -12,9 +13,9 @@ namespace WallpaperEngine::Render::Objects {
 using namespace WallpaperEngine::Scripting;
 
 /**
- * Static 3D model renderer for perspective scenes. Draws the MDLV mesh through
- * the regular material/pass pipeline (generic4 and friends) with depth state
- * taken from the material.
+ * 3D model renderer for perspective scenes. Draws static and GPU-skinned MDLV
+ * meshes through the regular material/pass pipeline (generic4 and friends)
+ * with depth state taken from the material.
  */
 class CModel final : public CRenderable, public ScriptableObject {
 public:
@@ -50,7 +51,10 @@ private:
     std::vector<SubmeshBuffers> m_submeshes = {};
     mutable std::vector<glm::mat4> m_worldBones = {};
     mutable std::vector<glm::mat4> m_skinBones = {};
+    /** Packed affine matrices uploaded to the shader's mat4x3 g_Bones array. */
+    mutable std::vector<glm::mat4x3> m_gpuSkinBones = {};
     mutable float m_poseTime = std::numeric_limits<float>::quiet_NaN ();
+    bool m_skinningEnabled = false;
 
     glm::mat4 m_modelMatrix = glm::mat4 (1.0f);
     glm::mat4 m_viewProjectionMatrix = glm::mat4 (1.0f);

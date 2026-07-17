@@ -48,11 +48,12 @@ CPass::CPass (
     CRenderable& renderable, std::shared_ptr<const FBOProvider> fboProvider, const MaterialPass& pass,
     std::optional<std::reference_wrapper<const ImageEffectPassOverride>> override,
     std::optional<std::reference_wrapper<const TextureMap>> binds,
-    std::optional<std::reference_wrapper<std::string>> target
+    std::optional<std::reference_wrapper<std::string>> target, ComboMap runtimeCombos
 ) :
     Helpers::ContextAware (renderable), m_renderable (renderable), m_fboProvider (std::move (fboProvider)),
     m_pass (pass), m_binds (binds.has_value () ? binds.value ().get () : DEFAULT_BINDS),
-    m_override (override.has_value () ? override.value ().get () : DEFAULT_OVERRIDE), m_target (target),
+    m_override (override.has_value () ? override.value ().get () : DEFAULT_OVERRIDE),
+    m_runtimeCombos (std::move (runtimeCombos)), m_target (target),
     m_blendingmode (pass.blending) {
     this->setupShaders ();
     // NOTE: m_vao is created lazily in render(): VAOs are not shared between GL
@@ -359,6 +360,11 @@ void CPass::setupRenderReferenceUniforms () {
 		    value->id, 1, GL_FALSE, glm::value_ptr (*static_cast<const glm::mat4*> (*value->value))
 		);
 		break;
+	    case Matrix4x3:
+		glUniformMatrix4x3fv (
+		    value->id, 1, GL_FALSE, glm::value_ptr (*static_cast<const glm::mat4x3*> (*value->value))
+		);
+		break;
 	    case Matrix3:
 		glUniformMatrix3fv (
 		    value->id, 1, GL_FALSE, glm::value_ptr (*static_cast<const glm::mat3*> (*value->value))
@@ -393,7 +399,13 @@ void CPass::setupRenderUniforms () {
 		break;
 	    case Matrix4:
 		glUniformMatrix4fv (
-		    value->id, 1, GL_FALSE, glm::value_ptr (*static_cast<const glm::mat4*> (value->value))
+		    value->id, value->count, GL_FALSE, glm::value_ptr (*static_cast<const glm::mat4*> (value->value))
+		);
+		break;
+	    case Matrix4x3:
+		glUniformMatrix4x3fv (
+		    value->id, value->count, GL_FALSE,
+		    glm::value_ptr (*static_cast<const glm::mat4x3*> (value->value))
 		);
 		break;
 	    case Matrix3:
@@ -623,6 +635,9 @@ void CPass::setupShaders () {
 
     // copy the combos from the pass
     this->m_combos.insert (this->m_pass.combos.begin (), this->m_pass.combos.end ());
+    for (const auto& [name, value] : this->m_runtimeCombos) {
+	this->m_combos.insert_or_assign (name, value);
+    }
 
     // WE compiles every scene shader with SCENE_ORTHO describing the camera type; lit shaders
     // (genericimage3/4) use it to pick a fixed view vector on 2D scenes vs. the perspective
@@ -1235,6 +1250,10 @@ void CPass::addUniform (const std::string& name, const glm::mat4 value) {
 
 void CPass::addUniform (const std::string& name, const glm::mat4* value) {
     this->addUniform (name, UniformType::Matrix4, value, 1);
+}
+
+void CPass::addUniform (const std::string& name, const glm::mat4x3* value, int count) {
+    this->addUniform (name, UniformType::Matrix4x3, value, count);
 }
 
 void CPass::addUniform (const std::string& name, const glm::mat4** value) {
