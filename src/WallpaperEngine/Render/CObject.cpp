@@ -67,6 +67,8 @@ int CObject::getId () const { return this->m_object.id; }
 
 const Object& CObject::getObject () const { return this->m_object; }
 
+std::optional<glm::mat4> CObject::getAttachmentTransform (const std::string&) const { return std::nullopt; }
+
 glm::vec2 CObject::resolveParallaxDepth () const {
     constexpr int kMaxParentDepth = 32;
     const Object* current = &this->m_object;
@@ -156,6 +158,18 @@ glm::mat4 CObject::resolveWorldMatrix () const {
 
     for (int i = count - 1; i >= 0; --i) {
 	world = world * localMatrix (*chain[i], time);
+
+	// Attachments live on the parent and are inserted between that parent's local
+	// transform and the attached child's local transform.
+	if (i > 0 && chain[i - 1]->attachment.has_value ()) {
+	    const CObject* parent = this->m_scene.getObject (chain[i]->id);
+	    if (parent != nullptr) {
+		const auto attachment = parent->getAttachmentTransform (*chain[i - 1]->attachment);
+		if (attachment.has_value ()) {
+		    world *= *attachment;
+		}
+	    }
+	}
     }
 
     return world;

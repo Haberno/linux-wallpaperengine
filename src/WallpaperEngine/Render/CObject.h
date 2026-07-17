@@ -1,5 +1,6 @@
 #pragma once
 
+#include <optional>
 #include <string>
 
 #include "WallpaperEngine/Render/Helpers/ContextAware.h"
@@ -23,6 +24,8 @@ public:
     [[nodiscard]] const AssetLocator& getAssetLocator () const;
     [[nodiscard]] int getId () const;
     [[nodiscard]] const Object& getObject () const;
+    /** Model-local animated attachment transform for a named MDAT attachment. */
+    [[nodiscard]] virtual std::optional<glm::mat4> getAttachmentTransform (const std::string& name) const;
     /** Effective parallax depth: the root-most layer controls its entire subtree; an
      *  unauthored root defaults to 1 (Wallpaper Engine's Layer constructor default). */
     [[nodiscard]] glm::vec2 resolveParallaxDepth () const;
@@ -31,9 +34,8 @@ public:
      *  whole subtree in Wallpaper Engine, and children often carry no visible of their own */
     [[nodiscard]] bool isVisibleThroughParents () const;
 
-    /** world transform for 3D scenes: translate * rotate (Rz*Ry*Rx, radians) * scale,
-     *  composed through the parent chain. 2D images keep their own decomposed
-     *  accumulation in CImage::resolveTransform */
+    /** World transform for 3D scenes, including animated MDAT attachment edges,
+     *  composed through the parent chain. 2D images keep their own decomposed path. */
     [[nodiscard]] glm::mat4 resolveWorldMatrix () const;
 
     /** Classify a 3D model's authored material passes for render ordering. */

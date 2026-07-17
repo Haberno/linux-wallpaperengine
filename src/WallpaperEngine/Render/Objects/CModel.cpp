@@ -40,9 +40,7 @@ void CModel::setup () {
     CRenderable::setup ();
 
     if (!this->m_model.animationData.bones.empty ()) {
-	const auto pose = MdlAnimationEvaluator::evaluate (this->m_model.animationData, {});
-	this->m_worldBones = pose.worldBones;
-	this->m_skinBones = pose.skinBones;
+	this->updateAnimationPose ();
 	sLog.out (
 	    "Loaded 3D model animation data ", this->m_model.filename,
 	    " bones=", this->m_model.animationData.bones.size (),
@@ -155,7 +153,7 @@ void CModel::setupGeometryCallback (Effects::CPass* pass, size_t submeshIndex) {
     );
 }
 
-void CModel::updateAnimationPose () {
+void CModel::updateAnimationPose () const {
     const auto& animationData = this->m_model.animationData;
     if (animationData.bones.empty ()) {
 	return;
@@ -163,6 +161,9 @@ void CModel::updateAnimationPose () {
 
     std::vector<MdlActiveAnimation> activeAnimations;
     const float sceneTime = this->getScene ().getTime ();
+    if (sceneTime == this->m_poseTime) {
+	return;
+    }
 
     if (this->m_model.animationLayers.empty ()) {
 	if (!animationData.animations.empty ()) {
@@ -194,6 +195,7 @@ void CModel::updateAnimationPose () {
     auto pose = MdlAnimationEvaluator::evaluate (animationData, activeAnimations);
     this->m_worldBones = std::move (pose.worldBones);
     this->m_skinBones = std::move (pose.skinBones);
+    this->m_poseTime = sceneTime;
 }
 
 void CModel::updateMatrices () {
@@ -240,6 +242,11 @@ void CModel::render () {
 }
 
 const Model3D& CModel::getModel () const { return this->m_model; }
+
+std::optional<glm::mat4> CModel::getAttachmentTransform (const std::string& name) const {
+    this->updateAnimationPose ();
+    return MdlAnimationEvaluator::attachmentTransform (this->m_model.animationData, this->m_worldBones, name);
+}
 
 const float& CModel::getBrightness () const { return this->m_brightness; }
 

@@ -5,6 +5,7 @@
 #include "WallpaperEngine/Scripting/ScriptableObject.h"
 
 #include <glm/mat3x3.hpp>
+#include <limits>
 #include <vector>
 
 namespace WallpaperEngine::Render::Objects {
@@ -24,6 +25,7 @@ public:
     void render () override;
 
     [[nodiscard]] const Model3D& getModel () const;
+    [[nodiscard]] std::optional<glm::mat4> getAttachmentTransform (const std::string& name) const override;
 
     [[nodiscard]] const float& getBrightness () const override;
     [[nodiscard]] const float& getUserAlpha () const override;
@@ -40,14 +42,15 @@ private:
     };
 
     void setupGeometryCallback (Effects::CPass* pass, size_t submeshIndex);
-    void updateAnimationPose ();
+    void updateAnimationPose () const;
     void updateMatrices ();
 
     const Model3D& m_model;
 
     std::vector<SubmeshBuffers> m_submeshes = {};
-    std::vector<glm::mat4> m_worldBones = {};
-    std::vector<glm::mat4> m_skinBones = {};
+    mutable std::vector<glm::mat4> m_worldBones = {};
+    mutable std::vector<glm::mat4> m_skinBones = {};
+    mutable float m_poseTime = std::numeric_limits<float>::quiet_NaN ();
 
     glm::mat4 m_modelMatrix = glm::mat4 (1.0f);
     glm::mat4 m_viewProjectionMatrix = glm::mat4 (1.0f);
