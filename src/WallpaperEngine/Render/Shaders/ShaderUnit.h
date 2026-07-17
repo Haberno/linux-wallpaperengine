@@ -109,6 +109,15 @@ private:
      */
     [[nodiscard]] std::string applyFragmentTexCoordCompatibility (std::string source) const;
     /**
+     * Removes const from initializers that depend on uniforms. Wallpaper Engine's shader
+     * compiler accepts these while desktop GLSL requires a compile-time constant.
+     */
+    [[nodiscard]] std::string applyNonConstantInitializerCompatibility (std::string source) const;
+    /**
+     * Undefines a macro before an authored redefinition accepted by Wallpaper Engine's preprocessor.
+     */
+    [[nodiscard]] std::string applyDuplicateMacroCompatibility (std::string source) const;
+    /**
      * Makes v_TexCoord writable in fragment shaders by injecting a local variable alias at the
      * top of main() that shadows the read-only varying input.
      */

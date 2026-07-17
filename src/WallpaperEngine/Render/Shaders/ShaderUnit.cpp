@@ -7,6 +7,7 @@
 #include <mutex>
 #include <regex>
 #include <set>
+#include <sstream>
 #include <stack>
 #include <string>
 #include <unordered_map>
@@ -803,13 +804,17 @@ std::string ShaderUnit::applyFragmentTexCoordCompatibility (std::string source) 
 	source = std::regex_replace (source, shieldedNarrowDecl, "varying vec4 v_TexCoord;");
 	source = std::regex_replace (source, shieldedDecl, "v_TexCoord");
     } else if (std::regex_search (source, wideTexCoordDecl)) {
-	static const std::regex texCoordBeforeCast2 (R"(\bv_TexCoord\b(\s*[-+*/]\s*CAST2\s*\())");
-	static const std::regex cast2BeforeTexCoord (R"((CAST2\s*\([^)]+\)\s*[-+*/]\s*)\bv_TexCoord\b)");
+	static const std::regex texCoordBeforeVec2 (R"(\bv_TexCoord\b(\s*[-+*/]\s*(?:CAST2|vec2)\s*\())");
+	static const std::regex vec2BeforeTexCoord (R"(((?:CAST2|vec2)\s*\([^)]+\)\s*[-+*/]\s*)\bv_TexCoord\b)");
+	static const std::regex sampledTexCoord (
+	    R"(((?:texSample2D|texSample2DLod)\s*\([^,]+,\s*)\bv_TexCoord\b(?!\s*\.))"
+	);
 	// HLSL allows implicit truncation on assignment (vec2 x = v_TexCoord), GLSL does not
 	static const std::regex vec2AssignTexCoord (R"((\bvec2\s+[A-Za-z_][A-Za-z0-9_]*\s*=\s*)v_TexCoord\s*;)");
 
-	source = std::regex_replace (source, texCoordBeforeCast2, "v_TexCoord.xy$1");
-	source = std::regex_replace (source, cast2BeforeTexCoord, "$1v_TexCoord.xy");
+	source = std::regex_replace (source, texCoordBeforeVec2, "v_TexCoord.xy$1");
+	source = std::regex_replace (source, vec2BeforeTexCoord, "$1v_TexCoord.xy");
+	source = std::regex_replace (source, sampledTexCoord, "$1v_TexCoord.xy");
 	source = std::regex_replace (source, vec2AssignTexCoord, "$1v_TexCoord.xy;");
     }
 
@@ -818,6 +823,42 @@ std::string ShaderUnit::applyFragmentTexCoordCompatibility (std::string source) 
     }
 
     return source;
+}
+
+std::string ShaderUnit::applyNonConstantInitializerCompatibility (std::string source) const {
+    const std::string original = source;
+    static const std::regex uniformInitializer (
+	R"(\bconst(\s+(?:(?:[biu]?vec|float|int|uint)[234]?|bool|mat[234](?:x[234])?)\s+[A-Za-z_][A-Za-z0-9_]*(?:\s*\[[^\]]*\])?\s*=\s*[^;\n]*\b[ug]_[A-Za-z_][A-Za-z0-9_]*[^;\n]*;))"
+    );
+
+    source = std::regex_replace (source, uniformInitializer, "$1");
+    if (source != original) {
+	sLog.out ("Applied uniform initializer compatibility in ", this->m_file);
+    }
+    return source;
+}
+
+std::string ShaderUnit::applyDuplicateMacroCompatibility (std::string source) const {
+    static const std::regex definePattern (R"(^\s*#\s*define\s+([A-Za-z_][A-Za-z0-9_]*))");
+    std::set<std::string> defined;
+    std::istringstream input (source);
+    std::ostringstream output;
+    std::string line;
+    bool changed = false;
+
+    while (std::getline (input, line)) {
+	std::smatch match;
+	if (std::regex_search (line, match, definePattern) && !defined.insert (match[1].str ()).second) {
+	    output << "#undef " << match[1].str () << '\n';
+	    changed = true;
+	}
+	output << line << '\n';
+    }
+
+    if (changed) {
+	sLog.out ("Applied duplicate macro compatibility in ", this->m_file);
+    }
+    return changed ? output.str () : source;
 }
 
 std::string ShaderUnit::applyFragmentWritableVaryings (std::string source) const {
@@ -1091,10 +1132,40 @@ void ShaderUnit::parseParameterConfiguration (
 	const char value = name.at (std::string ("g_Texture").length ());
 	const auto requireany = data.find ("requireany");
 	const auto require = data.find ("require");
+	const auto components = data.find ("components");
 	// now convert it to integer
 	// TODO: BETTER CONVERSION HERE
 	size_t index = value - '0';
 	// TODO: SUPPORT USER TEXTURES!!
+
+	// Packed material textures record their authored channels in texture flag
+	// bits 20..23. CPass exposes that nibble as TEX<n>COMPONENTS; match the
+	// sampler's ordered component metadata to the corresponding feature combos.
+	// Explicit material/override combos retain precedence over these discovered
+	// values through the normal combo chain.
+	if (components != data.end () && components->is_array ()) {
+	    const std::string componentMaskName = "TEX" + std::to_string (index) + "COMPONENTS";
+	    int componentMask = 0;
+	    if (const auto it = this->m_combos.find (componentMaskName); it != this->m_combos.end ()) {
+		componentMask = it->second;
+	    }
+
+	    size_t componentIndex = 0;
+	    for (const auto& component : *components) {
+		if (componentIndex >= 4) {
+		    break;
+		}
+
+		const auto componentCombo = component.find ("combo");
+		if ((componentMask & (1 << componentIndex)) != 0 && componentCombo != component.end ()
+		    && componentCombo->is_string ()) {
+		    const std::string comboName = componentCombo->get<std::string> ();
+		    this->m_discoveredCombos.emplace (comboName, 1);
+		    this->m_usedCombos.emplace (comboName, true);
+		}
+		componentIndex++;
+	    }
+	}
 
 	if (combo != data.end ()) {
 	    // TODO: CLEANUP HOW THIS IS DETERMINED FIRST
@@ -1352,11 +1423,12 @@ const std::string& ShaderUnit::compile () {
 	}
     }
 
-    std::string compatResult =
-	this->applyFragmentTexCoordCompatibility (
-	    this->applyFragmentWritableVaryings (
-		this->applyFloatTernaryCompatibility (
-		    this->applyLinkedVaryingCompatibility (this->m_preprocessed))));
+    std::string compatResult = this->applyDuplicateMacroCompatibility (
+	this->applyNonConstantInitializerCompatibility (
+	    this->applyFragmentTexCoordCompatibility (
+		this->applyFragmentWritableVaryings (
+		    this->applyFloatTernaryCompatibility (
+			this->applyLinkedVaryingCompatibility (this->m_preprocessed))))));
     this->m_final += compatResult;
 
     {
