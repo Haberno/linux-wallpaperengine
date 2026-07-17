@@ -28,6 +28,9 @@ struct VertexLayout {
     uint32_t normalOffset = 0;
     uint32_t tangentOffset = 0;
     uint32_t uvOffset = 0;
+    bool skinned = false;
+    uint32_t blendIndicesOffset = 0;
+    uint32_t blendWeightsOffset = 0;
 };
 
 VertexLayout getVertexLayout (uint32_t tag) {
@@ -39,6 +42,7 @@ VertexLayout getVertexLayout (uint32_t tag) {
 	    .normalOffset = 12,
 	    .tangentOffset = 24,
 	    .uvOffset = 40,
+	    .skinned = false,
 	};
     }
 
@@ -50,6 +54,9 @@ VertexLayout getVertexLayout (uint32_t tag) {
 	    .normalOffset = 12,
 	    .tangentOffset = 24,
 	    .uvOffset = 72,
+	    .skinned = true,
+	    .blendIndicesOffset = 40,
+	    .blendWeightsOffset = 56,
 	};
     }
 
@@ -133,10 +140,15 @@ MdlMesh MdlParser::parse (const std::vector<char>& data, const std::string& file
 	    mesh.normalOffset = layout.normalOffset;
 	    mesh.tangentOffset = layout.tangentOffset;
 	    mesh.uvOffset = layout.uvOffset;
+	    mesh.skinned = layout.skinned;
+	    mesh.blendIndicesOffset = layout.blendIndicesOffset;
+	    mesh.blendWeightsOffset = layout.blendWeightsOffset;
 	} else if (
 	    mesh.strideBytes != layout.strideBytes || mesh.positionOffset != layout.positionOffset
 	    || mesh.normalOffset != layout.normalOffset || mesh.tangentOffset != layout.tangentOffset
-	    || mesh.uvOffset != layout.uvOffset
+	    || mesh.uvOffset != layout.uvOffset || mesh.skinned != layout.skinned
+	    || mesh.blendIndicesOffset != layout.blendIndicesOffset
+	    || mesh.blendWeightsOffset != layout.blendWeightsOffset
 	) {
 	    sLog.exception ("Mixed MDLV vertex layouts are not supported in ", filename);
 	}
