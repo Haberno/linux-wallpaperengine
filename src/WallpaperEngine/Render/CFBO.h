@@ -11,7 +11,8 @@ class CFBO final : public TextureProvider {
 public:
     CFBO (
 	std::string name, const TextureFormat format, const uint32_t flags, const float scale, uint32_t realWidth,
-	uint32_t realHeight, uint32_t textureWidth, uint32_t textureHeight, bool withDepthBuffer = false
+	uint32_t realHeight, uint32_t textureWidth, uint32_t textureHeight, bool withDepthBuffer = false,
+	bool depthTexture = false
     );
     ~CFBO () override;
 
@@ -51,6 +52,8 @@ private:
     mutable GLuint m_framebuffer = GL_NONE;
     GLuint m_depthbuffer = GL_NONE;
     GLuint m_texture = GL_NONE;
+    /** The main texture is a sampleable depth-comparison attachment, not RGBA color. */
+    bool m_depthTexture = false;
     glm::vec4 m_resolution = {};
     float m_scale = 0;
     std::string m_name = "";

@@ -8,6 +8,7 @@
 
 #include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
+#include <cmath>
 #include <glm/gtc/constants.hpp>
 #include <glm/gtc/matrix_transform.hpp>
 
@@ -27,6 +28,34 @@ TEST_CASE ("Spot cone angles are packed as cosine thresholds") {
     CHECK (cones.x == Catch::Approx (0.9396926f));
     CHECK (cones.y == Catch::Approx (0.8191520f));
     CHECK (cones.x > cones.y);
+}
+
+TEST_CASE ("Spot shadow projection covers the authored cone and radius") {
+    const glm::vec3 origin (10.0f, 3.0f, -2.0f);
+    const glm::vec3 direction = glm::normalize (glm::vec3 (-1.0f, -0.2f, 0.1f));
+    const glm::mat4 projection = CLight::calculateSpotShadowViewProjection (origin, direction, 35.0f, 100.0f);
+
+    const glm::vec4 centerClip = projection * glm::vec4 (origin + direction * 50.0f, 1.0f);
+    const glm::vec3 centerNdc = glm::vec3 (centerClip) / centerClip.w;
+    CHECK (std::isfinite (centerNdc.x));
+    CHECK (std::isfinite (centerNdc.y));
+    CHECK (std::isfinite (centerNdc.z));
+    CHECK (std::abs (centerNdc.x) < 0.001f);
+    CHECK (std::abs (centerNdc.y) < 0.001f);
+    CHECK (centerNdc.z > -1.0f);
+    CHECK (centerNdc.z < 1.0f);
+}
+
+TEST_CASE ("Vertical spot shadow projections remain finite") {
+    const glm::mat4 projection = CLight::calculateSpotShadowViewProjection (
+	glm::vec3 (0.0f), glm::vec3 (0.0f, 1.0f, 0.0f), 30.0f, 10.0f
+    );
+
+    for (int column = 0; column < 4; column++) {
+	for (int row = 0; row < 4; row++) {
+	    CHECK (std::isfinite (projection[column][row]));
+	}
+    }
 }
 
 TEST_CASE ("Tube control point follows the full world transform") {

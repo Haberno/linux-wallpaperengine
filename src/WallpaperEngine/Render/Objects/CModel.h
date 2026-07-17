@@ -24,6 +24,8 @@ public:
 
     void setup () override;
     void render () override;
+    /** Draw opaque mesh depth from a spotlight into the scene shadow atlas. */
+    void renderShadow (const glm::mat4& lightViewProjection);
 
     [[nodiscard]] const Model3D& getModel () const;
     [[nodiscard]] std::optional<glm::mat4> getAttachmentTransform (const std::string& name) const override;
@@ -43,6 +45,7 @@ private:
     };
 
     void setupGeometryCallback (Effects::CPass* pass, size_t submeshIndex);
+    void setupShadowProgram ();
     void updateAnimationPose () const;
     void updateMatrices ();
 
@@ -63,6 +66,11 @@ private:
     glm::mat3 m_normalMatrix = glm::mat3 (1.0f);
 
     std::vector<Effects::CPass*> m_passes = {};
+    GLuint m_shadowProgram = GL_NONE;
+    GLuint m_shadowVao = GL_NONE;
+    GLint m_shadowLightViewProjection = -1;
+    GLint m_shadowModel = -1;
+    GLint m_shadowBones = -1;
     bool m_initialized = false;
 
     /** model objects carry no per-object tint/alpha; materials do that via constants */

@@ -109,6 +109,7 @@ public:
 	int directionalCount = 0;
 	int pointCount = 0;
 	int spotCount = 0;
+	int spotShadowCount = 0;
 	int tubeCount = 0;
 	/** xyz = world-space direction towards the light, w unused */
 	std::vector<glm::vec4> directionalDirections = {};
@@ -126,6 +127,12 @@ public:
 	std::vector<glm::vec4> spotColors = {};
 	/** x = falloff exponent, yzw unused */
 	std::vector<glm::vec4> spotExponents = {};
+	/** Light-space projection and atlas data, indexed like the spot arrays above. */
+	std::vector<glm::mat4> spotShadowMatrices = {};
+	std::vector<glm::vec4> spotShadowTransforms = {};
+	std::vector<float> spotShadowEnabled = {};
+	/** Pixel viewport inside the depth atlas; not uploaded to material shaders. */
+	std::vector<glm::ivec4> spotShadowViewports = {};
 	/** xyz = first world-space endpoint, w = falloff exponent */
 	std::vector<glm::vec4> tubeOriginsA = {};
 	/** xyz = second world-space endpoint, w unused */
@@ -172,6 +179,7 @@ private:
     Render::CObject* dispatchObjectType (const Object& object);
     void addObjectToRenderOrder (const Object& object);
     void updateLightState ();
+    void renderSpotShadows ();
     void registerFogScripts ();
     void updateFogState ();
     void updateCameraPath (float deltaTime);
@@ -205,5 +213,8 @@ private:
     std::shared_ptr<const CFBO> _rt_8FrameBuffer = nullptr;
     std::shared_ptr<const CFBO> _rt_Bloom = nullptr;
     std::shared_ptr<const CFBO> _rt_shadowAtlas = nullptr;
+
+    static constexpr int SHADOW_ATLAS_SIZE = 2048;
+    static constexpr int SHADOW_ATLAS_GUARD = 2;
 };
 } // namespace WallpaperEngine::Render::Wallpaper

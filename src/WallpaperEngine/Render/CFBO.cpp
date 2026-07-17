@@ -5,8 +5,8 @@ using namespace WallpaperEngine::Render;
 
 CFBO::CFBO (
     std::string name, const TextureFormat format, const uint32_t flags, const float scale, uint32_t realWidth,
-    uint32_t realHeight, uint32_t textureWidth, uint32_t textureHeight, bool withDepthBuffer
-) : m_scale (scale), m_name (std::move (name)), m_format (format), m_flags (flags) {
+    uint32_t realHeight, uint32_t textureWidth, uint32_t textureHeight, bool withDepthBuffer, bool depthTexture
+) : m_depthTexture (depthTexture), m_scale (scale), m_name (std::move (name)), m_format (format), m_flags (flags) {
     // NOTE: the framebuffer object itself is created lazily on first use (see
     // ensureFramebuffer): FBOs are not shared between GL contexts, so when this
     // constructor runs on the async switch worker only the shared objects
@@ -18,13 +18,29 @@ CFBO::CFBO (
     // Wallpaper Engine declares these render targets as ARGB8888. Keeping them at
     // eight bits per channel halves their color-storage footprint compared with
     // RGBA16F and avoids paying the HDR cost for every intermediate effect surface.
-    glTexImage2D (GL_TEXTURE_2D, 0, GL_RGBA8, textureWidth, textureHeight, 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
+    if (this->m_depthTexture) {
+	glTexImage2D (
+	    GL_TEXTURE_2D, 0, GL_DEPTH_COMPONENT24, textureWidth, textureHeight, 0, GL_DEPTH_COMPONENT,
+	    GL_UNSIGNED_INT, nullptr
+	);
+	// Stock scene shaders declare the shadow atlas as sampler2DComparison. Hardware
+	// comparison also lets their 9-tap PCF path work without a custom sampler object.
+	glTexParameteri (GL_TEXTURE_2D, GL_TEXTURE_COMPARE_MODE, GL_COMPARE_REF_TO_TEXTURE);
+	glTexParameteri (GL_TEXTURE_2D, GL_TEXTURE_COMPARE_FUNC, GL_LEQUAL);
+	const GLfloat borderDepth[] = { 1.0f, 1.0f, 1.0f, 1.0f };
+	glTexParameterfv (GL_TEXTURE_2D, GL_TEXTURE_BORDER_COLOR, borderDepth);
+    } else {
+	glTexImage2D (GL_TEXTURE_2D, 0, GL_RGBA8, textureWidth, textureHeight, 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
+    }
     // label stuff for debugging
 #if !NDEBUG
     glObjectLabel (GL_TEXTURE, this->m_texture, -1, this->m_name.c_str ());
 #endif /* DEBUG */
     // set filtering parameters, otherwise the texture is not rendered
-    if (flags & TextureFlags_ClampUVs) {
+    if (this->m_depthTexture) {
+	glTexParameteri (GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_BORDER);
+	glTexParameteri (GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_BORDER);
+    } else if (flags & TextureFlags_ClampUVs) {
 	glTexParameteri (GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
 	glTexParameteri (GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
     } else if (flags & TextureFlags_ClampUVsBorder) {
@@ -47,7 +63,7 @@ CFBO::CFBO (
 
     // 3D scenes depth-test their models, so the scene framebuffer needs a depth attachment
     // (renderbuffers are shared objects, so this is safe on the worker context too)
-    if (withDepthBuffer) {
+    if (withDepthBuffer && !this->m_depthTexture) {
 	glGenRenderbuffers (1, &this->m_depthbuffer);
 	glBindRenderbuffer (GL_RENDERBUFFER, this->m_depthbuffer);
 	glRenderbufferStorage (GL_RENDERBUFFER, GL_DEPTH_COMPONENT24, textureWidth, textureHeight);
@@ -92,33 +108,41 @@ void CFBO::ensureFramebuffer () const {
     glGetIntegerv (GL_DRAW_FRAMEBUFFER_BINDING, &previousDraw);
     glGetIntegerv (GL_READ_FRAMEBUFFER_BINDING, &previousRead);
 
-    constexpr GLenum drawBuffers[1] = { GL_COLOR_ATTACHMENT0 };
-
     glGenFramebuffers (1, &this->m_framebuffer);
     glBindFramebuffer (GL_FRAMEBUFFER, this->m_framebuffer);
 
-    // set the texture as the colour attachmend #0
-    glFramebufferTexture2D (GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, this->m_texture, 0);
+    if (this->m_depthTexture) {
+	glFramebufferTexture2D (GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_TEXTURE_2D, this->m_texture, 0);
+	glDrawBuffer (GL_NONE);
+	glReadBuffer (GL_NONE);
+    } else {
+	constexpr GLenum drawBuffers[1] = { GL_COLOR_ATTACHMENT0 };
+	glFramebufferTexture2D (GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, this->m_texture, 0);
+	glDrawBuffers (1, drawBuffers);
+    }
 
     if (this->m_depthbuffer != GL_NONE) {
 	glFramebufferRenderbuffer (GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_RENDERBUFFER, this->m_depthbuffer);
     }
-
-    // finally set the list of draw buffers
-    glDrawBuffers (1, drawBuffers);
 
     // ensure first framebuffer is okay
     if (glCheckFramebufferStatus (GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE) {
 	sLog.exception ("Framebuffers are not properly set");
     }
 
-    // Layer framebuffers must start transparent. The scene clear color is often opaque,
-    // and using it here makes empty layer areas render as solid rectangles.
-    GLfloat previousClearColor[4] = {};
-    glGetFloatv (GL_COLOR_CLEAR_VALUE, previousClearColor);
-    glClearColor (0.0f, 0.0f, 0.0f, 0.0f);
-    glClear (GL_COLOR_BUFFER_BIT);
-    glClearColor (previousClearColor[0], previousClearColor[1], previousClearColor[2], previousClearColor[3]);
+    if (this->m_depthTexture) {
+	// Unrendered atlas texels represent the far plane and therefore compare as lit.
+	glClearDepth (1.0);
+	glClear (GL_DEPTH_BUFFER_BIT);
+    } else {
+	// Layer framebuffers must start transparent. The scene clear color is often opaque,
+	// and using it here makes empty layer areas render as solid rectangles.
+	GLfloat previousClearColor[4] = {};
+	glGetFloatv (GL_COLOR_CLEAR_VALUE, previousClearColor);
+	glClearColor (0.0f, 0.0f, 0.0f, 0.0f);
+	glClear (GL_COLOR_BUFFER_BIT);
+	glClearColor (previousClearColor[0], previousClearColor[1], previousClearColor[2], previousClearColor[3]);
+    }
 
     glBindFramebuffer (GL_DRAW_FRAMEBUFFER, static_cast<GLuint> (previousDraw));
     glBindFramebuffer (GL_READ_FRAMEBUFFER, static_cast<GLuint> (previousRead));

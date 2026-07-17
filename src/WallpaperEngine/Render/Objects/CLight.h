@@ -29,6 +29,10 @@ public:
 
     /** Native spot uniform packing: cos(inner degrees), cos(outer degrees). */
     [[nodiscard]] static glm::vec2 calculateSpotConeCosines (float innerDegrees, float outerDegrees);
+    /** OpenGL light-space matrix spanning the authored outer cone and radius. */
+    [[nodiscard]] static glm::mat4 calculateSpotShadowViewProjection (
+	const glm::vec3& origin, const glm::vec3& direction, float outerDegrees, float radius
+    );
     /** Transform a tube's authored local control point into its world-space endpoint. */
     [[nodiscard]] static glm::vec3
     calculateTubeEndPosition (const glm::mat4& worldMatrix, const glm::vec3& controlPoint);

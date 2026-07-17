@@ -103,7 +103,12 @@ CScene::CScene (
 
 	    switch (object->as<Data::Model::Light> ()->type) {
 		case LightData::Type_Directional: this->m_lights.directionalCount++; break;
-		case LightData::Type_Spot: this->m_lights.spotCount++; break;
+		case LightData::Type_Spot:
+		    this->m_lights.spotCount++;
+		    if (object->as<Data::Model::Light> ()->castShadow) {
+			this->m_lights.spotShadowCount++;
+		    }
+		    break;
 		case LightData::Type_Tube: this->m_lights.tubeCount++; break;
 		case LightData::Type_Point: this->m_lights.pointCount++; break;
 	    }
@@ -117,6 +122,10 @@ CScene::CScene (
 	this->m_lights.spotDirections.resize (this->m_lights.spotCount, glm::vec4 (0.0f));
 	this->m_lights.spotColors.resize (this->m_lights.spotCount, glm::vec4 (0.0f));
 	this->m_lights.spotExponents.resize (this->m_lights.spotCount, glm::vec4 (0.0f));
+	this->m_lights.spotShadowMatrices.resize (this->m_lights.spotCount, glm::mat4 (1.0f));
+	this->m_lights.spotShadowTransforms.resize (this->m_lights.spotCount, glm::vec4 (0.0f));
+	this->m_lights.spotShadowEnabled.resize (this->m_lights.spotCount, 0.0f);
+	this->m_lights.spotShadowViewports.resize (this->m_lights.spotCount, glm::ivec4 (0));
 	this->m_lights.tubeOriginsA.resize (this->m_lights.tubeCount, glm::vec4 (0.0f));
 	this->m_lights.tubeOriginsB.resize (this->m_lights.tubeCount, glm::vec4 (0.0f));
 	this->m_lights.tubeColors.resize (this->m_lights.tubeCount, glm::vec4 (0.0f));
@@ -132,11 +141,23 @@ CScene::CScene (
     const uint32_t sceneWidth = this->m_camera->getWidth ();
     const uint32_t sceneHeight = this->m_camera->getHeight ();
 
-    this->_rt_shadowAtlas = this->create (
-	"_rt_shadowAtlas", TextureFormat_ARGB8888, TextureFlags_ClampUVs, 1.0, { sceneWidth, sceneHeight },
-	{ sceneWidth, sceneHeight }
+    if (this->m_lights.spotShadowCount > 0) {
+	this->_rt_shadowAtlas = this->create (
+	    "_rt_shadowAtlas", TextureFormat_ARGB8888, TextureFlags_ClampUVsBorder, 1.0,
+	    { SHADOW_ATLAS_SIZE, SHADOW_ATLAS_SIZE }, { SHADOW_ATLAS_SIZE, SHADOW_ATLAS_SIZE }, false, true
+	);
+    } else {
+	// Keep the legacy placeholder available for shaders that declare the atlas but
+	// compile their shadow combo out.
+	this->_rt_shadowAtlas = this->create (
+	    "_rt_shadowAtlas", TextureFormat_ARGB8888, TextureFlags_ClampUVs, 1.0,
+	    { sceneWidth, sceneHeight }, { sceneWidth, sceneHeight }
+	);
+    }
+    // Cookies are ordinary color textures and cannot alias the depth-comparison atlas.
+    this->create (
+	"_alias_lightCookie", TextureFormat_ARGB8888, TextureFlags_ClampUVs, 1.0, { 1, 1 }, { 1, 1 }
     );
-    this->alias ("_alias_lightCookie", "_rt_shadowAtlas");
 
     // set clear color
     const glm::vec3 clearColor = scene->colors.clear->value->getVec3 ();
@@ -422,6 +443,9 @@ void CScene::renderFrame (const glm::ivec4& viewport) {
 
     // refresh light uniform state after scripts have moved the lights
     this->updateLightState ();
+
+    // Render light-space depth before any material pass samples _rt_shadowAtlas.
+    this->renderSpotShadows ();
 
     // update every cached texture instead of walking image objects: textures that
     // are only referenced as effect/pass inputs have no CImage driving them, so
@@ -716,6 +740,7 @@ void CScene::updateLightState () {
     int directional = 0;
     int point = 0;
     int spot = 0;
+    int spotShadow = 0;
     int tube = 0;
 
     for (const auto* light : this->m_lightObjects) {
@@ -741,6 +766,34 @@ void CScene::updateLightState () {
 	    this->m_lights.spotColors[spot]
 		= glm::vec4 (light->getPremultipliedColor (), data.radius->value->getFloat ());
 	    this->m_lights.spotExponents[spot] = glm::vec4 (data.exponent->value->getFloat (), 0.0f, 0.0f, 0.0f);
+
+	    if (data.castShadow) {
+		const int grid = static_cast<int> (std::ceil (std::sqrt (this->m_lights.spotShadowCount)));
+		const int tileSize = SHADOW_ATLAS_SIZE / glm::max (grid, 1);
+		const int tileX = spotShadow % grid;
+		const int tileY = spotShadow / grid;
+		const glm::ivec4 viewport (
+		    tileX * tileSize + SHADOW_ATLAS_GUARD, tileY * tileSize + SHADOW_ATLAS_GUARD,
+		    tileSize - SHADOW_ATLAS_GUARD * 2, tileSize - SHADOW_ATLAS_GUARD * 2
+		);
+
+		this->m_lights.spotShadowMatrices[spot] = Objects::CLight::calculateSpotShadowViewProjection (
+		    light->getWorldPosition (), light->getWorldDirection (), data.outerCone->value->getFloat (),
+		    data.radius->value->getFloat ()
+		);
+		this->m_lights.spotShadowTransforms[spot] = glm::vec4 (
+		    static_cast<float> (viewport.x) / SHADOW_ATLAS_SIZE,
+		    static_cast<float> (viewport.y) / SHADOW_ATLAS_SIZE,
+		    static_cast<float> (viewport.z) / SHADOW_ATLAS_SIZE,
+		    static_cast<float> (viewport.w) / SHADOW_ATLAS_SIZE
+		);
+		this->m_lights.spotShadowViewports[spot] = viewport;
+		this->m_lights.spotShadowEnabled[spot]
+		    = data.groupVisible->value->getBool () && light->isVisibleThroughParents () ? 1.0f : 0.0f;
+		spotShadow++;
+	    } else {
+		this->m_lights.spotShadowEnabled[spot] = 0.0f;
+	    }
 	    spot++;
 	} else if (data.type == LightData::Type_Tube && tube < this->m_lights.tubeCount) {
 	    this->m_lights.tubeOriginsA[tube]
@@ -751,6 +804,54 @@ void CScene::updateLightState () {
 	    tube++;
 	}
     }
+}
+
+void CScene::renderSpotShadows () {
+    if (this->m_lights.spotShadowCount == 0 || this->_rt_shadowAtlas == nullptr) {
+	return;
+    }
+
+#if !NDEBUG
+    glPushDebugGroup (GL_DEBUG_SOURCE_APPLICATION, 0, -1, "Spotlight shadow atlas");
+#endif
+
+    glBindFramebuffer (GL_FRAMEBUFFER, this->_rt_shadowAtlas->getFramebuffer ());
+    glViewport (0, 0, SHADOW_ATLAS_SIZE, SHADOW_ATLAS_SIZE);
+    glColorMask (false, false, false, false);
+    glDisable (GL_BLEND);
+    glEnable (GL_DEPTH_TEST);
+    glDepthFunc (GL_LEQUAL);
+    glDepthMask (true);
+    glClearDepth (1.0);
+    glClear (GL_DEPTH_BUFFER_BIT);
+    glEnable (GL_POLYGON_OFFSET_FILL);
+    glPolygonOffset (2.0f, 4.0f);
+
+    for (int spot = 0; spot < this->m_lights.spotCount; spot++) {
+	if (this->m_lights.spotShadowEnabled[spot] < 0.5f) {
+	    continue;
+	}
+
+	const glm::ivec4& viewport = this->m_lights.spotShadowViewports[spot];
+	glViewport (viewport.x, viewport.y, viewport.z, viewport.w);
+
+	for (auto* object : this->m_objectsByRenderOrder) {
+	    if (auto* model = dynamic_cast<Objects::CModel*> (object); model != nullptr) {
+		model->renderShadow (this->m_lights.spotShadowMatrices[spot]);
+	    }
+	}
+    }
+
+    glDisable (GL_POLYGON_OFFSET_FILL);
+    glDisable (GL_CULL_FACE);
+    glFrontFace (GL_CCW);
+    glColorMask (true, true, true, true);
+    glDepthMask (true);
+    glUseProgram (GL_NONE);
+
+#if !NDEBUG
+    glPopDebugGroup ();
+#endif
 }
 
 const Scene& CScene::getScene () const { return *this->getWallpaperData ().as<Scene> (); }

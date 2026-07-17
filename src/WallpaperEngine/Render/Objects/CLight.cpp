@@ -1,7 +1,9 @@
 #include "CLight.h"
 
+#include <algorithm>
 #include <cmath>
 #include <glm/geometric.hpp>
+#include <glm/gtc/matrix_transform.hpp>
 
 using namespace WallpaperEngine;
 using namespace WallpaperEngine::Render::Objects;
@@ -46,6 +48,25 @@ glm::vec3 CLight::getPremultipliedColor () const {
 glm::vec2 CLight::calculateSpotConeCosines (const float innerDegrees, const float outerDegrees) {
     constexpr float degreesToRadians = 0.01745329251994329577f;
     return { std::cos (innerDegrees * degreesToRadians), std::cos (outerDegrees * degreesToRadians) };
+}
+
+glm::mat4 CLight::calculateSpotShadowViewProjection (
+    const glm::vec3& origin, const glm::vec3& direction, const float outerDegrees, const float radius
+) {
+    const float directionLength = glm::length (direction);
+    const glm::vec3 forward
+	= directionLength > 1e-6f ? direction / directionLength : glm::vec3 (1.0f, 0.0f, 0.0f);
+    // lookAt becomes singular when forward and up are parallel. Switch axes for
+    // near-vertical authored lights while retaining a stable orientation otherwise.
+    const glm::vec3 up = std::abs (glm::dot (forward, glm::vec3 (0.0f, 1.0f, 0.0f))) > 0.99f
+	? glm::vec3 (0.0f, 0.0f, 1.0f)
+	: glm::vec3 (0.0f, 1.0f, 0.0f);
+    const float farPlane = std::max (std::abs (radius), 1.01f);
+    const float nearPlane = std::clamp (farPlane * 0.001f, 0.01f, farPlane * 0.1f);
+    const float fieldOfView = std::clamp (std::abs (outerDegrees) * 2.0f, 1.0f, 179.0f);
+
+    return glm::perspective (glm::radians (fieldOfView), 1.0f, nearPlane, farPlane)
+	* glm::lookAt (origin, origin + forward, up);
 }
 
 glm::vec3
