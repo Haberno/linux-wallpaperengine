@@ -6,15 +6,14 @@
 
 namespace WallpaperEngine::Data::Model {
 /**
- * Static (non-skinned) mesh read from an MDLV container, as referenced by
- * "model" objects in 3D scenes. The container holds one or more submeshes
+ * Mesh read from an MDLV container, as referenced by "model" objects in 3D
+ * scenes. The container holds one or more submeshes
  * (count in the header), each with its own material and vertex/index data.
  * Supported vertex layouts:
  * - tag 15: position vec3 @0, normal vec3 @12, tangent vec4 @24,
  *   uv vec2 @40, 48-byte stride.
  * - tag 0x0180000f: same visible attributes, skin indices/weights between
- *   tangent and uv, uv vec2 @72, 80-byte stride. The scene model renderer
- *   currently renders these in rest pose.
+ *   tangent and uv, uv vec2 @72, 80-byte stride.
  * See docs/wiki/MDL File Format.md.
  */
 struct MdlSubmesh {
@@ -34,6 +33,10 @@ struct MdlMesh {
     uint32_t normalOffset = 0;
     uint32_t tangentOffset = 0;
     uint32_t uvOffset = 0;
+    /** True when vertices carry four uint bone indices and four float weights. */
+    bool skinned = false;
+    uint32_t blendIndicesOffset = 0;
+    uint32_t blendWeightsOffset = 0;
     std::vector<MdlSubmesh> submeshes;
 };
 } // namespace WallpaperEngine::Data::Model

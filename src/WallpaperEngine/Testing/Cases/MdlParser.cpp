@@ -15,7 +15,7 @@ template <typename T> void appendValue (std::vector<char>& data, const T& value)
     data.insert (data.end (), bytes, bytes + sizeof (T));
 }
 
-std::vector<char> makeModel (uint32_t submeshFlags) {
+std::vector<char> makeModel (uint32_t submeshFlags, uint32_t vertexTag = 15, uint32_t vertexStride = 48) {
     std::vector<char> data;
     const char marker[] = "MDLV0023";
     data.insert (data.end (), marker, marker + sizeof (marker));
@@ -33,8 +33,7 @@ std::vector<char> makeModel (uint32_t submeshFlags) {
 	appendValue (data, 0.0f);
     }
 
-    constexpr uint32_t vertexTag = 15;
-    constexpr uint32_t vertexBytes = 3 * 48;
+    const uint32_t vertexBytes = 3 * vertexStride;
     appendValue (data, vertexTag);
     appendValue (data, vertexBytes);
     data.resize (data.size () + vertexBytes, '\0');
@@ -51,6 +50,16 @@ std::vector<char> makeModel (uint32_t submeshFlags) {
     }
 
     return data;
+}
+
+TEST_CASE ("MDLV parser exposes skinned vertex attributes") {
+    const auto mesh = MdlParser::parse (makeModel (0, 0x0180000f, 80), "test-skinned.mdl");
+
+    CHECK (mesh.skinned);
+    CHECK (mesh.strideBytes == 80);
+    CHECK (mesh.blendIndicesOffset == 40);
+    CHECK (mesh.blendWeightsOffset == 56);
+    CHECK (mesh.uvOffset == 72);
 }
 } // namespace
 

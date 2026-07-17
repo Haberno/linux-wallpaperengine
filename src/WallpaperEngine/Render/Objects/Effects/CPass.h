@@ -27,7 +27,7 @@ public:
 	CRenderable& renderable, std::shared_ptr<const FBOProvider> fboProvider, const MaterialPass& pass,
 	std::optional<std::reference_wrapper<const ImageEffectPassOverride>> override,
 	std::optional<std::reference_wrapper<const TextureMap>> binds,
-	std::optional<std::reference_wrapper<std::string>> target
+	std::optional<std::reference_wrapper<std::string>> target, ComboMap runtimeCombos = {}
     );
     ~CPass ();
 
@@ -65,6 +65,7 @@ public:
     void addUniform (const std::string& name, const glm::vec4* value, int count = 1);
     void addUniform (const std::string& name, const glm::mat3* value);
     void addUniform (const std::string& name, const glm::mat4* value);
+    void addUniform (const std::string& name, const glm::mat4x3* value, int count = 1);
 
 private:
     struct TextureChainEntry {
@@ -83,11 +84,12 @@ private:
 	Float = 0,
 	Matrix3 = 1,
 	Matrix4 = 2,
-	Integer = 3,
-	Vector2 = 4,
-	Vector3 = 5,
-	Vector4 = 6,
-	Double = 7
+	Matrix4x3 = 3,
+	Integer = 4,
+	Vector2 = 5,
+	Vector3 = 6,
+	Vector4 = 7,
+	Double = 8
     };
 
     class UniformEntry {
@@ -186,6 +188,7 @@ private:
     const MaterialPass& m_pass;
     const TextureMap& m_binds;
     const ImageEffectPassOverride& m_override;
+    ComboMap m_runtimeCombos = {};
     std::optional<std::reference_wrapper<std::string>> m_target;
     std::map<int, std::shared_ptr<const CFBO>> m_fbos = {};
     std::map<std::string, int> m_combos = {};
