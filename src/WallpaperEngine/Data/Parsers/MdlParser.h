@@ -1,6 +1,7 @@
 #pragma once
 
 #include <string>
+#include <vector>
 
 #include "WallpaperEngine/Data/Model/MdlMesh.h"
 
@@ -18,5 +19,6 @@ using namespace WallpaperEngine::Data::Model;
 class MdlParser {
 public:
     static MdlMesh load (const Project& project, const std::string& filename);
+    static MdlMesh parse (const std::vector<char>& data, const std::string& filename);
 };
 } // namespace WallpaperEngine::Data::Parsers
