@@ -925,15 +925,17 @@ bool WallpaperApplication::applyPreparedSwitch (PreparedSwitch& job) {
 	    : this->m_context.settings.render.window.clamp;
 
 	if (this->m_renderContext) {
+	    const auto& assetLocator = *this->m_backgrounds[job.screen]->assetLocator;
 	    // Shared-context uploads are already complete; cache insertion is only a pointer move.
 	    for (auto& [name, texture] : job.readyTextures) {
-		this->m_renderContext->storeTexture (name, std::move (texture));
+		this->m_renderContext->storeTexture (name, assetLocator, std::move (texture));
 	    }
 
 	    // Media textures and non-Wayland fallbacks still need main-context construction.
 	    for (auto& [name, texture] : job.textures) {
 		this->m_renderContext->storeTexture (
-		    name, std::make_shared<Render::CTexture> (*this->m_renderContext, std::move (texture))
+		    name, assetLocator,
+		    std::make_shared<Render::CTexture> (*this->m_renderContext, std::move (texture))
 		);
 	    }
 
