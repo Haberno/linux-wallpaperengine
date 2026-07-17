@@ -442,12 +442,14 @@ std::string ShaderUnit::generateLightingV1 () const {
     const int directionalLights = comboValue ("LIGHTS_DIRECTIONAL");
     const int directionalShadowLights = comboValue ("LIGHTS_DIRECTIONAL_SHADOW");
     const int pointLights = comboValue ("LIGHTS_POINT");
+    const int pointShadowLights = comboValue ("LIGHTS_POINT_SHADOW");
     const int spotLights = comboValue ("LIGHTS_SPOT");
     const int spotShadowLights = comboValue ("LIGHTS_SPOT_SHADOW");
     const int tubeLights = comboValue ("LIGHTS_TUBE");
     const int shadowFeatures = comboValue ("LIGHTS_SHADOW_FEATURES");
     const uint32_t directionalShadowMask
 	= static_cast<uint32_t> (comboValue ("LIGHTS_DIRECTIONAL_SHADOW_MASK"));
+    const uint32_t pointShadowMask = static_cast<uint32_t> (comboValue ("LIGHTS_POINT_SHADOW_MASK"));
     const uint32_t spotShadowMask = static_cast<uint32_t> (comboValue ("LIGHTS_SPOT_SHADOW_MASK"));
 
     std::vector<std::array<int, 3>> directionalFeatureIndices (
@@ -480,6 +482,12 @@ std::string ShaderUnit::generateLightingV1 () const {
     if (pointLights > 0) {
 	code += "uniform vec4 g_LPoint_Origin[" + std::to_string (pointLights) + "];\n";
 	code += "uniform vec4 g_LPoint_Color[" + std::to_string (pointLights) + "];\n";
+	if (pointShadowLights > 0) {
+	    code += "uniform vec4 g_LFeature_ShadowPointProjection[" + std::to_string (pointLights) + "];\n";
+	    code += "uniform vec4 g_LFeature_ShadowPointProjectionTransform[" + std::to_string (pointLights)
+		+ "];\n";
+	    code += "uniform float g_LPoint_ShadowEnabled[" + std::to_string (pointLights) + "];\n";
+	}
     }
 
     if (spotLights > 0) {
@@ -513,11 +521,33 @@ std::string ShaderUnit::generateLightingV1 () const {
 	const std::string index = std::to_string (i);
 
 	code += "    {\n"
-		"        vec3 lightDelta = g_LPoint_Origin[" + index + "].xyz - worldPos;\n"
+		"        vec3 lightDelta = g_LPoint_Origin[" + index + "].xyz - worldPos;\n";
+	if (i < 32 && (pointShadowMask & (uint32_t (1) << i)) != 0) {
+	    code += "        float shadowFactor = 1.0;\n"
+		    "        if (g_LPoint_ShadowEnabled[" + index + "] > 0.5) {\n"
+		    "            vec4 pointAtlasTransform = g_LFeature_ShadowPointProjectionTransform[" + index
+		    + "];\n"
+		      "            vec4 projectedCoords = CalculateProjectedCoordsPoint(worldPos,\n"
+		      "                g_LPoint_Origin[" + index + "].xyz,\n"
+		      "                g_LFeature_ShadowPointProjection[" + index + "], pointAtlasTransform);\n"
+		      // The stock helper targets Direct3D's top-left texture orientation. Keep
+		      // its native 2x3 face selection, but flip Y within the selected OpenGL cell.
+		      "            float pointCellHeight = pointAtlasTransform.w / 3.0;\n"
+		      "            float pointRelativeY = projectedCoords.y - pointAtlasTransform.y;\n"
+		      "            float pointRow = floor(clamp(pointRelativeY / pointCellHeight, 0.0, 2.999));\n"
+		      "            float pointRowY = pointAtlasTransform.y + pointRow * pointCellHeight;\n"
+		      "            projectedCoords.y = pointRowY + pointCellHeight - (projectedCoords.y - pointRowY);\n"
+		      "            projectedCoords.z = projectedCoords.z * 0.5 + 0.5 - 0.0015;\n"
+		      "            shadowFactor = PerformPointShadowMapping(projectedCoords);\n"
+		      "        }\n";
+	} else {
+	    code += "        float shadowFactor = 1.0;\n";
+	}
+	code +=
 		"        light += ComputePBRLightShadow(normal, lightDelta, viewDir, albedo,\n"
 		"            g_LPoint_Color[" + index + "].rgb, g_LPoint_Color[" + index + "].w,\n"
 		"            g_LPoint_Origin[" + index + "].w, specularTint, baseReflectance,\n"
-		"            roughness, metallic, 1.0);\n"
+		"            roughness, metallic, shadowFactor);\n"
 		"    }\n";
     }
 

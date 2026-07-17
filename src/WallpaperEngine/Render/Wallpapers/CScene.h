@@ -5,6 +5,7 @@
 #include "WallpaperEngine/Render/CWallpaper.h"
 #include "WallpaperEngine/Scripting/ScriptEngine.h"
 
+#include <array>
 #include <set>
 #include <optional>
 #include <random>
@@ -109,12 +110,16 @@ public:
 	int directionalCount = 0;
 	int directionalShadowCount = 0;
 	int pointCount = 0;
+	int pointShadowCount = 0;
 	int spotCount = 0;
 	int spotShadowCount = 0;
 	int tubeCount = 0;
-	/** Three features per shadowed directional light and one per shadowed spot. */
+	/** Matrix features: three per shadowed directional light and one per shadowed spot. */
 	int shadowFeatureCount = 0;
+	/** Total square atlas cells, including six cells per point-shadow block. */
+	int shadowViewCount = 0;
 	uint32_t directionalShadowMask = 0;
+	uint32_t pointShadowMask = 0;
 	uint32_t spotShadowMask = 0;
 	/** xyz = world-space direction towards the light, w unused */
 	std::vector<glm::vec4> directionalDirections = {};
@@ -127,6 +132,12 @@ public:
 	std::vector<glm::vec4> pointOrigins = {};
 	/** rgb = color premultiplied by intensity, w = radius */
 	std::vector<glm::vec4> pointColors = {};
+	/** Native compact projection and 2x3 atlas block data, indexed like point arrays. */
+	std::vector<glm::vec4> pointShadowProjections = {};
+	std::vector<glm::vec4> pointShadowTransforms = {};
+	std::vector<float> pointShadowEnabled = {};
+	std::vector<std::array<glm::mat4, 6>> pointShadowMatrices = {};
+	std::vector<std::array<glm::ivec4, 6>> pointShadowViewports = {};
 	/** xyz = world-space position, w = cos(inner cone angle) */
 	std::vector<glm::vec4> spotOrigins = {};
 	/** xyz = direction the spotlight points, w = cos(outer cone angle) */

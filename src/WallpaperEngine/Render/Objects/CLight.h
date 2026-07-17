@@ -3,6 +3,8 @@
 #include "WallpaperEngine/Render/CObject.h"
 #include "WallpaperEngine/Scripting/ScriptableObject.h"
 
+#include <array>
+
 namespace WallpaperEngine::Render::Objects {
 using namespace WallpaperEngine::Scripting;
 
@@ -39,6 +41,11 @@ public:
 	float fieldOfViewDegrees, float aspectRatio, float zoom, float nearDistance, float farDistance,
 	const glm::vec3& lightDirection, int shadowResolution
     );
+    /** Six +X/-X/+Y/-Y/+Z/-Z view-projections used by the native 2x3 point atlas block. */
+    [[nodiscard]] static std::array<glm::mat4, 6>
+    calculatePointShadowViewProjections (const glm::vec3& origin, float radius);
+    /** Compact perspective coefficients consumed by CalculateProjectedCoordsPoint. */
+    [[nodiscard]] static glm::vec4 calculatePointShadowProjectionInfo (float radius);
     /** Transform a tube's authored local control point into its world-space endpoint. */
     [[nodiscard]] static glm::vec3
     calculateTubeEndPosition (const glm::mat4& worldMatrix, const glm::vec3& controlPoint);
