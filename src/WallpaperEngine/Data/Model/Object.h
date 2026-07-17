@@ -11,6 +11,7 @@
 #include "DynamicValue.h"
 #include "Effect.h"
 #include "Material.h"
+#include "MdlAnimation.h"
 #include "MdlMesh.h"
 #include "Model.h"
 #include "Types.h"
@@ -656,6 +657,10 @@ struct Model3DData {
     std::string filename;
     /** Mesh data read from the MDLV container */
     MdlMesh mesh;
+    /** Embedded MDLS skeleton, MDAT attachments, and MDLA animation clips. */
+    MdlAnimationData animationData;
+    /** Authored animation-layer controls for the embedded clips. */
+    std::vector<ImageAnimationLayerUniquePtr> animationLayers;
     /** Materials referenced by the submesh headers, aligned with mesh.submeshes */
     std::vector<MaterialUniquePtr> materials;
 };
