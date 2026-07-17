@@ -674,6 +674,12 @@ void CPass::setupShaders () {
 	this->m_combos.insert_or_assign ("LIGHTS_SPOT", lights.spotCount);
     }
 
+    if (lights.spotShadowCount > 0) {
+	this->m_combos.insert_or_assign ("LIGHTS_SPOT_SHADOW", lights.spotShadowCount);
+	this->m_combos.insert_or_assign ("LIGHTS_SHADOW_MAPPING", 1);
+	this->m_combos.insert_or_assign ("LIGHTS_SHADOW_MAPPING_QUALITY", 2);
+    }
+
     if (lights.tubeCount > 0) {
 	this->m_combos.insert_or_assign ("LIGHTS_TUBE", lights.tubeCount);
     }
@@ -911,6 +917,14 @@ void CPass::setupTextureUniforms () {
     this->m_texture0Resolution = *texture->getResolution ();
     this->addUniform ("g_Texture0Resolution", &this->m_texture0Resolution);
 
+    const auto registerTexelUniform = [this] (const int index, const TextureProvider& provider) {
+	const float width = static_cast<float> (glm::max (provider.getTextureWidth (0), 1u));
+	const float height = static_cast<float> (glm::max (provider.getTextureHeight (0), 1u));
+	this->m_textureTexels.insert_or_assign (index, glm::vec4 (1.0f / width, 1.0f / height, width, height));
+	this->addUniform ("g_Texture" + std::to_string (index) + "Texel", &this->m_textureTexels.at (index));
+    };
+    registerTexelUniform (0, *texture);
+
     for (const auto& [textureIndex, expectedTexture] : this->m_textures) {
 	std::ostringstream namestream;
 
@@ -918,6 +932,7 @@ void CPass::setupTextureUniforms () {
 
 	texture = this->resolveTexture (expectedTexture->texture, textureIndex, texture);
 	this->addUniform (namestream.str (), texture->getResolution ());
+	registerTexelUniform (textureIndex, *texture);
     }
 
     this->addUniform ("g_Texture0Resolution", &this->m_texture0Resolution);
@@ -986,6 +1001,15 @@ void CPass::setupUniforms () {
 	this->addUniform ("g_LSpot_Direction", lights.spotDirections.data (), lights.spotCount);
 	this->addUniform ("g_LSpot_Color", lights.spotColors.data (), lights.spotCount);
 	this->addUniform ("g_LSpot_Exponent", lights.spotExponents.data (), lights.spotCount);
+	if (lights.spotShadowCount > 0) {
+	    this->addUniform (
+		"g_LFeature_ShadowProjection", lights.spotShadowMatrices.data (), lights.spotCount
+	    );
+	    this->addUniform (
+		"g_LFeature_ShadowProjectionTransform", lights.spotShadowTransforms.data (), lights.spotCount
+	    );
+	    this->addUniform ("g_LSpot_ShadowEnabled", lights.spotShadowEnabled.data (), lights.spotCount);
+	}
     }
 
     if (lights.tubeCount > 0) {
@@ -1248,8 +1272,8 @@ void CPass::addUniform (const std::string& name, const glm::mat4 value) {
     this->addUniform (name, UniformType::Matrix4, value);
 }
 
-void CPass::addUniform (const std::string& name, const glm::mat4* value) {
-    this->addUniform (name, UniformType::Matrix4, value, 1);
+void CPass::addUniform (const std::string& name, const glm::mat4* value, int count) {
+    this->addUniform (name, UniformType::Matrix4, value, count);
 }
 
 void CPass::addUniform (const std::string& name, const glm::mat4x3* value, int count) {

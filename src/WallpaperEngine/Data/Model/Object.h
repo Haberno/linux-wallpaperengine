@@ -695,7 +695,7 @@ struct LightData {
     UserSettingUniquePtr outerCone;
     /** Tube light's second endpoint in the light's local coordinate system */
     UserSettingUniquePtr controlPoint;
-    /** Stored for later shadow support; unused while shadows are not implemented */
+    /** Whether this light renders and samples a scene shadow map. */
     bool castShadow;
 };
 

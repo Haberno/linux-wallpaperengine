@@ -1,14 +1,38 @@
 #include "CModel.h"
 
 #include <algorithm>
+#include <sstream>
 
 #include <glm/gtc/matrix_inverse.hpp>
+#include <glm/gtc/type_ptr.hpp>
 
 #include "WallpaperEngine/Data/Model/MdlAnimation.h"
 #include "WallpaperEngine/Logging/Log.h"
 
 using namespace WallpaperEngine;
 using namespace WallpaperEngine::Render::Objects;
+
+namespace {
+GLuint compileShadowStage (const std::string& source, const GLenum type) {
+    const GLuint shader = glCreateShader (type);
+    const char* sourcePointer = source.c_str ();
+    glShaderSource (shader, 1, &sourcePointer, nullptr);
+    glCompileShader (shader);
+
+    GLint compiled = GL_FALSE;
+    glGetShaderiv (shader, GL_COMPILE_STATUS, &compiled);
+    if (compiled == GL_FALSE) {
+	GLint length = 0;
+	glGetShaderiv (shader, GL_INFO_LOG_LENGTH, &length);
+	std::string log (std::max (length, 1), '\0');
+	glGetShaderInfoLog (shader, length, nullptr, log.data ());
+	glDeleteShader (shader);
+	sLog.exception ("Cannot compile model shadow shader: ", log);
+    }
+
+    return shader;
+}
+} // namespace
 
 CModel::CModel (Wallpapers::CScene& scene, const Model3D& model) :
     CObject (scene, model), CRenderable (scene, model, **model.materials.begin ()), ScriptableObject (scene, model),
@@ -22,6 +46,13 @@ CModel::~CModel () {
     for (const auto& submesh : this->m_submeshes) {
 	glDeleteBuffers (1, &submesh.vertexBuffer);
 	glDeleteBuffers (1, &submesh.indexBuffer);
+    }
+
+    if (this->m_shadowVao != GL_NONE) {
+	glDeleteVertexArrays (1, &this->m_shadowVao);
+    }
+    if (this->m_shadowProgram != GL_NONE) {
+	glDeleteProgram (this->m_shadowProgram);
     }
 }
 
@@ -104,7 +135,59 @@ void CModel::setup () {
 	}
     }
 
+    if (this->getScene ().getLights ().spotShadowCount > 0) {
+	this->setupShadowProgram ();
+    }
+
     this->m_initialized = true;
+}
+
+void CModel::setupShadowProgram () {
+    std::ostringstream vertex;
+    vertex << "#version 330 core\n"
+	      "layout(location = 0) in vec3 a_Position;\n";
+    if (this->m_skinningEnabled) {
+	vertex << "layout(location = 1) in uvec4 a_BlendIndices;\n"
+		  "layout(location = 2) in vec4 a_BlendWeights;\n"
+		  "uniform mat4x3 u_Bones[" << this->m_gpuSkinBones.size () << "];\n";
+    }
+    vertex << "uniform mat4 u_LightViewProjection;\n"
+	      "uniform mat4 u_Model;\n"
+	      "void main() {\n"
+	      "    vec3 localPosition = a_Position;\n";
+    if (this->m_skinningEnabled) {
+	vertex << "    mat4x3 skin = u_Bones[a_BlendIndices.x] * a_BlendWeights.x\n"
+		  "        + u_Bones[a_BlendIndices.y] * a_BlendWeights.y\n"
+		  "        + u_Bones[a_BlendIndices.z] * a_BlendWeights.z\n"
+		  "        + u_Bones[a_BlendIndices.w] * a_BlendWeights.w;\n"
+		  "    localPosition = skin * vec4(localPosition, 1.0);\n";
+    }
+    vertex << "    gl_Position = u_LightViewProjection * u_Model * vec4(localPosition, 1.0);\n"
+	      "}\n";
+
+    static const std::string fragment = "#version 330 core\nvoid main() {}\n";
+    const GLuint vertexShader = compileShadowStage (vertex.str (), GL_VERTEX_SHADER);
+    const GLuint fragmentShader = compileShadowStage (fragment, GL_FRAGMENT_SHADER);
+    this->m_shadowProgram = glCreateProgram ();
+    glAttachShader (this->m_shadowProgram, vertexShader);
+    glAttachShader (this->m_shadowProgram, fragmentShader);
+    glLinkProgram (this->m_shadowProgram);
+    glDeleteShader (vertexShader);
+    glDeleteShader (fragmentShader);
+
+    GLint linked = GL_FALSE;
+    glGetProgramiv (this->m_shadowProgram, GL_LINK_STATUS, &linked);
+    if (linked == GL_FALSE) {
+	GLint length = 0;
+	glGetProgramiv (this->m_shadowProgram, GL_INFO_LOG_LENGTH, &length);
+	std::string log (std::max (length, 1), '\0');
+	glGetProgramInfoLog (this->m_shadowProgram, length, nullptr, log.data ());
+	sLog.exception ("Cannot link model shadow shader: ", log);
+    }
+
+    this->m_shadowLightViewProjection = glGetUniformLocation (this->m_shadowProgram, "u_LightViewProjection");
+    this->m_shadowModel = glGetUniformLocation (this->m_shadowProgram, "u_Model");
+    this->m_shadowBones = glGetUniformLocation (this->m_shadowProgram, "u_Bones");
 }
 
 void CModel::setupGeometryCallback (Effects::CPass* pass, size_t submeshIndex) {
@@ -277,6 +360,83 @@ void CModel::render () {
 #if !NDEBUG
     glPopDebugGroup ();
 #endif /* DEBUG */
+}
+
+void CModel::renderShadow (const glm::mat4& lightViewProjection) {
+    if (!this->m_initialized || this->m_shadowProgram == GL_NONE
+	|| !this->m_model.groupVisible->value->getBool () || !this->isVisibleThroughParents ()) {
+	return;
+    }
+
+    this->updateAnimationPose ();
+    this->m_modelMatrix = this->resolveWorldMatrix ();
+
+    if (this->m_shadowVao == GL_NONE) {
+	glGenVertexArrays (1, &this->m_shadowVao);
+    }
+    glBindVertexArray (this->m_shadowVao);
+    glUseProgram (this->m_shadowProgram);
+    glUniformMatrix4fv (
+	this->m_shadowLightViewProjection, 1, GL_FALSE, glm::value_ptr (lightViewProjection)
+    );
+    glUniformMatrix4fv (this->m_shadowModel, 1, GL_FALSE, glm::value_ptr (this->m_modelMatrix));
+    if (this->m_skinningEnabled && this->m_shadowBones >= 0 && !this->m_gpuSkinBones.empty ()) {
+	glUniformMatrix4x3fv (
+	    this->m_shadowBones, static_cast<GLsizei> (this->m_gpuSkinBones.size ()), GL_FALSE,
+	    glm::value_ptr (this->m_gpuSkinBones.front ())
+	);
+    }
+
+    const GLsizei stride = static_cast<GLsizei> (this->m_model.mesh.strideBytes);
+    for (size_t submeshIndex = 0; submeshIndex < this->m_submeshes.size (); submeshIndex++) {
+	const auto& material = this->m_model.materials[submeshIndex];
+	const auto opaquePass = std::find_if (
+	    material->passes.begin (), material->passes.end (), [] (const auto& pass) {
+		return pass->blending == BlendingMode_Normal;
+	    }
+	);
+	if (opaquePass == material->passes.end ()) {
+	    continue;
+	}
+
+	if ((*opaquePass)->cullmode == CullingMode_Normal) {
+	    glEnable (GL_CULL_FACE);
+	} else {
+	    glDisable (GL_CULL_FACE);
+	}
+	// Model data follows Direct3D's winding convention; the shadow projection has
+	// no output-dependent Y flip, so clockwise triangles are front-facing here.
+	glFrontFace (GL_CW);
+
+	glBindBuffer (GL_ARRAY_BUFFER, this->m_submeshes[submeshIndex].vertexBuffer);
+	glEnableVertexAttribArray (0);
+	glVertexAttribPointer (
+	    0, 3, GL_FLOAT, GL_FALSE, stride, reinterpret_cast<void*> (this->m_model.mesh.positionOffset)
+	);
+	if (this->m_skinningEnabled) {
+	    glEnableVertexAttribArray (1);
+	    glVertexAttribIPointer (
+		1, 4, GL_UNSIGNED_INT, stride,
+		reinterpret_cast<void*> (this->m_model.mesh.blendIndicesOffset)
+	    );
+	    glEnableVertexAttribArray (2);
+	    glVertexAttribPointer (
+		2, 4, GL_FLOAT, GL_FALSE, stride,
+		reinterpret_cast<void*> (this->m_model.mesh.blendWeightsOffset)
+	    );
+	}
+
+	glBindBuffer (GL_ELEMENT_ARRAY_BUFFER, this->m_submeshes[submeshIndex].indexBuffer);
+	glDrawElements (
+	    GL_TRIANGLES, this->m_submeshes[submeshIndex].indexCount, GL_UNSIGNED_INT, nullptr
+	);
+    }
+
+    glDisableVertexAttribArray (0);
+    if (this->m_skinningEnabled) {
+	glDisableVertexAttribArray (1);
+	glDisableVertexAttribArray (2);
+    }
 }
 
 const Model3D& CModel::getModel () const { return this->m_model; }

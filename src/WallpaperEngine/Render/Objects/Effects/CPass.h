@@ -64,7 +64,7 @@ public:
     void addUniform (const std::string& name, const glm::vec3* value);
     void addUniform (const std::string& name, const glm::vec4* value, int count = 1);
     void addUniform (const std::string& name, const glm::mat3* value);
-    void addUniform (const std::string& name, const glm::mat4* value);
+    void addUniform (const std::string& name, const glm::mat4* value, int count = 1);
     void addUniform (const std::string& name, const glm::mat4x3* value, int count = 1);
 
 private:
@@ -215,6 +215,8 @@ private:
      * Contains the final map of textures to be used
      */
     std::map<int, std::shared_ptr<TextureChainEntry>> m_textures = {};
+    /** Stable pointer-backed {1/w, 1/h, w, h} uniforms for every resolved texture slot. */
+    std::map<int, glm::vec4> m_textureTexels = {};
     /** Whether this pass currently holds usage counts on m_textures, see adjustTextureUsageCounts */
     mutable bool m_texturesUsageCounted = false;
 
