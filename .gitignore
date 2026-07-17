@@ -14,4 +14,12 @@ packaging/archlinux/*
 AGENTS.md
 .headroom/
 scripts/
-.claude/settings.local.json
+
+# Local AI-assistant configuration and working state
+/.agents/
+/.codex/
+/.claude/
+/CLAUDE.md
+
+# Local reverse-engineering notes and Obsidian wiki
+/docs/wiki/
