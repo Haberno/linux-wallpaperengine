@@ -39,13 +39,16 @@ void CModel::setup () {
 
     CRenderable::setup ();
 
+    this->m_skinningEnabled = this->m_model.mesh.skinned && !this->m_model.animationData.bones.empty ();
+
     if (!this->m_model.animationData.bones.empty ()) {
 	this->updateAnimationPose ();
 	sLog.out (
 	    "Loaded 3D model animation data ", this->m_model.filename,
 	    " bones=", this->m_model.animationData.bones.size (),
 	    " attachments=", this->m_model.animationData.attachments.size (),
-	    " clips=", this->m_model.animationData.animations.size ()
+	    " clips=", this->m_model.animationData.animations.size (),
+	    " skinning=", this->m_skinningEnabled ? "gpu" : "none"
 	);
     }
 
@@ -70,8 +73,17 @@ void CModel::setup () {
 	this->m_submeshes.push_back (buffers);
 
 	for (const auto& cur : this->m_model.materials[submeshIndex]->passes) {
+	    ComboMap runtimeCombos;
+	    if (this->m_skinningEnabled) {
+		runtimeCombos = {
+		    { "SKINNING", 1 },
+		    { "BONECOUNT", static_cast<int> (this->m_gpuSkinBones.size ()) },
+		};
+	    }
+
 	    auto* pass = new Effects::CPass (
-		*this, std::make_shared<FBOProvider> (this), *cur, std::nullopt, std::nullopt, std::nullopt
+		*this, std::make_shared<FBOProvider> (this), *cur, std::nullopt, std::nullopt, std::nullopt,
+		std::move (runtimeCombos)
 	    );
 
 	    pass->setDestination (this->getScene ().getFBO ());
@@ -81,6 +93,11 @@ void CModel::setup () {
 	    pass->setModelMatrix (&this->m_modelMatrix);
 	    pass->setViewProjectionMatrix (&this->m_viewProjectionMatrix);
 	    pass->addUniform ("g_NormalModelMatrix", &this->m_normalMatrix);
+	    if (this->m_skinningEnabled) {
+		pass->addUniform (
+		    "g_Bones", this->m_gpuSkinBones.data (), static_cast<int> (this->m_gpuSkinBones.size ())
+		);
+	    }
 	    this->setupGeometryCallback (pass, submeshIndex);
 
 	    this->m_passes.push_back (pass);
@@ -100,6 +117,8 @@ void CModel::setupGeometryCallback (Effects::CPass* pass, size_t submeshIndex) {
 	    const GLint normal = glGetAttribLocation (pass->getProgramID (), "a_Normal");
 	    const GLint tangent = glGetAttribLocation (pass->getProgramID (), "a_Tangent4");
 	    const GLint texCoord = glGetAttribLocation (pass->getProgramID (), "a_TexCoord");
+	    const GLint blendIndices = glGetAttribLocation (pass->getProgramID (), "a_BlendIndices");
+	    const GLint blendWeights = glGetAttribLocation (pass->getProgramID (), "a_BlendWeights");
 
 	    glBindBuffer (GL_ARRAY_BUFFER, this->m_submeshes[submeshIndex].vertexBuffer);
 
@@ -130,6 +149,20 @@ void CModel::setupGeometryCallback (Effects::CPass* pass, size_t submeshIndex) {
 		    texCoord, 2, GL_FLOAT, GL_FALSE, stride, reinterpret_cast<void*> (mesh.uvOffset)
 		);
 	    }
+
+	    if (this->m_skinningEnabled && blendIndices >= 0) {
+		glEnableVertexAttribArray (blendIndices);
+		glVertexAttribIPointer (
+		    blendIndices, 4, GL_UNSIGNED_INT, stride, reinterpret_cast<void*> (mesh.blendIndicesOffset)
+		);
+	    }
+
+	    if (this->m_skinningEnabled && blendWeights >= 0) {
+		glEnableVertexAttribArray (blendWeights);
+		glVertexAttribPointer (
+		    blendWeights, 4, GL_FLOAT, GL_FALSE, stride, reinterpret_cast<void*> (mesh.blendWeightsOffset)
+		);
+	    }
 	},
 	[this, submeshIndex] () {
 	    // Wallpaper Engine is a Direct3D engine: with D3D's default rasterizer state the
@@ -142,7 +175,8 @@ void CModel::setupGeometryCallback (Effects::CPass* pass, size_t submeshIndex) {
 	    glFrontFace (GL_CCW);
 	},
 	[pass] () {
-	    for (const auto* name : { "a_Position", "a_Normal", "a_Tangent4", "a_TexCoord" }) {
+	    for (const auto* name :
+		 { "a_Position", "a_Normal", "a_Tangent4", "a_TexCoord", "a_BlendIndices", "a_BlendWeights" }) {
 		const GLint location = glGetAttribLocation (pass->getProgramID (), name);
 
 		if (location >= 0) {
@@ -195,6 +229,10 @@ void CModel::updateAnimationPose () const {
     auto pose = MdlAnimationEvaluator::evaluate (animationData, activeAnimations);
     this->m_worldBones = std::move (pose.worldBones);
     this->m_skinBones = std::move (pose.skinBones);
+    this->m_gpuSkinBones.resize (this->m_skinBones.size ());
+    for (size_t bone = 0; bone < this->m_skinBones.size (); bone++) {
+	this->m_gpuSkinBones[bone] = glm::mat4x3 (this->m_skinBones[bone]);
+    }
     this->m_poseTime = sceneTime;
 }
 
