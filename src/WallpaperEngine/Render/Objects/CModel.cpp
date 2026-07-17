@@ -135,7 +135,7 @@ void CModel::setup () {
 	}
     }
 
-    if (this->getScene ().getLights ().spotShadowCount > 0) {
+    if (this->getScene ().getLights ().shadowFeatureCount > 0) {
 	this->setupShadowProgram ();
     }
 
