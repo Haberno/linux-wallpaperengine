@@ -7,6 +7,7 @@
 #include <string>
 
 #include "TextureProvider.h"
+#include "WallpaperEngine/Assets/AssetLocator.h"
 #include "WallpaperEngine/Render/Helpers/ContextAware.h"
 #include "WallpaperEngine/Render/RenderContext.h"
 
@@ -33,6 +34,9 @@ public:
      * @return
      */
     std::shared_ptr<const TextureProvider> resolve (const std::string& filename);
+    /** Resolve an asset only within one wallpaper's mounted files and cache namespace. */
+    std::shared_ptr<const TextureProvider>
+    resolve (const std::string& filename, const Assets::AssetLocator& assetLocator);
 
     /**
      * Registers a texture in the cache
@@ -41,6 +45,11 @@ public:
      * @param texture
      */
     void store (const std::string& name, std::shared_ptr<const TextureProvider> texture);
+    /** Store a prepared wallpaper texture without colliding with another project. */
+    void store (
+	const std::string& name, const Assets::AssetLocator& assetLocator,
+	std::shared_ptr<const TextureProvider> texture
+    );
 
     /**
      * Runs a per-frame update on every cached texture so animated textures
@@ -63,6 +72,9 @@ private:
      * until the estimated cache size is back under budget
      */
     void trim ();
+
+    [[nodiscard]] static std::string
+    scopedKey (const std::string& name, const Assets::AssetLocator& assetLocator);
 
     /** The previous album thumbnail texture */
     std::shared_ptr<const AlbumTexture> m_previousThumbnail = nullptr;
