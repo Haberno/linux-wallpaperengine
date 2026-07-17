@@ -93,8 +93,18 @@ enum TextureFlags {
     TextureFlags_ClampUVsBorder = 8,
     TextureFlags_Video = 32,
     TextureFlags_AlphaChannelPriority = 524288, // Indicates RG88/R8 format where alpha is in G/R channel
+    // Wallpaper Engine records which channels of a packed component texture are
+    // authored in bits 20..23. Shader sampler metadata maps these channels to
+    // feature combos (for example metallic/roughness/reflection/emissive).
+    TextureFlags_ComponentRed = 0x100000,
+    TextureFlags_ComponentGreen = 0x200000,
+    TextureFlags_ComponentBlue = 0x400000,
+    TextureFlags_ComponentAlpha = 0x800000,
+    TextureFlags_ComponentMask = TextureFlags_ComponentRed | TextureFlags_ComponentGreen
+	| TextureFlags_ComponentBlue | TextureFlags_ComponentAlpha,
     TextureFlags_All = TextureFlags_NoInterpolation | TextureFlags_ClampUVs | TextureFlags_IsGif
-	| TextureFlags_ClampUVsBorder | TextureFlags_Video | TextureFlags_AlphaChannelPriority,
+	| TextureFlags_ClampUVsBorder | TextureFlags_Video | TextureFlags_AlphaChannelPriority
+	| TextureFlags_ComponentMask,
 };
 
 /** Frees a buffer allocated by the stbi decoder (defined in TextureParser.cpp) */
