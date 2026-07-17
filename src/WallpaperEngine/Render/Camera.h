@@ -37,6 +37,21 @@ public:
     [[nodiscard]] float getFov () const;
     [[nodiscard]] float getNearZ () const;
     [[nodiscard]] float getFarZ () const;
+    [[nodiscard]] float getZoom () const;
+    [[nodiscard]] CameraTransform getDefaultTransform () const;
+    /** Apply a sampled camera path transform and rebuild view/projection matrices. */
+    void setTransform (const CameraTransform& transform);
+    /** Restore the authored resting pose. */
+    void resetTransform ();
+    /** Convert a normalized scene position (0..1, bottom-left origin) to the
+     *  Wallpaper Engine authoring plane at world Z=0. */
+    [[nodiscard]] glm::vec3 screenToWorld (const glm::vec2& normalizedPosition) const;
+
+    /** Pure projection helper exposed for coordinate regression tests. */
+    [[nodiscard]] static glm::vec3 projectScreenPosition (
+	const glm::vec2& normalizedPosition, bool orthogonal, float width, float height, const glm::mat4& projection,
+	const glm::mat4& view, bool projectionYFlipped
+    );
 
 private:
     float m_width;
@@ -45,7 +60,11 @@ private:
     bool m_isYFlipped = false;
     glm::mat4 m_projection = {};
     glm::mat4 m_lookat = {};
+    CameraTransform m_defaultTransform = {};
+    CameraTransform m_transform = {};
     const SceneData::Camera& m_camera;
     Wallpapers::CScene& m_scene;
+
+    void updateMatrices ();
 };
 } // namespace WallpaperEngine::Render

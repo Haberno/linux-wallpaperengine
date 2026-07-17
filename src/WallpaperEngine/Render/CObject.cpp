@@ -10,6 +10,19 @@ using namespace WallpaperEngine::Render;
 using namespace WallpaperEngine::Render::Wallpapers;
 
 namespace {
+RenderSortClass classifyMaterial (const Material& material) {
+    RenderSortClass result = RenderSortClass::Opaque;
+    for (const auto& pass : material.passes) {
+	if (pass->blending == BlendingMode_Additive) {
+	    return RenderSortClass::Additive;
+	}
+	if (pass->blending == BlendingMode_Translucent) {
+	    result = RenderSortClass::Translucent;
+	}
+    }
+    return result;
+}
+
 glm::mat4 localMatrix (const Object& object, const float time) {
     glm::vec3 origin = object.origin->value->getVec3 ();
 
@@ -146,4 +159,22 @@ glm::mat4 CObject::resolveWorldMatrix () const {
     }
 
     return world;
+}
+
+RenderSortClass CObject::getRenderSortClass () const {
+    const Object& object = this->getObject ();
+    if (object.is<Model3D> ()) {
+	RenderSortClass result = RenderSortClass::Opaque;
+	for (const auto& material : object.as<Model3D> ()->materials) {
+	    const RenderSortClass current = classifyMaterial (*material);
+	    if (current == RenderSortClass::Additive) {
+		return current;
+	    }
+	    if (current == RenderSortClass::Translucent) {
+		result = current;
+	    }
+	}
+	return result;
+    }
+    return RenderSortClass::Opaque;
 }

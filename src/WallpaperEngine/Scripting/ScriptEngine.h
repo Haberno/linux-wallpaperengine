@@ -81,6 +81,10 @@ public:
      */
     void queueScript (const std::string& key, DynamicValue& currentValue, ScriptableObject& object);
 
+    /** Queue a script-backed scene setting such as fog color. Scene settings have
+     * thisScene/engine globals but intentionally no thisLayer object. */
+    void queueSceneScript (const std::string& key, DynamicValue& currentValue);
+
     /**
      * Runs a frame tick in the javascript engine. Dispatches any pending events,
      * timeouts, intervals AND calls any update() functions.
@@ -146,6 +150,7 @@ public:
 
 private:
     JSValue call (JSValue module, int argc, JSValueConst argv[], const char* name);
+    void queueScript (const std::string& key, DynamicValue& currentValue, ScriptableObject* object);
 
     void installBuiltins ();
 

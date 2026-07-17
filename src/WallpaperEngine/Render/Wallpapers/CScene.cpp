@@ -14,6 +14,9 @@
 #include "WallpaperEngine/Data/Parsers/ObjectParser.h"
 #include "WallpaperEngine/Data/Utils/ScopeGuard.h"
 
+#include <algorithm>
+#include <cmath>
+#include <numeric>
 #include <ranges>
 
 extern float g_Time;
@@ -36,6 +39,8 @@ CScene::CScene (
     this->m_scriptEngine = std::make_unique<Scripting::ScriptEngine> (*this, context.getMediaSource ());
     // setup the scene camera
     this->m_camera = std::make_unique<Camera> (*this, scene->camera);
+    this->registerFogScripts ();
+    this->updateFogState ();
 
     float width = scene->camera.projection.width;
     float height = scene->camera.projection.height;
@@ -89,12 +94,6 @@ CScene::CScene (
 	    width, height, this->getContext ().getOutput ().renderVFlip ()
 	);
 
-	const float zoom = scene->camera.projection.zoom->value->getFloat ();
-	if (zoom != 1.0f) {
-	    // zoom is untested against real WE output; implement when a wallpaper needs it
-	    sLog.error ("Scene camera zoom ", zoom, " is not supported yet and will be ignored");
-	}
-
 	// fixed light counts let passes compile LightingV1 with matching uniform arrays
 	// before any object is created
 	for (const auto& object : scene->objects) {
@@ -102,10 +101,11 @@ CScene::CScene (
 		continue;
 	    }
 
-	    if (object->as<Data::Model::Light> ()->type == LightData::Type_Directional) {
-		this->m_lights.directionalCount++;
-	    } else {
-		this->m_lights.pointCount++;
+	    switch (object->as<Data::Model::Light> ()->type) {
+		case LightData::Type_Directional: this->m_lights.directionalCount++; break;
+		case LightData::Type_Spot: this->m_lights.spotCount++; break;
+		case LightData::Type_Tube: this->m_lights.tubeCount++; break;
+		case LightData::Type_Point: this->m_lights.pointCount++; break;
 	    }
 	}
 
@@ -113,6 +113,13 @@ CScene::CScene (
 	this->m_lights.directionalColors.resize (this->m_lights.directionalCount, glm::vec4 (0.0f));
 	this->m_lights.pointOrigins.resize (this->m_lights.pointCount, glm::vec4 (0.0f));
 	this->m_lights.pointColors.resize (this->m_lights.pointCount, glm::vec4 (0.0f));
+	this->m_lights.spotOrigins.resize (this->m_lights.spotCount, glm::vec4 (0.0f));
+	this->m_lights.spotDirections.resize (this->m_lights.spotCount, glm::vec4 (0.0f));
+	this->m_lights.spotColors.resize (this->m_lights.spotCount, glm::vec4 (0.0f));
+	this->m_lights.spotExponents.resize (this->m_lights.spotCount, glm::vec4 (0.0f));
+	this->m_lights.tubeOriginsA.resize (this->m_lights.tubeCount, glm::vec4 (0.0f));
+	this->m_lights.tubeOriginsB.resize (this->m_lights.tubeCount, glm::vec4 (0.0f));
+	this->m_lights.tubeColors.resize (this->m_lights.tubeCount, glm::vec4 (0.0f));
     } else {
 	// TODO: CONVERSION
 	this->m_camera->setOrthogonalProjection (width, height);
@@ -374,8 +381,14 @@ void CScene::addObjectToRenderOrder (const Object& object) {
 
 ScriptEngine& CScene::getScriptEngine () const { return *this->m_scriptEngine; }
 Camera& CScene::getCamera () const { return *this->m_camera; }
+const CScene::SceneFog& CScene::getFog () const { return this->m_fog; }
 
 void CScene::renderFrame (const glm::ivec4& viewport) {
+    // Advance the active path before scripts read cursorWorldPosition and before
+    // any object renders. Script-driven camera visibility from the previous tick
+    // selects the source, matching the normal one-frame property update cadence.
+    this->updateCameraPath (glm::max (0.0f, this->getDeltaTime ()));
+
     // ensure the virtual mouse position is up to date
     this->updateMouse (viewport);
 
@@ -403,6 +416,9 @@ void CScene::renderFrame (const glm::ivec4& viewport) {
 
     // run a tick in the javascript logic
     this->getScriptEngine ().tick ();
+
+    // Fog colors and ranges can be SceneScript- or user-property-driven.
+    this->updateFogState ();
 
     // refresh light uniform state after scripts have moved the lights
     this->updateLightState ();
@@ -434,7 +450,8 @@ void CScene::renderFrame (const glm::ivec4& viewport) {
     glColorMask (true, true, true, true);
     glClear (GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
-    for (const auto& cur : this->m_objectsByRenderOrder) {
+    const std::vector<CObject*> renderOrder = this->buildFrameRenderOrder ();
+    for (const auto& cur : renderOrder) {
 	const auto& debug = this->getContext ().getApp ().getContext ().settings.render.debug;
 	if (debug.objectFilter.has_value () && cur->getId () != debug.objectFilter.value ()) {
 	    continue;
@@ -458,6 +475,210 @@ float CScene::calculateParallaxSmoothingAlpha (const float delay, const float de
 glm::vec2 CScene::calculateShaderParallaxPosition (const glm::vec2& displacement) {
     // displacement uses [-1,1], whereas g_ParallaxPosition uses [0,1].
     return glm::vec2 (0.5f) + displacement * 0.5f;
+}
+
+glm::vec4
+CScene::calculateFogParams (const float start, const float end, const float startDensity, const float endDensity) {
+    return glm::vec4 (start, end - start, startDensity, endDensity - startDensity);
+}
+
+void CScene::registerFogScripts () {
+    const auto queue = [this] (const std::string& key, const UserSettingUniquePtr& setting) {
+	this->m_scriptEngine->queueSceneScript (key + "_scene", *setting->value);
+    };
+    const auto queueLayer = [&queue] (const std::string& prefix, const SceneData::Fog::Layer& layer) {
+	queue (prefix, layer.enabled);
+	queue (prefix + "color", layer.color);
+	queue (prefix + "start", layer.start);
+	queue (prefix + "end", layer.end);
+	queue (prefix + "startdensity", layer.startDensity);
+	queue (prefix + "enddensity", layer.endDensity);
+    };
+
+    queueLayer ("fogdistance", this->getScene ().fog.distance);
+    queueLayer ("fogheight", this->getScene ().fog.height);
+}
+
+void CScene::updateFogState () {
+    const auto& fog = this->getScene ().fog;
+    const bool perspective = this->getScene ().camera.projection.isPerspective;
+    this->m_fog.distanceEnabled = perspective && fog.distance.enabled->value->getBool ();
+    this->m_fog.heightEnabled = perspective && fog.height.enabled->value->getBool ();
+    this->m_fog.distanceParams = calculateFogParams (
+	fog.distance.start->value->getFloat (), fog.distance.end->value->getFloat (),
+	fog.distance.startDensity->value->getFloat (), fog.distance.endDensity->value->getFloat ()
+    );
+    this->m_fog.heightParams = calculateFogParams (
+	fog.height.start->value->getFloat (), fog.height.end->value->getFloat (),
+	fog.height.startDensity->value->getFloat (), fog.height.endDensity->value->getFloat ()
+    );
+}
+
+float CScene::calculateCameraFadeAlpha (const float elapsedTime, const float duration) {
+    if (duration <= 0.0f) {
+	return 0.0f;
+    }
+
+    const float remaining = glm::max (duration - elapsedTime, 0.0f);
+    // Reference order matters for shots shorter than one second: the end
+    // envelope wins when it overlaps the opening envelope.
+    if (remaining < CAMERA_FADE_DURATION) {
+	return glm::clamp (1.0f - remaining / CAMERA_FADE_DURATION, 0.0f, 1.0f);
+    }
+    if (elapsedTime < CAMERA_FADE_DURATION) {
+	return glm::clamp (1.0f - elapsedTime / CAMERA_FADE_DURATION, 0.0f, 1.0f);
+    }
+    return 0.0f;
+}
+
+float CScene::getSceneFadeAlpha () const {
+    if (!this->getScene ().camera.fade->value->getBool () || this->m_activeCameraPathSource == nullptr
+	|| !this->m_activeCameraPathIndex.has_value ()) {
+	return 0.0f;
+    }
+
+    const CameraPath& path = this->m_activeCameraPathSource->paths[*this->m_activeCameraPathIndex];
+    return calculateCameraFadeAlpha (this->m_cameraPathElapsed, path.duration);
+}
+
+size_t CScene::chooseCameraPathIndex (
+    const std::optional<size_t> current, const size_t count, const std::string& queueMode,
+    const uint32_t randomValue
+) {
+    if (count <= 1) {
+	return 0;
+    }
+    if (queueMode != "random") {
+	return current.has_value () ? (*current + 1) % count : 0;
+    }
+    if (!current.has_value ()) {
+	return randomValue % count;
+    }
+
+    // Random queues do not immediately repeat the shot that just ended.
+    size_t candidate = randomValue % (count - 1);
+    if (candidate >= *current) {
+	candidate++;
+    }
+    return candidate;
+}
+
+std::vector<size_t>
+CScene::calculateTransparentSortPermutation (const std::vector<TransparentSortKey>& keys) {
+    std::vector<size_t> permutation (keys.size ());
+    std::iota (permutation.begin (), permutation.end (), 0);
+
+    std::vector<size_t> sortableSlots;
+    std::vector<size_t> sortedEntries;
+    for (size_t index = 0; index < keys.size (); index++) {
+	if (keys[index].sortable) {
+	    sortableSlots.push_back (index);
+	    sortedEntries.push_back (index);
+	}
+    }
+
+    std::stable_sort (sortedEntries.begin (), sortedEntries.end (), [&keys] (const size_t left, const size_t right) {
+	const TransparentSortKey& lhs = keys[left];
+	const TransparentSortKey& rhs = keys[right];
+	if (lhs.renderClass != rhs.renderClass) {
+	    return lhs.renderClass < rhs.renderClass;
+	}
+	if (lhs.renderClass == RenderSortClass::Opaque) {
+	    return false;
+	}
+	const float leftDepth = std::isfinite (lhs.cameraDepth) ? lhs.cameraDepth : 0.0f;
+	const float rightDepth = std::isfinite (rhs.cameraDepth) ? rhs.cameraDepth : 0.0f;
+	return leftDepth < rightDepth;
+    });
+
+    for (size_t index = 0; index < sortableSlots.size (); index++) {
+	permutation[sortableSlots[index]] = sortedEntries[index];
+    }
+    return permutation;
+}
+
+std::vector<CObject*> CScene::buildFrameRenderOrder () const {
+    if (!this->getScene ().camera.projection.isPerspective || !this->getScene ().transparentSorting
+	|| this->getScene ().customSortOrder) {
+	return this->m_objectsByRenderOrder;
+    }
+
+    std::vector<TransparentSortKey> keys;
+    keys.reserve (this->m_objectsByRenderOrder.size ());
+    const glm::mat4& view = this->m_camera->getLookAt ();
+    for (const CObject* object : this->m_objectsByRenderOrder) {
+	const bool sortable = object->getObject ().is<Model3D> ();
+	float cameraDepth = 0.0f;
+	if (sortable) {
+	    cameraDepth = (view * object->resolveWorldMatrix () * glm::vec4 (0.0f, 0.0f, 0.0f, 1.0f)).z;
+	}
+	keys.push_back (TransparentSortKey {
+	    .sortable = sortable,
+	    .renderClass = sortable ? object->getRenderSortClass () : RenderSortClass::Opaque,
+	    .cameraDepth = cameraDepth,
+	});
+    }
+
+    const std::vector<size_t> permutation = calculateTransparentSortPermutation (keys);
+    std::vector<CObject*> result = this->m_objectsByRenderOrder;
+    for (size_t index = 0; index < permutation.size (); index++) {
+	result[index] = this->m_objectsByRenderOrder[permutation[index]];
+    }
+    return result;
+}
+
+const CameraPathSource* CScene::findActiveCameraPathSource () const {
+    const CameraPathSource* active = nullptr;
+    for (const CameraPathSource& source : this->getScene ().camera.paths) {
+	if (!source.objectId.has_value ()) {
+	    active = &source;
+	    continue;
+	}
+
+	const CObject* object = this->getObject (*source.objectId);
+	if (object != nullptr && object->getObject ().groupVisible->value->getBool ()) {
+	    // Later visible camera objects override earlier/default cameras.
+	    active = &source;
+	}
+    }
+    return active;
+}
+
+void CScene::updateCameraPath (const float deltaTime) {
+    const CameraPathSource* source = this->findActiveCameraPathSource ();
+    if (source != this->m_activeCameraPathSource) {
+	this->m_activeCameraPathSource = source;
+	this->m_activeCameraPathIndex = std::nullopt;
+	this->m_cameraPathElapsed = 0.0f;
+	if (source == nullptr || source->paths.empty ()) {
+	    this->m_camera->resetTransform ();
+	    return;
+	}
+	this->m_activeCameraPathIndex = chooseCameraPathIndex (
+	    std::nullopt, source->paths.size (), source->queueMode, this->m_cameraPathRandom ()
+	);
+    }
+
+    if (source == nullptr || source->paths.empty () || !this->m_activeCameraPathIndex.has_value ()) {
+	return;
+    }
+
+    this->m_cameraPathElapsed += deltaTime;
+    // A stalled frame can cross multiple very short shots. Bound the loop by
+    // the queue length plus one so malformed assets can never spin forever.
+    for (size_t step = 0; step <= source->paths.size (); step++) {
+	const CameraPath& current = source->paths[*this->m_activeCameraPathIndex];
+	if (current.duration <= 0.0f || this->m_cameraPathElapsed < current.duration) {
+	    break;
+	}
+	this->m_cameraPathElapsed -= current.duration;
+	this->m_activeCameraPathIndex = chooseCameraPathIndex (
+	    this->m_activeCameraPathIndex, source->paths.size (), source->queueMode, this->m_cameraPathRandom ()
+	);
+    }
+
+    const CameraPath& path = source->paths[*this->m_activeCameraPathIndex];
+    this->m_camera->setTransform (path.evaluate (this->m_cameraPathElapsed, this->m_camera->getDefaultTransform ()));
 }
 
 void CScene::updateMouse (const glm::ivec4& viewport) {
@@ -494,6 +715,8 @@ const CScene::SceneLights& CScene::getLights () const { return this->m_lights; }
 void CScene::updateLightState () {
     int directional = 0;
     int point = 0;
+    int spot = 0;
+    int tube = 0;
 
     for (const auto* light : this->m_lightObjects) {
 	const auto& data = light->getLight ();
@@ -509,6 +732,23 @@ void CScene::updateLightState () {
 	    this->m_lights.pointColors[point]
 		= glm::vec4 (light->getPremultipliedColor (), data.radius->value->getFloat ());
 	    point++;
+	} else if (data.type == LightData::Type_Spot && spot < this->m_lights.spotCount) {
+	    const glm::vec2 cones = Objects::CLight::calculateSpotConeCosines (
+		data.innerCone->value->getFloat (), data.outerCone->value->getFloat ()
+	    );
+	    this->m_lights.spotOrigins[spot] = glm::vec4 (light->getWorldPosition (), cones.x);
+	    this->m_lights.spotDirections[spot] = glm::vec4 (light->getWorldDirection (), cones.y);
+	    this->m_lights.spotColors[spot]
+		= glm::vec4 (light->getPremultipliedColor (), data.radius->value->getFloat ());
+	    this->m_lights.spotExponents[spot] = glm::vec4 (data.exponent->value->getFloat (), 0.0f, 0.0f, 0.0f);
+	    spot++;
+	} else if (data.type == LightData::Type_Tube && tube < this->m_lights.tubeCount) {
+	    this->m_lights.tubeOriginsA[tube]
+		= glm::vec4 (light->getWorldPosition (), data.exponent->value->getFloat ());
+	    this->m_lights.tubeOriginsB[tube] = glm::vec4 (light->getTubeEndPosition (), 0.0f);
+	    this->m_lights.tubeColors[tube]
+		= glm::vec4 (light->getPremultipliedColor (), data.radius->value->getFloat ());
+	    tube++;
 	}
     }
 }

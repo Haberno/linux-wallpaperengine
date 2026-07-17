@@ -179,6 +179,9 @@ protected:
 
     GLuint m_vaoBuffer = GL_NONE;
 
+    /** Optional scene-local fade composited over the rendered wallpaper. */
+    [[nodiscard]] virtual float getSceneFadeAlpha () const;
+
 private:
     /** The texture used for the scene output */
     GLuint m_texCoordBuffer = GL_NONE;
@@ -189,6 +192,7 @@ private:
     GLint g_TransitionMode = GL_NONE;
     GLint g_TransitionProgress = GL_NONE;
     GLint g_TransitionCenter = GL_NONE;
+    GLint g_SceneFadeAlpha = GL_NONE;
     GLint a_Position = GL_NONE;
     GLint a_TexCoord = GL_NONE;
     /** The framebuffer to draw the background to */

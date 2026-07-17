@@ -1,11 +1,13 @@
 #pragma once
 
 #include <memory>
+#include <vector>
 
 #include <glm/glm.hpp>
 #include <utility>
 
 #include "Object.h"
+#include "CameraPath.h"
 #include "Types.h"
 #include "WallpaperEngine/Data/Utils/TypeCaster.h"
 
@@ -38,11 +40,28 @@ public:
 };
 
 struct SceneData {
+    /** Automatically order blended 3D models from back to front. */
+    bool transparentSorting;
+    /** Preserve an explicitly authored layer order instead of automatic depth sorting. */
+    bool customSortOrder;
     struct {
 	UserSettingUniquePtr ambient;
 	UserSettingUniquePtr skylight;
 	UserSettingUniquePtr clear;
     } colors;
+    /** Distance- and world-height-based fog applied by materials whose FOG combo is enabled. */
+    struct Fog {
+	struct Layer {
+	    UserSettingUniquePtr enabled;
+	    UserSettingUniquePtr color;
+	    UserSettingUniquePtr start;
+	    UserSettingUniquePtr end;
+	    UserSettingUniquePtr startDensity;
+	    UserSettingUniquePtr endDensity;
+	};
+	Layer distance;
+	Layer height;
+    } fog;
     /**
      * Camera configuration
      */
@@ -51,6 +70,8 @@ struct SceneData {
 	UserSettingUniquePtr fade;
 	/** Used by the software to allow the users to preview the background or not? */
 	bool preview;
+	/** Parsed path queues from the legacy top-level list and camera objects. */
+	std::vector<CameraPathSource> paths;
 
 	/**
 	 * Bloom effect configuration

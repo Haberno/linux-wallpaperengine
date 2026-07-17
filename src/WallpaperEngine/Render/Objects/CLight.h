@@ -22,8 +22,16 @@ public:
     [[nodiscard]] glm::vec3 getWorldPosition () const;
     /** world-space direction the light points at (directional lights); +X at zero angles */
     [[nodiscard]] glm::vec3 getWorldDirection () const;
+    /** world-space second endpoint of a tube light */
+    [[nodiscard]] glm::vec3 getTubeEndPosition () const;
     /** light color premultiplied by intensity, zeroed while the light is invisible */
     [[nodiscard]] glm::vec3 getPremultipliedColor () const;
+
+    /** Native spot uniform packing: cos(inner degrees), cos(outer degrees). */
+    [[nodiscard]] static glm::vec2 calculateSpotConeCosines (float innerDegrees, float outerDegrees);
+    /** Transform a tube's authored local control point into its world-space endpoint. */
+    [[nodiscard]] static glm::vec3
+    calculateTubeEndPosition (const glm::mat4& worldMatrix, const glm::vec3& controlPoint);
 
 private:
     const Light& m_light;

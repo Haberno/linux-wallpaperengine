@@ -307,6 +307,11 @@ set(COMMON_SOURCES
     src/WallpaperEngine/Debugging/CallStack.cpp
     src/WallpaperEngine/Debugging/CallStack.h
 
+    src/WallpaperEngine/Data/Model/CameraPath.h
+    src/WallpaperEngine/Data/Model/CameraPath.cpp
+    src/WallpaperEngine/Data/Parsers/CameraPathParser.h
+    src/WallpaperEngine/Data/Parsers/CameraPathParser.cpp
+
     src/WallpaperEngine/Application/ApplicationContext.cpp
     src/WallpaperEngine/Application/ApplicationContext.h
     src/WallpaperEngine/Application/WallpaperApplication.cpp
@@ -578,6 +583,8 @@ if(BUILD_TESTING)
         src/WallpaperEngine/Testing/Harnesses/RenderHarness.cpp
         src/WallpaperEngine/Testing/Harnesses/RenderHarness.h
         src/WallpaperEngine/Testing/Cases/MouseCoordinates.cpp
+        src/WallpaperEngine/Testing/Cases/CameraPath.cpp
+        src/WallpaperEngine/Testing/Cases/LightState.cpp
         src/WallpaperEngine/Testing/Cases/PropertyParser.cpp
         src/WallpaperEngine/Testing/Cases/Utf8Text.cpp
         src/WallpaperEngine/Testing/Cases/JsonTolerance.cpp

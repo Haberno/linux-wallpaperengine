@@ -199,10 +199,13 @@ ObjectParser::parseLight (const JSON& it, const Project& project, ObjectData bas
     const auto& properties = project.properties;
     LightData::Type type = LightData::Type_Point;
 
-    if (light == "ldirectional") {
+    if (light == "lspot") {
+	type = LightData::Type_Spot;
+    } else if (light == "ltube") {
+	type = LightData::Type_Tube;
+    } else if (light == "ldirectional") {
 	type = LightData::Type_Directional;
     } else if (light != "lpoint") {
-	// spot and tube lights are parsed as point lights until a wallpaper needs them
 	sLog.error ("Unsupported light type '", light, "' on object ", base.id, ", treating as point light");
     }
 
@@ -213,7 +216,10 @@ ObjectParser::parseLight (const JSON& it, const Project& project, ObjectData bas
 	    .color = it.user ("color", properties, glm::vec3 (1.0f)),
 	    .intensity = it.user ("intensity", properties, 1.0f),
 	    .radius = it.user ("radius", properties, 100.0f),
-	    .exponent = it.user ("exponent", properties, 1.0f),
+	    .exponent = it.user ("exponent", properties, 2.0f),
+	    .innerCone = it.user ("innercone", properties, 20.0f),
+	    .outerCone = it.user ("outercone", properties, 30.0f),
+	    .controlPoint = it.user ("controlpoint", properties, glm::vec3 (2.0f, 0.0f, 0.0f)),
 	    .castShadow = it.optional ("castshadow", false),
 	}
     );
