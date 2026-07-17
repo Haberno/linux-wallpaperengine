@@ -2,6 +2,7 @@
 
 #include <cstring>
 #include <glm/glm.hpp>
+#include <glm/trigonometric.hpp>
 #include <utility>
 
 #include "WallpaperEngine/Data/Model/DynamicValue.h"
@@ -223,6 +224,13 @@ JSValue scriptableobject_property_get (JSContext* ctx, JSValueConst obj_val, JSA
 	// find the property inside, otherwise return undefined
 	auto& property = container->object.getProperty (name);
 
+	// SceneScript exposes layer Euler angles in degrees even though scene.json
+	// and the renderer store them in radians.
+	if (std::strcmp (name, "angles") == 0 && property.getType () == DynamicValue::Vec3) {
+	    DynamicValue degrees (glm::degrees (property.getVec3 ()));
+	    return container->adapter.getEngine ().getAdapters ().vec3->instantiate (degrees, true);
+	}
+
 	return container->adapter.getEngine ().dynamicToJs (property);
     } catch (const std::exception& e) {
 	return JS_UNDEFINED;
@@ -268,9 +276,11 @@ int scriptableobject_property_set (
 		JS_FreeValue (ctx, field);
 		return static_cast<float> (number);
 	    };
-	    property.update (
-		glm::vec3 (component ("x"), component ("y"), component ("z")), DynamicValue::UpdateSource::User
-	    );
+	    glm::vec3 vector (component ("x"), component ("y"), component ("z"));
+	    if (std::strcmp (name, "angles") == 0) {
+		vector = glm::radians (vector);
+	    }
+	    property.update (vector, DynamicValue::UpdateSource::User);
 	}
     } catch (const std::exception&) {
 	// Unknown script-visible fields are ignored by Wallpaper Engine.

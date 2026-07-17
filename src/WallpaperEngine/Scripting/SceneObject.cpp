@@ -164,12 +164,13 @@ JSValue get_layer (JSContext* ctx, JSValueConst this_val, int argc, JSValueConst
 	return container->getEngine ().getAdapters ().object->instantiate (
 	    const_cast<ScriptableObject&> (*object->as<ScriptableObject> ())
 	);
-    } else if (JS_IsString (layer)) {
-	// find by name, this is harder
+    } else if (!JS_IsNull (layer) && !JS_IsUndefined (layer)) {
+	// Wallpaper Engine accepts string-coercible values here too (notably boxed
+	// strings produced by some workshop script/transpiler combinations).
 	const char* result = JS_ToCString (ctx, layer);
 
 	if (result == nullptr) {
-	    return JS_UNDEFINED;
+	    return JS_EXCEPTION;
 	}
 
 	ScopeGuard guard ([=] { JS_FreeCString (ctx, result); });
@@ -187,7 +188,7 @@ JSValue get_layer (JSContext* ctx, JSValueConst this_val, int argc, JSValueConst
 	}
     }
 
-    return JS_ThrowTypeError (ctx, "getLayer() argument must be a number or string");
+    return JS_UNDEFINED;
 }
 
 JSValue scene_set_value (JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {

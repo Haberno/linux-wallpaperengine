@@ -229,7 +229,16 @@ JSValue vector_property_get (JSContext* ctx, JSValueConst obj_val, JSAtom atom, 
 	}
     }
 
-    return JS_ThrowTypeError (ctx, "Vec%d has no property '%s'", (int) (components), name);
+    // Component access is exotic, but vector methods live on the ordinary class
+    // prototype. Forward unknown names there so calls such as origin.copy() and
+    // direction.normalize() are not hidden by the exotic getter.
+    JSValue prototype = JS_GetPrototype (ctx, obj_val);
+    if (JS_IsException (prototype)) {
+	return prototype;
+    }
+    JSValue result = JS_GetProperty (ctx, prototype, atom);
+    JS_FreeValue (ctx, prototype);
+    return result;
 }
 
 template JSValue vector_property_get<2> (JSContext* ctx, JSValueConst obj_val, JSAtom atom, JSValueConst receiver);
