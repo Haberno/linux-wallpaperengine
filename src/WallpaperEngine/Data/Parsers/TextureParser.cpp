@@ -349,11 +349,12 @@ void TextureParser::parseAnimations (Texture& header, const BinaryReader& file) 
 }
 
 uint32_t TextureParser::parseTextureFlags (uint32_t value) {
-    if (value < TextureFlags_All) {
-	return value;
-    }
-
-    sLog.exception ("unknown texture flags: ", value);
+    // Texture flags are a bitmask, not a bounded enum. Newer Wallpaper Engine
+    // assets set metadata bits that this renderer does not consume (for example
+    // the 0x200000/0x800000 bits used by several model material masks). Preserve
+    // every bit so the known sampling flags still work instead of rejecting an
+    // otherwise valid texture.
+    return value;
 }
 
 FIF TextureParser::parseFIF (uint32_t value) {
