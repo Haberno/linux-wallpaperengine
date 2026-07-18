@@ -128,6 +128,13 @@ private:
      */
     [[nodiscard]] std::string applyFloatTernaryCompatibility (std::string source) const;
     /**
+     * HLSL implicitly truncates float expressions passed to int-typed function parameters;
+     * GLSL overload resolution has no float->int conversion and fails with "no matching
+     * overloaded function". Wraps such call-site arguments in an explicit int() constructor,
+     * matching Wallpaper Engine's HLSL truncation semantics.
+     */
+    [[nodiscard]] std::string applyIntParameterCallCompatibility (std::string source) const;
+    /**
      * Removes unmatched #endif directives (workshop shaders sometimes emit one extra #endif
      * that HLSL's preprocessor silently ignores but GLSL's does not).
      */
