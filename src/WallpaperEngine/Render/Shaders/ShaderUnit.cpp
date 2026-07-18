@@ -3,7 +3,9 @@
 #include "WallpaperEngine/Logging/Log.h"
 #include <array>
 #include <cstdint>
+#include <cctype>
 #include <exception>
+#include <map>
 #include <mutex>
 #include <regex>
 #include <set>
@@ -780,6 +782,154 @@ std::string ShaderUnit::applyLinkedVaryingCompatibility (std::string source) con
     return source;
 }
 
+std::string ShaderUnit::applyIntParameterCallCompatibility (std::string source) const {
+    // Workshop shaders (authored for HLSL) pass float expressions to int-typed function
+    // parameters, relying on HLSL's implicit float->int truncation. GLSL overload resolution
+    // has no such conversion, so glslang fails with "no matching overloaded function"
+    // (e.g. multistage_wave's calWaveData receives the previous stage's float wave mask).
+    // Wrap those call-site arguments in an explicit int() constructor: this reproduces the
+    // truncation Wallpaper Engine's compiler performs, and int(int) remains valid GLSL, so
+    // over-wrapping an argument that is already an integer is harmless. Both branches of a
+    // combo-guarded definition are still present in the source here, so every signature
+    // variant of a function contributes its int parameter positions.
+    static const std::regex functionDefinition (
+	R"(\b[A-Za-z_][A-Za-z0-9_]*\s+([A-Za-z_][A-Za-z0-9_]*)\s*\(([^)]*)\)\s*\{)");
+    static const std::regex intParameter (
+	R"(^\s*(?:(?:in|out|inout|const)\s+)*int\s+[A-Za-z_][A-Za-z0-9_]*\s*$)");
+    static const std::regex parameterDeclaration (
+	R"(^\s*(?:(?:in|out|inout|const)\s+)*[A-Za-z_][A-Za-z0-9_]*\s+[A-Za-z_][A-Za-z0-9_]*\s*$)");
+    static const std::regex integerArgument (R"(^\s*-?[0-9]+\s*$)");
+    static const std::regex alreadyIntCast (R"(^\s*int\s*\(.*\)\s*$)");
+    static const auto isWordChar = [] (char c) {
+	return std::isalnum (static_cast<unsigned char> (c)) || c == '_';
+    };
+    static const auto isSpace = [] (char c) { return std::isspace (static_cast<unsigned char> (c)) != 0; };
+
+    // first pass: find user-defined functions and record their int-typed parameter positions
+    std::map<std::string, std::set<size_t>> intParameterIndices;
+
+    for (std::sregex_iterator it (source.cbegin (), source.cend (), functionDefinition), last; it != last; ++it) {
+	const std::string name = (*it) [1].str ();
+	const std::string parameters = (*it) [2].str ();
+
+	if (name == "main") {
+	    continue;
+	}
+
+	size_t index = 0;
+	size_t cursor = 0;
+
+	while (cursor <= parameters.size ()) {
+	    size_t comma = parameters.find (',', cursor);
+
+	    if (comma == std::string::npos) {
+		comma = parameters.size ();
+	    }
+
+	    if (const std::string parameter = parameters.substr (cursor, comma - cursor);
+		std::regex_match (parameter, intParameter)) {
+		intParameterIndices [name].insert (index);
+	    }
+
+	    index++;
+	    cursor = comma + 1;
+	}
+    }
+
+    // second pass: wrap the matching call-site arguments
+    for (const auto& [name, indices] : intParameterIndices) {
+	size_t pos = 0;
+
+	while ((pos = source.find (name, pos)) != std::string::npos) {
+	    const size_t afterName = pos + name.size ();
+
+	    // must be a word boundary on both sides
+	    if ((pos > 0 && isWordChar (source [pos - 1])) ||
+		(afterName < source.size () && isWordChar (source [afterName]))) {
+		pos = afterName;
+		continue;
+	    }
+
+	    // must be followed by an argument list
+	    size_t open = afterName;
+
+	    while (open < source.size () && isSpace (source [open])) {
+		open++;
+	    }
+
+	    if (open >= source.size () || source [open] != '(') {
+		pos = afterName;
+		continue;
+	    }
+
+	    // split the top-level arguments
+	    std::vector<std::pair<size_t, size_t>> arguments;
+	    size_t argumentStart = open + 1;
+	    size_t close = open;
+	    int depth = 0;
+
+	    for (; close < source.size (); close++) {
+		const char c = source [close];
+
+		if (c == '(') {
+		    depth++;
+		} else if (c == ')') {
+		    if (--depth == 0) {
+			arguments.emplace_back (argumentStart, close);
+			break;
+		    }
+		} else if (c == ',' && depth == 1) {
+		    arguments.emplace_back (argumentStart, close);
+		    argumentStart = close + 1;
+		}
+	    }
+
+	    if (close >= source.size ()) {
+		break; // unbalanced parenthesis, nothing sensible to do
+	    }
+
+	    // skip definitions ('{' after the parameter list) and prototypes (the
+	    // "arguments" are parameter declarations rather than expressions)
+	    size_t after = close + 1;
+
+	    while (after < source.size () && isSpace (source [after])) {
+		after++;
+	    }
+
+	    const std::string firstArgument =
+		arguments.empty () ? "" : source.substr (arguments [0].first, arguments [0].second - arguments [0].first);
+
+	    if ((after < source.size () && source [after] == '{') ||
+		std::regex_match (firstArgument, parameterDeclaration)) {
+		pos = afterName;
+		continue;
+	    }
+
+	    // wrap the int-typed positions right-to-left so the recorded offsets stay valid
+	    for (auto index = indices.rbegin (); index != indices.rend (); ++index) {
+		if (*index >= arguments.size ()) {
+		    continue;
+		}
+
+		const auto& [argumentBegin, argumentEnd] = arguments [*index];
+		const std::string argument = source.substr (argumentBegin, argumentEnd - argumentBegin);
+
+		// integer literals are already fine, and int(...) casts don't need another one
+		if (std::regex_match (argument, integerArgument) || std::regex_match (argument, alreadyIntCast)) {
+		    continue;
+		}
+
+		source.insert (argumentEnd, ")");
+		source.insert (argumentBegin, "int(");
+	    }
+
+	    pos = afterName;
+	}
+    }
+
+    return source;
+}
+
 std::string ShaderUnit::applyFragmentTexCoordCompatibility (std::string source) const {
     if (this->m_type != GLSLContext::UnitType_Fragment) {
 	return source;
@@ -1424,11 +1574,12 @@ const std::string& ShaderUnit::compile () {
     }
 
     std::string compatResult = this->applyDuplicateMacroCompatibility (
-	this->applyNonConstantInitializerCompatibility (
-	    this->applyFragmentTexCoordCompatibility (
-		this->applyFragmentWritableVaryings (
-		    this->applyFloatTernaryCompatibility (
-			this->applyLinkedVaryingCompatibility (this->m_preprocessed))))));
+	this->applyIntParameterCallCompatibility (
+	    this->applyNonConstantInitializerCompatibility (
+		this->applyFragmentTexCoordCompatibility (
+		    this->applyFragmentWritableVaryings (
+			this->applyFloatTernaryCompatibility (
+			    this->applyLinkedVaryingCompatibility (this->m_preprocessed)))))));
     this->m_final += compatResult;
 
     {
