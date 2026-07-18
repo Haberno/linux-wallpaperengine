@@ -17,7 +17,24 @@ ProjectUniquePtr ProjectParser::parse (const JSON& data, AssetLocatorUniquePtr c
     const auto general = data.optional ("general");
     const auto workshopId = data.optional ("workshopid");
     auto actualWorkshopId = std::to_string (--backgroundId);
-    auto type = data.require<std::string> ("type", "Project type missing");
+    const auto maybeType = data.optional<std::string> ("type");
+
+    if (!maybeType.has_value ()) {
+	// editor assets (effects, models, particle systems...) ship a project.json with
+	// category "Asset" and no "type"; they are imported into other wallpapers by the
+	// Wallpaper Engine editor and have nothing to render standalone, so give a clearer
+	// explanation than the generic missing-key error
+	if (data.optional ("category", std::string {}) == "Asset") {
+	    sLog.exception (
+		"Workshop item \"", data.optional ("title", std::string {"<untitled>"}),
+		"\" is an editor asset (category \"Asset\", ", data.optional ("file", std::string {"<no file>"}),
+		"), not a wallpaper - it can only be imported into other wallpapers and cannot be loaded standalone");
+	}
+
+	sLog.exception ("Project type missing. Contents: ", data.dump ());
+    }
+
+    auto type = *maybeType;
 
     if (workshopId.has_value ()) {
 	if (workshopId->is_number ()) {
