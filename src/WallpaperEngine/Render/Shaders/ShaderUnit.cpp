@@ -1,5 +1,6 @@
 #include "ShaderUnit.h"
 
+#include "WallpaperEngine/Debug/DebugHelpers.h"
 #include "WallpaperEngine/Logging/Log.h"
 #include <array>
 #include <cstdint>
@@ -1569,6 +1570,9 @@ const std::string& ShaderUnit::compile () {
 	const auto it = sCompatCache.find (compatKey);
 	if (it != sCompatCache.end ()) {
 	    this->m_final += it->second;
+	    // cache hits still produce a distinct fully-composed unit (different combos
+	    // in the header), so dump those too
+	    this->dumpFinalSource ();
 	    return this->m_final;
 	}
     }
@@ -1591,8 +1595,18 @@ const std::string& ShaderUnit::compile () {
 	sCompatCache.emplace (compatKey, std::move (compatResult));
     }
 
+    this->dumpFinalSource ();
+
     // the pass itself handles shader compilation, the unit doesn't have enough information for this step
     return this->m_final;
+}
+
+void ShaderUnit::dumpFinalSource () const {
+    // debug aid (WPE_DUMP_SHADERS=<dir>): dump the fully composed source for offline
+    // inspection, e.g. batch-compiling every emitted unit with glslang
+    Debug::dumpText (
+        "WPE_DUMP_SHADERS", this->m_file, this->m_type == GLSLContext::UnitType_Vertex ? ".vert" : ".frag",
+        this->m_final);
 }
 
 const std::vector<Variables::ShaderVariable*>& ShaderUnit::getParameters () const { return this->m_parameters; }

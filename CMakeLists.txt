@@ -386,6 +386,9 @@ set(COMMON_SOURCES
     src/WallpaperEngine/Render/Shaders/GLSLContext.cpp
     src/WallpaperEngine/Render/Shaders/GLSLContext.h
 
+    src/WallpaperEngine/Debug/DebugHelpers.cpp
+    src/WallpaperEngine/Debug/DebugHelpers.h
+
     src/WallpaperEngine/Render/Helpers/ContextAware.cpp
     src/WallpaperEngine/Render/Helpers/ContextAware.h
 
