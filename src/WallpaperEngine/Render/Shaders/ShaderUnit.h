@@ -139,6 +139,11 @@ private:
      * that HLSL's preprocessor silently ignores but GLSL's does not).
      */
     void stripOrphanedEndifs ();
+    /**
+     * Debug aid: writes the fully composed unit source to $WPE_DUMP_SHADERS (if set),
+     * including cache-hit variants, so every emitted unit can be inspected offline.
+     */
+    void dumpFinalSource () const;
 
     /**
      * Parses a COMBO value to add the proper define to the code
