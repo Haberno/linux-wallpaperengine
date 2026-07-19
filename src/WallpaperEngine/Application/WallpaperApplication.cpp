@@ -4,6 +4,7 @@
 #include "WallpaperEngine/Application/ApplicationState.h"
 #include "WallpaperEngine/Assets/AssetLoadException.h"
 #include "WallpaperEngine/Audio/Drivers/Detectors/PulseAudioPlayingDetector.h"
+#include "WallpaperEngine/Debug/RenderHealth.h"
 #include "WallpaperEngine/FileSystem/Container.h"
 #include "WallpaperEngine/Logging/Log.h"
 #include "WallpaperEngine/Render/Drivers/VideoFactories.h"
@@ -1514,6 +1515,10 @@ void WallpaperApplication::render () {
 	    m_renderContext->setPause (true);
 	    return;
 	}
+
+	// one active (non-paused) loop iteration == one frame for the health report;
+	// paused iterations are excluded so worst_frame_ms reflects real render gaps
+	Debug::RenderHealth::frame ();
     }
 
     this->processControlSocket ();
