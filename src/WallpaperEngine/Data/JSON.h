@@ -12,6 +12,7 @@
 #include "WallpaperEngine/Data/Builders/UserSettingBuilder.h"
 #include "WallpaperEngine/Data/Builders/VectorBuilder.h"
 #include "WallpaperEngine/Data/Model/Types.h"
+#include "WallpaperEngine/Data/Utils/JsonTelemetry.h"
 #include "WallpaperEngine/Data/Utils/SFINAE.h"
 #include "WallpaperEngine/Logging/Log.h"
 
@@ -49,6 +50,7 @@ public:
     }
     [[nodiscard]] Model::Color get () const { return ColorBuilder::parse (this->base ().get<std::string> ()); }
     [[nodiscard]] base_type require (const std::string& key, const std::string& message) const {
+	Utils::JsonTelemetry::recordAccess (key);
 	auto base = this->base ();
 	const auto it = base.find (key);
 
@@ -59,6 +61,7 @@ public:
 	return *it;
     }
     template <typename T> [[nodiscard]] T require (const std::string& key, const std::string& message) const {
+	Utils::JsonTelemetry::recordAccess (key);
 	auto base = this->base ();
 	const auto it = base.find (key);
 
@@ -69,6 +72,7 @@ public:
 	return (*it);
     }
     [[nodiscard]] std::optional<base_type> optional (const std::string& key) const noexcept {
+	Utils::JsonTelemetry::recordAccess (key);
 	auto base = this->base ();
 	const auto it = base.find (key);
 	auto result = std::optional<base_type> {};
@@ -80,6 +84,7 @@ public:
 	return result;
     }
     template <typename T> [[nodiscard]] std::optional<T> optional (const std::string& key) const {
+	Utils::JsonTelemetry::recordAccess (key);
 	auto base = this->base ();
 	const auto it = base.find (key);
 
@@ -100,6 +105,7 @@ public:
 	}
     }
     template <typename T> [[nodiscard]] T optional (const std::string& key, T defaultValue) const {
+	Utils::JsonTelemetry::recordAccess (key);
 	auto base = this->base ();
 	const auto it = base.find (key);
 
