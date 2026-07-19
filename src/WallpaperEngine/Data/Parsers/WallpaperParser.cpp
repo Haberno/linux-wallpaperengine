@@ -7,6 +7,7 @@
 #include "CameraPathParser.h"
 #include "WallpaperEngine/Data/Model/Project.h"
 #include "WallpaperEngine/Data/Model/Wallpaper.h"
+#include "WallpaperEngine/Data/Utils/JsonTelemetry.h"
 #include "WallpaperEngine/FileSystem/Container.h"
 #include "WallpaperEngine/Logging/Log.h"
 
@@ -128,7 +129,7 @@ SceneUniquePtr WallpaperParser::parseScene (const JSON& file, Project& project) 
     const JSON& zoomSource
 	= cameraObject.has_value () && cameraObject->find ("zoom") != cameraObject->end () ? *cameraObject : projectionSource;
 
-    return std::make_unique <Scene> (
+    auto result = std::make_unique <Scene> (
         WallpaperData {
             .filename = "",
             .project = project
@@ -198,6 +199,10 @@ SceneUniquePtr WallpaperParser::parseScene (const JSON& file, Project& project) 
             .objects = parseObjects (objects, project),
         }
     );
+
+    WallpaperEngine::Data::Utils::JsonTelemetry::scan (scene, file.get<std::string> ());
+
+    return result;
 }
 
 VideoUniquePtr WallpaperParser::parseVideo (const JSON& file, Project& project) {

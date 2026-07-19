@@ -11,6 +11,7 @@
 #include "WallpaperEngine/Data/Builders/ColorBuilder.h"
 #include "WallpaperEngine/Data/Model/Object.h"
 #include "WallpaperEngine/Data/Model/Project.h"
+#include "WallpaperEngine/Data/Utils/JsonTelemetry.h"
 #include "WallpaperEngine/Logging/Log.h"
 
 #include <glm/gtc/constants.hpp>
@@ -610,6 +611,12 @@ ParticleUniquePtr ObjectParser::parseParticle (const JSON& it, const Project& pr
 	    flags = flagsIt->get<uint32_t> ();
 	}
 
+	// only particles loaded from their own file are a full document worth scanning;
+	// inline definitions are part of the scene document and covered by its scan
+	if (!particleFile.empty ()) {
+	    WallpaperEngine::Data::Utils::JsonTelemetry::scan (particleJson, particleFile);
+	}
+
 	return std::make_unique<Particle> (
 	    std::move (base),
 	    ParticleData {
@@ -650,6 +657,7 @@ ParticleEmitter ObjectParser::parseParticleEmitter (const JSON& it) {
 
     // Helper lambda to parse vec3 fields that might be strings, arrays, single numbers, or missing
     auto parseVec3 = [&] (const char* fieldName, const glm::vec3& defaultValue) -> glm::vec3 {
+	WallpaperEngine::Data::Utils::JsonTelemetry::recordAccess (fieldName);
 	const auto fieldIt = it.find (fieldName);
 	if (fieldIt == it.end ()) {
 	    return defaultValue;
@@ -669,6 +677,7 @@ ParticleEmitter ObjectParser::parseParticleEmitter (const JSON& it) {
     };
 
     auto parseIVec3 = [&] (const char* fieldName, const glm::ivec3& defaultValue) -> glm::ivec3 {
+	WallpaperEngine::Data::Utils::JsonTelemetry::recordAccess (fieldName);
 	const auto fieldIt = it.find (fieldName);
 	if (fieldIt == it.end ()) {
 	    return defaultValue;
@@ -680,6 +689,7 @@ ParticleEmitter ObjectParser::parseParticleEmitter (const JSON& it) {
     };
 
     auto parseVec2 = [&] (const char* fieldName, const glm::vec2& defaultValue) -> glm::vec2 {
+	WallpaperEngine::Data::Utils::JsonTelemetry::recordAccess (fieldName);
 	const auto fieldIt = it.find (fieldName);
 	if (fieldIt == it.end ()) {
 	    return defaultValue;
@@ -940,6 +950,7 @@ ParticleChild ObjectParser::parseParticleChild (const JSON& it, const Project& p
 
     // Helper lambda to parse vec3 fields that might be strings, arrays, single numbers, or missing
     auto parseVec3 = [&] (const char* fieldName, const glm::vec3& defaultValue) -> glm::vec3 {
+	WallpaperEngine::Data::Utils::JsonTelemetry::recordAccess (fieldName);
 	const auto fieldIt = it.find (fieldName);
 	if (fieldIt == it.end ()) {
 	    return defaultValue;
