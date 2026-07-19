@@ -4,6 +4,7 @@
 #include "WallpaperEngine/Data/Model/Material.h"
 #include "WallpaperEngine/Data/Model/Project.h"
 #include "WallpaperEngine/Data/Parsers/ShaderConstantParser.h"
+#include "WallpaperEngine/Data/Utils/JsonTelemetry.h"
 #include "WallpaperEngine/FileSystem/Container.h"
 
 using namespace WallpaperEngine::Data::Parsers;
@@ -12,7 +13,11 @@ using namespace WallpaperEngine::Data::Model;
 MaterialUniquePtr MaterialParser::load (const Project& project, const std::string& filename) {
     const auto materialJson = JSON::parse (project.assetLocator->readString (filename));
 
-    return parse (materialJson, filename, project);
+    auto result = parse (materialJson, filename, project);
+
+    WallpaperEngine::Data::Utils::JsonTelemetry::scan (materialJson, filename);
+
+    return result;
 }
 
 MaterialUniquePtr MaterialParser::parse (const JSON& it, const std::string& filename, const Project& project) {

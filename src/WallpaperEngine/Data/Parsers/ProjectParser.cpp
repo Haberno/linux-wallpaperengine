@@ -7,6 +7,7 @@
 
 #include "PropertyParser.h"
 #include "WallpaperEngine/Data/Model/Wallpaper.h"
+#include "WallpaperEngine/Data/Utils/JsonTelemetry.h"
 #include "WallpaperEngine/FileSystem/Container.h"
 
 using namespace WallpaperEngine::Data::Parsers;
@@ -59,6 +60,8 @@ ProjectUniquePtr ProjectParser::parse (const JSON& data, AssetLocatorUniquePtr c
     });
 
     result->wallpaper = WallpaperParser::parse (data.require ("file", "Project's main file missing"), *result);
+
+    WallpaperEngine::Data::Utils::JsonTelemetry::scan (data, "project.json");
 
     return result;
 }
