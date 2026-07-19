@@ -6,6 +6,8 @@
 #include <sstream>
 #include <vector>
 
+#include "WallpaperEngine/Debug/RenderHealth.h"
+
 namespace WallpaperEngine::Logging {
 /**
  * Singleton class, simplifies logging for the whole app
@@ -49,6 +51,8 @@ public:
     template <typename... Data> void error (Data... data) {
 	std::string str = this->buildBuffer (data...);
 
+	Debug::RenderHealth::record ("log.error", str);
+
 	// then send it to all the outputs configured
 	for (const auto cur : this->mErrors) {
 	    *cur << str << std::endl;
@@ -57,6 +61,9 @@ public:
 
     template <class EX, typename... Data> [[noreturn]] void exception (Data... data) {
 	std::string str = this->buildBuffer (data...);
+
+	Debug::RenderHealth::record ("log.exception", str);
+
 	// then send it to all the outputs configured
 	for (const auto cur : this->mErrors) {
 	    *cur << str << std::endl;

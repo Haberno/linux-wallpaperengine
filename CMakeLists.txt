@@ -388,6 +388,8 @@ set(COMMON_SOURCES
 
     src/WallpaperEngine/Debug/DebugHelpers.cpp
     src/WallpaperEngine/Debug/DebugHelpers.h
+    src/WallpaperEngine/Debug/RenderHealth.cpp
+    src/WallpaperEngine/Debug/RenderHealth.h
 
     src/WallpaperEngine/Render/Helpers/ContextAware.cpp
     src/WallpaperEngine/Render/Helpers/ContextAware.h
