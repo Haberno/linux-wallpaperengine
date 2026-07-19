@@ -3,6 +3,7 @@
 
 #include "WallpaperEngine/Application/ApplicationContext.h"
 #include "WallpaperEngine/Application/WallpaperApplication.h"
+#include "WallpaperEngine/Debug/RenderHealth.h"
 #include "WallpaperEngine/Logging/Log.h"
 #include "WallpaperEngine/WebBrowser/WebBrowserContext.h"
 
@@ -35,6 +36,10 @@ int main (int argc, char* argv[]) {
     if (cefExitCode >= 0) {
 	return cefExitCode;
     }
+
+    // arm the health report (if configured) before anything can fail so a report is
+    // written on every exit path, even when the failure never touches a hook
+    WallpaperEngine::Debug::RenderHealth::count ("run.start");
 
     try {
 	// if type parameter is specified, this is a subprocess, so no logging should be enabled from our side
@@ -92,6 +97,10 @@ int main (int argc, char* argv[]) {
 
 	return abnormal ? 1 : 0;
     } catch (const std::exception& e) {
+	// sLog.exception already recorded log.exception; this also catches failures thrown
+	// directly (e.g. std::filesystem) that never went through a hook
+	WallpaperEngine::Debug::RenderHealth::record ("fatal.exception", e.what ());
+
 	std::cerr << e.what () << std::endl;
 	return 1;
     }
