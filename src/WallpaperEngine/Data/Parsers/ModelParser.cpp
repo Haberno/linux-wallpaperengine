@@ -5,6 +5,7 @@
 #include "WallpaperEngine/Data/Model/Material.h"
 #include "WallpaperEngine/Data/Model/Model.h"
 #include "WallpaperEngine/Data/Model/Project.h"
+#include "WallpaperEngine/Data/Utils/JsonTelemetry.h"
 #include "WallpaperEngine/FileSystem/Container.h"
 
 using namespace WallpaperEngine::Data::Parsers;
@@ -13,7 +14,11 @@ using namespace WallpaperEngine::Data::Model;
 ModelUniquePtr ModelParser::load (const Project& project, const std::string& filename) {
     const auto model = JSON::parse (project.assetLocator->readString (filename));
 
-    return parse (model, project, filename);
+    auto result = parse (model, project, filename);
+
+    WallpaperEngine::Data::Utils::JsonTelemetry::scan (model, filename);
+
+    return result;
 }
 
 ModelUniquePtr ModelParser::parse (const JSON& file, const Project& project, const std::string& filename) {
