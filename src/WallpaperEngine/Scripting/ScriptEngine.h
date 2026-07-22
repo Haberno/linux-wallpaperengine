@@ -48,6 +48,8 @@ public:
 	DynamicValue& value;
 	JSValue module;
 	bool initialized = false;
+	/** Cleared after an authored update hook throws, preventing per-frame retries/log spam. */
+	bool updateEnabled = true;
     };
     struct JSObjectAdapters {
 	std::unique_ptr<Adapters::VectorAdapter<4>> vec4;

@@ -27,7 +27,7 @@ public:
 	const ShaderConstantMap& constants, const TextureMap& passTextures, const TextureMap& overrideTextures,
 	const ComboMap& combos, const ComboMap& overrideCombos
     );
-    ~ShaderUnit () = default;
+    ~ShaderUnit ();
 
     /**
      * Links this shader unit with another unit so they're treated as one
@@ -105,6 +105,11 @@ private:
      */
     [[nodiscard]] std::string applyLinkedVaryingCompatibility (std::string source) const;
     /**
+     * Declares fragment inputs used by the fragment unit and exported by the linked vertex unit,
+     * but omitted from the authored fragment declarations.
+     */
+    [[nodiscard]] std::string applyMissingFragmentVaryingCompatibility (std::string source) const;
+    /**
      * Adjusts fragment shaders that use wide texture coordinates as vec2 values in Wallpaper Engine effects.
      */
     [[nodiscard]] std::string applyFragmentTexCoordCompatibility (std::string source) const;
@@ -118,6 +123,10 @@ private:
      */
     [[nodiscard]] std::string applyDuplicateMacroCompatibility (std::string source) const;
     /**
+     * Makes authored function names safe when they collide with generated header macros.
+     */
+    [[nodiscard]] std::string applyHeaderMacroCompatibility (std::string source) const;
+    /**
      * Makes v_TexCoord writable in fragment shaders by injecting a local variable alias at the
      * top of main() that shadows the read-only varying input.
      */
@@ -128,12 +137,21 @@ private:
      */
     [[nodiscard]] std::string applyFloatTernaryCompatibility (std::string source) const;
     /**
-     * HLSL implicitly truncates float expressions passed to int-typed function parameters;
-     * GLSL overload resolution has no float->int conversion and fails with "no matching
-     * overloaded function". Wraps such call-site arguments in an explicit int() constructor,
-     * matching Wallpaper Engine's HLSL truncation semantics.
+     * Makes Wallpaper Engine's implicit numeric conversions explicit at user-function calls.
      */
-    [[nodiscard]] std::string applyIntParameterCallCompatibility (std::string source) const;
+    [[nodiscard]] std::string applyNumericParameterCallCompatibility (std::string source) const;
+    /**
+     * Makes scalar splats, vector truncation, integer modulo, and numeric loop bounds explicit.
+     */
+    [[nodiscard]] std::string applyNumericInitializerCompatibility (std::string source) const;
+    /**
+     * Aligns vector widths passed to component-wise built-ins with strict GLSL overloads.
+     */
+    [[nodiscard]] std::string applyVectorBuiltinCompatibility (std::string source) const;
+    /**
+     * Converts multiplication of comparison results into an explicit numeric logical AND.
+     */
+    [[nodiscard]] std::string applyBooleanArithmeticCompatibility (std::string source) const;
     /**
      * Removes unmatched #endif directives (workshop shaders sometimes emit one extra #endif
      * that HLSL's preprocessor silently ignores but GLSL's does not).

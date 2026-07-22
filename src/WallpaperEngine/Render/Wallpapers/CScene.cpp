@@ -35,6 +35,12 @@ CScene::CScene (
     // caller should check this, if not a std::bad_cast is good to throw
     auto scene = wallpaper.as<Scene> ();
 
+    // CScene still owns render objects as raw pointers. Its destructor is not called
+    // when construction throws, so clean any objects created before the failure here.
+    // This guard runs before member teardown, while ScriptEngine is still usable by
+    // object destructors such as CText's script-layer cleanup.
+    WallpaperEngine::Data::Utils::ScopeGuard constructionGuard ([this] { this->destroyObjects (); });
+
     // setup scripting engine
     this->m_scriptEngine = std::make_unique<Scripting::ScriptEngine> (*this, context.getMediaSource ());
     // setup the scene camera
@@ -402,9 +408,13 @@ CScene::CScene (
 
 	this->m_objectsByRenderOrder.push_back (this->m_bloomObject);
     }
+
+    constructionGuard.cancel ();
 }
 
-CScene::~CScene () {
+CScene::~CScene () { this->destroyObjects (); }
+
+void CScene::destroyObjects () noexcept {
     // bloom object is in the objects list, so no need to explicitly delete it
     this->m_bloomObject = nullptr;
 
@@ -414,6 +424,8 @@ CScene::~CScene () {
 
     this->m_objectsByRenderOrder.clear ();
     this->m_objects.clear ();
+    this->m_lightObjects.clear ();
+    this->m_scriptedValues.clear ();
 }
 
 Render::CObject* CScene::createObject (const Object& object) {
@@ -565,6 +577,11 @@ Camera& CScene::getCamera () const { return *this->m_camera; }
 const CScene::SceneFog& CScene::getFog () const { return this->m_fog; }
 
 void CScene::renderFrame (const glm::ivec4& viewport) {
+    // Camera layers are ordinary scriptable objects. Resolve their parent chain
+    // before paths and mouse projection so a scripted camera rig supplies the
+    // resting eye/orientation rather than the editor's top-level viewport.
+    this->updateCameraObject ();
+
     // Advance the active path before scripts read cursorWorldPosition and before
     // any object renders. Script-driven camera visibility from the previous tick
     // selects the source, matching the normal one-frame property update cadence.
@@ -597,6 +614,17 @@ void CScene::renderFrame (const glm::ivec4& viewport) {
 
     // run a tick in the javascript logic
     this->getScriptEngine ().tick ();
+
+    // Apply camera-rig movement from this tick to the frame being rendered. A
+    // non-empty path still owns the final transform, but uses this pose as its
+    // live fallback for any channels it does not animate.
+    this->updateCameraObject ();
+    if (this->m_activeCameraPathSource != nullptr && this->m_activeCameraPathIndex.has_value ()) {
+	const CameraPath& path = this->m_activeCameraPathSource->paths[*this->m_activeCameraPathIndex];
+	this->m_camera->setTransform (
+	    path.evaluate (this->m_cameraPathElapsed, this->m_camera->getDefaultTransform ())
+	);
+    }
 
     // Fog colors and ranges can be SceneScript- or user-property-driven.
     this->updateFogState ();
@@ -826,6 +854,35 @@ const CameraPathSource* CScene::findActiveCameraPathSource () const {
 	}
     }
     return active;
+}
+
+void CScene::updateCameraObject () {
+    if (!this->getScene ().camera.projection.isPerspective) {
+	return;
+    }
+
+    const CObject* active = nullptr;
+    for (const int id : this->getScene ().camera.objectIds) {
+	const CObject* object = this->getObject (id);
+	if (object == nullptr || !object->getObject ().groupVisible->value->getBool ()
+	    || !object->isVisibleThroughParents ()) {
+	    continue;
+	}
+	// Later visible camera layers override earlier/default cameras, matching
+	// the selection rule already used by camera path sources.
+	active = object;
+    }
+
+    if (active == nullptr) {
+	return;
+    }
+
+    const CameraTransform transform = Camera::objectTransform (
+	active->resolveWorldMatrix (), this->getScene ().camera.projection.fov->value->getFloat (),
+	this->getScene ().camera.projection.zoom->value->getFloat ()
+    );
+    const bool pathActive = this->m_activeCameraPathSource != nullptr && this->m_activeCameraPathIndex.has_value ();
+    this->m_camera->setDefaultTransform (transform, !pathActive);
 }
 
 void CScene::updateCameraPath (const float deltaTime) {

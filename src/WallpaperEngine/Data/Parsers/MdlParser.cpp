@@ -123,8 +123,23 @@ MdlMesh MdlParser::parse (const std::vector<char>& data, const std::string& file
 	}
 	const bool wideIndices = (submeshFlags & INDEX_32_BIT_FLAG) != 0;
 
-	// bounding box min/max, unused
-	offset += sizeof (float) * 6;
+	glm::vec3 boundingBoxMin;
+	boundingBoxMin.x = readValue<float> (data, offset, filename);
+	boundingBoxMin.y = readValue<float> (data, offset, filename);
+	boundingBoxMin.z = readValue<float> (data, offset, filename);
+	glm::vec3 boundingBoxMax;
+	boundingBoxMax.x = readValue<float> (data, offset, filename);
+	boundingBoxMax.y = readValue<float> (data, offset, filename);
+	boundingBoxMax.z = readValue<float> (data, offset, filename);
+
+	if (!mesh.hasBoundingBox) {
+	    mesh.boundingBoxMin = boundingBoxMin;
+	    mesh.boundingBoxMax = boundingBoxMax;
+	    mesh.hasBoundingBox = true;
+	} else {
+	    mesh.boundingBoxMin = glm::min (mesh.boundingBoxMin, boundingBoxMin);
+	    mesh.boundingBoxMax = glm::max (mesh.boundingBoxMax, boundingBoxMax);
+	}
 
 	const auto tag = readValue<uint32_t> (data, offset, filename);
 	const auto vertexBytes = readValue<uint32_t> (data, offset, filename);

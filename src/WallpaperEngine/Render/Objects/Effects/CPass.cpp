@@ -544,6 +544,11 @@ void CPass::render () {
     this->setupRenderAttributes ();
     this->renderGeometry ();
     this->cleanupRenderSetup ();
+
+    // Refresh the mip chain for layer composite targets so a later pass that maps this
+    // FBO onto grazing 3D geometry can filter it instead of aliasing (self-guards to
+    // composite FBOs only).
+    this->m_drawTo->generateMipmaps ();
 }
 
 std::shared_ptr<const FBOProvider> CPass::getFBOProvider () const { return this->m_fboProvider; }
@@ -587,7 +592,7 @@ const MaterialPass& CPass::getPass () const { return this->m_pass; }
 
 std::optional<std::reference_wrapper<std::string>> CPass::getTarget () const { return this->m_target; }
 
-Render::Shaders::Shader* CPass::getShader () const { return this->m_shader; }
+Render::Shaders::Shader* CPass::getShader () const { return this->m_shader.get (); }
 
 GLuint CPass::getProgramID () const { return this->m_programID; }
 
@@ -777,7 +782,7 @@ void CPass::setupShaders () {
 	overrideTextures.insert_or_assign (index, texture);
     }
 
-    this->m_shader = new Render::Shaders::Shader (
+    this->m_shader = std::make_unique<Render::Shaders::Shader> (
 	this->m_renderable.getAssetLocator (), shaderName, this->m_combos, this->m_override.combos, passTextures,
 	overrideTextures, this->m_override.constants
     );
@@ -1154,7 +1159,7 @@ void CPass::addAttribute (const std::string& name, GLint type, GLint elements, c
 	return;
     }
 
-    this->m_attribs.emplace_back (new AttribEntry (id, name, type, elements, value));
+    this->m_attribs.emplace_back (std::make_unique<AttribEntry> (id, name, type, elements, value));
 }
 
 template <typename T> void CPass::addUniform (const std::string& name, UniformType type, T value) {
@@ -1165,18 +1170,14 @@ template <typename T> void CPass::addUniform (const std::string& name, UniformTy
 	return;
     }
 
-    // free the uniform that's already registered if it's there already
-    const auto it = this->m_uniforms.find (name);
-
-    if (it != this->m_uniforms.end ()) {
-	delete it->second;
-    }
-
     // build a copy of the value and allocate it somewhere
-    T* newValue = new T (value);
+    auto newValue = std::make_shared<T> (value);
 
     // uniform found, add it to the list
-    this->m_uniforms.insert_or_assign (name, new UniformEntry (id, name, type, newValue, 1));
+    this->m_referenceUniforms.erase (name);
+    this->m_uniforms.insert_or_assign (
+	name, std::make_unique<UniformEntry> (id, name, type, std::move (newValue), 1)
+    );
 }
 
 template <typename T> void CPass::addUniform (const std::string& name, UniformType type, T* value, int count) {
@@ -1188,14 +1189,9 @@ template <typename T> void CPass::addUniform (const std::string& name, UniformTy
 	return;
     }
 
-    // free the uniform that's already registered if it's there already
-
-    if (const auto it = this->m_uniforms.find (name); it != this->m_uniforms.end ()) {
-	delete it->second;
-    }
-
     // uniform found, add it to the list
-    this->m_uniforms.insert_or_assign (name, new UniformEntry (id, name, type, value, count));
+    this->m_referenceUniforms.erase (name);
+    this->m_uniforms.insert_or_assign (name, std::make_unique<UniformEntry> (id, name, type, value, count));
 }
 
 template <typename T> void CPass::addUniform (const std::string& name, UniformType type, T** value) {
@@ -1207,15 +1203,12 @@ template <typename T> void CPass::addUniform (const std::string& name, UniformTy
 	return;
     }
 
-    // free the uniform that's already registered if it's there already
-
-    if (const auto it = this->m_uniforms.find (name); it != this->m_uniforms.end ()) {
-	delete it->second;
-    }
-
     // uniform found, add it to the list
+    this->m_uniforms.erase (name);
     this->m_referenceUniforms.insert_or_assign (
-	name, new ReferenceUniformEntry (id, name, type, reinterpret_cast<const void**> (value))
+	name, std::make_unique<ReferenceUniformEntry> (
+		  id, name, type, reinterpret_cast<const void**> (value)
+	      )
     );
 }
 

@@ -345,7 +345,8 @@ ScriptEngine::ScriptEngine (Wallpapers::CScene& scene, Media::MediaSource& media
 	this->m_context, this->m_globalThis, "thisScene", this->m_sceneObject->getInstance (), JS_PROP_ENUMERABLE
     );
     JS_DefinePropertyValueStr (
-	this->m_context, this->m_globalThis, "console", this->m_consoleObject->getInstance (), JS_PROP_ENUMERABLE
+	this->m_context, this->m_globalThis, "console", this->m_consoleObject->getInstance (),
+	JS_PROP_WRITABLE | JS_PROP_CONFIGURABLE | JS_PROP_ENUMERABLE
     );
     JS_DefinePropertyValueStr (
 	this->m_context, this->m_globalThis, "shared", JS_NewObject (this->m_context), JS_PROP_ENUMERABLE
@@ -363,19 +364,10 @@ ScriptEngine::~ScriptEngine () {
 	JS_FreeValue (this->m_context, module.module);
     }
 
-    if (this->m_context && this->m_runtime) {
-	static constexpr const char* GLOBALS_TO_CLEAR[] = {
-	    "shared",	  "__textLayers",	"__sceneCtx",	  "__propScriptLayer",
-	    "__propScriptProps", "__layerSeedProps", "__layerSeedText", "Vec2",
-	    "Vec3",	  "Vec4",		"WEMath",	  "WEVector",
-	};
-
-	for (const char* name : GLOBALS_TO_CLEAR) {
-	    JS_SetPropertyStr (this->m_context, this->m_globalThis, name, JS_UNDEFINED);
-	}
-	JS_RunGC (this->m_runtime);
-    }
-
+    // Do not mutate globalThis while tearing a context down. Some authored globals
+    // are non-writable; JS_SetPropertyStr then enters QuickJS's exception path while
+    // CScene is already unwinding, which is the switch crash seen in core dumps.
+    // JS_FreeContext/JS_FreeRuntime release the context-owned global graph directly.
     JS_FreeValue (this->m_context, this->m_globalThis);
 
     this->m_adapters.vec4.reset ();
@@ -494,6 +486,9 @@ ScriptLayerHandle ScriptEngine::createLayerScript (
     std::ostringstream wrapper;
     wrapper
 	<< "(function() {\n"
+	// As with property scripts, this is an ES-module body lowered into a classic IIFE.
+	// Keep module strictness across generated code that precedes the authored directive.
+	<< "  'use strict';\n"
 	<< "  var __id = " << id << ";\n"
 	<< "  var __props = Object.assign({}, globalThis.__layerSeedProps || {});\n"
 	<< "  var thisLayer = { text: String(globalThis.__layerSeedText || '') };\n"
@@ -731,6 +726,12 @@ void ScriptEngine::queueScript (const std::string& key, DynamicValue& currentVal
 
     std::ostringstream wrapper;
     wrapper << "(function() {\n"
+	    // SceneScript property sources are ES modules, so their entire body is strict even
+	    // when an authored `use strict` directive appears after generated/obfuscated setup
+	    // code. Preserve that semantic after lowering the module into a classic IIFE. Besides
+	    // matching Wallpaper Engine, this avoids legacy mapped `arguments` objects whose
+	    // var-ref graph can be invalidated by those generated setup closures during QuickJS GC.
+	    << "  'use strict';\n"
 	    << "  var thisLayer = globalThis.__propScriptLayer;\n"
 	    // WE's scriptProperties builder doubles as the values object (scripts read
 	    // scriptProperties.<name> without calling finish()), so the shim collects slider
@@ -769,6 +770,7 @@ void ScriptEngine::queueScript (const std::string& key, DynamicValue& currentVal
 	    .value = currentValue,
 	    .module = module,
 	    .initialized = false,
+	    .updateEnabled = true,
 	}
     );
 
@@ -803,6 +805,9 @@ void ScriptEngine::initializeModule (const std::string& key, LoadedModule& loade
 
 	if (JS_IsException (result)) {
 	    logJSException (this->m_context, key.c_str ());
+	    if (std::string_view (hook) == "update") {
+		loaded.updateEnabled = false;
+	    }
 	    continue;
 	}
 
@@ -874,7 +879,7 @@ void ScriptEngine::tick () {
 
     // run all update methods
     for (auto& [key, module] : this->m_scriptModules) {
-	if (!module.initialized) {
+	if (!module.initialized || !module.updateEnabled) {
 	    continue;
 	}
 	this->m_runningModule = &module;
@@ -889,6 +894,7 @@ void ScriptEngine::tick () {
 
 	if (JS_IsException (result)) {
 	    logJSException (this->m_context, key.c_str ());
+	    module.updateEnabled = false;
 	    continue;
 	}
 
