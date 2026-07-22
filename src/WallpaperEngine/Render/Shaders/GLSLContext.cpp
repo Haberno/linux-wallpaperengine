@@ -11,6 +11,10 @@
 
 using namespace WallpaperEngine::Render::Shaders;
 
+namespace {
+constexpr size_t GLSL_CACHE_BUDGET_BYTES = 64ULL * 1024 * 1024;
+}
+
 TBuiltInResource BuiltInResource = { .maxLights = 32,
 				     .maxClipPlanes = 6,
 				     .maxTextureUnits = 32,
@@ -211,11 +215,17 @@ std::pair<std::string, std::string> GLSLContext::toGlsl (const std::string& vert
 
     {
 	const std::lock_guard<std::mutex> lock (m_cacheMutex);
-	// content-keyed, so it stays valid across switches, but never evicts;
-	// cap it so cycling through many wallpapers can't grow it unboundedly
-	if (m_cache.size () >= 512)
+	const size_t entryBytes = cacheKey.size () + result.first.size () + result.second.size ();
+	if (entryBytes > GLSL_CACHE_BUDGET_BYTES) {
+	    return result;
+	}
+	if (m_cacheBytes + entryBytes > GLSL_CACHE_BUDGET_BYTES) {
 	    m_cache.clear ();
-	m_cache.emplace (std::move (cacheKey), result);
+	    m_cacheBytes = 0;
+	}
+	if (m_cache.emplace (std::move (cacheKey), result).second) {
+	    m_cacheBytes += entryBytes;
+	}
     }
 
     return result;

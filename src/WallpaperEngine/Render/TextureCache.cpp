@@ -62,15 +62,19 @@ namespace {
 constexpr size_t TEXTURE_CACHE_BUDGET_BYTES = 512ULL * 1024 * 1024;
 
 size_t estimateTextureBytes (const TextureProvider& texture) {
-    // RGBA8 at the allocated texture size plus a third for mipmaps; compressed
-    // formats overestimate a bit, which is fine for a soft budget
-    const size_t base = static_cast<size_t> (texture.getTextureWidth (0)) * texture.getTextureHeight (0) * 4;
-
-    // video textures keep the whole source file pinned in RAM for mpv to stream from,
-    // which dwarfs the GPU-side estimate and previously made them look free to cache
-    return base + base / 3 + texture.getRetainedCpuBytes ();
+    // CTexture includes every image and authored mip level. Video textures also
+    // keep the whole source file pinned in RAM for mpv to stream from.
+    return texture.getApproximateGpuBytes () + texture.getRetainedCpuBytes ();
 }
 } // namespace
+
+bool TextureCache::isPinnedRuntimeTextureKey (const std::string& key) {
+    // Runtime aliases such as $mediaThumbnail are global and pinned. Authored
+    // textures use "<asset-locator fingerprint>\x1f<filename>" keys; the fingerprint
+    // itself currently starts with the $mediaThumbnail mount, so starts_with('$')
+    // would accidentally pin every workshop texture forever.
+    return key.find ('\x1f') == std::string::npos && key.starts_with ('$');
+}
 
 std::shared_ptr<const TextureProvider> TextureCache::resolve (const std::string& filename) {
     if (const auto found = this->m_textureCache.find (filename); found != this->m_textureCache.end ()) {
@@ -168,13 +172,36 @@ std::string TextureCache::scopedKey (const std::string& name, const AssetLocator
     return assetLocator.identity () + '\x1f' + name;
 }
 
-void TextureCache::updateAll () const {
+void TextureCache::updateAll () {
     // textures only referenced as effect/pass inputs have no CImage driving their
     // update, so tick every cached texture; update() is a no-op for static textures
     // and for videos whose usage count is zero
     for (const auto& entry : this->m_textureCache | std::views::values) {
 	entry.texture->update ();
     }
+
+    // A store performed while the outgoing wallpaper is still crossfading can
+    // leave the cache over budget because those old textures still have scene
+    // references and are not eviction candidates yet. Re-check each frame so
+    // the first frame after transition teardown releases them even when the new
+    // wallpaper reused already-cached textures and performs no further stores.
+    this->trim ();
+}
+
+TextureCacheStats TextureCache::getStats () const {
+    TextureCacheStats stats {
+	.entries = this->m_textureCache.size (),
+	.approximateBytes = this->m_cacheBytes,
+    };
+
+    for (const auto& entry : this->m_textureCache | std::views::values) {
+	if (entry.texture.use_count () > 1) {
+	    stats.referencedEntries++;
+	    stats.referencedBytes += entry.approximateBytes;
+	}
+    }
+
+    return stats;
 }
 
 void TextureCache::trim () {
@@ -184,11 +211,12 @@ void TextureCache::trim () {
 
     // collect entries that only the cache itself keeps alive; anything with more
     // references is in active use by a wallpaper (or the crossfade) and must stay.
-    // "$"-prefixed entries are special (album art) and are never evicted
+    // Unscoped "$" entries are special (album art) and are never evicted.
+    // Scoped authored keys may also begin with "$" through their mount fingerprint.
     std::vector<std::map<std::string, CacheEntry>::iterator> candidates;
 
     for (auto it = this->m_textureCache.begin (); it != this->m_textureCache.end (); ++it) {
-	if (it->second.texture.use_count () == 1 && !it->first.starts_with ('$')) {
+	if (it->second.texture.use_count () == 1 && !isPinnedRuntimeTextureKey (it->first)) {
 	    candidates.push_back (it);
 	}
     }

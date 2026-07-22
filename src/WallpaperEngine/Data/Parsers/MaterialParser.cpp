@@ -10,24 +10,31 @@
 using namespace WallpaperEngine::Data::Parsers;
 using namespace WallpaperEngine::Data::Model;
 
-MaterialUniquePtr MaterialParser::load (const Project& project, const std::string& filename) {
-    const auto materialJson = JSON::parse (project.assetLocator->readString (filename));
+MaterialUniquePtr
+MaterialParser::load (const Project& project, const std::string& filename, const bool modelDepthDefaults) {
+    const auto materialJson
+	= WallpaperEngine::Data::JSON::parseCompatible (project.assetLocator->readString (filename), filename);
 
-    auto result = parse (materialJson, filename, project);
+    auto result = parse (materialJson, filename, project, modelDepthDefaults);
 
     WallpaperEngine::Data::Utils::JsonTelemetry::scan (materialJson, filename);
 
     return result;
 }
 
-MaterialUniquePtr MaterialParser::parse (const JSON& it, const std::string& filename, const Project& project) {
+MaterialUniquePtr MaterialParser::parse (
+    const JSON& it, const std::string& filename, const Project& project, const bool modelDepthDefaults
+) {
     return std::make_unique<Material> (Material {
 	.filename = filename,
-	.passes = parsePasses (it.require ("passes", "Material must have passes to render"), project),
+	.passes = parsePasses (
+	    it.require ("passes", "Material must have passes to render"), project, modelDepthDefaults
+	),
     });
 }
 
-std::vector<MaterialPassUniquePtr> MaterialParser::parsePasses (const JSON& it, const Project& project) {
+std::vector<MaterialPassUniquePtr>
+MaterialParser::parsePasses (const JSON& it, const Project& project, const bool modelDepthDefaults) {
     std::vector<MaterialPassUniquePtr> result = {};
 
     if (!it.is_array ()) {
@@ -35,24 +42,30 @@ std::vector<MaterialPassUniquePtr> MaterialParser::parsePasses (const JSON& it, 
     }
 
     for (const auto& cur : it) {
-	result.push_back (parsePass (cur, project));
+	result.push_back (parsePass (cur, project, modelDepthDefaults));
     }
 
     return result;
 }
 
-MaterialPassUniquePtr MaterialParser::parsePass (const JSON& it, const Project& project) {
+MaterialPassUniquePtr
+MaterialParser::parsePass (const JSON& it, const Project& project, const bool modelDepthDefaults) {
     const auto textures = it.optional ("textures");
     const auto usertextures = it.optional ("usertextures");
     const auto combos = it.optional ("combos");
     const auto constants = it.optional ("constantshadervalues");
 
+    // Image/effect passes historically default to an overlay with no depth state.
+    // Opaque 3D model materials use the opposite defaults in Wallpaper Engine: many
+    // imported models omit both keys and rely on depth testing/writes for occlusion.
+    const std::string depthDefault = modelDepthDefaults ? "enabled" : "disabled";
+
     return std::make_unique<MaterialPass> (MaterialPass {
 	// TODO: REMOVE THIS UGLY STD::STRING CREATION
 	.blending = parseBlendMode (it.optional ("blending", std::string ("normal"))),
 	.cullmode = parseCullMode (it.optional ("cullmode", std::string ("nocull"))),
-	.depthtest = parseDepthtestMode (it.optional ("depthtest", std::string ("disabled"))),
-	.depthwrite = parseDepthwriteMode (it.optional ("depthwrite", std::string ("disabled"))),
+	.depthtest = parseDepthtestMode (it.optional ("depthtest", depthDefault)),
+	.depthwrite = parseDepthwriteMode (it.optional ("depthwrite", depthDefault)),
 	.shader = it.require<std::string> ("shader", "Material pass must have a shader"),
 	.textures = textures.has_value () ? TextureParser::parseTextureMap (*textures) : TextureMap {},
 	.usertextures = usertextures.has_value () ? TextureParser::parseTextureMap (*usertextures) : TextureMap {},
