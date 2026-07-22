@@ -37,6 +37,10 @@ glm::mat4 localMatrix (const Object& object, const float time) {
 	const auto* image = object.as<Image> ();
 	scale = image->scale->value->getVec3 ();
 	angles = image->angles->value->getVec3 ();
+    } else if (object.is<Particle> ()) {
+	const auto* particle = object.as<Particle> ();
+	scale = particle->scale->value->getVec3 ();
+	angles = particle->angles->value->getVec3 ();
     } else if (object.is<Text> ()) {
 	scale = object.as<Text> ()->scale->value->getVec3 ();
     } else {

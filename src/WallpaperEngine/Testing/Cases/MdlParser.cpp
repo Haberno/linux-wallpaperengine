@@ -1,3 +1,4 @@
+#include <array>
 #include <cstdint>
 #include <cstring>
 #include <string>
@@ -15,7 +16,10 @@ template <typename T> void appendValue (std::vector<char>& data, const T& value)
     data.insert (data.end (), bytes, bytes + sizeof (T));
 }
 
-std::vector<char> makeModel (uint32_t submeshFlags, uint32_t vertexTag = 15, uint32_t vertexStride = 48) {
+std::vector<char> makeModel (
+    uint32_t submeshFlags, uint32_t vertexTag = 15, uint32_t vertexStride = 48,
+    const std::array<float, 6>& bounds = {}
+) {
     std::vector<char> data;
     const char marker[] = "MDLV0023";
     data.insert (data.end (), marker, marker + sizeof (marker));
@@ -29,8 +33,8 @@ std::vector<char> makeModel (uint32_t submeshFlags, uint32_t vertexTag = 15, uin
     data.push_back ('\0');
     appendValue (data, submeshFlags);
 
-    for (size_t i = 0; i < 6; i++) {
-	appendValue (data, 0.0f);
+    for (const float value : bounds) {
+	appendValue (data, value);
     }
 
     const uint32_t vertexBytes = 3 * vertexStride;
@@ -60,6 +64,20 @@ TEST_CASE ("MDLV parser exposes skinned vertex attributes") {
     CHECK (mesh.blendIndicesOffset == 40);
     CHECK (mesh.blendWeightsOffset == 56);
     CHECK (mesh.uvOffset == 72);
+}
+
+TEST_CASE ("MDLV parser exposes model bounds for SceneScript") {
+    const auto mesh = MdlParser::parse (
+	makeModel (0, 15, 48, { -1.0f, -2.0f, -3.0f, 4.0f, 5.0f, 6.0f }), "test-bounds.mdl"
+    );
+
+    REQUIRE (mesh.hasBoundingBox);
+    CHECK (mesh.boundingBoxMin.x == -1.0f);
+    CHECK (mesh.boundingBoxMin.y == -2.0f);
+    CHECK (mesh.boundingBoxMin.z == -3.0f);
+    CHECK (mesh.boundingBoxMax.x == 4.0f);
+    CHECK (mesh.boundingBoxMax.y == 5.0f);
+    CHECK (mesh.boundingBoxMax.z == 6.0f);
 }
 } // namespace
 

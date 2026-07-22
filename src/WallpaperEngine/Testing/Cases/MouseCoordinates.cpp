@@ -11,8 +11,10 @@
 #include <catch2/catch_test_macros.hpp>
 #include <cmath>
 #include <glm/glm.hpp>
+#include <glm/gtc/constants.hpp>
 #include <glm/gtc/matrix_transform.hpp>
 
+using WallpaperEngine::Data::Model::CameraTransform;
 using WallpaperEngine::Render::Camera;
 using WallpaperEngine::Render::Wallpapers::CScene;
 
@@ -249,6 +251,22 @@ TEST_CASE ("Camera path queue selection supports sequence and no-repeat random")
     CHECK (CScene::chooseCameraPathIndex (std::nullopt, 3, "random", 5) == 2);
     CHECK (CScene::chooseCameraPathIndex (1, 3, "random", 1) == 2);
     CHECK (CScene::chooseCameraPathIndex (2, 3, "random", 1) == 1);
+}
+
+TEST_CASE ("Camera object transform follows its world-space parent rig") {
+    glm::mat4 world = glm::translate (glm::mat4 (1.0f), glm::vec3 (2.0f, 3.0f, -5.0f));
+    world = glm::rotate (world, glm::pi<float> (), glm::vec3 (0.0f, 1.0f, 0.0f));
+
+    const CameraTransform camera = Camera::objectTransform (world, 60.0f, 1.25f);
+    CHECK (camera.eye.x == Catch::Approx (2.0f));
+    CHECK (camera.eye.y == Catch::Approx (3.0f));
+    CHECK (camera.eye.z == Catch::Approx (-5.0f));
+    CHECK (camera.center.x == Catch::Approx (2.0f));
+    CHECK (camera.center.y == Catch::Approx (3.0f));
+    CHECK (camera.center.z == Catch::Approx (-4.0f));
+    CHECK (camera.up.y == Catch::Approx (1.0f));
+    CHECK (camera.fov == Catch::Approx (60.0f));
+    CHECK (camera.zoom == Catch::Approx (1.25f));
 }
 
 TEST_CASE ("3D transparent sorting preserves fixed slots and orders blended models back to front") {

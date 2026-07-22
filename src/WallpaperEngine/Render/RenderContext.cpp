@@ -154,6 +154,8 @@ const std::map<std::string, std::shared_ptr<CWallpaper>>& RenderContext::getWall
     return this->m_wallpapers;
 }
 
+TextureCacheStats RenderContext::getTextureCacheStats () const { return this->m_textureCache->getStats (); }
+
 Media::MediaSource& RenderContext::getMediaSource () const { return this->m_mediaSource; }
 
 } // namespace WallpaperEngine::Render

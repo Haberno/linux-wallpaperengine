@@ -36,7 +36,15 @@ GLuint compileShadowStage (const std::string& source, const GLenum type) {
 
 CModel::CModel (Wallpapers::CScene& scene, const Model3D& model) :
     CObject (scene, model), CRenderable (scene, model, **model.materials.begin ()), ScriptableObject (scene, model),
-    m_model (model) { }
+    m_model (model),
+    m_size (
+	model.mesh.hasBoundingBox ? model.mesh.boundingBoxMax - model.mesh.boundingBoxMin : glm::vec3 (0.0f)
+    ) {
+    // Some older Workshop scenes bind the editor's 2D pivot script to a 3D model.
+    // Expose its authored bounds as a vector-like size so those published scripts can
+    // keep calculating their pivot even though current IModelLayer docs omit the field.
+    this->registerProperty ("size", this->m_size);
+}
 
 CModel::~CModel () {
     for (const auto& pass : this->m_passes) {
@@ -105,11 +113,19 @@ void CModel::setup () {
 
 	for (const auto& cur : this->m_model.materials[submeshIndex]->passes) {
 	    ComboMap runtimeCombos;
+	    // Thin translucent model surfaces must receive light from either side of
+	    // their authored normal. Otherwise a back-lit sheet collapses to black
+	    // RGB while its alpha still occludes what is behind it (most visibly the
+	    // Saturn ring in workshop 3589454154). generic4 already contains the
+	    // stock DOUBLESIDEDLIGHTING branch; select it for translucent model
+	    // passes unless the material explicitly authored a value.
+	    if (cur->shader == "generic4" && cur->blending == BlendingMode_Translucent
+		&& !cur->combos.contains ("DOUBLESIDEDLIGHTING")) {
+		runtimeCombos.emplace ("DOUBLESIDEDLIGHTING", 1);
+	    }
 	    if (this->m_skinningEnabled) {
-		runtimeCombos = {
-		    { "SKINNING", 1 },
-		    { "BONECOUNT", static_cast<int> (this->m_gpuSkinBones.size ()) },
-		};
+		runtimeCombos.insert_or_assign ("SKINNING", 1);
+		runtimeCombos.insert_or_assign ("BONECOUNT", static_cast<int> (this->m_gpuSkinBones.size ()));
 	    }
 
 	    auto* pass = new Effects::CPass (

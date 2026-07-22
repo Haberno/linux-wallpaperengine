@@ -50,6 +50,7 @@ public:
     [[nodiscard]] uint32_t getSpritesheetFrames () const override;
     [[nodiscard]] float getSpritesheetDuration () const override;
     [[nodiscard]] size_t getRetainedCpuBytes () const override;
+    [[nodiscard]] size_t getApproximateGpuBytes () const override;
 
     /**
      * Increments the usage count of the texture
@@ -96,6 +97,8 @@ private:
     GLuint* m_textureID = nullptr;
     /** Resolution vector of the texture */
     glm::vec4 m_resolution {};
+    /** Sum of all uploaded images and mip levels, used by cache accounting. */
+    size_t m_approximateGpuBytes = 0;
     /** The video player in use */
     GLPlayerUniquePtr m_player;
 };

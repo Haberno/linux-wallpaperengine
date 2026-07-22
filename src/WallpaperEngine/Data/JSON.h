@@ -7,6 +7,7 @@
 #include <nlohmann/json.hpp>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <utility>
 
 #include "WallpaperEngine/Data/Builders/UserSettingBuilder.h"
@@ -26,6 +27,14 @@ class JsonExtensions;
 using JSON = nlohmann::basic_json<
     std::map, std::vector, std::string, bool, std::int64_t, std::uint64_t, double, std::allocator,
     nlohmann::adl_serializer, std::vector<std::uint8_t>, JsonExtensions>;
+
+/**
+ * Parses Wallpaper Engine-authored JSON. The editor's JsonCpp reader accepts a
+ * trailing comma before an array/object close, and a small number of published
+ * workshop packages rely on that extension. Strict JSON is always attempted
+ * first; only that single compatibility form is repaired on parse failure.
+ */
+[[nodiscard]] JSON parseCompatible (std::string_view contents, std::string_view source = {});
 
 /**
  * Small extensions class that is used as base class of nlohmann's implementation.

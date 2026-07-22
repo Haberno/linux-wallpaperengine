@@ -2,6 +2,7 @@
 #include "WallpaperEngine/Logging/Log.h"
 
 #include <algorithm>
+#include <ranges>
 #include <lz4.h>
 
 #define STB_IMAGE_IMPLEMENTATION
@@ -16,6 +17,31 @@ CTexture::CTexture (RenderContext& context, TextureUniquePtr header) :
     // ensure the header is parsed
     this->setupResolution ();
     const GLint internalFormat = this->setupInternalFormat ();
+
+    if (this->m_header->isVideoMp4 || this->m_header->flags & TextureFlags_Video) {
+	this->m_approximateGpuBytes
+	    = static_cast<size_t> (this->m_header->textureWidth) * this->m_header->textureHeight * 4;
+    } else {
+	for (const auto& mipmaps : this->m_header->images | std::views::values) {
+	    for (const auto& mipmap : mipmaps) {
+		const size_t width = mipmap->decodedWidth > 0 ? mipmap->decodedWidth : mipmap->width;
+		const size_t height = mipmap->decodedHeight > 0 ? mipmap->decodedHeight : mipmap->height;
+
+		if (this->m_header->freeImageFormat != FIF_UNKNOWN) {
+		    this->m_approximateGpuBytes += width * height * 4;
+		} else if (internalFormat == GL_R8) {
+		    this->m_approximateGpuBytes += width * height;
+		} else if (internalFormat == GL_RG8) {
+		    this->m_approximateGpuBytes += width * height * 2;
+		} else if (internalFormat == GL_RGBA8) {
+		    this->m_approximateGpuBytes += width * height * 4;
+		} else {
+		    // Compressed uploads retain exactly the block payload supplied to GL.
+		    this->m_approximateGpuBytes += static_cast<size_t> (mipmap->uncompressedSize);
+		}
+	    }
+	}
+    }
 
     // videos are a bit special, they only have one framebuffer, one mipmap
     if (this->m_header->isVideoMp4 || this->m_header->flags & TextureFlags_Video) {
@@ -319,6 +345,8 @@ size_t CTexture::getRetainedCpuBytes () const {
 
     return bytes;
 }
+
+size_t CTexture::getApproximateGpuBytes () const { return this->m_approximateGpuBytes; }
 
 void CTexture::incrementUsageCount () const {
     if (this->m_player) {

@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <glm/glm.hpp>
 #include <string>
 #include <vector>
 
@@ -37,6 +38,10 @@ struct MdlMesh {
     bool skinned = false;
     uint32_t blendIndicesOffset = 0;
     uint32_t blendWeightsOffset = 0;
+    /** Union of the per-submesh bounds serialized in the MDLV container. */
+    glm::vec3 boundingBoxMin = glm::vec3 (0.0f);
+    glm::vec3 boundingBoxMax = glm::vec3 (0.0f);
+    bool hasBoundingBox = false;
     std::vector<MdlSubmesh> submeshes;
 };
 } // namespace WallpaperEngine::Data::Model

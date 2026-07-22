@@ -72,6 +72,9 @@ struct SceneData {
 	bool preview;
 	/** Parsed path queues from the legacy top-level list and camera objects. */
 	std::vector<CameraPathSource> paths;
+	/** Camera layer ids in authored order. Their live world transforms select and
+	 *  position the runtime camera after SceneScript updates. */
+	std::vector<int> objectIds;
 
 	/**
 	 * Bloom effect configuration

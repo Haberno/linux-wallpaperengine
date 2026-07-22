@@ -39,6 +39,12 @@ public:
     [[nodiscard]] float getFarZ () const;
     [[nodiscard]] float getZoom () const;
     [[nodiscard]] CameraTransform getDefaultTransform () const;
+    /** Replace the resting pose used when no camera path is active. */
+    void setDefaultTransform (const CameraTransform& transform, bool apply);
+    /** Convert a camera layer's world matrix into the eye/forward/up contract. */
+    [[nodiscard]] static CameraTransform objectTransform (
+	const glm::mat4& world, float fov, float zoom
+    );
     /** Apply a sampled camera path transform and rebuild view/projection matrices. */
     void setTransform (const CameraTransform& transform);
     /** Restore the authored resting pose. */

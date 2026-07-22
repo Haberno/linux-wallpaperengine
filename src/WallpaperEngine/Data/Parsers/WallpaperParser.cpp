@@ -27,7 +27,10 @@ WallpaperUniquePtr WallpaperParser::parse (const JSON& file, Project& project) {
 }
 
 SceneUniquePtr WallpaperParser::parseScene (const JSON& file, Project& project) {
-    const auto scene = JSON::parse (project.assetLocator->readString (file));
+    const std::string sceneFilename = file;
+    const auto scene = WallpaperEngine::Data::JSON::parseCompatible (
+	project.assetLocator->readString (sceneFilename), sceneFilename
+    );
     const auto camera = scene.require ("camera", "Scenes must have a camera section");
     const auto general = scene.require ("general", "Scenes must have a general section");
     // 2D scenes carry an orthogonal projection block; 3D scenes set it to null (or omit it)
@@ -45,15 +48,14 @@ SceneUniquePtr WallpaperParser::parseScene (const JSON& file, Project& project) 
     // PARALLAX ARE PRESENT
 
     // 3D scenes ship their runtime camera as a dedicated object in the objects list
-    // ("camera": "default"): origin is the eye, and angles orient a camera that looks down
-    // -Z with +Y up by default. The top-level "camera" block only stores the editor's last
-    // viewport, so it is just the fallback for scenes without a camera object (verified
-    // against workshop 3589454154, whose 4K UI plane and preview render only line up with
-    // the camera object's pose). Camera path animations ("path") are not implemented.
+    // ("camera": "default"). The top-level camera block is the editor viewport and remains
+    // the fallback for scenes without a camera layer; CScene follows the selected layer's
+    // live world transform (including parent rigs and SceneScript) once objects exist.
     glm::vec3 eye = camera.require<glm::vec3> ("eye", "Camera must have an eye position");
     glm::vec3 center = camera.require<glm::vec3> ("center", "Camera must have a center position");
     glm::vec3 up = camera.require<glm::vec3> ("up", "Camera must have an up position");
     std::vector<CameraPathSource> cameraPaths;
+    std::vector<int> cameraObjectIds;
     std::map<std::string, std::vector<CameraPath>> parsedPathFiles;
     const auto loadCameraPathFile = [&project, &parsedPathFiles] (const std::string& path) -> const std::vector<CameraPath>& {
 	const auto existing = parsedPathFiles.find (path);
@@ -63,7 +65,9 @@ SceneUniquePtr WallpaperParser::parseScene (const JSON& file, Project& project) 
 
 	std::vector<CameraPath> paths;
 	try {
-	    paths = CameraPathParser::parse (JSON::parse (project.assetLocator->readString (path)));
+	    paths = CameraPathParser::parse (
+		WallpaperEngine::Data::JSON::parseCompatible (project.assetLocator->readString (path), path)
+	    );
 	} catch (const std::exception& e) {
 	    sLog.error ("Cannot parse camera path file ", path, ": ", e.what ());
 	}
@@ -86,6 +90,9 @@ SceneUniquePtr WallpaperParser::parseScene (const JSON& file, Project& project) 
     for (const auto& cur : objects) {
 	if (!cur.is_object () || cur.find ("camera") == cur.end ()) {
 	    continue;
+	}
+	if (const auto id = cur.optional<int> ("id"); id.has_value ()) {
+	    cameraObjectIds.push_back (*id);
 	}
 	if (const auto path = cur.optional<std::string> ("path"); path.has_value ()) {
 	    const auto& paths = loadCameraPathFile (*path);
@@ -161,8 +168,9 @@ SceneUniquePtr WallpaperParser::parseScene (const JSON& file, Project& project) 
 	    },
             .camera = {
                 .fade = general.user ("camerafade", properties, false),
-                .preview = general.optional ("camerapreview", false),
-                .paths = std::move (cameraPaths),
+		.preview = general.optional ("camerapreview", false),
+		.paths = std::move (cameraPaths),
+		.objectIds = std::move (cameraObjectIds),
                 .bloom = {
                     .enabled = general.user ("bloom", properties, false),
                     .strength = general.user ("bloomstrength", properties, 0.0f),

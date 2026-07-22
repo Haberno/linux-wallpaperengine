@@ -9,7 +9,6 @@
 #include "TextureProvider.h"
 #include "WallpaperEngine/Assets/AssetLocator.h"
 #include "WallpaperEngine/Render/Helpers/ContextAware.h"
-#include "WallpaperEngine/Render/RenderContext.h"
 
 using namespace WallpaperEngine::Render;
 
@@ -20,6 +19,13 @@ namespace Helpers {
 }
 
 class RenderContext;
+
+struct TextureCacheStats {
+    size_t entries = 0;
+    size_t approximateBytes = 0;
+    size_t referencedEntries = 0;
+    size_t referencedBytes = 0;
+};
 
 class TextureCache final : Helpers::ContextAware {
 public:
@@ -55,7 +61,11 @@ public:
      * Runs a per-frame update on every cached texture so animated textures
      * (videos, gifs) keep decoding even when nothing else drives their update
      */
-    void updateAll () const;
+    void updateAll ();
+    [[nodiscard]] TextureCacheStats getStats () const;
+
+    /** True only for unscoped engine/runtime aliases that must never be evicted. */
+    [[nodiscard]] static bool isPinnedRuntimeTextureKey (const std::string& key);
 
 private:
     /** Bookkeeping for LRU eviction */

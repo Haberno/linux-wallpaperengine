@@ -197,6 +197,8 @@ protected:
     friend class CWallpaper;
 
 private:
+    /** Release raw-owned render objects, including during constructor unwinding. */
+    void destroyObjects () noexcept;
     Render::CObject* createObject (const Object& object);
     Render::CObject* dispatchObjectType (const Object& object);
     void addObjectToRenderOrder (const Object& object);
@@ -204,6 +206,7 @@ private:
     void renderShadowAtlas ();
     void registerFogScripts ();
     void updateFogState ();
+    void updateCameraObject ();
     void updateCameraPath (float deltaTime);
     [[nodiscard]] const CameraPathSource* findActiveCameraPathSource () const;
     [[nodiscard]] std::vector<CObject*> buildFrameRenderOrder () const;
