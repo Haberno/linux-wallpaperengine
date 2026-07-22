@@ -1,7 +1,30 @@
 #include "CFBO.h"
 #include "WallpaperEngine/Logging/Log.h"
 
+#include <algorithm>
+#include <map>
+#include <mutex>
+#include <ranges>
+#include <sstream>
+#include <tuple>
+#include <vector>
+
 using namespace WallpaperEngine::Render;
+
+std::atomic<size_t> CFBO::s_liveCount { 0 };
+std::atomic<size_t> CFBO::s_liveGpuBytes { 0 };
+
+namespace {
+struct LiveFBOInfo {
+    std::string name;
+    uint32_t width;
+    uint32_t height;
+    size_t bytes;
+};
+
+std::mutex s_liveFBOsMutex;
+std::map<const CFBO*, LiveFBOInfo> s_liveFBOs;
+}
 
 CFBO::CFBO (
     std::string name, const TextureFormat format, const uint32_t flags, const float scale, uint32_t realWidth,
@@ -56,7 +79,13 @@ CFBO::CFBO (
 	glTexParameteri (GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
     } else {
 	glTexParameteri (GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-	glTexParameteri (GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+	// Layer composite targets get sampled onto grazing 3D geometry in the final pass
+	// (e.g. the reflective water-road panels in 3708206626). A mip chain lets the
+	// anisotropic filter above damp that minification instead of aliasing into rainbow
+	// scanlines. Every other FBO is sampled ~1:1 and stays on plain GL_LINEAR.
+	glTexParameteri (
+	    GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, this->hasMipmaps () ? GL_LINEAR_MIPMAP_LINEAR : GL_LINEAR
+	);
     }
 
     glTexParameterf (GL_TEXTURE_2D, GL_TEXTURE_MAX_ANISOTROPY, 8.0f);
@@ -70,6 +99,22 @@ CFBO::CFBO (
     }
 
     this->m_resolution = { textureWidth, textureHeight, realWidth, realHeight };
+    const size_t pixels = static_cast<size_t> (textureWidth) * textureHeight;
+    this->m_approximateGpuBytes = pixels * 4 + (withDepthBuffer && !depthTexture ? pixels * 4 : 0);
+    s_liveCount.fetch_add (1, std::memory_order_relaxed);
+    s_liveGpuBytes.fetch_add (this->m_approximateGpuBytes, std::memory_order_relaxed);
+    {
+	std::lock_guard lock (s_liveFBOsMutex);
+	s_liveFBOs.emplace (
+	    this,
+	    LiveFBOInfo {
+		.name = this->m_name.empty () ? "<unnamed>" : this->m_name,
+		.width = textureWidth,
+		.height = textureHeight,
+		.bytes = this->m_approximateGpuBytes,
+	    }
+	);
+    }
 
     // create the textureframe entries
     const auto frame = std::make_shared<Frame> ();
@@ -94,6 +139,56 @@ CFBO::~CFBO () {
     if (this->m_depthbuffer != GL_NONE) {
 	glDeleteRenderbuffers (1, &this->m_depthbuffer);
     }
+
+    {
+	std::lock_guard lock (s_liveFBOsMutex);
+	s_liveFBOs.erase (this);
+    }
+
+    s_liveCount.fetch_sub (1, std::memory_order_relaxed);
+    s_liveGpuBytes.fetch_sub (this->m_approximateGpuBytes, std::memory_order_relaxed);
+}
+
+std::string CFBO::getLiveDebugSummary (const size_t limit) {
+    struct Group {
+	std::string name;
+	uint32_t width;
+	uint32_t height;
+	size_t count = 0;
+	size_t bytes = 0;
+    };
+
+    std::map<std::tuple<std::string, uint32_t, uint32_t>, Group> grouped;
+    {
+	std::lock_guard lock (s_liveFBOsMutex);
+	for (const auto& [instance, info] : s_liveFBOs) {
+	    auto& group = grouped[std::make_tuple (info.name, info.width, info.height)];
+	    group.name = info.name;
+	    group.width = info.width;
+	    group.height = info.height;
+	    group.count++;
+	    group.bytes += info.bytes;
+	}
+    }
+
+    std::vector<Group> sorted;
+    sorted.reserve (grouped.size ());
+    for (auto& group : grouped | std::views::values) {
+	sorted.push_back (std::move (group));
+    }
+    std::ranges::sort (sorted, [] (const Group& left, const Group& right) { return left.bytes > right.bytes; });
+
+    std::ostringstream out;
+    for (size_t index = 0; index < std::min (limit, sorted.size ()); index++) {
+	if (index > 0) {
+	    out << ';';
+	}
+	auto name = sorted[index].name;
+	std::ranges::replace (name, ' ', '_');
+	out << name << '@' << sorted[index].width << 'x' << sorted[index].height << 'x' << sorted[index].count << '='
+	    << sorted[index].bytes;
+    }
+    return out.str ();
 }
 
 void CFBO::ensureFramebuffer () const {
@@ -142,10 +237,32 @@ void CFBO::ensureFramebuffer () const {
 	glClearColor (0.0f, 0.0f, 0.0f, 0.0f);
 	glClear (GL_COLOR_BUFFER_BIT);
 	glClearColor (previousClearColor[0], previousClearColor[1], previousClearColor[2], previousClearColor[3]);
+
+	// A mipmapped min-filter is incomplete until the chain exists, so seed it from the
+	// transparent level 0 now; per-frame renders refresh it via generateMipmaps().
+	if (this->hasMipmaps ()) {
+	    glBindTexture (GL_TEXTURE_2D, this->m_texture);
+	    glGenerateMipmap (GL_TEXTURE_2D);
+	    glBindTexture (GL_TEXTURE_2D, 0);
+	}
     }
 
     glBindFramebuffer (GL_DRAW_FRAMEBUFFER, static_cast<GLuint> (previousDraw));
     glBindFramebuffer (GL_READ_FRAMEBUFFER, static_cast<GLuint> (previousRead));
+}
+
+bool CFBO::hasMipmaps () const {
+    return !this->m_depthTexture && this->m_name.starts_with ("_rt_imageLayerComposite");
+}
+
+void CFBO::generateMipmaps () const {
+    if (!this->hasMipmaps ()) {
+	return;
+    }
+
+    glBindTexture (GL_TEXTURE_2D, this->m_texture);
+    glGenerateMipmap (GL_TEXTURE_2D);
+    glBindTexture (GL_TEXTURE_2D, 0);
 }
 
 const std::string& CFBO::getName () const { return this->m_name; }
@@ -184,6 +301,8 @@ const glm::vec4* CFBO::getResolution () const { return &this->m_resolution; }
 
 bool CFBO::isAnimated () const { return false; }
 
+size_t CFBO::getApproximateGpuBytes () const { return this->m_approximateGpuBytes; }
+
 uint32_t CFBO::getSpritesheetCols () const {
     return 0; // FBOs don't have spritesheets
 }
@@ -205,3 +324,7 @@ void CFBO::decrementUsageCount () const { }
 void CFBO::update () const { }
 // FBOs are always ready
 bool CFBO::isReady () const { return true; }
+
+size_t CFBO::getLiveCount () { return s_liveCount.load (std::memory_order_relaxed); }
+
+size_t CFBO::getLiveGpuBytes () { return s_liveGpuBytes.load (std::memory_order_relaxed); }

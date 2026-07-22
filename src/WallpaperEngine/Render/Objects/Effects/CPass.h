@@ -96,12 +96,19 @@ private:
     public:
 	UniformEntry (const GLint id, std::string name, UniformType type, const void* value, int count) :
 	    id (id), name (std::move (name)), type (type), value (value), count (count) { }
+	UniformEntry (
+	    const GLint id, std::string name, UniformType type, std::shared_ptr<const void> ownedValue, int count
+	) :
+	    id (id), name (std::move (name)), type (type), value (ownedValue.get ()), count (count),
+	    ownedValue (std::move (ownedValue)) { }
 
 	const GLint id;
 	std::string name;
 	UniformType type;
 	const void* value;
 	int count;
+	/** Keeps values copied into this entry alive; external pointer-backed values leave this empty. */
+	std::shared_ptr<const void> ownedValue = nullptr;
     };
 
     class ReferenceUniformEntry {
@@ -192,9 +199,9 @@ private:
     std::optional<std::reference_wrapper<std::string>> m_target;
     std::map<int, std::shared_ptr<const CFBO>> m_fbos = {};
     std::map<std::string, int> m_combos = {};
-    std::vector<AttribEntry*> m_attribs = {};
-    std::map<std::string, UniformEntry*> m_uniforms = {};
-    std::map<std::string, ReferenceUniformEntry*> m_referenceUniforms = {};
+    std::vector<std::unique_ptr<AttribEntry>> m_attribs = {};
+    std::map<std::string, std::unique_ptr<UniformEntry>> m_uniforms = {};
+    std::map<std::string, std::unique_ptr<ReferenceUniformEntry>> m_referenceUniforms = {};
     BlendingMode m_blendingmode = BlendingMode_Normal;
     /**
      * Default matrix the pointers below start at. Owners (CImage, CModel, ...) point these at their own
@@ -220,7 +227,12 @@ private:
     /** Whether this pass currently holds usage counts on m_textures, see adjustTextureUsageCounts */
     mutable bool m_texturesUsageCounted = false;
 
-    Render::Shaders::Shader* m_shader = nullptr;
+    /**
+     * Owns the parsed/preprocessed shader sources for this pass. Complex scenes can
+     * create hundreds of passes, so leaking these strings on every wallpaper switch
+     * quickly retains hundreds of megabytes.
+     */
+    std::unique_ptr<Render::Shaders::Shader> m_shader = nullptr;
 
     std::shared_ptr<const CFBO> m_drawTo = nullptr;
     std::shared_ptr<const TextureProvider> m_input = nullptr;

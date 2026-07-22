@@ -84,6 +84,7 @@ namespace Render {
 	 */
 	void updateAllTextures () const;
 	[[nodiscard]] const std::map<std::string, std::shared_ptr<CWallpaper>>& getWallpapers () const;
+	[[nodiscard]] TextureCacheStats getTextureCacheStats () const;
 	[[nodiscard]] Media::MediaSource& getMediaSource () const;
 
     private:

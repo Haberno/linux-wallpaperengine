@@ -1059,7 +1059,10 @@ CParticle::createMapSequenceAroundControlPointInitializer (const MapSequenceArou
     return [this, controlPointValue, countValue, speedMinValue, speedMaxValue, sequenceIndex,
 	    speedOverride] (ParticleInstance& p) mutable {
 	int controlPoint = static_cast<int> (controlPointValue->getFloat ());
-	int count = static_cast<int> (countValue->getFloat ());
+	// Some Workshop particles explicitly author count=0 (for example the permanent
+	// cursor triangle in 3320489297). Wallpaper Engine accepts that value, so treat it
+	// like the parser's one-slot default instead of dividing and taking modulo by zero.
+	int count = std::max (1, static_cast<int> (countValue->getFloat ()));
 
 	// Calculate angle for this particle in the sequence (evenly distributed around circle)
 	float angle = (static_cast<float> (sequenceIndex) / static_cast<float> (count)) * glm::two_pi<float> ();
@@ -1991,18 +1994,18 @@ void CParticle::setupParticleUniforms () {
 }
 
 void CParticle::updateMatrices () {
-    glm::vec3 scale = m_particle.scale->value->getVec3 ();
-    glm::vec3 angles = m_particle.angles->value->getVec3 ();
+    const float width = getScene ().getCamera ().getWidth ();
+    const float height = getScene ().getCamera ().getHeight ();
+    const glm::mat4 flipY = glm::scale (glm::mat4 (1.0f), glm::vec3 (1.0f, -1.0f, 1.0f));
 
-    m_modelMatrix = glm::mat4 (1.0f);
-    m_modelMatrix = glm::translate (m_modelMatrix, m_transformedOrigin);
+    // Scene layer transforms use a top-left origin and Y-down coordinates, while
+    // particles are simulated around a centered, Y-up origin. Convert the complete
+    // parent chain between those spaces; using only this layer's origin left child
+    // particles near (0, 0) instead of around their parent emitter.
+    const glm::mat4 sceneToParticle
+	= glm::translate (glm::mat4 (1.0f), glm::vec3 (-width * 0.5f, height * 0.5f, 0.0f)) * flipY;
+    m_modelMatrix = sceneToParticle * this->resolveWorldMatrix () * flipY;
     this->applyParallaxToModelMatrix ();
-
-    // Negate X and Z rotations to account for Y-flipped coordinate system
-    m_modelMatrix = glm::rotate (m_modelMatrix, -angles.z, glm::vec3 (0, 0, 1));
-    m_modelMatrix = glm::rotate (m_modelMatrix, angles.y, glm::vec3 (0, 1, 0));
-    m_modelMatrix = glm::rotate (m_modelMatrix, -angles.x, glm::vec3 (1, 0, 0));
-    m_modelMatrix = glm::scale (m_modelMatrix, scale);
     m_modelMatrixInverse = glm::inverse (m_modelMatrix);
 
     this->updateParticleViewProjection ();
@@ -2038,7 +2041,9 @@ void CParticle::applyParallaxToModelMatrix () {
 	depth.y * parallaxAmount * displacement->y * referenceY,
 	0.0f,
     };
-    m_modelMatrix = glm::translate (m_modelMatrix, parallaxOffset);
+    // Parallax translates the complete layer subtree in world space. Pre-multiplying
+    // keeps the camera offset from being scaled or rotated by a particle parent.
+    m_modelMatrix = glm::translate (glm::mat4 (1.0f), parallaxOffset) * m_modelMatrix;
 }
 
 void CParticle::updateParticleViewProjection () {

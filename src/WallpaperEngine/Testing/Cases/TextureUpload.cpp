@@ -1,5 +1,6 @@
 #include "WallpaperEngine/Data/Assets/Texture.h"
 #include "WallpaperEngine/Render/CTexture.h"
+#include "WallpaperEngine/Render/TextureCache.h"
 
 #ifdef CHECK
 #undef CHECK
@@ -11,6 +12,7 @@ using WallpaperEngine::Data::Assets::TextureFormat_DXT1;
 using WallpaperEngine::Data::Assets::TextureFormat_DXT5;
 using WallpaperEngine::Data::Assets::TextureFormat_RG88;
 using WallpaperEngine::Render::CTexture;
+using WallpaperEngine::Render::TextureCache;
 
 TEST_CASE ("TEX payload layout is detected independently from its authored format", "[texture]") {
     SECTION ("DXT5 block payload") {
@@ -29,4 +31,15 @@ TEST_CASE ("TEX payload layout is detected independently from its authored forma
 	CHECK_FALSE (CTexture::isBlockCompressedPayload (TextureFormat_ARGB8888, 512, 512, 512 * 512 * 4));
 	CHECK_FALSE (CTexture::isBlockCompressedPayload (TextureFormat_RG88, 512, 512, 512 * 512 * 2));
     }
+}
+
+TEST_CASE ("only unscoped runtime texture aliases are pinned", "[texture][cache]") {
+    CHECK (TextureCache::isPinnedRuntimeTextureKey ("$mediaThumbnail"));
+    CHECK (TextureCache::isPinnedRuntimeTextureKey ("$mediaPreviousThumbnail"));
+
+    const std::string authoredKey
+	= "$mediaThumbnail=$mediaThumbnail;/=/workshop/431960/2297432332;" + std::string (1, '\x1f')
+	+ "materials/background.tex";
+    CHECK_FALSE (TextureCache::isPinnedRuntimeTextureKey (authoredKey));
+    CHECK_FALSE (TextureCache::isPinnedRuntimeTextureKey ("materials/background.tex"));
 }

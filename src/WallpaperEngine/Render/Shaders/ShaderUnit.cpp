@@ -159,6 +159,8 @@ struct PreprocessedIncludes {
 
 std::mutex sIncludeCacheMutex;
 std::unordered_map<std::string, PreprocessedIncludes> sIncludeCache;
+size_t sIncludeCacheBytes = 0;
+constexpr size_t SHADER_TEXT_CACHE_BUDGET_BYTES = 64ULL * 1024 * 1024;
 
 std::string buildIncludeCacheKey (const std::string& locatorIdentity, const std::string& file, const std::string& content) {
     std::string key = locatorIdentity;
@@ -359,16 +361,23 @@ void ShaderUnit::preprocessIncludes () {
 	sLog.exception ("Could not find where to place includes for shader unit ", this->m_file);
     }
 
-    // memoize the result for the next build of this unit. the key embeds the
-    // asset locator address, so entries go permanently stale once a project is
-    // unloaded (every switch loads a fresh locator) — without a bound this map
-    // grows by several MB per switch. hits only matter within a single build,
-    // so a wholesale clear on overflow is cheap and keeps memory bounded
+    // Memoize the result for the next build of this unit. Shader sizes vary by
+    // orders of magnitude, so an entry-count cap still allowed a few complex
+    // scenes to retain hundreds of MB. Bound the actual source bytes instead.
     {
 	std::lock_guard lock (sIncludeCacheMutex);
-	if (sIncludeCache.size () >= 1024)
+	const size_t entryBytes = cacheKey.size () + this->m_preprocessed.size () + this->m_includes.size ();
+	if (entryBytes > SHADER_TEXT_CACHE_BUDGET_BYTES)
+	    return;
+	if (sIncludeCacheBytes + entryBytes > SHADER_TEXT_CACHE_BUDGET_BYTES) {
 	    sIncludeCache.clear ();
-	sIncludeCache.emplace (cacheKey, PreprocessedIncludes { this->m_preprocessed, this->m_includes });
+	    sIncludeCacheBytes = 0;
+	}
+	if (sIncludeCache.emplace (
+		cacheKey, PreprocessedIncludes { this->m_preprocessed, this->m_includes }
+	    ).second) {
+	    sIncludeCacheBytes += entryBytes;
+	}
     }
 }
 
@@ -783,31 +792,54 @@ std::string ShaderUnit::applyLinkedVaryingCompatibility (std::string source) con
     return source;
 }
 
-std::string ShaderUnit::applyIntParameterCallCompatibility (std::string source) const {
-    // Workshop shaders (authored for HLSL) pass float expressions to int-typed function
-    // parameters, relying on HLSL's implicit float->int truncation. GLSL overload resolution
-    // has no such conversion, so glslang fails with "no matching overloaded function"
-    // (e.g. multistage_wave's calWaveData receives the previous stage's float wave mask).
-    // Wrap those call-site arguments in an explicit int() constructor: this reproduces the
-    // truncation Wallpaper Engine's compiler performs, and int(int) remains valid GLSL, so
-    // over-wrapping an argument that is already an integer is harmless. Both branches of a
-    // combo-guarded definition are still present in the source here, so every signature
-    // variant of a function contributes its int parameter positions.
+std::string ShaderUnit::applyMissingFragmentVaryingCompatibility (std::string source) const {
+    if (this->m_type != GLSLContext::UnitType_Fragment || this->m_link == nullptr) {
+	return source;
+    }
+
+    static const std::regex varyingDeclaration (
+	R"(\bvarying\s+((?:[biu]?vec[234]|float|int|uint|bool))\s+([A-Za-z_][A-Za-z0-9_]*)\s*;)"
+    );
+    std::string declarations;
+
+    for (std::sregex_iterator it (this->m_link->m_preprocessed.cbegin (), this->m_link->m_preprocessed.cend (),
+				  varyingDeclaration), last;
+	 it != last; ++it) {
+	const std::string type = (*it) [1].str ();
+	const std::string name = (*it) [2].str ();
+	const std::regex use ("\\b" + name + "\\b");
+	const std::regex ownDeclaration ("\\bvarying\\s+[A-Za-z_][A-Za-z0-9_]*\\s+" + name + "\\s*;");
+
+	if (std::regex_search (source, use) && !std::regex_search (source, ownDeclaration)) {
+	    declarations += "varying " + type + " " + name + ";\n";
+	}
+    }
+
+    if (!declarations.empty ()) {
+	source.insert (0, declarations);
+	sLog.out ("Applied missing fragment varying compatibility in ", this->m_file);
+    }
+
+    return source;
+}
+
+std::string ShaderUnit::applyNumericParameterCallCompatibility (std::string source) const {
+    // Wallpaper Engine accepts HLSL-style implicit numeric conversions at user-function call
+    // sites. GLSL does not. Explicit constructors are no-ops for matching types and reproduce
+    // scalar splatting or vector truncation for mismatched input arguments.
     static const std::regex functionDefinition (
 	R"(\b[A-Za-z_][A-Za-z0-9_]*\s+([A-Za-z_][A-Za-z0-9_]*)\s*\(([^)]*)\)\s*\{)");
-    static const std::regex intParameter (
-	R"(^\s*(?:(?:in|out|inout|const)\s+)*int\s+[A-Za-z_][A-Za-z0-9_]*\s*$)");
+    static const std::regex numericParameter (
+	R"(^\s*(?:(?:in|const)\s+)*((?:[biu]?vec[234]|float[234]|int[234]|float|int|uint|bool))\s+[A-Za-z_][A-Za-z0-9_]*\s*$)");
     static const std::regex parameterDeclaration (
 	R"(^\s*(?:(?:in|out|inout|const)\s+)*[A-Za-z_][A-Za-z0-9_]*\s+[A-Za-z_][A-Za-z0-9_]*\s*$)");
-    static const std::regex integerArgument (R"(^\s*-?[0-9]+\s*$)");
-    static const std::regex alreadyIntCast (R"(^\s*int\s*\(.*\)\s*$)");
     static const auto isWordChar = [] (char c) {
 	return std::isalnum (static_cast<unsigned char> (c)) || c == '_';
     };
     static const auto isSpace = [] (char c) { return std::isspace (static_cast<unsigned char> (c)) != 0; };
 
-    // first pass: find user-defined functions and record their int-typed parameter positions
-    std::map<std::string, std::set<size_t>> intParameterIndices;
+    using ParameterTypes = std::map<size_t, std::set<std::string>>;
+    std::map<std::string, std::map<size_t, ParameterTypes>> parameterTypes;
 
     for (std::sregex_iterator it (source.cbegin (), source.cend (), functionDefinition), last; it != last; ++it) {
 	const std::string name = (*it) [1].str ();
@@ -819,6 +851,7 @@ std::string ShaderUnit::applyIntParameterCallCompatibility (std::string source) 
 
 	size_t index = 0;
 	size_t cursor = 0;
+	ParameterTypes signature;
 
 	while (cursor <= parameters.size ()) {
 	    size_t comma = parameters.find (',', cursor);
@@ -827,18 +860,24 @@ std::string ShaderUnit::applyIntParameterCallCompatibility (std::string source) 
 		comma = parameters.size ();
 	    }
 
-	    if (const std::string parameter = parameters.substr (cursor, comma - cursor);
-		std::regex_match (parameter, intParameter)) {
-		intParameterIndices [name].insert (index);
+	    const std::string parameter = parameters.substr (cursor, comma - cursor);
+	    std::smatch parameterMatch;
+	    if (std::regex_match (parameter, parameterMatch, numericParameter)) {
+		signature [index].insert (parameterMatch [1].str ());
 	    }
 
 	    index++;
 	    cursor = comma + 1;
 	}
+
+	auto& stored = parameterTypes [name] [parameters.empty () ? 0 : index];
+	for (const auto& [parameterIndex, types] : signature) {
+	    stored [parameterIndex].insert (types.begin (), types.end ());
+	}
     }
 
     // second pass: wrap the matching call-site arguments
-    for (const auto& [name, indices] : intParameterIndices) {
+    for (const auto& [name, signatures] : parameterTypes) {
 	size_t pos = 0;
 
 	while ((pos = source.find (name, pos)) != std::string::npos) {
@@ -906,22 +945,41 @@ std::string ShaderUnit::applyIntParameterCallCompatibility (std::string source) 
 		continue;
 	    }
 
-	    // wrap the int-typed positions right-to-left so the recorded offsets stay valid
-	    for (auto index = indices.rbegin (); index != indices.rend (); ++index) {
-		if (*index >= arguments.size ()) {
+	    const auto signature = signatures.find (arguments.size ());
+	    if (signature == signatures.end ()) {
+		pos = close + 1;
+		continue;
+	    }
+	    const ParameterTypes& typesByIndex = signature->second;
+
+	    // Wrap right-to-left so the recorded offsets stay valid.
+	    for (auto entry = typesByIndex.rbegin (); entry != typesByIndex.rend (); ++entry) {
+		const size_t index = entry->first;
+		const std::set<std::string>& types = entry->second;
+		if (index >= arguments.size ()) {
 		    continue;
 		}
 
-		const auto& [argumentBegin, argumentEnd] = arguments [*index];
-		const std::string argument = source.substr (argumentBegin, argumentEnd - argumentBegin);
+		std::string targetType;
+		if (types.size () == 1) {
+		    targetType = *types.begin ();
+		} else if (types.contains ("int")) {
+		    // Preserve the older int-parameter compatibility for combo variants that expose
+		    // both an int and a float signature in the un-preprocessed source.
+		    targetType = "int";
+		} else {
+		    continue;
+		}
 
-		// integer literals are already fine, and int(...) casts don't need another one
-		if (std::regex_match (argument, integerArgument) || std::regex_match (argument, alreadyIntCast)) {
+		const auto& [argumentBegin, argumentEnd] = arguments [index];
+		const std::string argument = source.substr (argumentBegin, argumentEnd - argumentBegin);
+		const std::regex alreadyConverted ("^\\s*" + targetType + "\\s*\\(.*\\)\\s*$");
+		if (std::regex_match (argument, alreadyConverted)) {
 		    continue;
 		}
 
 		source.insert (argumentEnd, ")");
-		source.insert (argumentBegin, "int(");
+		source.insert (argumentBegin, targetType + "(");
 	    }
 
 	    pos = afterName;
@@ -929,6 +987,175 @@ std::string ShaderUnit::applyIntParameterCallCompatibility (std::string source) 
     }
 
     return source;
+}
+
+std::string ShaderUnit::applyNumericInitializerCompatibility (std::string source) const {
+    static const std::regex declaration (
+	R"(\b((?:[biu]?vec[234]|float[234]|int[234]|float|int|uint|bool))\s+[A-Za-z_][A-Za-z0-9_]*\s*=\s*)");
+    size_t offset = 0;
+    bool changed = false;
+
+    while (offset < source.size ()) {
+	std::smatch match;
+	if (!std::regex_search (source.cbegin () + offset, source.cend (), match, declaration)) {
+	    break;
+	}
+
+	const std::string type = match [1].str ();
+	const size_t initializerBegin = offset + match.position () + match.length ();
+	const size_t semicolon = source.find (';', initializerBegin);
+	const size_t newline = source.find ('\n', initializerBegin);
+	if (semicolon == std::string::npos || (newline != std::string::npos && newline < semicolon)) {
+	    offset = initializerBegin;
+	    continue;
+	}
+
+	int depth = 0;
+	bool topLevelComma = false;
+	size_t modulo = std::string::npos;
+	for (size_t i = initializerBegin; i < semicolon; i++) {
+	    if (source [i] == '(' || source [i] == '[') {
+		depth++;
+	    } else if (source [i] == ')' || source [i] == ']') {
+		depth--;
+	    } else if (depth == 0 && source [i] == ',') {
+		topLevelComma = true;
+	    } else if (depth == 0 && source [i] == '%') {
+		modulo = i;
+	    }
+	}
+
+	if (topLevelComma) {
+	    offset = semicolon + 1;
+	    continue;
+	}
+
+	std::string initializer = source.substr (initializerBegin, semicolon - initializerBegin);
+	if ((type == "int" || type == "uint") && modulo != std::string::npos) {
+	    const size_t relativeModulo = modulo - initializerBegin;
+	    std::string left = initializer.substr (0, relativeModulo);
+	    const std::string right = initializer.substr (relativeModulo + 1);
+	    if (type == "uint") {
+		static const std::regex unsignedAddition (
+		    R"((\b([A-Za-z_][A-Za-z0-9_]*)\s*\+\s*)([0-9]+)(?![A-Za-z0-9_]))");
+		std::smatch addition;
+		if (std::regex_search (left, addition, unsignedAddition)) {
+		    const std::regex unsignedDeclaration ("\\buint\\s+" + addition [2].str () + "\\b");
+		    if (std::regex_search (source.cbegin (), source.cbegin () + initializerBegin,
+					   unsignedDeclaration)) {
+			left.replace (addition.position (), addition.length (),
+				      addition [1].str () + addition [3].str () + "u");
+		    }
+		}
+	    }
+	    initializer = type + "(" + left + ") % " + type + "(" + right + ")";
+	}
+
+	const std::regex alreadyConverted ("^\\s*" + type + "\\s*\\(.*\\)\\s*$");
+	if (!std::regex_match (initializer, alreadyConverted)) {
+	    initializer = type + "(" + initializer + ")";
+	}
+
+	source.replace (initializerBegin, semicolon - initializerBegin, initializer);
+	offset = initializerBegin + initializer.size () + 1;
+	changed = true;
+    }
+
+    // Material properties are floats even when authors use them as integer loop bounds.
+    // Comparing in float space matches HLSL promotion while keeping the induction variable int.
+    static const std::regex integerLoop (
+	R"((for\s*\(\s*int\s+([A-Za-z_][A-Za-z0-9_]*)\s*=\s*[^;]+;\s*)([A-Za-z_][A-Za-z0-9_]*)(\s*(?:<=|>=|<|>)\s*)([^;]+)(;))");
+    std::smatch loop;
+    offset = 0;
+    while (std::regex_search (source.cbegin () + offset, source.cend (), loop, integerLoop)) {
+	const size_t position = offset + loop.position ();
+	if (loop [2].str () != loop [3].str ()) {
+	    offset = position + loop.length ();
+	    continue;
+	}
+	const std::string replacement = loop [1].str () + "float(" + loop [3].str () + ")" + loop [4].str ()
+	    + "float(" + loop [5].str () + ")" + loop [6].str ();
+	source.replace (position, loop.length (), replacement);
+	offset = position + replacement.size ();
+	changed = true;
+    }
+
+    if (changed) {
+	sLog.out ("Applied numeric initializer compatibility in ", this->m_file);
+    }
+    return source;
+}
+
+std::string ShaderUnit::applyVectorBuiltinCompatibility (std::string source) const {
+    const std::string original = source;
+
+    // These are the recurring HLSL idioms found by the corpus validator. Keep the rules
+    // syntax-directed: guessing types from identifier names across combo branches can corrupt
+    // otherwise valid stock shaders that reuse local names with different types.
+    static const std::regex vectorPow (
+	R"(pow\s*\(((?:[A-Za-z_][A-Za-z0-9_]*\.(?:rgb|xyz)|color\s*/\s*luma))\s*,\s*([^,;\n\)]+)\))");
+    static const std::regex vectorMax (
+	R"(max\s*\((abs\s*\(\s*[A-Za-z_][A-Za-z0-9_]*\s*\)\s*-\s*[A-Za-z_][A-Za-z0-9_]*\.xy\s*\+\s*[A-Za-z_][A-Za-z0-9_]*)\s*,\s*(0(?:\.0+)?)\s*\))");
+    static const std::regex scalarVectorMix (
+	R"(mix\s*\(\s*(luma)\s*,\s*(color)\s*,)");
+    static const std::regex wideNarrowMix (
+	R"(mix\s*\(\s*(albedo)\s*,\s*(newAlbedo)\s*,)");
+    static const std::regex narrowStrengthCompound (
+	R"(\bstrength\s*\*=\s*(500\s*/\s*g_Texture0Resolution)\s*;)");
+    static const std::regex dotMatrixSmoothstep (
+	R"(smoothstep\s*\(\s*dist\s*,\s*dist\s*\+\s*smoothing\s*,\s*thresh\s*\))");
+    static const std::regex dotMatrixAccumulation (
+	R"(fragLV\s*\+=\s*(smoothstep\s*\(\s*dist\s*,\s*dist\s*\+\s*smoothing\s*,\s*vec2\s*\(\s*thresh\s*\)\s*\)))");
+    static const std::regex vectorDeltaMax (
+	R"(max\s*\(\s*delta\s*,\s*(0(?:\.0+)?)\s*\))");
+    static const std::regex albedoGammaPow (
+	R"(pow\s*\(\s*albedo\s*,\s*startGamma\s*\))");
+    static const std::regex inverseAlbedoGammaPow (
+	R"(pow\s*\(\s*albedo\s*,\s*1\.0\s*/\s*startGamma\s*\))");
+    static const std::regex chromaticTimer (
+	R"((u_[rgb]Offset\s*\*\s*)timer\b(?!\.))");
+    static const std::regex stereoChannelClip (
+	R"(barLeft\s*\*=\s*isLeftChannel\s*;\s*barRight\s*\*=\s*isRightChannel\s*;)");
+    static const std::regex integerBarStep (
+	R"((bar(?:Left|Right)\s*\*=\s*)step\s*\(([^;\n]+)\)\s*;)");
+    static const std::regex integerInvertedBarStep (
+	R"((bar(?:Left|Right)\s*\*=\s*)(1\.0\s*-\s*step\s*\([^;\n]+\))\s*;)");
+
+    source = std::regex_replace (source, vectorPow, "pow($1, vec3($2))");
+    source = std::regex_replace (source, vectorMax, "max($1, vec2($2))");
+    source = std::regex_replace (source, scalarVectorMix, "mix(vec3($1), $2,");
+    source = std::regex_replace (source, wideNarrowMix, "mix($1.rgb, $2,");
+    source = std::regex_replace (source, narrowStrengthCompound, "strength *= vec2($1);");
+    source = std::regex_replace (source, dotMatrixSmoothstep, "smoothstep(dist, dist + smoothing, vec2(thresh))");
+    source = std::regex_replace (source, dotMatrixAccumulation, "fragLV += float($1)");
+    source = std::regex_replace (source, vectorDeltaMax, "max(delta, vec2($1))");
+    source = std::regex_replace (source, albedoGammaPow, "pow(albedo, vec4(startGamma))");
+    source = std::regex_replace (source, inverseAlbedoGammaPow, "pow(albedo, vec4(1.0 / startGamma))");
+    source = std::regex_replace (source, chromaticTimer, "$1timer.xy");
+    source = std::regex_replace (
+	source, stereoChannelClip,
+	"#if ANTIALIAS == 1\n"
+	"barLeft *= float(isLeftChannel); barRight *= float(isRightChannel);\n"
+	"#else\n"
+	"barLeft *= int(isLeftChannel); barRight *= int(isRightChannel);\n"
+	"#endif");
+    source = std::regex_replace (source, integerBarStep, "$1int(step($2));");
+    source = std::regex_replace (source, integerInvertedBarStep, "$1int($2);");
+
+    if (source != original) {
+	sLog.out ("Applied vector built-in compatibility in ", this->m_file);
+    }
+    return source;
+}
+
+std::string ShaderUnit::applyBooleanArithmeticCompatibility (std::string source) const {
+    static const std::regex comparisonProduct (
+	R"(return\s+\(([^;\n]*(?:<=|>=|==|!=|<|>)[^;\n]*)\)\s*\*\s*\(([^;\n]*(?:<=|>=|==|!=|<|>)[^;\n]*)\)\s*;)");
+    const std::string patched = std::regex_replace (source, comparisonProduct, "return float(($1) && ($2));");
+    if (patched != source) {
+	sLog.out ("Applied boolean arithmetic compatibility in ", this->m_file);
+    }
+    return patched;
 }
 
 std::string ShaderUnit::applyFragmentTexCoordCompatibility (std::string source) const {
@@ -962,11 +1189,14 @@ std::string ShaderUnit::applyFragmentTexCoordCompatibility (std::string source) 
 	);
 	// HLSL allows implicit truncation on assignment (vec2 x = v_TexCoord), GLSL does not
 	static const std::regex vec2AssignTexCoord (R"((\bvec2\s+[A-Za-z_][A-Za-z0-9_]*\s*=\s*)v_TexCoord\s*;)");
+	static const std::regex vec2InitializerTexCoord (
+	    R"((\b(?:vec2|float2)\s+[A-Za-z_][A-Za-z0-9_]*\s*=\s*[^;\n]*?)\bv_TexCoord\b(?!\s*\.))");
 
 	source = std::regex_replace (source, texCoordBeforeVec2, "v_TexCoord.xy$1");
 	source = std::regex_replace (source, vec2BeforeTexCoord, "$1v_TexCoord.xy");
 	source = std::regex_replace (source, sampledTexCoord, "$1v_TexCoord.xy");
 	source = std::regex_replace (source, vec2AssignTexCoord, "$1v_TexCoord.xy;");
+	source = std::regex_replace (source, vec2InitializerTexCoord, "$1v_TexCoord.xy");
     }
 
     if (source != original) {
@@ -981,8 +1211,11 @@ std::string ShaderUnit::applyNonConstantInitializerCompatibility (std::string so
     static const std::regex uniformInitializer (
 	R"(\bconst(\s+(?:(?:[biu]?vec|float|int|uint)[234]?|bool|mat[234](?:x[234])?)\s+[A-Za-z_][A-Za-z0-9_]*(?:\s*\[[^\]]*\])?\s*=\s*[^;\n]*\b[ug]_[A-Za-z_][A-Za-z0-9_]*[^;\n]*;))"
     );
+    static const std::regex authoredTemporaryInitializer (
+	R"(\bconst(\s+(?:(?:[biu]?vec|float|int|uint)[234]?|bool|mat[234](?:x[234])?)\s+__[A-Za-z_][A-Za-z0-9_]*\s*=\s*[^;\n]*;))");
 
     source = std::regex_replace (source, uniformInitializer, "$1");
+    source = std::regex_replace (source, authoredTemporaryInitializer, "$1");
     if (source != original) {
 	sLog.out ("Applied uniform initializer compatibility in ", this->m_file);
     }
@@ -1012,6 +1245,16 @@ std::string ShaderUnit::applyDuplicateMacroCompatibility (std::string source) co
     return changed ? output.str () : source;
 }
 
+std::string ShaderUnit::applyHeaderMacroCompatibility (std::string source) const {
+    static const std::regex authoredLog10 (R"(\b(?:float|vec[234])\s+log10\s*\()");
+    std::smatch match;
+    if (std::regex_search (source, match, authoredLog10)) {
+	source.insert (match.position (), "#undef log10\n");
+	sLog.out ("Applied log10 header macro compatibility in ", this->m_file);
+    }
+    return source;
+}
+
 std::string ShaderUnit::applyFragmentWritableVaryings (std::string source) const {
     if (this->m_type != GLSLContext::UnitType_Fragment) {
 	return source;
@@ -1020,7 +1263,7 @@ std::string ShaderUnit::applyFragmentWritableVaryings (std::string source) const
     // Only apply when the fragment shader actually WRITES to v_TexCoord
     // (matches v_TexCoord = and v_TexCoord.xy = etc., but not ==).
     // Shaders that only read v_TexCoord don't need the writable local alias.
-    static const std::regex writePattern (R"(\bv_TexCoord(?:\.[xyzwrgba]+)?\s*=[^=])");
+    static const std::regex writePattern (R"(\bv_TexCoord(?:\.[xyzwrgba]+)?\s*[+\-*/]?=[^=])");
     if (!std::regex_search (source, writePattern)) {
 	return source;
     }
@@ -1555,6 +1798,7 @@ const std::string& ShaderUnit::compile () {
     // Guarded by a mutex so a future worker-thread caller stays safe.
     static std::mutex sCompatCacheMutex;
     static std::unordered_map<std::string, std::string> sCompatCache;
+    static size_t sCompatCacheBytes = 0;
     static const std::string sNoLink;
 
     const std::string& linkedSource = this->m_link != nullptr ? this->m_link->m_preprocessed : sNoLink;
@@ -1577,28 +1821,47 @@ const std::string& ShaderUnit::compile () {
 	}
     }
 
-    std::string compatResult = this->applyDuplicateMacroCompatibility (
-	this->applyIntParameterCallCompatibility (
-	    this->applyNonConstantInitializerCompatibility (
-		this->applyFragmentTexCoordCompatibility (
-		    this->applyFragmentWritableVaryings (
-			this->applyFloatTernaryCompatibility (
-			    this->applyLinkedVaryingCompatibility (this->m_preprocessed)))))));
+    std::string compatResult = this->m_preprocessed;
+    compatResult = this->applyLinkedVaryingCompatibility (std::move (compatResult));
+    compatResult = this->applyMissingFragmentVaryingCompatibility (std::move (compatResult));
+    compatResult = this->applyFloatTernaryCompatibility (std::move (compatResult));
+    compatResult = this->applyBooleanArithmeticCompatibility (std::move (compatResult));
+    compatResult = this->applyFragmentWritableVaryings (std::move (compatResult));
+    compatResult = this->applyFragmentTexCoordCompatibility (std::move (compatResult));
+    compatResult = this->applyVectorBuiltinCompatibility (std::move (compatResult));
+    compatResult = this->applyNumericParameterCallCompatibility (std::move (compatResult));
+    compatResult = this->applyNumericInitializerCompatibility (std::move (compatResult));
+    compatResult = this->applyNonConstantInitializerCompatibility (std::move (compatResult));
+    compatResult = this->applyHeaderMacroCompatibility (std::move (compatResult));
+    compatResult = this->applyDuplicateMacroCompatibility (std::move (compatResult));
     this->m_final += compatResult;
 
     {
 	const std::lock_guard<std::mutex> lock (sCompatCacheMutex);
-	// content-keyed, so it stays valid across switches, but never evicts;
-	// cap it so cycling through many wallpapers can't grow it unboundedly
-	if (sCompatCache.size () >= 512)
+	const size_t entryBytes = compatKey.size () + compatResult.size ();
+	if (entryBytes > SHADER_TEXT_CACHE_BUDGET_BYTES) {
+	    this->dumpFinalSource ();
+	    return this->m_final;
+	}
+	if (sCompatCacheBytes + entryBytes > SHADER_TEXT_CACHE_BUDGET_BYTES) {
 	    sCompatCache.clear ();
-	sCompatCache.emplace (compatKey, std::move (compatResult));
+	    sCompatCacheBytes = 0;
+	}
+	if (sCompatCache.emplace (compatKey, std::move (compatResult)).second) {
+	    sCompatCacheBytes += entryBytes;
+	}
     }
 
     this->dumpFinalSource ();
 
     // the pass itself handles shader compilation, the unit doesn't have enough information for this step
     return this->m_final;
+}
+
+ShaderUnit::~ShaderUnit () {
+    for (auto* parameter : this->m_parameters) {
+	delete parameter;
+    }
 }
 
 void ShaderUnit::dumpFinalSource () const {

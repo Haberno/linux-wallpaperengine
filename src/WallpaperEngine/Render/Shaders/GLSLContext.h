@@ -34,5 +34,7 @@ private:
      */
     std::mutex m_cacheMutex;
     std::unordered_map<std::string, std::pair<std::string, std::string>> m_cache;
+    /** Source and translated text retained by m_cache (map overhead excluded). */
+    size_t m_cacheBytes = 0;
 };
 } // namespace WallpaperEngine::Render::Shaders

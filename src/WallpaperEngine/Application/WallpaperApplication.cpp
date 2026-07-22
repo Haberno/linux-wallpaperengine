@@ -20,6 +20,7 @@
 #include "WallpaperEngine/Data/Model/Object.h"
 #include "WallpaperEngine/Data/Utils/BinaryReader.h"
 #include "WallpaperEngine/Render/CTexture.h"
+#include "WallpaperEngine/Render/CFBO.h"
 
 #include "WallpaperEngine/Data/Model/Property.h"
 #include "WallpaperEngine/Data/Model/Wallpaper.h"
@@ -268,7 +269,7 @@ void WallpaperApplication::loadBackgrounds () {
 
 ProjectUniquePtr WallpaperApplication::loadProject (const std::string& bg) const {
     auto container = this->setupAssetLocator (bg);
-    auto json = WallpaperEngine::Data::JSON::JSON::parse (container->readString ("project.json"));
+    auto json = WallpaperEngine::Data::JSON::parseCompatible (container->readString ("project.json"), "project.json");
 
     return WallpaperEngine::Data::Parsers::ProjectParser::parse (json, std::move (container));
 }
@@ -403,7 +404,8 @@ bool WallpaperApplication::preflightWallpaper (const std::string& path) {
     try {
 	// avoid mutating state, just ensure project.json parses
 	auto container = this->setupAssetLocator (path);
-	const auto json = WallpaperEngine::Data::JSON::JSON::parse (container->readString ("project.json"));
+	const auto json
+	    = WallpaperEngine::Data::JSON::parseCompatible (container->readString ("project.json"), "project.json");
 	if (!json.contains ("type") || !json.contains ("file")) {
 	    sLog.error ("Preflight failed for ", path, ": missing required fields");
 	    return false;
@@ -464,8 +466,16 @@ std::optional<WallpaperEngine::Render::TransitionMode> parseTransitionName (cons
 } // namespace
 
 void WallpaperApplication::setupControlSocket () {
+    const char* socketOverride = getenv ("WPE_CONTROL_SOCKET");
     const char* runtimeDir = getenv ("XDG_RUNTIME_DIR");
-    this->m_controlSocketPath = std::string (runtimeDir != nullptr ? runtimeDir : "/tmp") + "/linux-wallpaperengine.sock";
+    this->m_controlSocketPath = socketOverride != nullptr && socketOverride[0] != '\0'
+	? socketOverride
+	: std::string (runtimeDir != nullptr ? runtimeDir : "/tmp") + "/linux-wallpaperengine.sock";
+
+    if (this->m_controlSocketPath.size () >= sizeof (sockaddr_un::sun_path)) {
+	sLog.error ("Control socket path is too long: ", this->m_controlSocketPath);
+	return;
+    }
 
     this->m_controlSocket = socket (AF_UNIX, SOCK_STREAM | SOCK_NONBLOCK | SOCK_CLOEXEC, 0);
 
@@ -619,8 +629,19 @@ void WallpaperApplication::processControlSocket () {
 	// memstats - glibc heap counters over the socket so leak hunts can run without ptrace
 	if (command == "memstats") {
 	    const auto info = mallinfo2 ();
+	    const auto textures = this->m_renderContext->getTextureCacheStats ();
 	    reply = "ok inuse=" + std::to_string (info.uordblks) + " free=" + std::to_string (info.fordblks)
-		+ " arena=" + std::to_string (info.arena) + " mmap=" + std::to_string (info.hblkhd) + "\n";
+		+ " arena=" + std::to_string (info.arena) + " mmap=" + std::to_string (info.hblkhd)
+		+ " tex_entries=" + std::to_string (textures.entries)
+		+ " tex_bytes=" + std::to_string (textures.approximateBytes)
+		+ " tex_ref_entries=" + std::to_string (textures.referencedEntries)
+		+ " tex_ref_bytes=" + std::to_string (textures.referencedBytes)
+		+ " fbo_live=" + std::to_string (Render::CFBO::getLiveCount ())
+		+ " fbo_bytes=" + std::to_string (Render::CFBO::getLiveGpuBytes ()) + "\n";
+	}
+
+	if (command == "fbostats") {
+	    reply = "ok " + Render::CFBO::getLiveDebugSummary () + "\n";
 	}
 
 	if (write (client, reply.c_str (), reply.size ()) < 0) {
@@ -907,15 +928,6 @@ bool WallpaperApplication::applyPreparedSwitch (PreparedSwitch& job) {
 	this->setupPropertiesForProject (*job.project);
 	this->ensureBrowserForProject (*job.project);
 
-	// the outgoing CWallpaper references this Project's data; the render context
-	// keeps it alive until the crossfade is over
-	std::shared_ptr<void> previousProject;
-	if (const auto it = this->m_backgrounds.find (job.screen); it != this->m_backgrounds.end ()) {
-	    previousProject = std::shared_ptr<Project> (std::move (it->second));
-	}
-
-	this->m_backgrounds[job.screen] = std::move (job.project);
-
 	const auto scalingIt = this->m_context.settings.general.screenScalings.find (job.screen);
 	const auto clampIt = this->m_context.settings.general.screenClamps.find (job.screen);
 	const auto scaling = scalingIt != this->m_context.settings.general.screenScalings.end ()
@@ -926,7 +938,11 @@ bool WallpaperApplication::applyPreparedSwitch (PreparedSwitch& job) {
 	    : this->m_context.settings.render.window.clamp;
 
 	if (this->m_renderContext) {
-	    const auto& assetLocator = *this->m_backgrounds[job.screen]->assetLocator;
+	    // Keep the current wallpaper/project pair untouched until the replacement is
+	    // fully constructed. A failed CScene constructor must not leave the still-rendered
+	    // wallpaper referring to a Project that was moved out and destroyed while unwinding.
+	    auto& nextProject = *job.project;
+	    const auto& assetLocator = *nextProject.assetLocator;
 	    // Shared-context uploads are already complete; cache insertion is only a pointer move.
 	    for (auto& [name, texture] : job.readyTextures) {
 		this->m_renderContext->storeTexture (name, assetLocator, std::move (texture));
@@ -941,9 +957,17 @@ bool WallpaperApplication::applyPreparedSwitch (PreparedSwitch& job) {
 	    }
 
 	    auto renderWallpaper = WallpaperEngine::Render::CWallpaper::fromWallpaper (
-		*this->m_backgrounds[job.screen]->wallpaper, *this->m_renderContext, *this->m_audioContext,
+		*nextProject.wallpaper, *this->m_renderContext, *this->m_audioContext,
 		this->m_browserContext.get (), scaling, clamp
 	    );
+
+	    // The replacement is valid. Transfer ownership atomically with the render swap;
+	    // the outgoing CWallpaper references the previous Project through the transition.
+	    std::shared_ptr<void> previousProject;
+	    if (const auto it = this->m_backgrounds.find (job.screen); it != this->m_backgrounds.end ()) {
+		previousProject = std::shared_ptr<Project> (std::move (it->second));
+	    }
+	    this->m_backgrounds[job.screen] = std::move (job.project);
 
 	    this->m_renderContext->setWallpaper (
 		job.screen, std::move (renderWallpaper), std::move (previousProject), job.transition
@@ -1567,6 +1591,12 @@ void WallpaperApplication::show () {
     }
 
     this->stopSwitchWorker ();
+
+    // Tear down scenes, sound streams and their reader threads while SDL is
+    // still alive. Leaving m_renderContext until ~WallpaperApplication made
+    // cleanup() call SDL_Quit first, which can hang or invalidate SDL state
+    // underneath AudioStream teardown.
+    this->m_renderContext.reset ();
 
     cleanup ();
 }

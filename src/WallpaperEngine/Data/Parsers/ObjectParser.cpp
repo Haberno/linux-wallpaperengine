@@ -186,7 +186,7 @@ ObjectParser::parseModel3D (const JSON& it, const Project& project, ObjectData b
 	std::vector<MaterialUniquePtr> materials;
 
 	for (const auto& submesh : mesh.submeshes) {
-	    materials.push_back (MaterialParser::load (project, submesh.materialPath));
+	    materials.push_back (MaterialParser::load (project, submesh.materialPath, true));
 	}
 	const auto& animationLayersIt = it.optional ("animationlayers");
 	auto animationLayers = animationLayersIt.has_value () ? parseAnimationLayers (*animationLayersIt, project)
@@ -446,7 +446,9 @@ ParticleUniquePtr ObjectParser::parseParticle (const JSON& it, const Project& pr
 	if (!particleFile.empty ()) {
 	    try {
 		particleJson
-		    = WallpaperEngine::Data::JSON::JSON::parse (project.assetLocator->readString (particleFile));
+		    = WallpaperEngine::Data::JSON::parseCompatible (
+			project.assetLocator->readString (particleFile), particleFile
+		    );
 	    } catch (std::runtime_error& e) {
 		sLog.error ("Cannot load particle file: ", particleFile, " - ", e.what ());
 	    }
