@@ -69,6 +69,8 @@ def run_engine (exe: Path, item_id: str, outdir: Path, args) -> dict:
     env = dict (os.environ)
     env ["WPE_HEALTH_REPORT"] = str (health_path)
     env ["WPE_DUMP_SHADERS"] = str (shaders)
+    # A validation process must not replace the live desktop engine's socket.
+    env ["WPE_CONTROL_SOCKET"] = f"/tmp/linux-wallpaperengine-validator-{os.getpid ()}-{item_id}.sock"
 
     cmd = [str (exe), "--window", args.window, "--silent", "--fps", str (args.fps), item_id]
     facts = {"cmd": " ".join (cmd), "hung": False, "early_exit": False}

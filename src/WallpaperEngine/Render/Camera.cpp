@@ -51,6 +51,35 @@ float Camera::getZoom () const { return this->m_transform.zoom; }
 
 CameraTransform Camera::getDefaultTransform () const { return this->m_defaultTransform; }
 
+void Camera::setDefaultTransform (const CameraTransform& transform, const bool apply) {
+    this->m_defaultTransform = transform;
+    if (apply) {
+	this->setTransform (transform);
+    }
+}
+
+CameraTransform Camera::objectTransform (const glm::mat4& world, const float fov, const float zoom) {
+    const glm::vec3 eye = glm::vec3 (world[3]);
+    const glm::mat3 orientation = glm::mat3 (world);
+    const auto normalizedOr = [] (const glm::vec3& value, const glm::vec3& fallback) {
+	const float length = glm::length (value);
+	return length > 0.000001f ? value / length : fallback;
+    };
+    const glm::vec3 forward = normalizedOr (
+	orientation * glm::vec3 (0.0f, 0.0f, -1.0f), glm::vec3 (0.0f, 0.0f, -1.0f)
+    );
+    const glm::vec3 up
+	= normalizedOr (orientation * glm::vec3 (0.0f, 1.0f, 0.0f), glm::vec3 (0.0f, 1.0f, 0.0f));
+
+    return CameraTransform {
+	.center = eye + forward,
+	.eye = eye,
+	.up = up,
+	.fov = fov,
+	.zoom = zoom,
+    };
+}
+
 void Camera::setTransform (const CameraTransform& transform) {
     this->m_transform = transform;
     this->updateMatrices ();

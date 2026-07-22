@@ -108,5 +108,13 @@ public:
     [[nodiscard]] virtual size_t getRetainedCpuBytes () const {
 	return 0;
     }
+
+    /**
+     * @return Approximate GPU storage owned by this provider. Cache budgeting
+     *         uses this instead of assuming every provider is one RGBA image.
+     */
+    [[nodiscard]] virtual size_t getApproximateGpuBytes () const {
+	return static_cast<size_t> (getTextureWidth (0)) * getTextureHeight (0) * 4;
+    }
 };
 } // namespace WallpaperEngine::Render

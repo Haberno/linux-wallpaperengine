@@ -50,6 +50,8 @@ private:
     void updateMatrices ();
 
     const Model3D& m_model;
+    /** Legacy SceneScript compatibility: published model layers read thisLayer.size. */
+    Data::Model::DynamicValue m_size;
 
     std::vector<SubmeshBuffers> m_submeshes = {};
     mutable std::vector<glm::mat4> m_worldBones = {};
