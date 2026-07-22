@@ -46,6 +46,9 @@ void CSound::load () {
 void CSound::unload () {
     // free all the sound buffers and streams
     for (const auto& stream : this->m_audioStreams) {
+	// Wake a decoder which may be waiting for packets before removeStream waits
+	// for the SDL callback mutex.
+	stream.second->stop ();
 	this->getScene ().getAudioContext ().removeStream (stream.first);
 	delete stream.second;
     }
