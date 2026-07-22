@@ -48,13 +48,12 @@ public:
     void queuePacket (AVPacket* pkt);
 
     /**
-     * Gets the next packet in the queue
+     * Tries to get the next packet in the queue. Audio callbacks must never
+     * block: an empty queue means silence until the reader supplies more data.
      *
-     * WARNING: BLOCKS UNTIL SOME DATA IS READ FROM IT
-     *
-     * @return
+     * @return whether a packet was dequeued
      */
-    void dequeuePacket ();
+    bool dequeuePacket ();
 
     /**
      * @return The audio context in use for this audio stream
@@ -173,7 +172,7 @@ private:
     /** The audio context this stream will be played under */
     AudioContext& m_audioContext;
     /** If this stream was properly initialized or not */
-    bool m_initialized = false;
+    std::atomic<bool> m_initialized = false;
     /** Repeat enabled? */
     bool m_repeat = false;
     /** Full playback passes so far; written by the read thread, read by the render thread */
@@ -195,6 +194,8 @@ private:
     AVPacket* m_decodePacket = nullptr;
     /** The AV frame used while decoding this stream */
     AVFrame* m_decodeFrame = nullptr;
+    /** Remaining bytes in m_decodePacket; decoder state must never be shared between streams */
+    int m_audioPacketSize = 0;
 
     /**
      * Packet queue information

@@ -56,6 +56,7 @@ int audio_read_thread (void* arg) {
     }
 
     // stop the audio too just in case
+    av_packet_free (&packet);
     SDL_DestroyMutex (waitMutex);
 
     return 0;
@@ -152,9 +153,12 @@ AudioStream::~AudioStream () {
 
     this->m_audioThread = nullptr;
 
-    if (this->m_queue != nullptr) {
-	// wait for the audio buffers to be done
-	SDL_CondWait (this->m_queue->wait, this->m_queue->mutex);
+    // The FIFO owns individually allocated, reference-counted AVPackets. Freeing
+    // only the FIFO storage leaks every packet still buffered at wallpaper teardown
+    // (up to MAX_QUEUE_SIZE per sound layer). Audio-heavy scenes can have dozens of
+    // layers, so repeated switches otherwise retain hundreds of MB per pass.
+    while (this->m_queue != nullptr && this->dequeuePacket ()) {
+	av_packet_unref (this->m_decodePacket);
     }
 
     if (this->m_swrctx != nullptr && swr_is_initialized (this->m_swrctx) == true) {
@@ -176,6 +180,12 @@ AudioStream::~AudioStream () {
 #else
 	av_fifo_freep2 (&this->m_queue->packetList);
 #endif /* FF_API_FIFO_OLD_API */
+    }
+
+    if (this->m_queue != nullptr) {
+	SDL_DestroyCond (this->m_queue->cond);
+	SDL_DestroyCond (this->m_queue->wait);
+	SDL_DestroyMutex (this->m_queue->mutex);
     }
 
     delete this->m_queue;
@@ -338,7 +348,7 @@ void AudioStream::queuePacket (AVPacket* pkt) {
     SDL_UnlockMutex (this->m_queue->mutex);
 
     if (!gotQueued) {
-	av_packet_free (&pkt);
+	av_packet_free (&clone);
     }
 }
 
@@ -369,39 +379,35 @@ bool AudioStream::doQueue (AVPacket* pkt) {
     return true;
 }
 
-void AudioStream::dequeuePacket () {
+bool AudioStream::dequeuePacket () {
     MyAVPacketList entry {};
+    bool dequeued = false;
 
     SDL_LockMutex (this->m_queue->mutex);
 
-    while (this->m_audioContext.getApplicationContext ().state.general.keepRunning) {
 #if FF_API_FIFO_OLD_API
-	int ret = -1;
+    int ret = -1;
 
-	if (av_fifo_size (this->m_queue->packetList) >= static_cast<int> (sizeof (entry))) {
-	    ret = av_fifo_generic_read (this->m_queue->packetList, &entry, sizeof (entry), nullptr);
-	}
+    if (av_fifo_size (this->m_queue->packetList) >= static_cast<int> (sizeof (entry))) {
+	ret = av_fifo_generic_read (this->m_queue->packetList, &entry, sizeof (entry), nullptr);
+    }
 #else
-	const int ret = av_fifo_read (this->m_queue->packetList, &entry, 1);
+    const int ret = av_fifo_read (this->m_queue->packetList, &entry, 1);
 #endif
 
-	// enough data available, read it
-	if (ret >= 0) {
-	    this->m_queue->nb_packets--;
-	    this->m_queue->size -= entry.packet->size + sizeof (entry);
-	    this->m_queue->duration -= entry.packet->duration;
+    if (ret >= 0) {
+	this->m_queue->nb_packets--;
+	this->m_queue->size -= entry.packet->size + sizeof (entry);
+	this->m_queue->duration -= entry.packet->duration;
 
-	    // move the reference and free the old one
-	    av_packet_move_ref (this->m_decodePacket, entry.packet);
-	    av_packet_free (&entry.packet);
-	    break;
-	}
-
-	// make the thread wait if nothing was available
-	SDL_CondWait (this->m_queue->cond, this->m_queue->mutex);
+	av_packet_move_ref (this->m_decodePacket, entry.packet);
+	av_packet_free (&entry.packet);
+	dequeued = true;
     }
 
     SDL_UnlockMutex (this->m_queue->mutex);
+
+    return dequeued;
 }
 
 AVCodecContext* AudioStream::getContext () const { return this->m_context; }
@@ -439,21 +445,29 @@ bool AudioStream::isQueueEmpty () const { return this->m_queue->nb_packets == 0;
 SDL_mutex* AudioStream::getMutex () const { return this->m_queue->mutex; }
 
 void AudioStream::stop () {
-    if (!this->isInitialized ()) {
+    if (!this->m_initialized.exchange (false)) {
 	return;
     }
 
-    // stop the threads running
-    this->m_initialized = false;
+    // Wake both the decoder callback and the file-reader thread. In particular,
+    // wallpaper teardown must not wait forever for an audio callback which is
+    // blocked on an empty packet queue.
+    if (this->m_queue != nullptr) {
+	SDL_LockMutex (this->m_queue->mutex);
+	SDL_CondBroadcast (this->m_queue->cond);
+	SDL_CondBroadcast (this->m_queue->wait);
+	SDL_UnlockMutex (this->m_queue->mutex);
+    }
 }
 
 int AudioStream::resampleAudio (uint8_t* out_buf, const int out_size) {
     int out_linesize = 0;
-    int ret;
-    int out_nb_channels;
-    int out_nb_samples;
+    int ret = 0;
     uint8_t** resampled_data = nullptr;
-    int resampled_data_size;
+
+    if (out_buf == nullptr || out_size <= 0) {
+	return -1;
+    }
 
     // retrieve number of audio samples (per channel)
     const int in_nb_samples = this->m_decodeFrame->nb_samples;
@@ -462,48 +476,8 @@ int AudioStream::resampleAudio (uint8_t* out_buf, const int out_size) {
 	return -1;
     }
 
-    int max_out_nb_samples = out_nb_samples = av_rescale_rnd (
-	in_nb_samples, this->m_audioContext.getSampleRate (), this->getContext ()->sample_rate, AV_ROUND_UP
-    );
-
-    // check rescaling was successful
-    if (max_out_nb_samples <= 0) {
-	sLog.error ("av_rescale_rnd error.");
-	return -1;
-    }
-
-    // get number of output audio channels
-#if FF_API_OLD_CHANNEL_LAYOUT
-    int64_t out_channel_layout;
-
-    // set output audio channels based on the input audio channels
-    switch (this->m_audioContext.getChannels ()) {
-	case 1:
-	    out_channel_layout = AV_CH_LAYOUT_MONO;
-	    break;
-	case 2:
-	    out_channel_layout = AV_CH_LAYOUT_STEREO;
-	    break;
-	default:
-	    out_channel_layout = AV_CH_LAYOUT_SURROUND;
-	    break;
-    }
-
-    out_nb_channels = av_get_channel_layout_nb_channels (out_channel_layout);
-#else
-    out_nb_channels = this->getContext ()->ch_layout.nb_channels;
-#endif
-    ret = av_samples_alloc_array_and_samples (
-	&resampled_data, &out_linesize, out_nb_channels, out_nb_samples, this->m_audioContext.getFormat (), 0
-    );
-
-    if (ret < 0) {
-	sLog.error ("av_samples_alloc_array_and_samples() error: Could not allocate destination samples.");
-	return -1;
-    }
-
     // retrieve output samples number taking into account the progressive delay
-    out_nb_samples = av_rescale_rnd (
+    const int out_nb_samples = av_rescale_rnd (
 	swr_get_delay (this->m_swrctx, this->getContext ()->sample_rate) + in_nb_samples,
 	this->m_audioContext.getSampleRate (), this->getContext ()->sample_rate, AV_ROUND_UP
     );
@@ -514,66 +488,65 @@ int AudioStream::resampleAudio (uint8_t* out_buf, const int out_size) {
 	return -1;
     }
 
-    if (out_nb_samples > max_out_nb_samples) {
-	// free memory block and set pointer to NULL
-	av_freep (&resampled_data[0]);
+    // swr was configured for the SDL output layout. Allocating with the input
+    // channel count under-allocated mono sources while swr wrote stereo data,
+    // corrupting the heap and eventually tripping the stack protector.
+    const int out_nb_channels = this->m_audioContext.getChannels ();
+    ret = av_samples_alloc_array_and_samples (
+	&resampled_data, &out_linesize, out_nb_channels, out_nb_samples, this->m_audioContext.getFormat (), 1
+    );
 
-	// Allocate a samples buffer for out_nb_samples samples
-	ret = av_samples_alloc (
-	    resampled_data, &out_linesize, out_nb_channels, out_nb_samples, this->m_audioContext.getFormat (), 1
-	);
-
-	// check samples buffer correctly allocated
-	if (ret < 0) {
-	    sLog.error ("av_samples_alloc failed.");
-	    return -1;
-	}
-
-	max_out_nb_samples = out_nb_samples;
+    if (ret < 0) {
+	sLog.error ("av_samples_alloc_array_and_samples() error: Could not allocate destination samples.");
+	return -1;
     }
+
+    const auto freeResampledData = [&resampled_data] () {
+	if (resampled_data != nullptr) {
+	    av_freep (&resampled_data[0]);
+	    av_freep (&resampled_data);
+	}
+    };
 
     // do the actual audio data resampling
     ret = swr_convert (
-	this->m_swrctx, resampled_data, max_out_nb_samples, const_cast<const uint8_t**> (this->m_decodeFrame->data),
+	this->m_swrctx, resampled_data, out_nb_samples, const_cast<const uint8_t**> (this->m_decodeFrame->data),
 	this->m_decodeFrame->nb_samples
     );
 
     // check audio conversion was successful
     if (ret < 0) {
 	sLog.error ("swr_convert_error.");
+	freeResampledData ();
 	return -1;
     }
 
     // Get the required buffer size for the given audio parameters
-    resampled_data_size
+    const int resampled_data_size
 	= av_samples_get_buffer_size (&out_linesize, out_nb_channels, ret, this->m_audioContext.getFormat (), 1);
 
     // check audio buffer size
     if (resampled_data_size < 0) {
 	sLog.error ("av_samples_get_buffer_size error.");
+	freeResampledData ();
 	return -1;
     }
 
     // copy the resampled data to the output buffer up to out_size bytes
-    memcpy (out_buf, resampled_data[0], std::min (resampled_data_size, out_size));
+    const int copied_size = std::min (resampled_data_size, out_size);
+    memcpy (out_buf, resampled_data[0], copied_size);
+    freeResampledData ();
 
-    // memory cleanup
-    if (resampled_data) {
-	// free memory block and set pointer to NULL
-	av_freep (&resampled_data[0]);
-    }
-
-    av_freep (&resampled_data);
-
-    return resampled_data_size;
+    // The caller uses this as the readable byte count for its fixed-size
+    // buffer, so returning the pre-clamp size would make it read past the end.
+    return copied_size;
 }
 
 int AudioStream::decodeFrame (uint8_t* audioBuffer, const int bufferSize) {
-    static int audio_pkt_size = 0;
-
     // block until there's any data in the buffers
-    while (this->m_audioContext.getApplicationContext ().state.general.keepRunning) {
-	while (audio_pkt_size > 0 && this->m_audioContext.getApplicationContext ().state.general.keepRunning) {
+    while (this->m_audioContext.getApplicationContext ().state.general.keepRunning && this->isInitialized ()) {
+	while (this->m_audioPacketSize > 0
+	       && this->m_audioContext.getApplicationContext ().state.general.keepRunning && this->isInitialized ()) {
 	    int got_frame = 0;
 	    int ret = avcodec_receive_frame (this->getContext (), this->m_decodeFrame);
 
@@ -592,11 +565,11 @@ int AudioStream::decodeFrame (uint8_t* audioBuffer, const int bufferSize) {
 
 	    if (this->m_decodePacket->size < 0) {
 		// if error, skip frame
-		audio_pkt_size = 0;
+		this->m_audioPacketSize = 0;
 		break;
 	    }
 
-	    audio_pkt_size -= this->m_decodePacket->size;
+	    this->m_audioPacketSize -= this->m_decodePacket->size;
 	    int data_size = 0;
 
 	    if (got_frame) {
@@ -615,9 +588,11 @@ int AudioStream::decodeFrame (uint8_t* audioBuffer, const int bufferSize) {
 	    av_packet_unref (this->m_decodePacket);
 	}
 
-	this->dequeuePacket ();
+	if (!this->dequeuePacket ()) {
+	    return 0;
+	}
 
-	audio_pkt_size = this->m_decodePacket->size;
+	this->m_audioPacketSize = this->m_decodePacket->size;
     }
 
     return 0;
