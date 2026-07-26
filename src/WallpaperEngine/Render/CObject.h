@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstddef>
 #include <optional>
 #include <string>
 
@@ -26,6 +27,9 @@ public:
     [[nodiscard]] const Object& getObject () const;
     /** Model-local animated attachment transform for a named MDAT attachment. */
     [[nodiscard]] virtual std::optional<glm::mat4> getAttachmentTransform (const std::string& name) const;
+    /** Resolve between the stable SceneScript attachment index and authored name. */
+    [[nodiscard]] virtual std::optional<size_t> getAttachmentIndex (const std::string& name) const;
+    [[nodiscard]] virtual std::optional<std::string> getAttachmentName (size_t index) const;
     /** Effective parallax depth: the root-most layer controls its entire subtree; an
      *  unauthored root defaults to 1 (Wallpaper Engine's Layer constructor default). */
     [[nodiscard]] glm::vec2 resolveParallaxDepth () const;
