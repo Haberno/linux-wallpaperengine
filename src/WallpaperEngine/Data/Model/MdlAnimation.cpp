@@ -55,11 +55,8 @@ glm::mat4 blendMatrix (const glm::mat4& from, const glm::mat4& to, const float w
     return poseMatrix (blendPose (matrixPose (from), matrixPose (to), weight));
 }
 
-MdlBoneFrame sampleBone (const MdlActiveAnimation& layer, const size_t bone) {
-    if (layer.animation == nullptr || bone >= layer.animation->boneFrames.size ()) {
-	return {};
-    }
-
+/** Playhead position in frames, wrapped according to the clip's play mode. */
+float sampleFrame (const MdlActiveAnimation& layer) {
     const auto& animation = *layer.animation;
     const float frameCount = static_cast<float> (animation.frameCount);
     float frame = layer.time * animation.fps;
@@ -83,16 +80,36 @@ MdlBoneFrame sampleBone (const MdlActiveAnimation& layer, const size_t bone) {
 	frame = 0.0f;
     }
 
-    const auto& frames = animation.boneFrames[bone];
+    return frame;
+}
+
+MdlBoneFrame sampleBone (const MdlActiveAnimation& layer, const size_t bone) {
+    if (layer.animation == nullptr || bone >= layer.animation->boneFrames.size ()) {
+	return {};
+    }
+
+    const auto& frames = layer.animation->boneFrames[bone];
     if (frames.empty ()) {
 	return {};
     }
 
+    const float frame = sampleFrame (layer);
     const auto firstFrame = static_cast<size_t> (frame);
     const float blend = frame - static_cast<float> (firstFrame);
     const auto& current = frames[std::min (firstFrame, frames.size () - 1)];
     const auto& next = frames[std::min (firstFrame + 1, frames.size () - 1)];
     return blendPose (current, next, blend);
+}
+
+/** Same playhead and interpolation as the bones, on a scalar track instead of a pose. */
+float sampleBlendTrack (const MdlActiveAnimation& layer, const size_t row) {
+    const auto& track = layer.animation->blendTracks[row];
+    const float frame = sampleFrame (layer);
+    const auto firstFrame = static_cast<size_t> (frame);
+    const float blend = frame - static_cast<float> (firstFrame);
+    const float current = track[std::min (firstFrame, track.size () - 1)];
+    const float next = track[std::min (firstFrame + 1, track.size () - 1)];
+    return glm::mix (current, next, blend);
 }
 } // namespace
 
@@ -143,6 +160,52 @@ MdlPose MdlAnimationEvaluator::evaluate (
 	const auto parent = animationData.bones[bone].parent;
 	pose.worldBones[bone] = parent >= 0 ? pose.worldBones[parent] * local : local;
 	pose.skinBones[bone] = pose.worldBones[bone] * animationData.bones[bone].inverseBindWorld;
+    }
+
+    // scalar blend tracks compose exactly like the bones do, one value per track row
+    size_t blendRows = 0;
+    for (const auto& layer : activeAnimations) {
+	if (layer.animation != nullptr) {
+	    blendRows = std::max (blendRows, layer.animation->blendTracks.size ());
+	}
+    }
+    pose.blendWeights.assign (blendRows, 0.0f);
+
+    for (size_t row = 0; row < blendRows; row++) {
+	const auto hasRow = [row] (const MdlActiveAnimation& layer) {
+	    return layer.animation != nullptr && row < layer.animation->blendTracks.size ()
+		&& !layer.animation->blendTracks[row].empty ();
+	};
+
+	float value = 0.0f;
+	size_t firstComposedLayer = 0;
+
+	if (!activeAnimations.empty ()) {
+	    const auto& baseLayer = activeAnimations.front ();
+	    if (hasRow (baseLayer)) {
+		value = glm::mix (
+		    baseLayer.animation->blendTracks[row].front (), sampleBlendTrack (baseLayer, row),
+		    std::clamp (baseLayer.weight, 0.0f, 1.0f)
+		);
+	    }
+	    firstComposedLayer = 1;
+	}
+
+	for (size_t layerIndex = firstComposedLayer; layerIndex < activeAnimations.size (); layerIndex++) {
+	    const auto& layer = activeAnimations[layerIndex];
+	    if (!hasRow (layer) || layer.weight <= 0.0f) {
+		continue;
+	    }
+
+	    const float sampled = sampleBlendTrack (layer, row);
+	    if (layer.additive) {
+		value += (sampled - layer.animation->blendTracks[row].front ()) * layer.weight;
+	    } else {
+		value = glm::mix (value, sampled, std::clamp (layer.weight, 0.0f, 1.0f));
+	    }
+	}
+
+	pose.blendWeights[row] = value;
     }
 
     return pose;
