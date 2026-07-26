@@ -1,5 +1,7 @@
+#include <atomic>
 #include <cmath>
 #include <cstring>
+#include <thread>
 
 #include <lz4.h>
 #include <stb_image.h>
@@ -15,7 +17,26 @@ void WallpaperEngine::Data::Assets::freeDecodedPixels (void* pixels) {
     stbi_image_free (pixels);
 }
 
-void TextureParser::decodeMipmaps (Texture& texture) {
+namespace {
+void decodeMipmap (Mipmap& mipmap) {
+    int width = 0, height = 0, fileChannels = 0;
+    stbi_uc* pixels = stbi_load_from_memory (
+	reinterpret_cast<unsigned char*> (mipmap.uncompressedData.get ()), mipmap.uncompressedSize, &width, &height,
+	&fileChannels, 4
+    );
+
+    // on failure leave the mipmap untouched, the render thread will retry and report
+    if (pixels == nullptr) {
+	return;
+    }
+
+    mipmap.decodedData.reset (pixels);
+    mipmap.decodedWidth = width;
+    mipmap.decodedHeight = height;
+}
+
+/** Every mipmap of the texture that still has to be decoded, appended to out */
+void collectDecodable (Texture& texture, std::vector<Mipmap*>& out) {
     // videos are fed to the player as-is and non-FIF formats upload their raw data
     // directly, so only image-format textures have anything to decode
     if (texture.isVideoMp4 || texture.flags & TextureFlags_Video || texture.freeImageFormat == FIF_UNKNOWN) {
@@ -24,26 +45,51 @@ void TextureParser::decodeMipmaps (Texture& texture) {
 
     for (auto& [index, mipmaps] : texture.images) {
 	for (const auto& mipmap : mipmaps) {
-	    if (mipmap->decodedData != nullptr || mipmap->uncompressedData == nullptr) {
-		continue;
+	    if (mipmap->decodedData == nullptr && mipmap->uncompressedData != nullptr) {
+		out.emplace_back (mipmap.get ());
 	    }
-
-	    int width = 0, height = 0, fileChannels = 0;
-	    stbi_uc* pixels = stbi_load_from_memory (
-		reinterpret_cast<unsigned char*> (mipmap->uncompressedData.get ()), mipmap->uncompressedSize,
-		&width, &height, &fileChannels, 4
-	    );
-
-	    // on failure leave the mipmap untouched, the render thread will retry and report
-	    if (pixels == nullptr) {
-		continue;
-	    }
-
-	    mipmap->decodedData.reset (pixels);
-	    mipmap->decodedWidth = width;
-	    mipmap->decodedHeight = height;
 	}
     }
+}
+} // namespace
+
+void TextureParser::decodeMipmaps (Texture& texture) {
+    std::vector<Mipmap*> pending;
+    collectDecodable (texture, pending);
+
+    for (Mipmap* mipmap : pending) {
+	decodeMipmap (*mipmap);
+    }
+}
+
+void TextureParser::decodeMipmaps (const std::vector<Texture*>& textures) {
+    std::vector<Mipmap*> pending;
+    for (Texture* texture : textures) {
+	collectDecodable (*texture, pending);
+    }
+
+    if (pending.empty ()) {
+	return;
+    }
+
+    std::atomic<size_t> next = 0;
+    const auto worker = [&next, &pending] {
+	for (size_t index = next++; index < pending.size (); index = next++) {
+	    decodeMipmap (*pending[index]);
+	}
+    };
+
+    const auto threads =
+	std::min<size_t> (pending.size (), std::max (1u, std::thread::hardware_concurrency ()));
+    std::vector<std::jthread> pool;
+    pool.reserve (threads - 1);
+
+    for (size_t thread = 1; thread < threads; thread++) {
+	pool.emplace_back (worker);
+    }
+
+    // this thread takes work too instead of waiting on the pool
+    worker ();
 }
 
 TextureUniquePtr TextureParser::parse (const BinaryReader& file) {
