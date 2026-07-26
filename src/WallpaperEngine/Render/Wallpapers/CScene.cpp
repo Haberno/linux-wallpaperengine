@@ -409,11 +409,7 @@ CScene::CScene (
 	      ) } };
 
     // create image for bloom passes
-    // the bloom helper is an orthographic full-scene quad; 3D scenes use the HDR bloom
-    // pipeline instead, which is not implemented yet
-    if (isPerspective && scene->camera.bloom.enabled->value->getBool ()) {
-	sLog.error ("Bloom is not supported on 3D scenes yet, ignoring");
-    } else if (scene->camera.bloom.enabled->value->getBool ()) {
+    if (scene->camera.bloom.enabled->value->getBool ()) {
 	this->m_bloomObjectData = ObjectParser::parse (bloom, scene->project);
 	this->m_bloomObject = this->createObject (*this->m_bloomObjectData);
 
