@@ -785,8 +785,12 @@ ParticleInitializerUniquePtr ObjectParser::parseParticleInitializer (const JSON&
 	);
     } else if (name == "mapsequencearoundcontrolpoint") {
 	return std::make_unique<MapSequenceAroundControlPointInitializer> (
-	    it.user ("controlpoint", properties, 0), it.user ("count", properties, 1),
-	    it.user ("speedmin", properties, glm::vec3 (0.0f)), it.user ("speedmax", properties, glm::vec3 (100.0f))
+	    it.user ("count", properties, 32.0f), it.user ("bounds", properties, glm::vec2 (0.0f, 1.0f)),
+	    it.user ("speedmin", properties, glm::vec3 (0.0f)),
+	    it.user ("speedmax", properties, glm::vec3 (0.0f)),
+	    it.user ("axis", properties, glm::vec3 (0.0f, 0.0f, 1.0f)),
+	    it.optional<std::string> ("limitbehavior", "repeat"), it.user ("controlpoint", properties, 0),
+	    it.optional ("flags", 0u)
 	);
     }
 

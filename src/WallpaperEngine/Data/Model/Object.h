@@ -294,15 +294,22 @@ public:
 class MapSequenceAroundControlPointInitializer : public ParticleInitializerBase {
 public:
     MapSequenceAroundControlPointInitializer (
-	UserSettingUniquePtr controlPoint, UserSettingUniquePtr count, UserSettingUniquePtr speedMin,
-	UserSettingUniquePtr speedMax
+	UserSettingUniquePtr count, UserSettingUniquePtr bounds, UserSettingUniquePtr speedMin,
+	UserSettingUniquePtr speedMax, UserSettingUniquePtr axis, std::string limitBehavior,
+	UserSettingUniquePtr controlPoint, uint32_t flags
     ) :
-	controlPoint (std::move (controlPoint)), count (std::move (count)), speedMin (std::move (speedMin)),
-	speedMax (std::move (speedMax)) { }
-    UserSettingUniquePtr controlPoint;
+	count (std::move (count)), bounds (std::move (bounds)), speedMin (std::move (speedMin)),
+	speedMax (std::move (speedMax)), axis (std::move (axis)), limitBehavior (std::move (limitBehavior)),
+	controlPoint (std::move (controlPoint)), flags (flags) { }
     UserSettingUniquePtr count;
+    UserSettingUniquePtr bounds;
     UserSettingUniquePtr speedMin;
     UserSettingUniquePtr speedMax;
+    UserSettingUniquePtr axis;
+    std::string limitBehavior;
+    UserSettingUniquePtr controlPoint;
+    /** Retained from the official schema; its CPU initializer does not inspect these bits. */
+    uint32_t flags;
 };
 
 using ParticleInitializerUniquePtr = std::unique_ptr<ParticleInitializerBase>;
