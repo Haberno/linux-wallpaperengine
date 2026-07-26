@@ -148,13 +148,19 @@ AssetLocatorUniquePtr WallpaperApplication::setupAssetLocator (const std::string
     container->mount ("$mediaThumbnail", "$mediaThumbnail");
     container->mount (path, "/");
 
-    try {
-	container->mount (path / "scene.pkg", "/");
-    } catch (std::runtime_error&) { }
+    // nearly every wallpaper packs its assets into "scene.pkg" or "gifscene.pkg", but older ones
+    // name the package after the scene file instead, e.g. 869945315 ships "audiophile.pkg" and
+    // could not resolve its own "/audiophile.json" at all
+    std::error_code packageError;
+    for (const auto& entry : std::filesystem::directory_iterator (path, packageError)) {
+	if (entry.path ().extension () != ".pkg") {
+	    continue;
+	}
 
-    try {
-	container->mount (path / "gifscene.pkg", "/");
-    } catch (std::runtime_error&) { }
+	try {
+	    container->mount (entry.path (), "/");
+	} catch (std::runtime_error&) { }
+    }
 
     try {
 	container->mount (this->m_context.settings.general.assets, "/");
