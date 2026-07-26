@@ -1375,7 +1375,7 @@ std::string ShaderUnit::applyFloatTernaryCompatibility (std::string source) cons
 void ShaderUnit::parseComboConfiguration (const std::string& content, const int defaultValue) {
     JSON data;
     try {
-	data = JSON::parse (content);
+	data = WallpaperEngine::Data::JSON::parseCompatible (content, this->m_file + " combo metadata");
     } catch (const std::exception& e) {
 	sLog.error ("Cannot parse combo metadata in shader ", this->m_file, ": ", e.what ());
 	return;
@@ -1473,7 +1473,9 @@ void ShaderUnit::parseParameterConfiguration (
 ) {
     JSON data;
     try {
-	data = JSON::parse (content);
+	data = WallpaperEngine::Data::JSON::parseCompatible (
+	    content, this->m_file + " parameter metadata for " + name
+	);
     } catch (const std::exception& e) {
 	sLog.error ("Cannot parse parameter metadata for ", name, " in shader ", this->m_file, ": ", e.what ());
 	return;

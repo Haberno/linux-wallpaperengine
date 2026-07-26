@@ -45,11 +45,23 @@ TEST_CASE ("omitted depth state uses 3D model defaults only in model context") {
     REQUIRE (overrideMaterial->passes.front ()->depthwrite == DepthwriteMode_Disabled);
 }
 
-TEST_CASE ("Wallpaper Engine JSON trailing commas are accepted narrowly") {
-    const auto data = parseCompatible (R"({"array":[1,2,],"object":{"value":3,},"literal":",]"})", "test.json");
+TEST_CASE ("Wallpaper Engine JSON comments and trailing commas are accepted narrowly") {
+    const auto data = parseCompatible (
+	R"json({
+	    // Comments may appear between values.
+	    "array": [1, /* inline */ 2,],
+	    "lineCommentBeforeClose": [1, // still a trailing comma
+	    ],
+	    "object": {"value": 3, /* and between a trailing comma and its close */},
+	    "literal": ",] // not a comment /* either */",
+	})json",
+	"test.json"
+    );
 
     REQUIRE (data["array"].size () == 2);
+    REQUIRE (data["lineCommentBeforeClose"].size () == 1);
     REQUIRE (data["object"]["value"] == 3);
-    REQUIRE (data["literal"] == ",]");
+    REQUIRE (data["literal"] == ",] // not a comment /* either */");
     REQUIRE_THROWS_AS (parseCompatible (R"({"still":"broken",oops})"), JSON::parse_error);
+    REQUIRE_THROWS_AS (parseCompatible (R"({"unterminated": true /* comment})"), JSON::parse_error);
 }
