@@ -175,6 +175,7 @@ SceneUniquePtr WallpaperParser::parseScene (const JSON& file, Project& project) 
                     .enabled = general.user ("bloom", properties, false),
                     .strength = general.user ("bloomstrength", properties, 0.0f),
                     .threshold = general.user ("bloomthreshold", properties, 0.0f),
+                    .tint = general.user ("bloomtint", properties, glm::vec3 (1.0f)),
                 },
                 .parallax = {
                     .enabled = general.user ("cameraparallax", properties, false),
