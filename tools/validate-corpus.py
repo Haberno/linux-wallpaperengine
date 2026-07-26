@@ -35,6 +35,12 @@ SHADER_EXTS = {".vert", ".frag"}
 # renderable standalone; workshop assets (effects, models, visualizers) are not
 WALLPAPER_TYPES = {"scene", "video", "web"}
 DETAIL_CAP = 2000  # chars of glslang output kept per failing shader
+# This machine's Wayland/GLFW stack logs these through sLog.error on every run,
+# regardless of the wallpaper. Counting them made every clean item a WARN.
+BENIGN_ERRORS = (
+    "Failed to initialize GLEW: No GLX display",
+    "GLFW error 65548",
+)
 # detail line of a WPE_JSON_TELEMETRY report: "    general.bloomhdrfeather (x1)"
 TELEMETRY_KEY = re.compile (r"^\s+(\S+) \(x(\d+)\)$")
 TELEMETRY_TOP = 25  # unconsumed keys printed in the console summary
@@ -174,6 +180,14 @@ def run_engine (exe: Path, item_id: str, outdir: Path, args) -> dict:
     except (OSError, json.JSONDecodeError):
         facts ["health"] = None
 
+    # health.json only carries the log.error count (details are capped), so the
+    # baseline lines have to be counted from the log to be subtracted from it
+    try:
+        log_text = (outdir / "log.txt").read_bytes ().decode ("utf-8", errors = "replace")
+    except OSError:
+        log_text = ""
+    facts ["benign_errors"] = sum (log_text.count (pattern) for pattern in BENIGN_ERRORS)
+
     return facts
 
 
@@ -221,8 +235,9 @@ def classify (facts: dict, shader_total: int, shader_failures: list [dict]) -> t
     if reasons:
         return "FAIL", reasons
 
-    if counters.get ("log.error", 0) > 0:
-        reasons.append (f"log.error x{counters ['log.error']} (see details in health.json)")
+    errors = counters.get ("log.error", 0) - facts.get ("benign_errors", 0)
+    if errors > 0:
+        reasons.append (f"log.error x{errors} (see details in health.json)")
         return "WARN", reasons
     return "PASS", reasons
 
