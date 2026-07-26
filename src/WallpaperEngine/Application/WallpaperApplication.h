@@ -192,6 +192,8 @@ private:
 	std::vector<std::pair<std::string, Data::Assets::TextureUniquePtr>> textures {};
 	/** Failure description, empty on success */
 	std::string error {};
+	/** When the switch was requested, for the health report's switch.total */
+	std::chrono::steady_clock::time_point requested {};
     };
 
     /**
