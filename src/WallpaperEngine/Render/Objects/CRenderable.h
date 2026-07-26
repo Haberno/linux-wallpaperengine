@@ -6,6 +6,8 @@
 
 #include "WallpaperEngine/Render/Shaders/Shader.h"
 
+#include <cstddef>
+
 using namespace WallpaperEngine;
 using namespace WallpaperEngine::Render;
 
@@ -20,6 +22,24 @@ public:
 
     [[nodiscard]] double getAnimationTime () const;
 
+    /** SceneScript texture-animation controller state for this layer's albedo texture. */
+    [[nodiscard]] bool hasTextureAnimation () const;
+    [[nodiscard]] size_t getTextureAnimationFrameCount () const;
+    [[nodiscard]] double getTextureAnimationDuration () const;
+    [[nodiscard]] float getTextureAnimationRate () const;
+    void setTextureAnimationRate (float rate);
+    void playTextureAnimation ();
+    void pauseTextureAnimation ();
+    void stopTextureAnimation ();
+    [[nodiscard]] bool isTextureAnimationPlaying () const;
+    [[nodiscard]] size_t getTextureAnimationFrame () const;
+    void setTextureAnimationFrame (size_t frame);
+    void joinTextureAnimation ();
+
+    /** Playback time used by material passes. Non-albedo animated textures stay on
+     *  Wallpaper Engine's shared render timer. */
+    [[nodiscard]] double getTextureAnimationTime (const std::shared_ptr<const TextureProvider>& texture) const;
+
     void setup () override;
 
     [[nodiscard]] virtual const float& getBrightness () const = 0;
@@ -33,6 +53,20 @@ protected:
     void detectTexture ();
 
     double m_animationTime = 0.0;
+
+    struct TextureAnimationPlayback {
+	bool joined = true;
+	bool playing = true;
+	float rate = 1.0f;
+	double anchorTime = 0.0;
+	float anchorRenderTime = 0.0f;
+    };
+
+    [[nodiscard]] float getTextureAnimationRenderTime () const;
+    [[nodiscard]] double getControlledTextureAnimationTime () const;
+    void detachTextureAnimationClock ();
+
+    TextureAnimationPlayback m_textureAnimationPlayback = {};
 
     std::shared_ptr<const TextureProvider> m_texture = nullptr;
     const Material& m_material;
