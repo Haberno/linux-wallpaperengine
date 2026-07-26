@@ -4,11 +4,13 @@
 #include "WallpaperEngine/Data/Model/Project.h"
 #include "WallpaperEngine/Data/Model/Wallpaper.h"
 #include "WallpaperEngine/Data/Parsers/MaterialParser.h"
+#include "WallpaperEngine/Data/Parsers/ObjectParser.h"
 
 using WallpaperEngine::Data::JSON::JSON;
 using WallpaperEngine::Data::JSON::parseCompatible;
 using namespace WallpaperEngine::Data::Model;
 using WallpaperEngine::Data::Parsers::MaterialParser;
+using WallpaperEngine::Data::Parsers::ObjectParser;
 
 TEST_CASE ("optional tolerates authored type drift") {
     // workshop 3758354038 authors text "padding" as a vector string where older scenes
@@ -19,6 +21,21 @@ TEST_CASE ("optional tolerates authored type drift") {
     REQUIRE_FALSE (data.optional<int> ("padding").has_value ());
     REQUIRE (data.optional ("maxrows", 0) == 1);
     REQUIRE (data.optional ("missing", 3) == 3);
+}
+
+TEST_CASE ("dependencies tolerate the structured authoring form") {
+    // workshop 3594400060, 2726424530 and 2787541254 author dependencies as
+    // {"id": 104, "index": 0, "type": "collisionmodel"} instead of a bare id. the implicit
+    // conversion to int threw type_error.302, and parseDependencies runs in both the parse
+    // attempt and its fallback, so the wallpaper died outright
+    const auto data = JSON::parse (
+	R"({"id": 12, "name": "thing", "solid": true,
+	    "dependencies": [7, {"id": 104, "index": 0, "type": "collisionmodel"}, {"index": 1}]})"
+    );
+    const Project project {};
+
+    const auto object = ObjectParser::parse (data, project);
+    REQUIRE (object->dependencies == std::vector {7, 104});
 }
 
 TEST_CASE ("alpha-to-coverage material blending is preserved") {
