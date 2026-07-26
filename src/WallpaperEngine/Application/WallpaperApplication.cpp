@@ -168,6 +168,24 @@ AssetLocatorUniquePtr WallpaperApplication::setupAssetLocator (const std::string
 	sLog.exception ("Cannot find a valid assets folder, resolved to ", this->m_context.settings.general.assets);
     }
 
+    // Stock effects ship as self-contained containers: the assets root has no
+    // materials/effects tree of its own, so `materials/effects/<name>.json` and
+    // the effect's own shaders only resolve if each container is mounted too.
+    // The directory name does not match the material name (watercaustics ->
+    // caustics.json), so they cannot be resolved on demand from the path.
+    std::error_code effectsError;
+    for (const auto& effect : std::filesystem::directory_iterator (
+	     this->m_context.settings.general.assets / "effects", effectsError
+	 )) {
+	if (effect.is_directory (effectsError) == false) {
+	    continue;
+	}
+
+	try {
+	    container->mount (effect.path (), "/");
+	} catch (std::runtime_error&) { }
+    }
+
     // mount the current directory as root
     try {
 	container->mount (std::filesystem::current_path (), "/");
