@@ -98,18 +98,32 @@ TextureUniquePtr TextureParser::parse (const BinaryReader& file) {
     parseTextureHeader (*result, file);
     parseContainer (*result, file);
 
-    for (uint32_t image = 0; image < result->imageCount; image++) {
+    // a rejected mipmap leaves the read position mid-payload, so nothing after it can be trusted
+    bool truncated = false;
+
+    for (uint32_t image = 0; image < result->imageCount && !truncated; image++) {
 	const uint32_t mipmapCount = file.nextUInt32 ();
 	MipmapList mipmaps;
 
 	for (uint32_t mipmap = 0; mipmap < mipmapCount; mipmap++) {
-	    mipmaps.emplace_back (parseMipmap (file, *result));
+	    auto parsed = parseMipmap (file, *result);
+
+	    if (parsed == nullptr) {
+		truncated = true;
+		break;
+	    }
+
+	    mipmaps.emplace_back (std::move (parsed));
+	}
+
+	if (mipmaps.empty ()) {
+	    sLog.exception ("Cannot parse texture, the first mipmap's header is not valid");
 	}
 
 	result->images.emplace (image, mipmaps);
     }
 
-    if (!result->isAnimated ()) {
+    if (truncated || !result->isAnimated ()) {
 	return result;
     }
 
@@ -159,6 +173,19 @@ MipmapSharedPtr TextureParser::parseMipmap (const BinaryReader& file, const Text
 	// this might be better named as mipmap_bytes_size instead of compressedSize
 	// as in uncompressed files this variable actually holds the file length
 	result->uncompressedSize = result->compressedSize;
+    }
+
+    // TEXB0004 containers with a variant table (conditionalImages > 1) interleave the alternate
+    // images' payloads between the base image's mipmap levels, so the read position after mip0 is
+    // variant data, not the next header. that layout is not decoded yet, and the garbage header
+    // used to reach LZ4 and abort the whole wallpaper. report the level as unusable instead; the
+    // caller keeps the levels parsed so far and CTexture sizes GL_TEXTURE_MAX_LEVEL off that count,
+    // so the texture stays mipmap-complete
+    // ponytail: costs the smaller mipmaps on those textures, drop it once the variant header is
+    // reverse-engineered (2924081598, 3766299002)
+    if (result->width == 0 || result->height == 0 || result->compression > 1 || result->compressedSize <= 0
+	|| result->uncompressedSize <= 0) {
+	return nullptr;
     }
 
     result->uncompressedData = std::unique_ptr<char[]> (new char[result->uncompressedSize]);
