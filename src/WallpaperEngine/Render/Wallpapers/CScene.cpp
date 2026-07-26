@@ -374,6 +374,15 @@ CScene::CScene (
 
     const auto bloomOrigin = glm::vec3 { sceneWidth / 2, sceneHeight / 2, 0.0f };
     const auto bloomSize = glm::vec2 { sceneWidth, sceneHeight };
+    // g_BloomTint is a vec3 constant, which is authored as a whitespace-separated string
+    const glm::vec3 bloomTint = this->getScene ().camera.bloom.tint->value->getVec3 ();
+    const JSON bloomConstants
+	= { { "constantshadervalues",
+	      { { "bloomstrength", this->getScene ().camera.bloom.strength->value->getFloat () },
+		{ "bloomthreshold", this->getScene ().camera.bloom.threshold->value->getFloat () },
+		{ "bloomtint",
+		  std::to_string (bloomTint.x) + " " + std::to_string (bloomTint.y) + " "
+		      + std::to_string (bloomTint.z) } } } };
 
     const JSON bloom
 	= { { "image", "models/wpenginelinux.json" },
@@ -391,21 +400,7 @@ CScene::CScene (
 		  { { { "file", "effects/wpenginelinux/bloomeffect.json" },
 		      { "id", 15242000 },
 		      { "name", "" },
-		      { "passes",
-			JSON::array (
-			    { { { "constantshadervalues",
-				  { { "bloomstrength", this->getScene ().camera.bloom.strength->value->getFloat () },
-				    { "bloomthreshold",
-				      this->getScene ().camera.bloom.threshold->value->getFloat () } } } },
-			      { { "constantshadervalues",
-				  { { "bloomstrength", this->getScene ().camera.bloom.strength->value->getFloat () },
-				    { "bloomthreshold",
-				      this->getScene ().camera.bloom.threshold->value->getFloat () } } } },
-			      { { "constantshadervalues",
-				  { { "bloomstrength", this->getScene ().camera.bloom.strength->value->getFloat () },
-				    { "bloomthreshold",
-				      this->getScene ().camera.bloom.threshold->value->getFloat () } } } } }
-			) } } }
+		      { "passes", JSON::array ({ bloomConstants, bloomConstants, bloomConstants }) } } }
 	      ) } };
 
     // create image for bloom passes
