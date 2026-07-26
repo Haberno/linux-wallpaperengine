@@ -115,7 +115,16 @@ std::vector<int> ObjectParser::parseDependencies (const JSON& it) {
     std::vector<int> result = {};
 
     for (const auto& cur : *dependenciesIt) {
-	result.push_back (cur);
+	if (cur.is_number ()) {
+	    result.push_back (cur);
+	} else if (cur.is_object ()) {
+	    // newer scenes author entries as {"id": 104, "index": 0, "type": "collisionmodel"}
+	    // instead of a bare object id. only the id matters here, dependencies are just a
+	    // creation-order list
+	    if (const auto id = cur.optional<int> ("id"); id.has_value ()) {
+		result.push_back (*id);
+	    }
+	}
     }
 
     return result;
