@@ -40,6 +40,13 @@ public:
 
     [[nodiscard]] const Image& getImage () const;
     [[nodiscard]] glm::vec2 getSize () const;
+    [[nodiscard]] std::optional<glm::mat4> getAttachmentTransform (const std::string& name) const override;
+    [[nodiscard]] std::optional<size_t> getAttachmentIndex (const std::string& name) const override;
+    [[nodiscard]] std::optional<std::string> getAttachmentName (size_t index) const override;
+
+    /** Return cursor coordinates local to this image when the world-space point
+     *  intersects its authored quad; std::nullopt means the point is outside. */
+    [[nodiscard]] std::optional<glm::vec3> cursorLocalPosition (const glm::vec3& worldPosition) const;
 
     [[nodiscard]] GLuint getSceneSpacePosition () const;
     [[nodiscard]] GLuint getCopySpacePosition () const;
@@ -104,7 +111,18 @@ private:
 	float visibilityWeight = 0.0f;
     };
 
+    /** Overlay vertex glued to a body triangle so it follows the same deformation. */
+    struct PuppetOverlayBinding {
+	std::array<GLushort, 3> vertices = {};
+	glm::vec3 weights = glm::vec3 (0.0f);
+    };
+
     bool loadPuppetMesh (const glm::vec2& size);
+    void
+    loadPuppetOverlay (const std::vector<char>& data, const std::vector<GLushort>& bodyIndices, const glm::vec2& size);
+    void bindPuppetOverlayToBody (const std::vector<GLushort>& bodyIndices);
+    void setupPuppetOverlayPass ();
+    void updatePuppetOverlayBuffer (const glm::vec2& size);
     void selectPuppetAnimations (float sceneTime);
     void updatePuppetPositionBuffer (const glm::vec2& size);
     [[nodiscard]] std::optional<ResolvedTransform> puppetAttachmentTransform (const std::string& name) const;
@@ -143,6 +161,25 @@ private:
     std::vector<GLfloat> m_puppetPositions = {};
     std::vector<WallpaperEngine::Data::Model::MdlActiveAnimation> m_puppetActiveLayers = {};
     std::unordered_map<int, PuppetLayerPlayback> m_puppetLayerPlayback = {};
+
+    /**
+     * Channelmap overlay: a second puppet submesh of static quads drawn over the body with
+     * the puppettexturechannels shader, whose opacity comes from the clip's blend tracks.
+     * This is how authored eye blinks work (Kirby in 3441873795, Sonic in 2915841260).
+     */
+    GLuint m_puppetOverlayPosition = GL_NONE;
+    GLuint m_puppetOverlayTexCoord = GL_NONE;
+    GLuint m_puppetOverlayBlendIndices = GL_NONE;
+    GLuint m_puppetOverlayIndices = GL_NONE;
+    GLsizei m_puppetOverlayIndexCount = 0;
+    size_t m_puppetOverlayPositionBytes = 0;
+    std::string m_puppetOverlayMaterial = {};
+    std::vector<GLfloat> m_puppetOverlayRawPositions = {};
+    std::vector<GLfloat> m_puppetOverlayPositions = {};
+    std::vector<PuppetOverlayBinding> m_puppetOverlayBindings = {};
+    /** g_BlendMap row zero; the shader indexes it with a_BlendIndices.x. */
+    glm::vec4 m_puppetBlendMap = glm::vec4 (0.0f);
+    Effects::CPass* m_puppetOverlayPass = nullptr;
 
     glm::mat4 m_modelViewProjectionScreen = {};
     glm::mat4 m_modelViewProjectionPass = {};
