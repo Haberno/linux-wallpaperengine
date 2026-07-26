@@ -19,6 +19,7 @@ Requires: python3 (stdlib only), glslang, a running display session.
 import argparse
 import json
 import os
+import re
 import shutil
 import signal
 import subprocess
@@ -34,6 +35,9 @@ SHADER_EXTS = {".vert", ".frag"}
 # renderable standalone; workshop assets (effects, models, visualizers) are not
 WALLPAPER_TYPES = {"scene", "video", "web"}
 DETAIL_CAP = 2000  # chars of glslang output kept per failing shader
+# detail line of a WPE_JSON_TELEMETRY report: "    general.bloomhdrfeather (x1)"
+TELEMETRY_KEY = re.compile (r"^\s+(\S+) \(x(\d+)\)$")
+TELEMETRY_TOP = 25  # unconsumed keys printed in the console summary
 
 
 def find_corpus (explicit: str | None) -> Path:
@@ -49,14 +53,86 @@ def find_corpus (explicit: str | None) -> Path:
     sys.exit ("error: no workshop corpus found; pass one explicitly")
 
 
-def project_info (item: Path) -> tuple [str, str]:
-    """Best-effort (title, type) from project.json."""
+def project_info (item: Path) -> tuple [str, str, str]:
+    """Best-effort (title, type, scene file) from project.json."""
     try:
         with open (item / "project.json", encoding = "utf-8", errors = "replace") as fp:
             project = json.load (fp)
-        return str (project.get ("title", "?")), str (project.get ("type", "?")).lower ()
-    except (OSError, json.JSONDecodeError, ValueError):
-        return "?", "?"
+        return (str (project.get ("title", "?")), str (project.get ("type", "?")).lower (),
+                str (project.get ("file", "scene.json")))
+    except (OSError, json.JSONDecodeError, ValueError, AttributeError):
+        return "?", "?", "scene.json"
+
+
+def pkg_entry (pkg: Path, wanted: str) -> bytes | None:
+    """Read one file out of a .pkg container.
+
+    Layout: [u32 len][version][u32 count]{[u32 len][path][u32 offset][u32 size]}* then the
+    data blob, entry offsets being relative to the start of that blob.
+    """
+    def u32 (fp) -> int:
+        return int.from_bytes (fp.read (4), "little")
+
+    try:
+        with open (pkg, "rb") as fp:
+            fp.seek (u32 (fp), 1)  # version string
+            count = u32 (fp)
+            if count > 1 << 20:  # not a pkg (or truncated); do not spin on garbage
+                return None
+            entries = {}
+            for _ in range (count):
+                path = fp.read (u32 (fp)).decode ("utf-8", errors = "replace")
+                entries [path] = (u32 (fp), u32 (fp))
+            if wanted not in entries:
+                return None
+            offset, size = entries [wanted]
+            fp.seek (offset, 1)
+            return fp.read (size)
+    except (OSError, ValueError):
+        return None
+
+
+def scene_projection (item: Path, scene_file: str) -> str:
+    """'3d' (perspective), '2d' (orthogonal), or '?' when the scene file is unreadable.
+
+    @param scene_file project.json's "file" - usually scene.json, but a handful of items
+                      ship gifscene.json/audiophile.json, loose or in a like-named .pkg.
+    """
+    raw = None
+    try:
+        loose = item / scene_file
+        if loose.is_file ():
+            raw = loose.read_bytes ()
+        else:
+            for pkg in sorted (item.glob ("*.pkg")):
+                raw = pkg_entry (pkg, scene_file)
+                if raw is not None:
+                    break
+    except OSError:
+        raw = None
+    if raw is None:
+        return "?"
+
+    try:
+        scene = json.loads (raw.decode ("utf-8", errors = "replace").lstrip ("﻿"))
+        # WE emits an orthogonalprojection block for 2D scenes and omits it for perspective ones
+        return "2d" if scene ["general"].get ("orthogonalprojection") is not None else "3d"
+    except (json.JSONDecodeError, ValueError, AttributeError, TypeError, KeyError):
+        return "?"
+
+
+def parse_telemetry (log: Path) -> dict [str, int]:
+    """Unconsumed JSON key paths reported by WPE_JSON_TELEMETRY: path -> occurrences."""
+    keys: dict [str, int] = {}
+    try:
+        text = log.read_text (encoding = "utf-8", errors = "replace")
+    except OSError:
+        return keys
+    for line in text.splitlines ():
+        match = TELEMETRY_KEY.match (line)
+        if match:
+            keys [match.group (1)] = keys.get (match.group (1), 0) + int (match.group (2))
+    return keys
 
 
 def run_engine (exe: Path, item_id: str, outdir: Path, args) -> dict:
@@ -71,6 +147,8 @@ def run_engine (exe: Path, item_id: str, outdir: Path, args) -> dict:
     env ["WPE_DUMP_SHADERS"] = str (shaders)
     # A validation process must not replace the live desktop engine's socket.
     env ["WPE_CONTROL_SOCKET"] = f"/tmp/linux-wallpaperengine-validator-{os.getpid ()}-{item_id}.sock"
+    if args.telemetry:
+        env ["WPE_JSON_TELEMETRY"] = "1"
 
     cmd = [str (exe), "--window", args.window, "--silent", "--fps", str (args.fps), item_id]
     facts = {"cmd": " ".join (cmd), "hung": False, "early_exit": False}
@@ -159,6 +237,12 @@ def main () -> int:
     parser.add_argument ("--out", default = "validation-output",
                          help = "artifact/report directory (default: %(default)s)")
     parser.add_argument ("--ids", nargs = "*", help = "only validate these workshop ids")
+    parser.add_argument ("--projection", choices = ("any", "2d", "3d"), default = "any",
+                         help = "only validate scenes with this projection; 3d selects the "
+                         "perspective (model) corpus (default: %(default)s)")
+    parser.add_argument ("--telemetry", action = "store_true",
+                         help = "run with WPE_JSON_TELEMETRY and rank the JSON keys no parser "
+                         "consumed, per item and corpus-wide, in report.json")
     parser.add_argument ("--duration", type = float, default = 8.0,
                          help = "seconds to let each background render (default: %(default)s)")
     parser.add_argument ("--grace", type = float, default = 10.0,
@@ -189,8 +273,11 @@ def main () -> int:
         missing = wanted - {path.name for path in items}
         if missing:
             sys.exit (f"error: ids not found in corpus: {', '.join (sorted (missing))}")
+    projections = {path.name: scene_projection (path, project_info (path) [2]) for path in items}
+    if args.projection != "any":
+        items = [path for path in items if projections [path.name] == args.projection]
     if not items:
-        sys.exit (f"error: no workshop items in {corpus}")
+        sys.exit (f"error: no workshop items in {corpus} matching the given filters")
 
     out = Path (args.out)
     out.mkdir (parents = True, exist_ok = True)
@@ -200,15 +287,19 @@ def main () -> int:
         "exe": str (exe),
         "corpus": str (corpus),
         "duration_per_item": args.duration,
+        "projection": args.projection,
         "totals": {"PASS": 0, "WARN": 0, "FAIL": 0, "SKIP": 0},
         "items": [],
     }
+    # unconsumed JSON key path -> [wallpapers reporting it, total occurrences]
+    unknown_keys: dict [str, list [int]] = {}
 
     print (f"validating {len (items)} item(s) from {corpus}")
     for index, item in enumerate (items, 1):
-        title, wp_type = project_info (item)
+        title, wp_type, _ = project_info (item)
+        projection = projections [item.name]
         outdir = out / item.name
-        print (f"[{index}/{len (items)}] {item.name} ({wp_type}) {title!r} ... ",
+        print (f"[{index}/{len (items)}] {item.name} ({wp_type}/{projection}) {title!r} ... ",
                end = "", flush = True)
 
         if wp_type not in WALLPAPER_TYPES and not args.include_assets:
@@ -218,6 +309,7 @@ def main () -> int:
                 "id": item.name,
                 "title": title,
                 "type": wp_type,
+                "projection": projection,
                 "status": "SKIP",
                 "reasons": ["no wallpaper type in project.json (workshop asset/effect)"],
             })
@@ -236,12 +328,20 @@ def main () -> int:
         if status == "PASS" and not args.keep_all:
             shutil.rmtree (outdir / "shaders", ignore_errors = True)
 
+        unknown = parse_telemetry (outdir / "log.txt") if args.telemetry else {}
+        for key, count in unknown.items ():
+            tally = unknown_keys.setdefault (key, [0, 0])
+            tally [0] += 1
+            tally [1] += count
+
         timing = (facts ["health"] or {}).get ("timing", {})
         report ["totals"] [status] += 1
         report ["items"].append ({
             "id": item.name,
             "title": title,
             "type": wp_type,
+            "projection": projection,
+            "unknown_keys": len (unknown),
             "status": status,
             "reasons": reasons,
             "exit_code": facts ["exit_code"],
@@ -254,6 +354,10 @@ def main () -> int:
             "counters": (facts ["health"] or {}).get ("counters", {}),
         })
 
+    ranked = sorted (unknown_keys.items (), key = lambda entry: (-entry [1] [0], entry [0]))
+    report ["unknown_keys"] = [{"key": key, "wallpapers": seen, "occurrences": total}
+                               for key, (seen, total) in ranked]
+
     report_path = out / "report.json"
     with open (report_path, "w", encoding = "utf-8") as fp:
         json.dump (report, fp, indent = 2)
@@ -264,6 +368,11 @@ def main () -> int:
     for entry in report ["items"]:
         if entry ["status"] in ("WARN", "FAIL"):
             print (f"  {entry ['status']} {entry ['id']}: {'; '.join (entry ['reasons'])}")
+
+    if ranked:
+        print (f"\ntop {min (TELEMETRY_TOP, len (ranked))} of {len (ranked)} JSON keys no parser consumed:")
+        for key, (seen, total) in ranked [:TELEMETRY_TOP]:
+            print (f"  {seen:4d} wallpaper(s) {total:6d}x  {key}")
 
     return 1 if totals ["FAIL"] else 0
 
