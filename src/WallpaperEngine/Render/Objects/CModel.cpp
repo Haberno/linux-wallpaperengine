@@ -1,9 +1,11 @@
 #include "CModel.h"
 
 #include <algorithm>
+#include <ranges>
 #include <sstream>
 
 #include <glm/gtc/matrix_inverse.hpp>
+#include <glm/gtc/matrix_transform.hpp>
 #include <glm/gtc/type_ptr.hpp>
 
 #include "WallpaperEngine/Data/Model/MdlAnimation.h"
@@ -108,7 +110,12 @@ void CModel::setup () {
 	    GL_STATIC_DRAW
 	);
 
-	buffers.indexCount = static_cast<GLsizei> (submesh.indices.size ());
+	// a container can pair vertex layouts (puppet models add a channelmap overlay next to
+	// the skinned body); the attribute setup below is built for the mesh-level tag, so a
+	// submesh that disagrees would read its vertices through the wrong stride
+	buffers.indexCount = submesh.vertexTag == this->m_model.mesh.vertexTag
+	    ? static_cast<GLsizei> (submesh.indices.size ())
+	    : 0;
 	this->m_submeshes.push_back (buffers);
 
 	for (const auto& cur : this->m_model.materials[submeshIndex]->passes) {
@@ -140,6 +147,7 @@ void CModel::setup () {
 	    pass->setModelMatrix (&this->m_modelMatrix);
 	    pass->setViewProjectionMatrix (&this->m_viewProjectionMatrix);
 	    pass->addUniform ("g_NormalModelMatrix", &this->m_normalMatrix);
+	    pass->addUniform ("g_EyePosition", &this->m_eyePosition);
 	    if (this->m_skinningEnabled) {
 		pass->addUniform (
 		    "g_Bones", this->m_gpuSkinBones.data (), static_cast<int> (this->m_gpuSkinBones.size ())
@@ -228,21 +236,23 @@ void CModel::setupGeometryCallback (Effects::CPass* pass, size_t submeshIndex) {
 		);
 	    }
 
-	    if (normal >= 0) {
+	    // a shader can ask for an attribute the vertex tag left out; leaving the array
+	    // disabled feeds the generic default instead of reinterpreting another attribute
+	    if (normal >= 0 && mesh.normalOffset != MdlMesh::AttributeAbsent) {
 		glEnableVertexAttribArray (normal);
 		glVertexAttribPointer (
 		    normal, 3, GL_FLOAT, GL_FALSE, stride, reinterpret_cast<void*> (mesh.normalOffset)
 		);
 	    }
 
-	    if (tangent >= 0) {
+	    if (tangent >= 0 && mesh.tangentOffset != MdlMesh::AttributeAbsent) {
 		glEnableVertexAttribArray (tangent);
 		glVertexAttribPointer (
 		    tangent, 4, GL_FLOAT, GL_FALSE, stride, reinterpret_cast<void*> (mesh.tangentOffset)
 		);
 	    }
 
-	    if (texCoord >= 0) {
+	    if (texCoord >= 0 && mesh.uvOffset != MdlMesh::AttributeAbsent) {
 		glEnableVertexAttribArray (texCoord);
 		glVertexAttribPointer (
 		    texCoord, 2, GL_FLOAT, GL_FALSE, stride, reinterpret_cast<void*> (mesh.uvOffset)
@@ -264,11 +274,12 @@ void CModel::setupGeometryCallback (Effects::CPass* pass, size_t submeshIndex) {
 	    }
 	},
 	[this, submeshIndex] () {
-	    // Wallpaper Engine is a Direct3D engine: with D3D's default rasterizer state the
-	    // kept faces are the mirror of OpenGL's default, so clockwise is front here
-	    // (verified against this scene's skybox, which is only visible from inside).
-	    // A Y-flipped projection mirrors the winding once more, back to counter-clockwise.
-	    glFrontFace (this->getScene ().getCamera ().isYFlipped () ? GL_CCW : GL_CW);
+	    // A perspective output flip and a mirrored model transform each reverse
+	    // winding. Account for both so orthographic scene-space conversion and
+	    // authored negative scales do not cull the model's front faces.
+	    const bool modelMirrored = glm::determinant (glm::mat3 (this->m_modelMatrix)) < 0.0f;
+	    const bool windingReversed = this->getScene ().getCamera ().isYFlipped () != modelMirrored;
+	    glFrontFace (windingReversed ? GL_CW : GL_CCW);
 	    glBindBuffer (GL_ELEMENT_ARRAY_BUFFER, this->m_submeshes[submeshIndex].indexBuffer);
 	    glDrawElements (GL_TRIANGLES, this->m_submeshes[submeshIndex].indexCount, GL_UNSIGNED_INT, nullptr);
 	    glFrontFace (GL_CCW);
@@ -335,14 +346,40 @@ void CModel::updateAnimationPose () const {
     this->m_poseTime = sceneTime;
 }
 
+glm::mat4 CModel::resolveModelMatrix () const {
+    glm::mat4 model = this->resolveWorldMatrix ();
+    const auto& camera = this->getScene ().getCamera ();
+
+    if (camera.isOrthogonal ()) {
+	// Orthographic layer origins are authored from the canvas's top-left in
+	// Y-down coordinates. The camera, however, is centered and Y-up. Image and
+	// particle layers already perform this conversion; model layers need the
+	// same basis change or the canvas center lands at the bottom-right and the
+	// mesh is vertically mirrored.
+	const glm::mat4 flipY = glm::scale (glm::mat4 (1.0f), glm::vec3 (1.0f, -1.0f, 1.0f));
+	const glm::mat4 sceneToRender = glm::translate (
+	    glm::mat4 (1.0f), glm::vec3 (-camera.getWidth () * 0.5f, camera.getHeight () * 0.5f, 0.0f)
+	) * flipY;
+	model = sceneToRender * model;
+    }
+
+    return model;
+}
+
 void CModel::updateMatrices () {
     const auto& camera = this->getScene ().getCamera ();
 
-    this->m_modelMatrix = this->resolveWorldMatrix ();
+    this->m_modelMatrix = this->resolveModelMatrix ();
     this->m_viewProjectionMatrix = camera.getProjection () * camera.getLookAt ();
     this->m_modelViewProjectionMatrix = this->m_viewProjectionMatrix * this->m_modelMatrix;
     this->m_modelViewProjectionMatrixInverse = glm::inverse (this->m_modelViewProjectionMatrix);
     this->m_normalMatrix = glm::inverseTranspose (glm::mat3 (this->m_modelMatrix));
+    if (camera.isOrthogonal ()) {
+	const float depth = glm::max (glm::abs (camera.getNearZ ()), glm::abs (camera.getFarZ ()));
+	this->m_eyePosition = glm::vec3 (0.0f, 0.0f, depth);
+    } else {
+	this->m_eyePosition = camera.getEye ();
+    }
 
     // Wallpaper Engine's generic model shaders use the normal matrix to build
     // the tangent basis but do not normalize its tangent/bitangent outputs.
@@ -362,7 +399,9 @@ void CModel::render () {
 	return;
     }
 
-    if (!this->m_model.groupVisible->value->getBool ()) {
+    // a hidden container hides its whole subtree; scenes routinely park always-visible models
+    // under a group that is toggled off (3737268876 gates every mask on its `Masks` group)
+    if (!this->m_model.groupVisible->value->getBool () || !this->isVisibleThroughParents ()) {
 	return;
     }
 
@@ -397,7 +436,7 @@ void CModel::renderShadow (const glm::mat4& lightViewProjection) {
     }
 
     this->updateAnimationPose ();
-    this->m_modelMatrix = this->resolveWorldMatrix ();
+    this->m_modelMatrix = this->resolveModelMatrix ();
 
     if (this->m_shadowVao == GL_NONE) {
 	glGenVertexArrays (1, &this->m_shadowVao);
@@ -432,9 +471,9 @@ void CModel::renderShadow (const glm::mat4& lightViewProjection) {
 	} else {
 	    glDisable (GL_CULL_FACE);
 	}
-	// Model data follows Direct3D's winding convention; the shadow projection has
-	// no output-dependent Y flip, so clockwise triangles are front-facing here.
-	glFrontFace (GL_CW);
+	// The shadow projection is not output-flipped, so it keeps the MDLV mesh's
+	// counter-clockwise front-face convention too.
+	glFrontFace (GL_CCW);
 
 	glBindBuffer (GL_ARRAY_BUFFER, this->m_submeshes[submeshIndex].vertexBuffer);
 	glEnableVertexAttribArray (0);
@@ -472,6 +511,27 @@ const Model3D& CModel::getModel () const { return this->m_model; }
 std::optional<glm::mat4> CModel::getAttachmentTransform (const std::string& name) const {
     this->updateAnimationPose ();
     return MdlAnimationEvaluator::attachmentTransform (this->m_model.animationData, this->m_worldBones, name);
+}
+
+std::optional<size_t> CModel::getAttachmentIndex (const std::string& name) const {
+    size_t index = 0;
+    for (const auto& attachmentName : this->m_model.animationData.attachments | std::views::keys) {
+	if (attachmentName == name) {
+	    return index;
+	}
+	index++;
+    }
+    return std::nullopt;
+}
+
+std::optional<std::string> CModel::getAttachmentName (const size_t requestedIndex) const {
+    size_t index = 0;
+    for (const auto& attachmentName : this->m_model.animationData.attachments | std::views::keys) {
+	if (index++ == requestedIndex) {
+	    return attachmentName;
+	}
+    }
+    return std::nullopt;
 }
 
 const float& CModel::getBrightness () const { return this->m_brightness; }

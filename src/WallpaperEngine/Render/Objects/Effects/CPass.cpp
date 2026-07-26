@@ -267,9 +267,7 @@ CPass::resolveTextureAnimationState (const std::shared_ptr<const TextureProvider
 	return state;
     }
 
-    double currentRenderTime = fmod (
-	static_cast<double> (this->getContext ().getDriver ().getRenderTime ()), this->m_renderable.getAnimationTime ()
-    );
+    double currentRenderTime = this->m_renderable.getTextureAnimationTime (texture);
 
     for (const auto& frameCur : texture->getFrames ()) {
 	currentRenderTime -= frameCur->frametime;
@@ -991,6 +989,18 @@ void CPass::setupTextureUniforms () {
     this->addUniform ("g_Texture6", 6);
     this->addUniform ("g_Texture7", 7);
     this->addUniform ("g_TextureReductionScale", 1.0f);
+
+    // Wallpaper Engine initializes resolution uniforms even when the matching texture
+    // slot is not bound. Workshop shaders sometimes use one of those spare uniforms
+    // solely to build UVs for a mask stored in another slot (for example, an opacity
+    // mask in g_Texture3 with UVs derived from g_Texture7Resolution). Leaving it at
+    // OpenGL's zero default turns the ratio below into 0/0 and makes the mask sample
+    // undefined. Identity dimensions preserve the authored UVs; resolved textures
+    // overwrite their own slots below.
+    for (int index = 0; index < 8; index++) {
+	this->addUniform ("g_Texture" + std::to_string (index) + "Resolution", glm::vec4 (1.0f));
+    }
+
     this->m_texture0Resolution = *texture->getResolution ();
     this->addUniform ("g_Texture0Resolution", &this->m_texture0Resolution);
 

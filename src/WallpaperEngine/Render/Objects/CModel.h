@@ -29,6 +29,8 @@ public:
 
     [[nodiscard]] const Model3D& getModel () const;
     [[nodiscard]] std::optional<glm::mat4> getAttachmentTransform (const std::string& name) const override;
+    [[nodiscard]] std::optional<size_t> getAttachmentIndex (const std::string& name) const override;
+    [[nodiscard]] std::optional<std::string> getAttachmentName (size_t index) const override;
 
     [[nodiscard]] const float& getBrightness () const override;
     [[nodiscard]] const float& getUserAlpha () const override;
@@ -47,6 +49,7 @@ private:
     void setupGeometryCallback (Effects::CPass* pass, size_t submeshIndex);
     void setupShadowProgram ();
     void updateAnimationPose () const;
+    [[nodiscard]] glm::mat4 resolveModelMatrix () const;
     void updateMatrices ();
 
     const Model3D& m_model;
@@ -66,6 +69,7 @@ private:
     glm::mat4 m_modelViewProjectionMatrix = glm::mat4 (1.0f);
     glm::mat4 m_modelViewProjectionMatrixInverse = glm::mat4 (1.0f);
     glm::mat3 m_normalMatrix = glm::mat3 (1.0f);
+    glm::vec3 m_eyePosition = glm::vec3 (0.0f);
 
     std::vector<Effects::CPass*> m_passes = {};
     GLuint m_shadowProgram = GL_NONE;
