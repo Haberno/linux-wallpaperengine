@@ -1046,54 +1046,83 @@ InitializerFunc CParticle::createTurbulentVelocityRandomInitializer (const Turbu
 
 InitializerFunc
 CParticle::createMapSequenceAroundControlPointInitializer (const MapSequenceAroundControlPointInitializer& init) {
-    DynamicValue* controlPointValue = init.controlPoint->value.get ();
     DynamicValue* countValue = init.count->value.get ();
+    DynamicValue* boundsValue = init.bounds->value.get ();
     DynamicValue* speedMinValue = init.speedMin->value.get ();
     DynamicValue* speedMaxValue = init.speedMax->value.get ();
+    DynamicValue* axisValue = init.axis->value.get ();
+    DynamicValue* controlPointValue = init.controlPoint->value.get ();
     DynamicValue* speedOverride = m_particle.instanceOverride.speed->value.get ();
+    const bool mirror = init.limitBehavior == "mirror";
 
-    // Sequence counter shared across all particles spawned with this initializer
-    // This creates the circular distribution pattern
-    int sequenceIndex = 0;
+    // The official initializer stores a normalized [0, 1] phase and a signed
+    // 1/count step. Both are shared by every particle emitted by this initializer.
+    return [this, countValue, boundsValue, speedMinValue, speedMaxValue, axisValue, controlPointValue,
+	       speedOverride, mirror, phase = 0.0f, direction = 1.0f] (ParticleInstance& p) mutable {
+	constexpr float normalizationEpsilon = 1.1920929e-7f;
 
-    return [this, controlPointValue, countValue, speedMinValue, speedMaxValue, sequenceIndex,
-	    speedOverride] (ParticleInstance& p) mutable {
-	int controlPoint = static_cast<int> (controlPointValue->getFloat ());
-	// Some Workshop particles explicitly author count=0 (for example the permanent
-	// cursor triangle in 3320489297). Wallpaper Engine accepts that value, so treat it
-	// like the parser's one-slot default instead of dividing and taking modulo by zero.
-	int count = std::max (1, static_cast<int> (countValue->getFloat ()));
+	const int controlPoint = std::clamp (static_cast<int> (controlPointValue->getFloat ()), 0,
+					     PARTICLE_CONTROL_POINT_COUNT - 1);
+	const glm::vec3 centerPos = controlPoint < static_cast<int> (m_controlPoints.size ())
+	    ? m_controlPoints[controlPoint].position
+	    : glm::vec3 (0.0f);
 
-	// Calculate angle for this particle in the sequence (evenly distributed around circle)
-	float angle = (static_cast<float> (sequenceIndex) / static_cast<float> (count)) * glm::two_pi<float> ();
-	sequenceIndex = (sequenceIndex + 1) % count; // Wrap around after reaching count
-
-	// Get control point position to spawn around
-	glm::vec3 centerPos = glm::vec3 (0.0f);
-	if (controlPoint >= 0 && controlPoint < static_cast<int> (m_controlPoints.size ())) {
-	    centerPos = m_controlPoints[controlPoint].position;
+	glm::vec3 axis = axisValue->getVec3 ();
+	const float axisLength = glm::length (axis);
+	if (axisLength <= normalizationEpsilon) {
+	    axis = glm::vec3 (0.0f, 0.0f, 1.0f);
+	} else {
+	    axis /= axisLength;
 	}
 
-	// Set particle position in circular pattern around control point
-	// This creates the natural clustering seen in the original
-	p.position = centerPos;
+	// Wallpaper Engine constructs these two perpendicular vectors when it
+	// compiles the initializer. This particular orientation is significant:
+	// phase zero starts on basis2 and advances toward basis1.
+	glm::vec3 basis1;
+	const float axisXYLength = glm::length (glm::vec2 (axis));
+	if (axisXYLength <= normalizationEpsilon) {
+	    basis1 = glm::vec3 (1.0f, 0.0f, 0.0f);
+	} else {
+	    basis1 = glm::vec3 (axis.y, -axis.x, 0.0f) / axisXYLength;
+	}
+	const glm::vec3 basis2 = glm::normalize (glm::cross (axis, basis1));
 
-	// Set velocity based on angle and speed range
-	glm::vec3 speedMin = speedMinValue->getVec3 ();
-	glm::vec3 speedMax = speedMaxValue->getVec3 ();
-	glm::vec3 speed = WallpaperEngine::Maths::randomVec3 (m_rng, speedMin, speedMax);
+	const glm::vec2 bounds = boundsValue->getVec2 ();
+	const float angle = (bounds.x + phase * (bounds.y - bounds.x)) * glm::two_pi<float> ();
+	const float sine = std::sin (angle);
+	const float cosine = std::cos (angle);
+	const glm::vec3 radialDirection = cosine * basis2 + sine * basis1;
+	const glm::vec3 tangentDirection = -sine * basis2 + cosine * basis1;
 
-	// Flip Y before rotation to convert to centered space
-	speed.y = -speed.y;
+	// Keep the emitter's radius and its displacement along the selected axis;
+	// only its angle around the control point is replaced by the sequence.
+	const glm::vec3 relativePosition = p.position - centerPos;
+	const float axialDistance = glm::dot (relativePosition, axis);
+	const glm::vec3 radialPosition = relativePosition - axialDistance * axis;
+	p.position = centerPos + radialDirection * glm::length (radialPosition) + axis * axialDistance;
 
-	// Rotate velocity based on sequence angle (creates outward radial pattern)
-	glm::mat3 rotationMatrix = glm::mat3 (
-	    std::cos (angle), -std::sin (angle), 0.0f, std::sin (angle), std::cos (angle), 0.0f, 0.0f, 0.0f, 1.0f
-	);
-	glm::vec3 rotatedSpeed = rotationMatrix * speed * speedOverride->getFloat ();
+	// Authored X/Y/Z speed components are tangent/radial/axial respectively.
+	const glm::vec3 speed
+	    = WallpaperEngine::Maths::randomVec3 (m_rng, speedMinValue->getVec3 (), speedMaxValue->getVec3 ());
+	p.velocity += (tangentDirection * speed.x + radialDirection * speed.y + axis * speed.z)
+	    * speedOverride->getFloat ();
 
-	// Set velocity (speed override applied in movement operator)
-	p.velocity = rotatedSpeed;
+	// The compiler clamps count to 0.0001, not to an integer. Fractional
+	// counts (including shipped values such as 3.02) are intentional.
+	const float count = std::max (0.0001f, countValue->getFloat ());
+	const float step = direction / count;
+	phase += step;
+	if (phase > 1.0f) {
+	    if (mirror) {
+		phase = 1.0f - (phase - 1.0f);
+		direction = -direction;
+	    } else {
+		phase = std::fmod (phase, 1.0f);
+	    }
+	} else if (phase < 0.0f) {
+	    phase = -phase;
+	    direction = -direction;
+	}
     };
 }
 
