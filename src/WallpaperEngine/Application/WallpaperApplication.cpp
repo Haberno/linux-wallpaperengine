@@ -807,15 +807,23 @@ void WallpaperApplication::switchWorkerMain () {
 			return job.project->assetLocator->readString (fullPath);
 		    };
 
-		    auto texture = Data::Parsers::TextureParser::parse (stream, name, metadataLoader);
-		    // decode image-format textures here as well so the render thread
-		    // skips the stbi work entirely and only does the GL upload
-		    Data::Parsers::TextureParser::decodeMipmaps (*texture);
-
-		    job.textures.emplace_back (name, std::move (texture));
+		    job.textures.emplace_back (name, Data::Parsers::TextureParser::parse (stream, name, metadataLoader));
 		} catch (const std::exception&) {
 		    // ignored, the render thread falls back to loading it synchronously
 		}
+	    }
+
+	    // decode image-format textures here as well so the render thread skips the stbi work
+	    // entirely and only does the GL upload. One batch for the whole wallpaper, since that
+	    // is what gives the pool enough independent mipmaps to be worth spawning
+	    {
+		std::vector<Data::Assets::Texture*> decodable;
+		decodable.reserve (job.textures.size ());
+		for (const auto& [name, texture] : job.textures) {
+		    decodable.emplace_back (texture.get ());
+		}
+
+		Data::Parsers::TextureParser::decodeMipmaps (decodable);
 	    }
 
 	    {

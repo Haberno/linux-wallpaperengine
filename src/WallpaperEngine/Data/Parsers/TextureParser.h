@@ -28,6 +28,12 @@ public:
      * thread only has to upload them, meant to run off the render thread
      */
     static void decodeMipmaps (Texture& texture);
+    /**
+     * Same, for a whole batch of textures at once, decoding their mipmaps in parallel.
+     * Mipmaps are independent, so a batch is the only place with enough of them to fill
+     * the cores: a single texture holds 3.4 on average and its level 0 is most of the work
+     */
+    static void decodeMipmaps (const std::vector<Texture*>& textures);
     static FrameSharedPtr parseFrame (const BinaryReader& file);
     static FrameSharedPtr parseFrameV1 (const BinaryReader& file);
     static TextureMap parseTextureMap (const JSON& it);
