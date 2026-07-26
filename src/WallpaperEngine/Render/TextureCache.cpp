@@ -9,6 +9,7 @@
 
 #include "WallpaperEngine/Data/Model/Project.h"
 #include "WallpaperEngine/Data/Parsers/TextureParser.h"
+#include "WallpaperEngine/Debug/RenderHealth.h"
 
 #include <algorithm>
 #include <chrono>
@@ -130,6 +131,10 @@ TextureCache::resolve (const std::string& filename, const AssetLocator& assetLoc
 	found->second.lastUsed = ++this->m_useCounter;
 	return found->second.texture;
     }
+
+    // a miss decodes on the calling thread, which during a scene build is the render
+    // thread; anything landing here is a texture the batch prefetch failed to cover
+    Debug::RenderHealth::record ("texture.sync_load", filename);
 
     const auto contents = assetLocator.texture (filename);
     auto stream = BinaryReader (contents);

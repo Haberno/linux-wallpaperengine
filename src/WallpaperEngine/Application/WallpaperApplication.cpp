@@ -87,9 +87,29 @@ void CustomGLDebugCallback (
     }
 }
 
+namespace {
+/** Process start, as close as dynamic initialization gets to it; the baseline for startup.first_frame */
+const auto sStartupBegin = std::chrono::steady_clock::now ();
+
+/** Records how long a startup phase took. No-op unless WPE_HEALTH_REPORT is set */
+void recordStartupPhase (const std::string& metric, const std::chrono::steady_clock::time_point start) {
+    if (!WallpaperEngine::Debug::RenderHealth::enabled ()) {
+	return;
+    }
+
+    const std::chrono::duration<double, std::milli> elapsed = std::chrono::steady_clock::now () - start;
+
+    WallpaperEngine::Debug::RenderHealth::record (metric, std::to_string (elapsed.count ()) + " ms");
+}
+} // namespace
+
 WallpaperApplication::WallpaperApplication (ApplicationContext& context) : m_context (context) {
     this->initializeSubsystems ();
+
+    const auto projectLoadStart = std::chrono::steady_clock::now ();
     this->loadBackgrounds ();
+    recordStartupPhase ("startup.project_load", projectLoadStart);
+
     this->setupProperties ();
     this->setupBrowser ();
     this->initializePlaylists ();
@@ -729,6 +749,45 @@ std::set<std::string> collectProjectTextures (const Project& project) {
     return result;
 }
 
+/**
+ * Reads, decompresses and decodes every texture a project references, leaving the caller
+ * with nothing but the GL upload to do. Textures that fail to parse are dropped so the
+ * render thread falls back to loading them synchronously.
+ */
+std::vector<std::pair<std::string, WallpaperEngine::Data::Assets::TextureUniquePtr>>
+parseProjectTextures (const Project& project) {
+    std::vector<std::pair<std::string, WallpaperEngine::Data::Assets::TextureUniquePtr>> textures {};
+
+    for (const auto& name : collectProjectTextures (project)) {
+	try {
+	    const auto contents = project.assetLocator->texture (name);
+	    auto stream = WallpaperEngine::Data::Utils::BinaryReader (contents);
+	    auto metadataLoader = [&project] (const std::string& metaFilename) -> std::string {
+		const auto fullPath = std::filesystem::path ("materials") / metaFilename;
+		return project.assetLocator->readString (fullPath);
+	    };
+
+	    textures.emplace_back (name, WallpaperEngine::Data::Parsers::TextureParser::parse (stream, name, metadataLoader));
+	} catch (const std::exception&) {
+	    // ignored, the render thread falls back to loading it synchronously
+	}
+    }
+
+    // decode image-format textures here as well so the render thread skips the stbi work
+    // entirely and only does the GL upload. One batch for the whole wallpaper, since that
+    // is what gives the pool enough independent mipmaps to be worth spawning
+    std::vector<WallpaperEngine::Data::Assets::Texture*> decodable;
+    decodable.reserve (textures.size ());
+
+    for (const auto& [name, texture] : textures) {
+	decodable.emplace_back (texture.get ());
+    }
+
+    WallpaperEngine::Data::Parsers::TextureParser::decodeMipmaps (decodable);
+
+    return textures;
+}
+
 /** Finishes queued uploads and releases the worker's shared GL context on every exit path. */
 class BuildContextGuard {
 public:
@@ -764,6 +823,7 @@ void WallpaperApplication::requestBackgroundSwitch (
 	job.screen = screen;
 	job.path = path;
 	job.transition = transition;
+	job.requested = std::chrono::steady_clock::now ();
 	this->m_latestSwitchIds[screen] = job.id;
 	this->m_switchRequests.emplace_back (std::move (job));
     }
@@ -794,37 +854,18 @@ void WallpaperApplication::switchWorkerMain () {
 	    }
 	}
 
+	const auto prepareStart = std::chrono::steady_clock::now ();
+	auto projectMs = std::chrono::duration<double, std::milli>::zero ();
+	auto textureMs = projectMs;
+
 	try {
 	    job.project = this->loadProject (job.path);
+	    projectMs = std::chrono::steady_clock::now () - prepareStart;
 
-	    // Read and decompress textures away from the render loop first.
-	    for (const auto& name : collectProjectTextures (*job.project)) {
-		try {
-		    const auto contents = job.project->assetLocator->texture (name);
-		    auto stream = Data::Utils::BinaryReader (contents);
-		    auto metadataLoader = [&job] (const std::string& metaFilename) -> std::string {
-			const auto fullPath = std::filesystem::path ("materials") / metaFilename;
-			return job.project->assetLocator->readString (fullPath);
-		    };
-
-		    job.textures.emplace_back (name, Data::Parsers::TextureParser::parse (stream, name, metadataLoader));
-		} catch (const std::exception&) {
-		    // ignored, the render thread falls back to loading it synchronously
-		}
-	    }
-
-	    // decode image-format textures here as well so the render thread skips the stbi work
-	    // entirely and only does the GL upload. One batch for the whole wallpaper, since that
-	    // is what gives the pool enough independent mipmaps to be worth spawning
-	    {
-		std::vector<Data::Assets::Texture*> decodable;
-		decodable.reserve (job.textures.size ());
-		for (const auto& [name, texture] : job.textures) {
-		    decodable.emplace_back (texture.get ());
-		}
-
-		Data::Parsers::TextureParser::decodeMipmaps (decodable);
-	    }
+	    // Read, decompress and decode textures away from the render loop first.
+	    const auto textureStart = std::chrono::steady_clock::now ();
+	    job.textures = parseProjectTextures (*job.project);
+	    textureMs = std::chrono::steady_clock::now () - textureStart;
 
 	    {
 		std::lock_guard lock (this->m_switchMutex);
@@ -865,6 +906,16 @@ void WallpaperApplication::switchWorkerMain () {
 	    }
 	} catch (const std::exception& e) {
 	    job.error = e.what ();
+	}
+
+	if (Debug::RenderHealth::enabled ()) {
+	    const std::chrono::duration<double, std::milli> totalMs
+		= std::chrono::steady_clock::now () - prepareStart;
+	    std::ostringstream detail;
+	    detail << totalMs.count () << " ms (project " << projectMs.count () << ", read+decode "
+		   << textureMs.count () << ", upload " << (totalMs - projectMs - textureMs).count () << "), "
+		   << (job.textures.size () + job.readyTextures.size ()) << " textures";
+	    Debug::RenderHealth::record ("switch.prepare", detail.str ());
 	}
 
 	{
@@ -927,6 +978,11 @@ void WallpaperApplication::processPreparedSwitches () {
 }
 
 bool WallpaperApplication::applyPreparedSwitch (PreparedSwitch& job) {
+    // everything in here runs on the render thread, so it is a visible stall
+    const auto applyStart = std::chrono::steady_clock::now ();
+    const auto requested = job.requested;
+    auto buildMs = std::chrono::duration<double, std::milli>::zero ();
+
     try {
 	if (!this->makeAnyViewportCurrent ()) {
 	    sLog.error ("Cannot switch wallpaper on ", job.screen, ": no active viewport");
@@ -952,6 +1008,10 @@ bool WallpaperApplication::applyPreparedSwitch (PreparedSwitch& job) {
 	    auto& nextProject = *job.project;
 	    const auto& assetLocator = *nextProject.assetLocator;
 	    // Shared-context uploads are already complete; cache insertion is only a pointer move.
+	    // These are deliberately not held past the store: the outgoing wallpaper's textures
+	    // are still referenced through the crossfade, so keeping both sets pinned over the
+	    // scene build exhausts memory on 4K wallpapers. trim() may evict some of these and
+	    // the build reloads them (texture.sync_load counts it) — that is the cheaper failure.
 	    for (auto& [name, texture] : job.readyTextures) {
 		this->m_renderContext->storeTexture (name, assetLocator, std::move (texture));
 	    }
@@ -964,10 +1024,12 @@ bool WallpaperApplication::applyPreparedSwitch (PreparedSwitch& job) {
 		);
 	    }
 
+	    const auto buildStart = std::chrono::steady_clock::now ();
 	    auto renderWallpaper = WallpaperEngine::Render::CWallpaper::fromWallpaper (
 		*nextProject.wallpaper, *this->m_renderContext, *this->m_audioContext,
 		this->m_browserContext.get (), scaling, clamp
 	    );
+	    buildMs = std::chrono::steady_clock::now () - buildStart;
 
 	    // The replacement is valid. Transfer ownership atomically with the render swap;
 	    // the outgoing CWallpaper references the previous Project through the transition.
@@ -983,6 +1045,17 @@ bool WallpaperApplication::applyPreparedSwitch (PreparedSwitch& job) {
 	}
 
 	this->m_context.settings.general.screenBackgrounds[job.screen] = job.path;
+
+	if (Debug::RenderHealth::enabled ()) {
+	    const auto now = std::chrono::steady_clock::now ();
+	    const std::chrono::duration<double, std::milli> applyMs = now - applyStart;
+	    const std::chrono::duration<double, std::milli> totalMs = now - requested;
+	    std::ostringstream detail;
+	    detail << "stall " << applyMs.count () << " ms (scene build " << buildMs.count ()
+		   << "), request to visible " << totalMs.count () << " ms";
+	    Debug::RenderHealth::record ("switch.apply", detail.str ());
+	}
+
 	return true;
     } catch (const std::exception& e) {
 	sLog.error ("Failed to switch wallpaper on ", job.screen, ": ", e.what ());
@@ -1326,7 +1399,45 @@ void WallpaperApplication::prepareOutputs () {
     // initialize render context
     m_renderContext
 	= std::make_unique<WallpaperEngine::Render::RenderContext> (*m_videoDriver, *this, *this->m_mediaSource);
+
+    // Stage every texture before the scene build asks for them. Without this the first
+    // wallpaper of a session decodes lazily, one texture at a time, inside CTexture on this
+    // thread; batching them hands the whole set to the decode pool at once (6x on heavy ones)
+    if (this->makeAnyViewportCurrent ()) {
+	const auto prefetchStart = std::chrono::steady_clock::now ();
+	auto readMs = std::chrono::duration<double, std::milli>::zero ();
+	size_t staged = 0;
+
+	for (const auto& [background, info] : this->m_backgrounds) {
+	    const auto readStart = std::chrono::steady_clock::now ();
+	    auto textures = parseProjectTextures (*info);
+	    readMs += std::chrono::steady_clock::now () - readStart;
+
+	    for (auto& [name, texture] : textures) {
+		try {
+		    m_renderContext->storeTexture (
+			name, *info->assetLocator,
+			std::make_shared<Render::CTexture> (*m_renderContext, std::move (texture))
+		    );
+		    staged++;
+		} catch (const std::exception& e) {
+		    // resolveTexture will load this asset normally during the scene build
+		    sLog.error ("Texture prefetch failed for ", name, ": ", e.what ());
+		}
+	    }
+	}
+
+	if (Debug::RenderHealth::enabled ()) {
+	    const std::chrono::duration<double, std::milli> totalMs = std::chrono::steady_clock::now () - prefetchStart;
+	    std::ostringstream detail;
+	    detail << staged << " textures, read+decode " << readMs.count () << " ms, upload "
+		   << (totalMs - readMs).count () << " ms";
+	    Debug::RenderHealth::record ("startup.texture_prefetch", detail.str ());
+	}
+    }
+
     // create a new background for each screen
+    const auto sceneBuildStart = std::chrono::steady_clock::now ();
 
     // set all the specific wallpapers required (skip span group synthetic keys)
     for (const auto& [background, info] : this->m_backgrounds) {
@@ -1416,6 +1527,8 @@ void WallpaperApplication::prepareOutputs () {
 	    m_renderContext->setWallpaper (screenName, shared);
 	}
     }
+
+    recordStartupPhase ("startup.scene_build", sceneBuildStart);
 }
 
 void WallpaperApplication::setupOpenGLDebugging () {
@@ -1551,6 +1664,13 @@ void WallpaperApplication::render () {
 	// one active (non-paused) loop iteration == one frame for the health report;
 	// paused iterations are excluded so worst_frame_ms reflects real render gaps
 	Debug::RenderHealth::frame ();
+
+	// everything above finished at least once, so this is the whole load cost
+	static bool firstFrame = true;
+	if (firstFrame) {
+	    firstFrame = false;
+	    recordStartupPhase ("startup.first_frame", sStartupBegin);
+	}
     }
 
     this->processControlSocket ();
