@@ -296,8 +296,19 @@ CScene::CScene (
     }
 
     // setup framebuffers here as they're required for the scene setup;
-    // 3D scenes depth-test their models, so their scene framebuffer carries a depth buffer
-    this->setupFramebuffers (isPerspective);
+    // models depth-test their submeshes against each other, so any scene rendering one needs a
+    // depth buffer. Orthographic scenes can carry MDL layers too (workshop 3101147701 places
+    // Pokemon models on a 2D canvas); without the attachment their materials' authored
+    // depthtest/depthwrite are silent no-ops and submeshes simply paint in draw order, hiding
+    // the eye/face material behind the body and floating far geometry over near geometry.
+    bool hasModels = false;
+    for (const auto& object : scene->objects) {
+	if (object->is<Data::Model::Model3D> ()) {
+	    hasModels = true;
+	    break;
+	}
+    }
+    this->setupFramebuffers (isPerspective || hasModels);
 
     const uint32_t sceneWidth = this->m_camera->getWidth ();
     const uint32_t sceneHeight = this->m_camera->getHeight ();
