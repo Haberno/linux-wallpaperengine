@@ -6,7 +6,9 @@
 #include <cmath>
 #include <cstring>
 #include <iterator>
+#include <limits>
 #include <optional>
+#include <ranges>
 #include <sstream>
 
 #include <glm/glm.hpp>
@@ -21,6 +23,7 @@
 #include "WallpaperEngine/Data/Model/UserSetting.h"
 #include "WallpaperEngine/Data/Parsers/MaterialParser.h"
 #include "WallpaperEngine/Data/Parsers/MdlAnimationParser.h"
+#include "WallpaperEngine/Data/Parsers/MdlParser.h"
 #include "WallpaperEngine/Data/Utils/BinaryReader.h"
 #include "WallpaperEngine/Data/Utils/MemoryStream.h"
 #include "WallpaperEngine/Logging/Log.h"
@@ -35,6 +38,22 @@ using namespace WallpaperEngine::Data::Builders;
 using namespace WallpaperEngine::Data::Utils;
 
 namespace {
+/** 2D barycentric coordinates of a point in a triangle; a degenerate triangle misses everywhere. */
+glm::vec3 barycentric (const glm::vec2& point, const glm::vec2& a, const glm::vec2& b, const glm::vec2& c) {
+    const glm::vec2 ab = b - a;
+    const glm::vec2 ac = c - a;
+    const glm::vec2 ap = point - a;
+    const float area = ab.x * ac.y - ac.x * ab.y;
+
+    if (std::abs (area) < 1e-6f) {
+	return glm::vec3 (-1.0f);
+    }
+
+    const float v = (ap.x * ac.y - ac.x * ap.y) / area;
+    const float w = (ab.x * ap.y - ap.x * ab.y) / area;
+    return { 1.0f - v - w, v, w };
+}
+
 glm::vec2 rotateVec2 (const glm::vec2& value, float angle) {
     const float cosAngle = std::cos (angle);
     const float sinAngle = std::sin (angle);
@@ -493,6 +512,7 @@ CImage::~CImage () {
     }
 
     this->m_passes.clear ();
+    delete this->m_puppetOverlayPass;
 
     // free any gl resources
     glDeleteBuffers (1, &this->m_sceneSpacePosition);
@@ -511,6 +531,12 @@ CImage::~CImage () {
     }
     if (this->m_puppetIndices != GL_NONE) {
 	glDeleteBuffers (1, &this->m_puppetIndices);
+    }
+    for (GLuint* buffer : { &this->m_puppetOverlayPosition, &this->m_puppetOverlayTexCoord,
+			    &this->m_puppetOverlayBlendIndices, &this->m_puppetOverlayIndices }) {
+	if (*buffer != GL_NONE) {
+	    glDeleteBuffers (1, buffer);
+	}
     }
 }
 
@@ -640,6 +666,7 @@ bool CImage::loadPuppetMesh (const glm::vec2& size) {
 	    this->m_puppetWorldBones.clear ();
 	}
 
+	this->loadPuppetOverlay (data, indices, size);
 	this->updatePuppetPositionBuffer (size);
 
 	glGenBuffers (1, &this->m_puppetTexCoord);
@@ -688,6 +715,161 @@ bool CImage::loadPuppetMesh (const glm::vec2& size) {
     } catch (const std::exception& ex) {
 	sLog.error ("Could not load puppet mesh ", *this->getImage ().model->puppet, ": ", ex.what ());
 	return false;
+    }
+}
+
+void CImage::loadPuppetOverlay (
+    const std::vector<char>& data, const std::vector<GLushort>& bodyIndices, const glm::vec2& size
+) {
+    // The overlay lives in a second submesh whose vertices carry a vec4 texcoord (the
+    // channelmap atlas uv in xy) instead of the body's skin weights. The container parser
+    // reads the whole file; the scanner above only ever finds the first mesh block.
+    MdlMesh mesh;
+    try {
+	mesh = MdlParser::parse (data, *this->getImage ().model->puppet);
+    } catch (const std::exception& ex) {
+	sLog.error ("Could not read puppet submeshes ", *this->getImage ().model->puppet, ": ", ex.what ());
+	return;
+    }
+
+    const MdlSubmesh* overlay = nullptr;
+    for (const auto& submesh : mesh.submeshes) {
+	if (submesh.texCoordVec4Offset != MdlMesh::AttributeAbsent && !submesh.indices.empty ()) {
+	    overlay = &submesh;
+	    break;
+	}
+    }
+
+    if (overlay == nullptr) {
+	return;
+    }
+
+    const size_t stride = overlay->strideBytes / sizeof (float);
+    const size_t vertexCount = stride > 0 ? overlay->vertices.size () / stride : 0;
+    if (vertexCount == 0) {
+	return;
+    }
+
+    std::vector<GLfloat> texcoords;
+    std::vector<GLuint> blendIndices;
+    std::vector<GLushort> indices;
+    this->m_puppetOverlayRawPositions.reserve (vertexCount * 3);
+    texcoords.reserve (vertexCount * 4);
+    blendIndices.reserve (vertexCount * 4);
+    indices.reserve (overlay->indices.size ());
+
+    // attribute offsets are in bytes, the vertices are stored as floats
+    const size_t uvElement = overlay->texCoordVec4Offset / sizeof (float);
+    const size_t blendElement = overlay->blendIndicesOffset != MdlMesh::AttributeAbsent
+	? overlay->blendIndicesOffset / sizeof (float)
+	: 0;
+
+    for (size_t vertex = 0; vertex < vertexCount; vertex++) {
+	const float* base = overlay->vertices.data () + vertex * stride;
+	// The overlay quads are stored in bottom-left-origin image pixels while the body mesh is
+	// centered on the image; shift them so both meshes share one rest space. Cross-checked
+	// against the base-texture uv these same vertices carry (Kirby 443,650 -> 0.2985,0.5327
+	// on a 1484x1391 image, which is exactly 0.5 + x/w and 0.5 - y/h after the shift).
+	this->m_puppetOverlayRawPositions.push_back (base[0] - size.x / 2.0f);
+	this->m_puppetOverlayRawPositions.push_back (base[1] - size.y / 2.0f);
+	this->m_puppetOverlayRawPositions.push_back (base[2]);
+
+	for (int component = 0; component < 4; component++) {
+	    texcoords.push_back (base[uvElement + component]);
+	}
+
+	// the shader picks a g_BlendMap element with these, they are not skin bones
+	for (int component = 0; component < 4; component++) {
+	    uint32_t value = 0;
+	    if (overlay->blendIndicesOffset != MdlMesh::AttributeAbsent) {
+		std::memcpy (&value, base + blendElement + component, sizeof (value));
+	    }
+	    blendIndices.push_back (value);
+	}
+    }
+
+    for (const auto index : overlay->indices) {
+	if (index >= vertexCount) {
+	    sLog.error ("Invalid puppet overlay index ", index, " in ", *this->getImage ().model->puppet);
+	    this->m_puppetOverlayRawPositions.clear ();
+	    return;
+	}
+	indices.push_back (static_cast<GLushort> (index));
+    }
+
+    this->bindPuppetOverlayToBody (bodyIndices);
+
+    glGenBuffers (1, &this->m_puppetOverlayTexCoord);
+    glBindBuffer (GL_ARRAY_BUFFER, this->m_puppetOverlayTexCoord);
+    glBufferData (GL_ARRAY_BUFFER, texcoords.size () * sizeof (GLfloat), texcoords.data (), GL_STATIC_DRAW);
+
+    glGenBuffers (1, &this->m_puppetOverlayBlendIndices);
+    glBindBuffer (GL_ARRAY_BUFFER, this->m_puppetOverlayBlendIndices);
+    glBufferData (GL_ARRAY_BUFFER, blendIndices.size () * sizeof (GLuint), blendIndices.data (), GL_STATIC_DRAW);
+
+    glGenBuffers (1, &this->m_puppetOverlayIndices);
+    glBindBuffer (GL_ELEMENT_ARRAY_BUFFER, this->m_puppetOverlayIndices);
+    glBufferData (GL_ELEMENT_ARRAY_BUFFER, indices.size () * sizeof (GLushort), indices.data (), GL_STATIC_DRAW);
+
+    this->m_puppetOverlayIndexCount = static_cast<GLsizei> (indices.size ());
+    this->m_puppetOverlayMaterial = overlay->materialPath;
+    sLog.out (
+	"Loaded puppet channelmap overlay ", overlay->materialPath, " vertices=", vertexCount,
+	" indices=", this->m_puppetOverlayIndexCount
+    );
+}
+
+void CImage::bindPuppetOverlayToBody (const std::vector<GLushort>& bodyIndices) {
+    this->m_puppetOverlayBindings.clear ();
+
+    const size_t bodyVertices = this->m_puppetRawPositions.size () / 3;
+    if (bodyVertices == 0 || bodyIndices.size () < 3) {
+	return;
+    }
+
+    const auto bodyPoint = [this] (const GLushort vertex) {
+	return glm::vec2 (this->m_puppetRawPositions[vertex * 3], this->m_puppetRawPositions[vertex * 3 + 1]);
+    };
+
+    // The overlay carries no skin weights of its own, so on its own it would stay in the rest
+    // pose while the body deforms around it (Sonic's head is posed well away from where the
+    // atlas puts it, which lands the blink on his ears). Both meshes are authored in the same
+    // rest space, so gluing each overlay vertex to the body triangle containing it makes the
+    // quad follow whatever the skinning does, without duplicating the skinning itself.
+    for (size_t index = 0; index + 2 < this->m_puppetOverlayRawPositions.size (); index += 3) {
+	const glm::vec2 point (
+	    this->m_puppetOverlayRawPositions[index], this->m_puppetOverlayRawPositions[index + 1]
+	);
+
+	PuppetOverlayBinding best = {};
+	float bestMiss = std::numeric_limits<float>::max ();
+
+	for (size_t corner = 0; corner + 2 < bodyIndices.size (); corner += 3) {
+	    const std::array triangle { bodyIndices[corner], bodyIndices[corner + 1], bodyIndices[corner + 2] };
+	    const glm::vec3 weights = barycentric (
+		point, bodyPoint (triangle[0]), bodyPoint (triangle[1]), bodyPoint (triangle[2])
+	    );
+
+	    // how far outside the triangle the point sits; zero means it is inside
+	    const float miss = std::max (0.0f, -weights.x) + std::max (0.0f, -weights.y) + std::max (0.0f, -weights.z);
+	    if (miss >= bestMiss) {
+		continue;
+	    }
+
+	    best = { triangle, weights };
+	    bestMiss = miss;
+	    if (miss == 0.0f) {
+		break;
+	    }
+	}
+
+	if (bestMiss == std::numeric_limits<float>::max ()) {
+	    // every triangle was degenerate, leave the overlay unbound so it falls back
+	    this->m_puppetOverlayBindings.clear ();
+	    return;
+	}
+
+	this->m_puppetOverlayBindings.push_back (best);
     }
 }
 
@@ -805,6 +987,13 @@ void CImage::updatePuppetPositionBuffer (const glm::vec2& size) {
     this->m_puppetWorldBones = std::move (pose.worldBones);
     this->m_puppetSkinBones = std::move (pose.skinBones);
 
+    // ponytail: only g_BlendMap row zero, which covers BLENDROWCOUNT 1 (every channelmap
+    // material in the corpus). More rows would need a vec4 array uniform instead.
+    this->m_puppetBlendMap = glm::vec4 (0.0f);
+    for (size_t track = 0; track < pose.blendWeights.size () && track < 4; track++) {
+	this->m_puppetBlendMap[static_cast<glm::length_t> (track)] = pose.blendWeights[track];
+    }
+
     this->m_puppetPositions.clear ();
     this->m_puppetPositions.reserve (this->m_puppetRawPositions.size ());
     for (size_t index = 0; index + 2 < this->m_puppetRawPositions.size (); index += 3) {
@@ -860,11 +1049,143 @@ void CImage::updatePuppetPositionBuffer (const glm::vec2& size) {
     } else if (positionBytes > 0) {
 	glBufferSubData (GL_ARRAY_BUFFER, 0, positionBytes, this->m_puppetPositions.data ());
     }
+
+    this->updatePuppetOverlayBuffer (size);
+}
+
+void CImage::updatePuppetOverlayBuffer (const glm::vec2& size) {
+    if (this->m_puppetOverlayRawPositions.empty ()) {
+	return;
+    }
+
+    this->m_puppetOverlayPositions.clear ();
+    this->m_puppetOverlayPositions.reserve (this->m_puppetOverlayRawPositions.size ());
+    for (size_t index = 0; index + 2 < this->m_puppetOverlayRawPositions.size (); index += 3) {
+	const size_t vertex = index / 3;
+
+	// The quads carry no skin weights, so they ride on the body triangle they were bound to
+	// and land wherever the skinning put it. m_puppetPositions is already posed scene space.
+	if (vertex < this->m_puppetOverlayBindings.size ()) {
+	    const auto& binding = this->m_puppetOverlayBindings[vertex];
+	    glm::vec2 posed (0.0f);
+	    for (int corner = 0; corner < 3; corner++) {
+		const size_t base = static_cast<size_t> (binding.vertices[corner]) * 3;
+		if (base + 1 >= this->m_puppetPositions.size ()) {
+		    continue;
+		}
+		posed += binding.weights[corner]
+		    * glm::vec2 (this->m_puppetPositions[base], this->m_puppetPositions[base + 1]);
+	    }
+	    this->m_puppetOverlayPositions.push_back (posed.x);
+	    this->m_puppetOverlayPositions.push_back (posed.y);
+	    this->m_puppetOverlayPositions.push_back (0.0f);
+	    continue;
+	}
+
+	// unbound fallback: place it on the quad the same way the body's rest pose maps
+	const float u = 0.5f + this->m_puppetOverlayRawPositions[index] / size.x;
+	const float v = 0.5f - this->m_puppetOverlayRawPositions[index + 1] / size.y;
+	this->m_puppetOverlayPositions.push_back (this->m_pos.x + u * (this->m_pos.z - this->m_pos.x));
+	this->m_puppetOverlayPositions.push_back (this->m_pos.w + v * (this->m_pos.y - this->m_pos.w));
+	this->m_puppetOverlayPositions.push_back (0.0f);
+    }
+
+    if (this->m_puppetOverlayPosition == GL_NONE) {
+	glGenBuffers (1, &this->m_puppetOverlayPosition);
+    }
+    glBindBuffer (GL_ARRAY_BUFFER, this->m_puppetOverlayPosition);
+    const size_t positionBytes = this->m_puppetOverlayPositions.size () * sizeof (GLfloat);
+    if (positionBytes != this->m_puppetOverlayPositionBytes) {
+	glBufferData (GL_ARRAY_BUFFER, positionBytes, this->m_puppetOverlayPositions.data (), GL_DYNAMIC_DRAW);
+	this->m_puppetOverlayPositionBytes = positionBytes;
+    } else if (positionBytes > 0) {
+	glBufferSubData (GL_ARRAY_BUFFER, 0, positionBytes, this->m_puppetOverlayPositions.data ());
+    }
+}
+
+void CImage::setupPuppetOverlayPass () {
+    if (this->m_puppetOverlayIndexCount == 0 || this->m_puppetOverlayMaterial.empty ()) {
+	return;
+    }
+
+    try {
+	this->m_materials.compatibilityMaterials.emplace_back (
+	    MaterialParser::load (this->getScene ().getScene ().project, this->m_puppetOverlayMaterial)
+	);
+    } catch (const std::exception& ex) {
+	sLog.error ("Could not load puppet overlay material ", this->m_puppetOverlayMaterial, ": ", ex.what ());
+	return;
+    }
+
+    const auto& material = this->m_materials.compatibilityMaterials.back ();
+    if (material->passes.empty ()) {
+	return;
+    }
+
+    this->m_puppetOverlayPass = new CPass (
+	*this, std::make_shared<FBOProvider> (this), **material->passes.begin (), std::nullopt, std::nullopt,
+	std::nullopt
+    );
+
+    // the overlay composites straight onto the scene after the image's own passes; its
+    // g_Texture0 comes from the material (the channelmap), not from the pass chain
+    this->m_puppetOverlayPass->setDestination (this->getScene ().getFBO ());
+    this->m_puppetOverlayPass->setInput (this->getTexture ());
+    this->m_puppetOverlayPass->setModelViewProjectionMatrix (&this->m_modelViewProjectionScreen);
+    this->m_puppetOverlayPass->setModelViewProjectionMatrixInverse (&this->m_modelViewProjectionScreenInverse);
+    this->m_puppetOverlayPass->setModelMatrix (&this->m_modelMatrix);
+    this->m_puppetOverlayPass->setViewProjectionMatrix (&this->m_viewProjectionMatrix);
+    this->m_puppetOverlayPass->addUniform ("g_BlendMap", &this->m_puppetBlendMap, 1);
+
+    CPass* pass = this->m_puppetOverlayPass;
+    pass->setGeometryCallback (
+	[this, pass] () {
+	    const GLint position = glGetAttribLocation (pass->getProgramID (), "a_Position");
+	    const GLint texCoord = glGetAttribLocation (pass->getProgramID (), "a_TexCoordVec4");
+	    const GLint blendIndices = glGetAttribLocation (pass->getProgramID (), "a_BlendIndices");
+
+	    if (position >= 0) {
+		glEnableVertexAttribArray (position);
+		glBindBuffer (GL_ARRAY_BUFFER, this->m_puppetOverlayPosition);
+		glVertexAttribPointer (position, 3, GL_FLOAT, GL_FALSE, 0, nullptr);
+	    }
+
+	    if (texCoord >= 0) {
+		glEnableVertexAttribArray (texCoord);
+		glBindBuffer (GL_ARRAY_BUFFER, this->m_puppetOverlayTexCoord);
+		glVertexAttribPointer (texCoord, 4, GL_FLOAT, GL_FALSE, 0, nullptr);
+	    }
+
+	    if (blendIndices >= 0) {
+		glEnableVertexAttribArray (blendIndices);
+		glBindBuffer (GL_ARRAY_BUFFER, this->m_puppetOverlayBlendIndices);
+		// an integer attribute must not go through the float path or it reads as 0.0
+		glVertexAttribIPointer (blendIndices, 4, GL_UNSIGNED_INT, 0, nullptr);
+	    }
+	},
+	[this] () {
+	    // same Y-flip winding problem the body mesh has, and the material is nocull anyway
+	    const GLboolean cullFaceEnabled = glIsEnabled (GL_CULL_FACE);
+	    glDisable (GL_CULL_FACE);
+	    glBindBuffer (GL_ELEMENT_ARRAY_BUFFER, this->m_puppetOverlayIndices);
+	    glDrawElements (GL_TRIANGLES, this->m_puppetOverlayIndexCount, GL_UNSIGNED_SHORT, nullptr);
+	    if (cullFaceEnabled) {
+		glEnable (GL_CULL_FACE);
+	    }
+	},
+	[pass] () {
+	    for (const auto* name : { "a_Position", "a_TexCoordVec4", "a_BlendIndices" }) {
+		const GLint attribute = glGetAttribLocation (pass->getProgramID (), name);
+		if (attribute >= 0) {
+		    glDisableVertexAttribArray (attribute);
+		}
+	    }
+	}
+    );
 }
 
 std::optional<CImage::ResolvedTransform> CImage::puppetAttachmentTransform (const std::string& name) const {
-    const auto model
-	= MdlAnimationEvaluator::attachmentTransform (this->m_puppetAnimation, this->m_puppetWorldBones, name);
+    const auto model = this->getAttachmentTransform (name);
     if (!model.has_value ()) {
 	return std::nullopt;
     }
@@ -1174,6 +1495,7 @@ void CImage::setup () {
     CRenderable::setup ();
 
     this->setupPasses ();
+    this->setupPuppetOverlayPass ();
     this->m_initialized = true;
 }
 
@@ -1371,6 +1693,13 @@ void CImage::render () {
 	}
 
 	(*cur)->render ();
+    }
+
+    // the channelmap overlay composites onto the scene after the body, with alpha writes still
+    // masked off like the last pass, so it blends instead of punching a hole
+    if (this->m_puppetOverlayPass != nullptr) {
+	glColorMask (true, true, true, false);
+	this->m_puppetOverlayPass->render ();
     }
 
     // Restore alpha writes: leaving the mask disabled leaks it into the next frame's scene clear (the
@@ -1747,6 +2076,71 @@ glm::vec2 CImage::getSize () const {
     }
 
     return { this->m_texture->getRealWidth (), this->m_texture->getRealHeight () };
+}
+
+std::optional<glm::mat4> CImage::getAttachmentTransform (const std::string& name) const {
+    return MdlAnimationEvaluator::attachmentTransform (this->m_puppetAnimation, this->m_puppetWorldBones, name);
+}
+
+std::optional<size_t> CImage::getAttachmentIndex (const std::string& name) const {
+    size_t index = 0;
+    for (const auto& attachmentName : this->m_puppetAnimation.attachments | std::views::keys) {
+	if (attachmentName == name) {
+	    return index;
+	}
+	index++;
+    }
+    return std::nullopt;
+}
+
+std::optional<std::string> CImage::getAttachmentName (const size_t requestedIndex) const {
+    size_t index = 0;
+    for (const auto& attachmentName : this->m_puppetAnimation.attachments | std::views::keys) {
+	if (index++ == requestedIndex) {
+	    return attachmentName;
+	}
+    }
+    return std::nullopt;
+}
+
+std::optional<glm::vec3> CImage::cursorLocalPosition (const glm::vec3& worldPosition) const {
+    if (!this->m_image.visible->value->getBool () || !this->isVisibleThroughParents ()) {
+	return std::nullopt;
+    }
+
+    const glm::mat4 world = this->resolveWorldMatrix ();
+    const float determinant = glm::determinant (world);
+    if (!std::isfinite (determinant) || std::abs (determinant) < 1e-8f) {
+	return std::nullopt;
+    }
+
+    const glm::vec4 local4 = glm::inverse (world) * glm::vec4 (worldPosition, 1.0f);
+    const glm::vec3 local = glm::vec3 (local4);
+    const glm::vec2 size = this->getSize ();
+
+    float left = -size.x * 0.5f;
+    float right = size.x * 0.5f;
+    float bottom = -size.y * 0.5f;
+    float top = size.y * 0.5f;
+    if (this->m_image.alignment.find ("left") != std::string::npos) {
+	left = 0.0f;
+	right = size.x;
+    } else if (this->m_image.alignment.find ("right") != std::string::npos) {
+	left = -size.x;
+	right = 0.0f;
+    }
+    if (this->m_image.alignment.find ("top") != std::string::npos) {
+	bottom = -size.y;
+	top = 0.0f;
+    } else if (this->m_image.alignment.find ("bottom") != std::string::npos) {
+	bottom = 0.0f;
+	top = size.y;
+    }
+
+    if (local.x < left || local.x > right || local.y < bottom || local.y > top) {
+	return std::nullopt;
+    }
+    return local;
 }
 
 GLuint CImage::getSceneSpacePosition () const { return this->m_sceneSpacePosition; }

@@ -12,6 +12,7 @@
 #include "WallpaperEngine/Data/Utils/ScopeGuard.h"
 #include "WallpaperEngine/Logging/Log.h"
 #include "WallpaperEngine/Render/CObject.h"
+#include "WallpaperEngine/Render/Objects/CImage.h"
 #include "WallpaperEngine/Render/Objects/CSound.h"
 #include "WallpaperEngine/Render/Wallpapers/CScene.h"
 #include "WallpaperEngine/Scripting/Builtins.generated.h"
@@ -754,6 +755,12 @@ void ScriptEngine::queueScript (const std::string& key, DynamicValue& currentVal
 	    << "    mediaTimelineChanged: (typeof mediaTimelineChanged === 'function') ? mediaTimelineChanged : null,\n"
 	    << "    mediaThumbnailChanged: (typeof mediaThumbnailChanged === 'function') ? mediaThumbnailChanged : null,\n"
 	    << "    applyUserProperties: (typeof applyUserProperties === 'function') ? applyUserProperties : null,\n"
+	    << "    cursorEnter: (typeof cursorEnter === 'function') ? cursorEnter : null,\n"
+	    << "    cursorLeave: (typeof cursorLeave === 'function') ? cursorLeave : null,\n"
+	    << "    cursorMove: (typeof cursorMove === 'function') ? cursorMove : null,\n"
+	    << "    cursorDown: (typeof cursorDown === 'function') ? cursorDown : null,\n"
+	    << "    cursorUp: (typeof cursorUp === 'function') ? cursorUp : null,\n"
+	    << "    cursorClick: (typeof cursorClick === 'function') ? cursorClick : null,\n"
 	    << "  };\n"
 	    << "})()";
 
@@ -769,8 +776,13 @@ void ScriptEngine::queueScript (const std::string& key, DynamicValue& currentVal
 	LoadedModule {
 	    .value = currentValue,
 	    .module = module,
+	    .object = object,
 	    .initialized = false,
 	    .updateEnabled = true,
+	    .cursorEvents = body.find ("cursorEnter") != std::string::npos
+		|| body.find ("cursorLeave") != std::string::npos || body.find ("cursorMove") != std::string::npos
+		|| body.find ("cursorDown") != std::string::npos || body.find ("cursorUp") != std::string::npos
+		|| body.find ("cursorClick") != std::string::npos,
 	}
     );
 
@@ -875,7 +887,9 @@ void ScriptEngine::tick () {
     // run intervals
     this->m_engineObject->tick ();
 
-    // run any pending notifications
+    // Dispatch layer cursor events before update() so click handlers that change
+    // shared state are visible to property scripts in the same frame.
+    this->dispatchCursorEvents ();
 
     // run all update methods
     for (auto& [key, module] : this->m_scriptModules) {
@@ -904,6 +918,78 @@ void ScriptEngine::tick () {
 	    jsToDynamicValue (this->m_context, result, module.value);
 	}
     }
+}
+
+JSValue ScriptEngine::makeCursorEvent (const glm::vec3& worldPosition, const glm::vec3& localPosition) {
+    DynamicValue world (worldPosition);
+    DynamicValue local (localPosition);
+    JSValue event = JS_NewObject (this->m_context);
+    JS_SetPropertyStr (this->m_context, event, "worldPosition", this->m_adapters.vec3->instantiate (world, true));
+    JS_SetPropertyStr (this->m_context, event, "localPosition", this->m_adapters.vec3->instantiate (local, true));
+    return event;
+}
+
+void ScriptEngine::dispatchCursorEvents () {
+    const auto& input = this->m_scene.getContext ().getInputContext ().getMouseInput ();
+    const bool leftDown = input.leftClick () == Input::MouseClickStatus::Clicked;
+    const glm::vec3 worldPosition
+	= this->m_scene.getCamera ().screenToWorld (*this->m_scene.getMousePositionNormalized ());
+    const glm::vec3 cursorDelta
+	= worldPosition - this->m_lastCursorWorldPosition.value_or (worldPosition + glm::vec3 (1.0f));
+    const bool moved = !this->m_lastCursorWorldPosition.has_value ()
+	|| glm::dot (cursorDelta, cursorDelta) > 1e-8f;
+
+    for (auto& [key, module] : this->m_scriptModules) {
+	if (!module.cursorEvents) {
+	    continue;
+	}
+	auto* image = dynamic_cast<Render::Objects::CImage*> (module.object);
+	const auto localPosition = image != nullptr ? image->cursorLocalPosition (worldPosition) : std::nullopt;
+	const bool inside = localPosition.has_value ();
+
+	const auto callCursorHook = [&] (const char* hook) {
+	    if (!inside && std::string_view (hook) != "cursorLeave") {
+		return;
+	    }
+	    this->m_runningModule = &module;
+	    const glm::vec3 local = localPosition.value_or (glm::vec3 (0.0f));
+	    JSValue event = this->makeCursorEvent (worldPosition, local);
+	    JSValue args[] = { event };
+	    JSValue result = this->call (module.module, 1, args, hook);
+	    if (JS_IsException (result)) {
+		logJSException (this->m_context, key.c_str ());
+	    }
+	    JS_FreeValue (this->m_context, result);
+	    JS_FreeValue (this->m_context, event);
+	};
+
+	if (inside && !module.cursorInside) {
+	    callCursorHook ("cursorEnter");
+	}
+	if (!inside && module.cursorInside) {
+	    callCursorHook ("cursorLeave");
+	}
+	if (inside && moved) {
+	    callCursorHook ("cursorMove");
+	}
+	if (inside && leftDown && !this->m_cursorLeftDown) {
+	    module.cursorPressedInside = true;
+	    callCursorHook ("cursorDown");
+	}
+	if (!leftDown && this->m_cursorLeftDown) {
+	    if (inside) {
+		callCursorHook ("cursorUp");
+		if (module.cursorPressedInside) {
+		    callCursorHook ("cursorClick");
+		}
+	    }
+	    module.cursorPressedInside = false;
+	}
+	module.cursorInside = inside;
+    }
+
+    this->m_cursorLeftDown = leftDown;
+    this->m_lastCursorWorldPosition = worldPosition;
 }
 
 void ScriptEngine::notifyMediaUpdate (const Media::MediaSource::MediaInfo& media) {

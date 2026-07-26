@@ -47,9 +47,13 @@ public:
     struct LoadedModule {
 	DynamicValue& value;
 	JSValue module;
+	ScriptableObject* object = nullptr;
 	bool initialized = false;
 	/** Cleared after an authored update hook throws, preventing per-frame retries/log spam. */
 	bool updateEnabled = true;
+	bool cursorEvents = false;
+	bool cursorInside = false;
+	bool cursorPressedInside = false;
     };
     struct JSObjectAdapters {
 	std::unique_ptr<Adapters::VectorAdapter<4>> vec4;
@@ -158,6 +162,8 @@ private:
     JSValue call (JSValue module, int argc, JSValueConst argv[], const char* name);
     void queueScript (const std::string& key, DynamicValue& currentValue, ScriptableObject* object);
     void initializeModule (const std::string& key, LoadedModule& module);
+    void dispatchCursorEvents ();
+    JSValue makeCursorEvent (const glm::vec3& worldPosition, const glm::vec3& localPosition);
 
     void installBuiltins ();
 
@@ -181,6 +187,8 @@ private:
 
     LoadedModule* m_runningModule = nullptr;
     bool m_sceneLayersReady = false;
+    bool m_cursorLeftDown = false;
+    std::optional<glm::vec3> m_lastCursorWorldPosition = std::nullopt;
 
     ScriptLayerHandle m_nextLayerId = 1;
     bool m_layerRegistryReady = false;
