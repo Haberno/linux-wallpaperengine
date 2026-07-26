@@ -59,8 +59,14 @@ TextureCache::TextureCache (RenderContext& context) : Helpers::ContextAware (con
 TextureCache::~TextureCache () { this->m_mediaCallback (); }
 
 namespace {
-/** Soft cap for the texture cache; least-recently-used unreferenced entries are evicted past this */
-constexpr size_t TEXTURE_CACHE_BUDGET_BYTES = 512ULL * 1024 * 1024;
+/**
+ * Soft cap for the texture cache; least-recently-used unreferenced entries are evicted past this.
+ * Must hold two wallpapers at once: a switch stages the incoming set while the outgoing one is
+ * still referenced by the crossfade. A single 4K wallpaper already runs to ~570 MB, and the old
+ * 512 MB cap made every switch evict the textures it had just staged, so the scene build decoded
+ * them again on the render thread (2.0 s stall vs 0.3 s here).
+ */
+constexpr size_t TEXTURE_CACHE_BUDGET_BYTES = 1536ULL * 1024 * 1024;
 
 size_t estimateTextureBytes (const TextureProvider& texture) {
     // CTexture includes every image and authored mip level. Video textures also
