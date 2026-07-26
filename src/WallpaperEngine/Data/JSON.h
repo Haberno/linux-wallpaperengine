@@ -29,10 +29,10 @@ using JSON = nlohmann::basic_json<
     nlohmann::adl_serializer, std::vector<std::uint8_t>, JsonExtensions>;
 
 /**
- * Parses Wallpaper Engine-authored JSON. The editor's JsonCpp reader accepts a
- * trailing comma before an array/object close, and a small number of published
- * workshop packages rely on that extension. Strict JSON is always attempted
- * first; only that single compatibility form is repaired on parse failure.
+ * Parses Wallpaper Engine-authored JSON. The editor's reader accepts line and
+ * block comments as well as trailing commas before array/object closes. Strict
+ * JSON is attempted first, then those compatibility forms are sanitized while
+ * preserving source positions for useful parse errors.
  */
 [[nodiscard]] JSON parseCompatible (std::string_view contents, std::string_view source = {});
 

@@ -8,7 +8,6 @@
 #include "WallpaperEngine/Assets/AssetLocator.h"
 #include "WallpaperEngine/Data/JSON.h"
 #include "WallpaperEngine/Render/Shaders/Variables/ShaderVariable.h"
-#include "nlohmann/json.hpp"
 
 #include "WallpaperEngine/Data/Model/Types.h"
 

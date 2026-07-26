@@ -11,17 +11,24 @@ using namespace WallpaperEngine::Data::Model;
 using namespace WallpaperEngine::Data::Parsers;
 
 namespace {
-std::string removeTrailingCommas (const std::string_view contents, bool& changed) {
-    std::string repaired;
-    repaired.reserve (contents.size ());
+struct CompatibleJSON {
+    std::string contents;
+    bool changed { false };
+    bool unterminatedBlockComment { false };
+};
+
+CompatibleJSON sanitizeCompatibleJSON (const std::string_view contents) {
+    CompatibleJSON result { .contents = std::string (contents) };
     bool inString = false;
     bool escaped = false;
 
-    for (size_t index = 0; index < contents.size (); index++) {
-	const char current = contents[index];
+    // Strip comments first so the trailing-comma pass can treat comments before
+    // a closing bracket exactly like whitespace. Replacing bytes with spaces
+    // preserves line and column positions in any parse error.
+    for (size_t index = 0; index < result.contents.size (); index++) {
+	const char current = result.contents[index];
 
 	if (inString) {
-	    repaired.push_back (current);
 	    if (escaped) {
 		escaped = false;
 	    } else if (current == '\\') {
@@ -34,25 +41,78 @@ std::string removeTrailingCommas (const std::string_view contents, bool& changed
 
 	if (current == '"') {
 	    inString = true;
-	    repaired.push_back (current);
 	    continue;
 	}
 
-	if (current == ',') {
-	    size_t next = index + 1;
-	    while (next < contents.size () && std::isspace (static_cast<unsigned char> (contents[next]))) {
-		next++;
-	    }
-	    if (next < contents.size () && (contents[next] == ']' || contents[next] == '}')) {
-		changed = true;
-		continue;
-	    }
+	if (current != '/' || index + 1 >= result.contents.size ()) {
+	    continue;
 	}
 
-	repaired.push_back (current);
+	const char next = result.contents[index + 1];
+	if (next == '/') {
+	    result.changed = true;
+	    result.contents[index++] = ' ';
+	    result.contents[index] = ' ';
+	    while (++index < result.contents.size () && result.contents[index] != '\n'
+		   && result.contents[index] != '\r') {
+		result.contents[index] = ' ';
+	    }
+	} else if (next == '*') {
+	    result.changed = true;
+	    result.contents[index++] = ' ';
+	    result.contents[index] = ' ';
+	    bool terminated = false;
+	    while (++index < result.contents.size ()) {
+		if (result.contents[index] == '*' && index + 1 < result.contents.size ()
+		    && result.contents[index + 1] == '/') {
+		    result.contents[index++] = ' ';
+		    result.contents[index] = ' ';
+		    terminated = true;
+		    break;
+		}
+		if (result.contents[index] != '\n' && result.contents[index] != '\r') {
+		    result.contents[index] = ' ';
+		}
+	    }
+	    if (!terminated) {
+		result.unterminatedBlockComment = true;
+		return result;
+	    }
+	}
     }
 
-    return repaired;
+    inString = false;
+    escaped = false;
+    for (size_t index = 0; index < result.contents.size (); index++) {
+	const char current = result.contents[index];
+	if (inString) {
+	    if (escaped) {
+		escaped = false;
+	    } else if (current == '\\') {
+		escaped = true;
+	    } else if (current == '"') {
+		inString = false;
+	    }
+	    continue;
+	}
+	if (current == '"') {
+	    inString = true;
+	    continue;
+	}
+	if (current == ',') {
+	    size_t next = index + 1;
+	    while (next < result.contents.size ()
+		   && std::isspace (static_cast<unsigned char> (result.contents[next]))) {
+		next++;
+	    }
+	    if (next < result.contents.size () && (result.contents[next] == ']' || result.contents[next] == '}')) {
+		result.changed = true;
+		result.contents[index] = ' ';
+	    }
+	}
+    }
+
+    return result;
 }
 }
 
@@ -60,15 +120,14 @@ JSON WallpaperEngine::Data::JSON::parseCompatible (const std::string_view conten
     try {
 	return JSON::parse (contents);
     } catch (const JSON::parse_error&) {
-	bool changed = false;
-	auto repaired = removeTrailingCommas (contents, changed);
-	if (!changed) {
+	auto compatible = sanitizeCompatibleJSON (contents);
+	if (!compatible.changed || compatible.unterminatedBlockComment) {
 	    throw;
 	}
 
-	auto result = JSON::parse (repaired);
+	auto result = JSON::parse (compatible.contents);
 	sLog.out (
-	    "Accepted Wallpaper Engine JSON trailing comma", source.empty () ? "" : " in ",
+	    "Accepted Wallpaper Engine JSON comments/trailing commas", source.empty () ? "" : " in ",
 	    source.empty () ? "" : std::string (source)
 	);
 	return result;

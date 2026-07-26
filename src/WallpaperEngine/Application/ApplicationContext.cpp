@@ -21,6 +21,7 @@
 
 using namespace WallpaperEngine::Application;
 using WallpaperEngine::Data::JSON::JSON;
+using WallpaperEngine::Data::JSON::parseCompatible;
 
 std::filesystem::path ApplicationContext::resolvePlaylistItemPath (const std::string& raw) const {
     if (raw.empty ()) {
@@ -76,7 +77,9 @@ std::optional<JSON> ApplicationContext::parseConfigJson (const std::filesystem::
     }
 
     try {
-	return JSON::parse (configFile);
+	std::ostringstream contents;
+	contents << configFile.rdbuf ();
+	return parseCompatible (contents.str (), path.string ());
     } catch (const std::exception& e) {
 	sLog.error ("Failed parsing wallpaper engine config.json: ", e.what ());
 	return std::nullopt;
