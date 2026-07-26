@@ -208,6 +208,52 @@ void parseAttachments (
     }
 }
 
+/**
+ * Reads the per-frame scalar tracks that follow a clip's bone tracks. They feed g_BlendMap
+ * in the puppettexturechannels shader, which is how authored blinks fade a channelmap
+ * overlay in and out; the bone tracks of such a clip are completely static.
+ *
+ * The record does not end with these tracks and not every clip carries them, so anything
+ * that does not match the expected shape leaves the offset untouched for the record scan.
+ */
+bool readBlendTracks (
+    const std::vector<char>& data, size_t& offset, const size_t sectionEnd, MdlAnimationClip& animation
+) {
+    constexpr uint32_t MAX_TRACKS = 64;
+    const size_t start = offset;
+    // one sample per frame plus the wrap-around sample that closes the loop
+    const size_t expectedBytes = (static_cast<size_t> (animation.frameCount) + 1) * sizeof (float);
+
+    try {
+	const uint32_t trackCount = readValue<uint32_t> (data, offset, sectionEnd);
+	if (trackCount == 0 || trackCount > MAX_TRACKS) {
+	    offset = start;
+	    return false;
+	}
+
+	std::vector<std::vector<float>> tracks;
+	tracks.reserve (trackCount);
+	for (uint32_t track = 0; track < trackCount; track++) {
+	    readValue<uint32_t> (data, offset, sectionEnd); // track type, only 0 observed
+	    if (readValue<uint32_t> (data, offset, sectionEnd) != expectedBytes) {
+		offset = start;
+		return false;
+	    }
+
+	    auto& values = tracks.emplace_back (expectedBytes / sizeof (float));
+	    for (auto& value : values) {
+		value = readValue<float> (data, offset, sectionEnd);
+	    }
+	}
+
+	animation.blendTracks = std::move (tracks);
+	return true;
+    } catch (const std::runtime_error&) {
+	offset = start;
+	return false;
+    }
+}
+
 void parseAnimations (
     const std::vector<char>& data, const size_t sectionOffset, const std::string& filename, MdlAnimationData& result
 ) {
@@ -264,6 +310,8 @@ void parseAnimations (
 		}
 	    }
 	}
+
+	readBlendTracks (data, offset, sectionEnd, animation);
 
 	result.animations.push_back (std::move (animation));
 	if (index + 1 < animationCount) {
