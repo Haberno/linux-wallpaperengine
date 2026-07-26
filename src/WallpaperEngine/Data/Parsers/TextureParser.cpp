@@ -2,7 +2,6 @@
 #include <cstring>
 
 #include <lz4.h>
-#include <nlohmann/json.hpp>
 #include <stb_image.h>
 
 #include "TextureParser.h"
@@ -259,7 +258,13 @@ void TextureParser::parseContainer (Texture& header, const BinaryReader& file) {
     if (strncmp (magic, "TEXB0004", 9) == 0) {
 	header.containerVersion = ContainerVersion_TEXB0004;
 	header.freeImageFormat = parseFIF (file.nextUInt32 ());
-	header.isVideoMp4 = file.nextUInt32 () == 1;
+	// number of conditional image variants stored ahead of the base image; each one is an
+	// alternate picked by a user property (3737268876 ships Link's tunic as three
+	// 'tuniccolor' alternates on top of the default green base image)
+	const uint32_t conditionalImages = file.nextUInt32 ();
+	// mp4 containers report a single entry too, so only trust that when the header also
+	// flags video; parseMipmap needs TextureFlags_Video to read the payload anyway
+	header.isVideoMp4 = conditionalImages == 1 && (header.flags & TextureFlags_Video) != 0;
 
 	if (header.freeImageFormat == FIF_UNKNOWN && header.isVideoMp4) {
 	    header.freeImageFormat = FIF_MP4;
@@ -268,6 +273,16 @@ void TextureParser::parseContainer (Texture& header, const BinaryReader& file) {
 	// default to TEXB0003 format here
 	if (header.freeImageFormat != FIF_MP4) {
 	    header.containerVersion = ContainerVersion_TEXB0003;
+
+	    // the variant table sits between the container header and the base image, which uses
+	    // the plain TEXB0003 mipmap layout. Skip it so the base image parses; that is the
+	    // variant the property falls back to and the only one the engine can pick today.
+	    for (uint32_t variant = 0; variant < conditionalImages; variant++) {
+		std::ignore = file.nextUInt32 ();
+		std::ignore = file.nextUInt32 ();
+		std::ignore = file.nextUInt32 ();
+		std::ignore = file.nextNullTerminatedString ();
+	    }
 	}
     } else if (strncmp (magic, "TEXB0003", 9) == 0) {
 	header.containerVersion = ContainerVersion_TEXB0003;
@@ -424,7 +439,7 @@ void TextureParser::parseSpritesheetMetadata (
 ) {
     try {
 	std::string texJsonContent = metadataLoader (filename + ".tex-json");
-	nlohmann::json texJson = nlohmann::json::parse (texJsonContent);
+	JSON texJson = WallpaperEngine::Data::JSON::parseCompatible (texJsonContent, filename + ".tex-json");
 
 	// Check for spritesheet sequences
 	if (texJson.contains ("spritesheetsequences") && texJson["spritesheetsequences"].is_array ()) {
