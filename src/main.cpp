@@ -1,6 +1,10 @@
 #include <csignal>
 #include <iostream>
 
+#if defined(__GLIBC__)
+#include <malloc.h>
+#endif
+
 #include "WallpaperEngine/Application/ApplicationContext.h"
 #include "WallpaperEngine/Application/WallpaperApplication.h"
 #include "WallpaperEngine/Debug/RenderHealth.h"
@@ -36,6 +40,14 @@ int main (int argc, char* argv[]) {
     if (cefExitCode >= 0) {
 	return cefExitCode;
     }
+
+#if defined(__GLIBC__)
+    // Texture decoding runs one thread per core, and glibc would give each of them its own
+    // arena. The decode buffers are hundreds of MB per wallpaper, and once freed they sit
+    // mid-arena where malloc_trim cannot return them: 232 MiB stuck per heavy switch instead
+    // of 5. Two arenas keep that memory reclaimable and cost ~3% of the decode.
+    mallopt (M_ARENA_MAX, 2);
+#endif
 
     // arm the health report (if configured) before anything can fail so a report is
     // written on every exit path, even when the failure never touches a hook
