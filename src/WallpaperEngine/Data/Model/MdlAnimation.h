@@ -39,6 +39,12 @@ struct MdlAnimationClip {
     std::vector<uint32_t> boneFlags = {};
     /** boneFrames[bone][frame], commonly frameCount + 1 entries for loop interpolation. */
     std::vector<std::vector<MdlBoneFrame>> boneFrames = {};
+    /**
+     * blendTracks[row][frame], the per-frame scalars a clip drives alongside its bones.
+     * They become g_BlendMap in the puppettexturechannels shader, fading a channelmap
+     * overlay in and out; authored blinks live here, not in the bone tracks.
+     */
+    std::vector<std::vector<float>> blendTracks = {};
 };
 
 struct MdlAnimationData {
@@ -57,6 +63,8 @@ struct MdlActiveAnimation {
 struct MdlPose {
     std::vector<glm::mat4> worldBones = {};
     std::vector<glm::mat4> skinBones = {};
+    /** Interpolated blend track values of the active clips, indexed by track row. */
+    std::vector<float> blendWeights = {};
 };
 
 class MdlAnimationEvaluator {
