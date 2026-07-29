@@ -664,7 +664,17 @@ void ApplicationContext::loadSettingsFromArgv () {
     );
 
     try {
-	program.parse_known_args (this->m_argc, this->m_argv);
+	// parse_known_args returns whatever it could not match. Discarding it means a
+	// misspelled option is accepted in silence and simply does nothing, so a user
+	// passing --no-full-screen-pause instead of --no-fullscreen-pause keeps paying
+	// for fullscreen detection while believing it is off. Unknown options stay
+	// non-fatal so existing launcher configurations keep starting, but they are
+	// reported loudly enough to be findable in the log.
+	const auto unknownArguments = program.parse_known_args (this->m_argc, this->m_argv);
+
+	for (const auto& argument : unknownArguments) {
+	    sLog.error ("Ignoring unrecognized command line argument: ", argument);
+	}
 
 	if (this->settings.general.defaultBackground.empty ()) {
 	    throw std::runtime_error ("At least one background ID must be specified");
