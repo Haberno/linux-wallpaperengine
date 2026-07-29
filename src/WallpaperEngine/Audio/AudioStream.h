@@ -40,12 +40,19 @@ using namespace WallpaperEngine::FileSystem;
  */
 class AudioStream {
 public:
-    AudioStream (AudioContext& context, const std::string& filename);
-    AudioStream (AudioContext& context, const ReadStreamSharedPtr& buffer);
+    AudioStream (AudioContext& context, const std::string& filename, bool repeat = false);
+    AudioStream (AudioContext& context, const ReadStreamSharedPtr& buffer, bool repeat = false);
     AudioStream (AudioContext& audioContext, AVCodecContext* context);
     ~AudioStream ();
 
     void queuePacket (AVPacket* pkt);
+
+    /**
+     * Queues an ordered decoder reset after every packet from the completed pass.
+     * The file-reader thread must not call avcodec_flush_buffers() directly because
+     * the SDL callback owns and operates the decoder context.
+     */
+    void queueDecoderFlush ();
 
     /**
      * Tries to get the next packet in the queue. Audio callbacks must never
@@ -161,7 +168,7 @@ private:
      * @param pkt
      * @return
      */
-    bool doQueue (AVPacket* pkt);
+    bool doQueue (AVPacket* pkt, bool flushDecoder = false);
     /**
      * Initializes queues and ffmpeg resampling
      */
@@ -174,7 +181,7 @@ private:
     /** If this stream was properly initialized or not */
     std::atomic<bool> m_initialized = false;
     /** Repeat enabled? */
-    bool m_repeat = false;
+    std::atomic<bool> m_repeat = false;
     /** Full playback passes so far; written by the read thread, read by the render thread */
     std::atomic<uint32_t> m_completions = 0;
     /** The codec context that contains the original audio format information */
@@ -187,15 +194,16 @@ private:
     ReadStreamSharedPtr m_buffer = nullptr;
 
     struct MyAVPacketList {
-	AVPacket* packet;
+	AVPacket* packet = nullptr;
+	bool flushDecoder = false;
     };
 
     /** The packet used while decoding this stream */
     AVPacket* m_decodePacket = nullptr;
     /** The AV frame used while decoding this stream */
     AVFrame* m_decodeFrame = nullptr;
-    /** Remaining bytes in m_decodePacket; decoder state must never be shared between streams */
-    int m_audioPacketSize = 0;
+    /** The last dequeued entry is an ordered loop-boundary decoder reset */
+    bool m_decoderFlushPending = false;
 
     /**
      * Packet queue information
