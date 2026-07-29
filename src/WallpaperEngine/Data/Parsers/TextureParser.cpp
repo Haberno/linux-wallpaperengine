@@ -134,9 +134,12 @@ TextureUniquePtr TextureParser::parse (const BinaryReader& file) {
 
 MipmapSharedPtr TextureParser::parseMipmap (const BinaryReader& file, const Texture& header) {
     auto result = std::make_shared<Mipmap> ();
+    const bool isVideo = (header.flags & TextureFlags_Video) != 0;
 
-    // TEXB0004 has some extra data in the header that has to be handled
-    if (header.containerVersion == ContainerVersion_TEXB0004) {
+    // Still-image TEXB0004 mipmaps prefix the ordinary dimensions with editor metadata.
+    // Video TEXB0004 mipmaps do not: their width starts immediately after the mip count,
+    // followed by height/compression/sizes and the embedded MP4 bytes.
+    if (header.containerVersion == ContainerVersion_TEXB0004 && !isVideo) {
 	// some integers that we can ignore as they only seem to affect
 	// the editor
 	std::ignore = file.nextUInt32 ();
@@ -155,19 +158,24 @@ MipmapSharedPtr TextureParser::parseMipmap (const BinaryReader& file, const Text
 	|| header.containerVersion == ContainerVersion_TEXB0002) {
 	result->compression = file.nextUInt32 ();
 	result->uncompressedSize = file.nextInt ();
-
-    if (header.flags & TextureFlags_Video) {
-            result->uncompressedSize = result->compressedSize;
-            result->compression = 0;
-            result->uncompressedData = std::unique_ptr<char[]> (new char[result->uncompressedSize]);
-            file.next (result->uncompressedData.get (), result->uncompressedSize);
-
-            return result;
-        }
-    
     }
 
     result->compressedSize = file.nextInt ();
+
+    // Packed video textures carry a raw MP4 payload. Its preceding uncompressed-size
+    // field is zero, so the following compressed-size field is the authoritative byte
+    // count even though the payload itself is not compressed.
+    if (isVideo) {
+	if (result->compressedSize <= 0) {
+	    return nullptr;
+	}
+
+	result->uncompressedSize = result->compressedSize;
+	result->compression = 0;
+	result->uncompressedData = std::make_unique<char[]> (result->uncompressedSize);
+	file.next (result->uncompressedData.get (), result->uncompressedSize);
+	return result;
+    }
 
     if (result->compression == 0) {
 	// this might be better named as mipmap_bytes_size instead of compressedSize
