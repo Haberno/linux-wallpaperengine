@@ -35,16 +35,33 @@ int audio_read_thread (void* arg) {
 	if (ret == AVERROR_EOF) {
 	    // a full pass finished — the playback coordinator uses this to rotate soundtracks
 	    stream->notifyCompletion ();
-	    // seek to the beginning of the file again
-	    avformat_seek_file (stream->getFormatContext (), stream->getAudioStream (), 0, 0, 0, ~AVSEEK_FLAG_FRAME);
-	    avcodec_flush_buffers (stream->getContext ());
 
-	    // ensure the thread is not killed if audio has to be looped
 	    if (stream->isRepeat ()) {
+		// The demuxer is owned by this thread, so it can seek immediately. Queue the
+		// decoder reset after every packet from the old pass and before any packet
+		// from the new pass. The SDL callback is the sole AVCodecContext owner.
+		const int seekResult = avformat_seek_file (
+		    stream->getFormatContext (), stream->getAudioStream (), 0, 0, 0, ~AVSEEK_FLAG_FRAME
+		);
+		if (seekResult < 0) {
+		    sLog.error ("Cannot seek repeating audio stream: ", av_err2str (seekResult));
+		    break;
+		}
+
+		stream->queueDecoderFlush ();
 		ret = 0;
+	    } else {
+		// Let the decoder callback drain the queued tail before resetting. This also
+		// keeps completion ordering deterministic for soundtrack rotation.
+		stream->queueDecoderFlush ();
 	    }
 
 	    continue;
+	}
+
+	if (ret < 0) {
+	    sLog.error ("Cannot read audio packet: ", av_err2str (ret));
+	    break;
 	}
 
 	// TODO: PROPERLY IMPLEMENT THIS
@@ -109,11 +126,13 @@ int64_t audio_seek_data_callback (void* streamarg, int64_t offset, int whence) {
     return 0;
 }
 
-AudioStream::AudioStream (AudioContext& context, const std::string& filename) : m_audioContext (context) {
+AudioStream::AudioStream (AudioContext& context, const std::string& filename, const bool repeat) :
+    m_audioContext (context), m_repeat (repeat) {
     this->loadCustomContent (filename.c_str ());
 }
 
-AudioStream::AudioStream (AudioContext& context, const ReadStreamSharedPtr& buffer) : m_audioContext (context) {
+AudioStream::AudioStream (AudioContext& context, const ReadStreamSharedPtr& buffer, const bool repeat) :
+    m_audioContext (context), m_repeat (repeat) {
     // setup a custom context first
     this->m_formatContext = avformat_alloc_context ();
 
@@ -352,8 +371,18 @@ void AudioStream::queuePacket (AVPacket* pkt) {
     }
 }
 
-bool AudioStream::doQueue (AVPacket* pkt) {
-    MyAVPacketList entry { pkt };
+void AudioStream::queueDecoderFlush () {
+    SDL_LockMutex (this->m_queue->mutex);
+    const bool gotQueued = this->doQueue (nullptr, true);
+    SDL_UnlockMutex (this->m_queue->mutex);
+
+    if (!gotQueued) {
+	sLog.error ("Cannot queue audio decoder flush");
+    }
+}
+
+bool AudioStream::doQueue (AVPacket* pkt, const bool flushDecoder) {
+    MyAVPacketList entry { .packet = pkt, .flushDecoder = flushDecoder };
 
 #if FF_API_FIFO_OLD_API
     if (av_fifo_space (this->m_queue->packetList) < static_cast<int> (sizeof (entry))) {
@@ -371,8 +400,8 @@ bool AudioStream::doQueue (AVPacket* pkt) {
 #endif
 
     this->m_queue->nb_packets++;
-    this->m_queue->size += entry.packet->size + sizeof (entry);
-    this->m_queue->duration += entry.packet->duration;
+    this->m_queue->size += (entry.packet != nullptr ? entry.packet->size : 0) + sizeof (entry);
+    this->m_queue->duration += entry.packet != nullptr ? entry.packet->duration : 0;
 
     SDL_CondSignal (this->m_queue->cond);
 
@@ -382,6 +411,7 @@ bool AudioStream::doQueue (AVPacket* pkt) {
 bool AudioStream::dequeuePacket () {
     MyAVPacketList entry {};
     bool dequeued = false;
+    this->m_decoderFlushPending = false;
 
     SDL_LockMutex (this->m_queue->mutex);
 
@@ -397,11 +427,16 @@ bool AudioStream::dequeuePacket () {
 
     if (ret >= 0) {
 	this->m_queue->nb_packets--;
-	this->m_queue->size -= entry.packet->size + sizeof (entry);
-	this->m_queue->duration -= entry.packet->duration;
+	this->m_queue->size -= (entry.packet != nullptr ? entry.packet->size : 0) + sizeof (entry);
+	this->m_queue->duration -= entry.packet != nullptr ? entry.packet->duration : 0;
 
-	av_packet_move_ref (this->m_decodePacket, entry.packet);
-	av_packet_free (&entry.packet);
+	if (entry.flushDecoder) {
+	    this->m_decoderFlushPending = true;
+	} else if (entry.packet != nullptr) {
+	    av_packet_unref (this->m_decodePacket);
+	    av_packet_move_ref (this->m_decodePacket, entry.packet);
+	    av_packet_free (&entry.packet);
+	}
 	dequeued = true;
     }
 
@@ -543,56 +578,46 @@ int AudioStream::resampleAudio (uint8_t* out_buf, const int out_size) {
 }
 
 int AudioStream::decodeFrame (uint8_t* audioBuffer, const int bufferSize) {
-    // block until there's any data in the buffers
+    // FFmpeg's send/receive state belongs exclusively to the SDL callback. The
+    // reader thread only demuxes packets and queues loop-boundary reset markers.
     while (this->m_audioContext.getApplicationContext ().state.general.keepRunning && this->isInitialized ()) {
-	while (this->m_audioPacketSize > 0
-	       && this->m_audioContext.getApplicationContext ().state.general.keepRunning && this->isInitialized ()) {
-	    int got_frame = 0;
-	    int ret = avcodec_receive_frame (this->getContext (), this->m_decodeFrame);
-
-	    if (ret == 0) {
-		got_frame = 1;
-	    }
-	    if (ret == AVERROR (EAGAIN)) {
-		ret = 0;
-	    }
-	    if (ret == 0) {
-		ret = avcodec_send_packet (this->getContext (), this->m_decodePacket);
-	    }
-	    if (ret < 0 && ret != AVERROR (EAGAIN)) {
-		return -1;
-	    }
-
-	    if (this->m_decodePacket->size < 0) {
-		// if error, skip frame
-		this->m_audioPacketSize = 0;
-		break;
-	    }
-
-	    this->m_audioPacketSize -= this->m_decodePacket->size;
-	    int data_size = 0;
-
-	    if (got_frame) {
-		// audio resampling
-		data_size = this->resampleAudio (audioBuffer, bufferSize);
-	    }
-	    if (data_size <= 0) {
-		// no data found, keep waiting
-		continue;
-	    }
-	    // some data was found
-	    return data_size;
+	int ret = avcodec_receive_frame (this->getContext (), this->m_decodeFrame);
+	if (ret == 0) {
+	    return this->resampleAudio (audioBuffer, bufferSize);
+	}
+	if (ret != AVERROR (EAGAIN) && ret != AVERROR_EOF) {
+	    sLog.error ("Cannot receive decoded audio frame: ", av_err2str (ret));
+	    return -1;
 	}
 
-	if (this->m_decodePacket->data) {
+	// A packet is retained only when avcodec_send_packet() previously asked us
+	// to receive more output first. Never drop it on EAGAIN.
+	if (this->m_decodePacket->data != nullptr) {
+	    ret = avcodec_send_packet (this->getContext (), this->m_decodePacket);
+	    if (ret == 0) {
+		av_packet_unref (this->m_decodePacket);
+		continue;
+	    }
+	    if (ret == AVERROR (EAGAIN)) {
+		return 0;
+	    }
+
+	    sLog.error ("Cannot send audio packet for decoding: ", av_err2str (ret));
 	    av_packet_unref (this->m_decodePacket);
+	    return -1;
 	}
 
 	if (!this->dequeuePacket ()) {
 	    return 0;
 	}
 
-	this->m_audioPacketSize = this->m_decodePacket->size;
+	if (this->m_decoderFlushPending) {
+	    // This marker is ordered after the old pass's packets. Reaching it here
+	    // means receive_frame() has already drained all decoder output available
+	    // from those packets, and no other thread can be inside the codec.
+	    avcodec_flush_buffers (this->getContext ());
+	    continue;
+	}
     }
 
     return 0;
