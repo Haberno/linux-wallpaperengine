@@ -1,0 +1,2214 @@
+#!/usr/bin/env python3
+"""Small live terminal monitor for the Waypaper/linux-wallpaperengine stack.
+
+The desktop launcher intentionally detaches both Waypaper and the engine with
+stdout/stderr pointed at /dev/null.  This tool therefore watches the observable
+runtime state instead:
+
+* Waypaper's persisted monitor -> wallpaper assignments and engine settings
+* the live engine process, cgroup, resource use and stale/deleted mappings
+* the engine's Unix control socket, memstats and fbostats commands
+* the CEF child process tree, coredumps, OOM kills and kernel GPU faults
+* timestamped changes correlated with wallpaper selections
+
+It uses only the Python standard library and does not mutate engine state.
+"""
+
+from __future__ import annotations
+
+import argparse
+import configparser
+import curses
+import dataclasses
+import datetime as dt
+import json
+import os
+from pathlib import Path
+import re
+import shlex
+import signal
+import socket
+import subprocess
+import sys
+import textwrap
+import time
+from collections import deque
+from typing import Sequence, TextIO
+
+
+VERSION = "1.0"
+DEFAULT_INTERVAL = 0.5
+MIB = 1024 * 1024
+GIB = 1024 * MIB
+# "HH:MM:SS.mmm [LEVEL] message" as written by WallpaperEngine::Logging::Log
+LOG_LINE = re.compile(r"^(\d{2}:\d{2}:\d{2}\.\d{3}) \[([A-Z]+)\] (.*)$")
+
+
+@dataclasses.dataclass(frozen=True)
+class Wallpaper:
+    path: str
+    project_dir: str
+    workshop_id: str
+    title: str
+
+    @property
+    def short_name(self) -> str:
+        if self.workshop_id:
+            return f"{self.title} [{self.workshop_id}]"
+        return self.title
+
+
+@dataclasses.dataclass(frozen=True)
+class WaypaperState:
+    path: str
+    signature: tuple[int, int, int] | None
+    backend: str = ""
+    assignments: tuple[tuple[str, Wallpaper], ...] = ()
+    monitors: tuple[str, ...] = ()
+    wallpapers: tuple[str, ...] = ()
+    transition: str = ""
+    fps: str = ""
+    volume: str = ""
+    audio_scale: str = ""
+    silent: bool = False
+    noautomute: bool = False
+    parse_error: str = ""
+
+
+@dataclasses.dataclass(frozen=True)
+class ProcessInfo:
+    pid: int
+    exe: str
+    argv: tuple[str, ...]
+    screens: tuple[str, ...]
+    uptime: float
+    cpu_percent: float | None
+    rss_bytes: int
+    threads: int
+    cgroup: str
+    stdout: str
+    stderr: str
+    deleted_mappings: int
+
+
+@dataclasses.dataclass(frozen=True)
+class SocketInfo:
+    path: str
+    state: str
+    error: str
+    latency_ms: float | None
+    stats: tuple[tuple[str, int], ...] = ()
+    fbo_summary: str = ""
+
+    def get(self, key: str, default: int = 0) -> int:
+        return dict(self.stats).get(key, default)
+
+
+@dataclasses.dataclass(frozen=True)
+class ChildProcess:
+    pid: int
+    kind: str
+    pss_bytes: int
+    threads: int
+
+
+@dataclasses.dataclass(frozen=True)
+class Sample:
+    """One periodic resource reading, retained so a death can be explained afterwards."""
+
+    wall: float
+    rss_bytes: int
+    children_pss_bytes: int
+    heap_bytes: int
+    fbo_bytes: int
+    tex_bytes: int
+    cpu_percent: float | None
+    threads: int
+    children: int
+
+    def as_json(self) -> dict[str, object]:
+        return {
+            "time": round(self.wall, 3),
+            "rss": self.rss_bytes,
+            "children_pss": self.children_pss_bytes,
+            "heap": self.heap_bytes,
+            "fbo": self.fbo_bytes,
+            "tex": self.tex_bytes,
+            "cpu": None if self.cpu_percent is None else round(self.cpu_percent, 1),
+            "threads": self.threads,
+            "children": self.children,
+        }
+
+
+@dataclasses.dataclass(frozen=True)
+class Snapshot:
+    captured: float
+    engine: ProcessInfo | None
+    waypaper_pid: int | None
+    waypaper: WaypaperState
+    control: SocketInfo
+    warnings: tuple[str, ...]
+    children: tuple[ChildProcess, ...] = ()
+
+
+@dataclasses.dataclass(frozen=True)
+class Event:
+    sequence: int
+    stamp: str
+    kind: str
+    message: str
+    level: str = "info"
+
+    def plain(self) -> str:
+        return f"{self.stamp} {self.kind:<8} {self.message}"
+
+
+@dataclasses.dataclass(frozen=True)
+class CrashInfo:
+    timestamp_us: int
+    stamp: str
+    pid: int
+    signal_number: int
+    signal_name: str
+    size: int
+    command: str = ""
+    reason: str = ""
+    frames: tuple[str, ...] = ()
+    wallpapers: str = ""
+    symbolized: bool = True
+
+    @property
+    def is_child(self) -> bool:
+        return "--type=" in self.command
+
+
+@dataclasses.dataclass(frozen=True)
+class Diagnostics:
+    updated: float = 0.0
+    log_path: str = ""
+    log_lines: tuple[str, ...] = ()
+    log_errors: tuple[str, ...] = ()
+    log_error: str = ""
+    crashes: tuple[CrashInfo, ...] = ()
+    journal_lines: tuple[str, ...] = ()
+    journal_error: str = ""
+    gpu_lines: tuple[str, ...] = ()
+    gpu_error: str = ""
+    symbol_note: str = ""
+
+
+def human_bytes(value: int | float, signed: bool = False) -> str:
+    sign = ""
+    number = float(value)
+    if signed:
+        if number > 0:
+            sign = "+"
+        elif number < 0:
+            sign = "-"
+        number = abs(number)
+    for suffix, scale in (("GiB", GIB), ("MiB", MIB), ("KiB", 1024)):
+        if number >= scale:
+            return f"{sign}{number / scale:.1f} {suffix}"
+    return f"{sign}{int(number)} B"
+
+
+def human_duration(seconds: float) -> str:
+    seconds = max(0, int(seconds))
+    days, seconds = divmod(seconds, 86400)
+    hours, seconds = divmod(seconds, 3600)
+    minutes, seconds = divmod(seconds, 60)
+    if days:
+        return f"{days}d {hours:02d}h"
+    if hours:
+        return f"{hours}h {minutes:02d}m"
+    if minutes:
+        return f"{minutes}m {seconds:02d}s"
+    return f"{seconds}s"
+
+
+def children_summary(children: tuple[ChildProcess, ...]) -> str:
+    if not children:
+        return "none"
+    grouped: dict[str, list[int]] = {}
+    for child in children:
+        grouped.setdefault(child.kind, []).append(child.pss_bytes)
+    parts = [
+        f"{kind}x{len(sizes)} {human_bytes(sum(sizes))}"
+        if len(sizes) > 1
+        else f"{kind} {human_bytes(sizes[0])}"
+        for kind, sizes in sorted(grouped.items())
+    ]
+    return "  ".join(parts)
+
+
+def parse_bool(value: str, default: bool = False) -> bool:
+    normalized = value.strip().lower()
+    if normalized in {"1", "yes", "true", "on"}:
+        return True
+    if normalized in {"0", "no", "false", "off"}:
+        return False
+    return default
+
+
+def parse_key_value_reply(reply: str) -> dict[str, int]:
+    values: dict[str, int] = {}
+    if not reply.startswith("ok"):
+        return values
+    for item in reply.split()[1:]:
+        key, separator, raw = item.partition("=")
+        if not separator:
+            continue
+        try:
+            values[key] = int(raw)
+        except ValueError:
+            continue
+    return values
+
+
+def socket_request(path: str, command: str, timeout: float = 0.45) -> tuple[str, float]:
+    started = time.monotonic()
+    chunks: list[bytes] = []
+    with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as client:
+        client.settimeout(timeout)
+        client.connect(path)
+        client.sendall(command.encode("utf-8") + b"\n")
+        while True:
+            block = client.recv(65536)
+            if not block:
+                break
+            chunks.append(block)
+            if sum(map(len, chunks)) > MIB:
+                raise RuntimeError("control socket reply exceeded 1 MiB")
+    elapsed = (time.monotonic() - started) * 1000
+    return b"".join(chunks).decode("utf-8", "replace").strip(), elapsed
+
+
+def read_cmdline(pid: int) -> tuple[str, ...]:
+    try:
+        content = Path(f"/proc/{pid}/cmdline").read_bytes()
+    except (FileNotFoundError, PermissionError, ProcessLookupError):
+        return ()
+    return tuple(part.decode("utf-8", "replace") for part in content.split(b"\0") if part)
+
+
+def process_ids() -> list[int]:
+    try:
+        return [int(entry.name) for entry in os.scandir("/proc") if entry.name.isdigit()]
+    except OSError:
+        return []
+
+
+def find_engine_pid() -> int | None:
+    candidates: list[int] = []
+    for pid in process_ids():
+        try:
+            exe = os.readlink(f"/proc/{pid}/exe")
+        except (FileNotFoundError, PermissionError, ProcessLookupError):
+            continue
+        if not Path(exe.removesuffix(" (deleted)")).name.startswith("linux-wallpaperengine"):
+            continue
+        argv = read_cmdline(pid)
+        if not argv or any(argument.startswith("--type=") for argument in argv):
+            continue
+        candidates.append(pid)
+    return min(candidates) if candidates else None
+
+
+def read_environ(pid: int) -> dict[str, str]:
+    try:
+        raw = Path(f"/proc/{pid}/environ").read_bytes()
+    except (FileNotFoundError, PermissionError, ProcessLookupError, OSError):
+        return {}
+    environ: dict[str, str] = {}
+    for entry in raw.split(b"\0"):
+        name, sep, value = entry.decode("utf-8", "replace").partition("=")
+        if sep:
+            environ[name] = value
+    return environ
+
+
+def default_log_dir() -> Path:
+    state = os.environ.get("XDG_STATE_HOME") or "~/.local/state"
+    return Path(state).expanduser() / "linux-wallpaperengine"
+
+
+def discover_log_path(pid: int | None) -> str:
+    """Locate the log the running engine is actually writing to.
+
+    The engine defaults to <state>/linux-wallpaperengine/engine.log but honours
+    $WPE_LOG_FILE, so ask the live process first -- that is the only source that stays
+    correct when it was launched with a custom path.  Falling back to the newest file in
+    the state directory keeps the log of a crashed engine reachable after it is gone.
+    """
+    if pid is not None:
+        configured = read_environ(pid).get("WPE_LOG_FILE", "")
+        if configured and configured != "off":
+            return str(Path(configured).expanduser())
+
+    default = default_log_dir() / "engine.log"
+    if default.exists():
+        return str(default)
+
+    try:
+        logs = sorted(
+            default_log_dir().glob("*.log*"),
+            key=lambda item: item.stat().st_mtime,
+            reverse=True,
+        )
+    except OSError:
+        logs = []
+    return str(logs[0]) if logs else str(default)
+
+
+def find_waypaper_pid() -> int | None:
+    for pid in process_ids():
+        argv = read_cmdline(pid)
+        if len(argv) >= 3 and argv[1:3] == ("-m", "waypaper"):
+            return pid
+    return None
+
+
+def read_status_fields(pid: int) -> dict[str, str]:
+    fields: dict[str, str] = {}
+    try:
+        for line in Path(f"/proc/{pid}/status").read_text(errors="replace").splitlines():
+            key, separator, value = line.partition(":")
+            if separator:
+                fields[key] = value.strip()
+    except (FileNotFoundError, PermissionError, ProcessLookupError):
+        pass
+    return fields
+
+
+def read_fd_target(pid: int, number: int) -> str:
+    try:
+        return os.readlink(f"/proc/{pid}/fd/{number}")
+    except (FileNotFoundError, PermissionError, ProcessLookupError):
+        return "?"
+
+
+def read_cgroup(pid: int) -> str:
+    try:
+        lines = Path(f"/proc/{pid}/cgroup").read_text(errors="replace").splitlines()
+    except (FileNotFoundError, PermissionError, ProcessLookupError):
+        return "?"
+    if not lines:
+        return "?"
+    path = lines[0].rsplit(":", 1)[-1]
+    return path.rsplit("/", 1)[-1] or path
+
+
+def deleted_engine_mappings(pid: int) -> int:
+    try:
+        lines = Path(f"/proc/{pid}/maps").read_text(errors="replace").splitlines()
+    except (FileNotFoundError, PermissionError, ProcessLookupError):
+        return 0
+    return sum(
+        "(deleted)" in line
+        and ("linux-wallpaperengine" in line or "liblinux-wallpaperengine" in line)
+        for line in lines
+    )
+
+
+def screen_names(argv: tuple[str, ...]) -> tuple[str, ...]:
+    screens: list[str] = []
+    for index, argument in enumerate(argv[:-1]):
+        if argument == "--screen-root" and argv[index + 1] not in screens:
+            screens.append(argv[index + 1])
+    return tuple(screens)
+
+
+def read_ppid(pid: int) -> int:
+    try:
+        raw = Path(f"/proc/{pid}/stat").read_text()
+    except (FileNotFoundError, PermissionError, ProcessLookupError):
+        return 0
+    try:
+        return int(raw[raw.rfind(")") + 2 :].split()[1])
+    except (IndexError, ValueError):
+        return 0
+
+
+def read_pss_bytes(pid: int) -> int:
+    """Proportional set size, which unlike RSS does not double-count shared CEF pages."""
+    try:
+        lines = Path(f"/proc/{pid}/smaps_rollup").read_text(errors="replace").splitlines()
+    except (FileNotFoundError, PermissionError, ProcessLookupError, OSError):
+        return 0
+    for line in lines:
+        if line.startswith("Pss:"):
+            try:
+                return int(line.split()[1]) * 1024
+            except (IndexError, ValueError):
+                return 0
+    return 0
+
+
+def classify_child(argv: tuple[str, ...], threads: int) -> str:
+    """Name a CEF helper from its argv.
+
+    Processes forked by a zygote inherit the zygote's argv, so a child still reports
+    --type=zygote even after it has become something else.  A genuine zygote is always
+    single-threaded because fork() only clones the calling thread, so any multi-threaded
+    "zygote" is really a forked child whose true role argv cannot tell us.
+    """
+    kind = ""
+    sub_type = ""
+    for argument in argv:
+        if argument.startswith("--type="):
+            kind = argument.partition("=")[2]
+        elif argument.startswith("--utility-sub-type="):
+            sub_type = argument.partition("=")[2].rsplit(".", 1)[-1]
+    if not kind:
+        return ""
+    if kind == "utility" and sub_type:
+        return f"utility:{sub_type}"
+    if kind == "zygote" and threads > 1:
+        return "zygote-child"
+    return kind
+
+
+def read_children(pid: int) -> tuple[ChildProcess, ...]:
+    # Descendants, not just direct children.  A zygote forks the renderers and utility
+    # processes itself, so they hang off the zygote rather than the engine; matching only
+    # ppid == pid hides exactly the processes most likely to be crashing.
+    by_parent: dict[int, list[int]] = {}
+    for candidate in process_ids():
+        by_parent.setdefault(read_ppid(candidate), []).append(candidate)
+
+    descendants: list[int] = []
+    pending = [pid]
+    while pending:
+        for child in by_parent.get(pending.pop(), ()):
+            descendants.append(child)
+            pending.append(child)
+
+    children: list[ChildProcess] = []
+    for candidate in descendants:
+        argv = read_cmdline(candidate)
+        if not argv:
+            continue
+        try:
+            threads = int(read_status_fields(candidate).get("Threads", "0"))
+        except ValueError:
+            threads = 0
+        kind = classify_child(argv, threads)
+        if not kind:
+            continue
+        children.append(
+            ChildProcess(
+                pid=candidate,
+                kind=kind,
+                pss_bytes=read_pss_bytes(candidate),
+                threads=threads,
+            )
+        )
+    children.sort(key=lambda child: (child.kind, child.pid))
+    return tuple(children)
+
+
+class RuntimeMonitor:
+    def __init__(
+        self,
+        control_path: str,
+        config_path: str,
+        interval: float,
+        engine_log_path: str | None = None,
+        record_path: str | None = None,
+        since: str = "1 hour ago",
+        sample_record_path: str | None = None,
+    ) -> None:
+        self.control_path = str(Path(control_path).expanduser())
+        self.config_path = str(Path(config_path).expanduser())
+        # None means "follow whatever the running engine uses"; an explicit path is never
+        # overridden, so --engine-log still wins over discovery.
+        self.log_override = str(Path(engine_log_path).expanduser()) if engine_log_path else None
+        self.engine_log_path = self.log_override or discover_log_path(find_engine_pid())
+        self.interval = interval
+        self.since = since
+        self.events: deque[Event] = deque(maxlen=500)
+        self.snapshot: Snapshot | None = None
+        self.diagnostics = Diagnostics(log_path=self.engine_log_path)
+        self._clock_ticks = os.sysconf("SC_CLK_TCK")
+        self._last_cpu: tuple[int, int, float] | None = None
+        self._title_cache: dict[str, Wallpaper] = {}
+        self._last_fbo_at = 0.0
+        self._last_fbo_summary = ""
+        self._socket_failures = 0
+        self._pending_selection: tuple[float, tuple[int, int, int], str] | None = None
+        self._event_sequence = 0
+        self._known_crash_pids: set[int] = set()
+        self._known_log_errors: set[str] = set()
+        self._log_errors_primed = False
+        self._crash_detail_cache: dict[int, CrashInfo] = {}
+        # Trailing window of samples, so a death can be described by what led up to it
+        # rather than only by the fact that it happened.
+        self._samples: deque[Sample] = deque(maxlen=int(max(1.0, 60.0 / max(interval, 0.1))))
+        self._child_pids: dict[int, str] = {}
+        self._child_restarts = 0
+        self._last_crash_loop_at = 0.0
+        self._symbol_note: str | None = None
+        self._record: TextIO | None = None
+        self._sample_record: TextIO | None = None
+        if record_path:
+            self._record = self._open_append(record_path)
+        if sample_record_path:
+            self._sample_record = self._open_append(sample_record_path)
+
+    @staticmethod
+    def _open_append(raw_path: str) -> TextIO:
+        path = Path(raw_path).expanduser()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        return path.open("a", encoding="utf-8", buffering=1)
+
+    def close(self) -> None:
+        for stream in ("_record", "_sample_record"):
+            handle = getattr(self, stream)
+            if handle:
+                handle.close()
+                setattr(self, stream, None)
+
+    def emit(self, kind: str, message: str, level: str = "info") -> None:
+        self._event_sequence += 1
+        event = Event(
+            self._event_sequence,
+            dt.datetime.now().strftime("%H:%M:%S.%f")[:-3],
+            kind,
+            message,
+            level,
+        )
+        self.events.append(event)
+        if self._record:
+            self._record.write(event.plain() + "\n")
+
+    def read_process(self, pid: int) -> ProcessInfo | None:
+        argv = read_cmdline(pid)
+        if not argv:
+            return None
+        try:
+            exe = os.readlink(f"/proc/{pid}/exe")
+            raw_stat = Path(f"/proc/{pid}/stat").read_text()
+            rest = raw_stat[raw_stat.rfind(")") + 2 :].split()
+            process_ticks = int(rest[11]) + int(rest[12])
+            start_ticks = int(rest[19])
+            system_uptime = float(Path("/proc/uptime").read_text().split()[0])
+        except (FileNotFoundError, PermissionError, ProcessLookupError, ValueError, IndexError):
+            return None
+
+        sampled = time.monotonic()
+        cpu_percent: float | None = None
+        if self._last_cpu and self._last_cpu[0] == pid:
+            _, old_ticks, old_sampled = self._last_cpu
+            elapsed = sampled - old_sampled
+            if elapsed > 0:
+                cpu_percent = max(
+                    0.0,
+                    (process_ticks - old_ticks) / self._clock_ticks / elapsed * 100,
+                )
+        self._last_cpu = (pid, process_ticks, sampled)
+
+        fields = read_status_fields(pid)
+        try:
+            rss_bytes = int(fields.get("VmRSS", "0 kB").split()[0]) * 1024
+        except (ValueError, IndexError):
+            rss_bytes = 0
+        try:
+            threads = int(fields.get("Threads", "0"))
+        except ValueError:
+            threads = 0
+
+        return ProcessInfo(
+            pid=pid,
+            exe=exe,
+            argv=argv,
+            screens=screen_names(argv),
+            uptime=system_uptime - start_ticks / self._clock_ticks,
+            cpu_percent=cpu_percent,
+            rss_bytes=rss_bytes,
+            threads=threads,
+            cgroup=read_cgroup(pid),
+            stdout=read_fd_target(pid, 1),
+            stderr=read_fd_target(pid, 2),
+            deleted_mappings=deleted_engine_mappings(pid),
+        )
+
+    def wallpaper(self, raw_path: str) -> Wallpaper:
+        expanded = str(Path(raw_path).expanduser())
+        path = Path(expanded)
+        project_dir = path if path.is_dir() else path.parent
+        cache_key = str(project_dir)
+        cached = self._title_cache.get(cache_key)
+        if cached:
+            return dataclasses.replace(cached, path=expanded)
+
+        workshop_id = project_dir.name if project_dir.name.isdigit() else ""
+        title = workshop_id or path.name or str(project_dir)
+        try:
+            project = json.loads((project_dir / "project.json").read_text(errors="replace"))
+            candidate = project.get("title")
+            if isinstance(candidate, str) and candidate.strip():
+                title = candidate.strip()
+        except (OSError, ValueError, TypeError):
+            if path.name.lower().startswith("preview."):
+                title = project_dir.name
+
+        result = Wallpaper(
+            path=expanded,
+            project_dir=str(project_dir),
+            workshop_id=workshop_id,
+            title=title,
+        )
+        self._title_cache[cache_key] = result
+        return result
+
+    @staticmethod
+    def file_signature(path: str) -> tuple[int, int, int] | None:
+        try:
+            stat = Path(path).stat()
+            return stat.st_ino, stat.st_mtime_ns, stat.st_size
+        except OSError:
+            return None
+
+    def read_waypaper(self, connected_screens: tuple[str, ...]) -> WaypaperState:
+        path = self.config_path
+        signature = self.file_signature(path)
+        parser = configparser.ConfigParser(interpolation=None)
+        try:
+            with Path(path).open(encoding="utf-8") as config_file:
+                parser.read_file(config_file)
+            section = parser["Settings"]
+        except (OSError, configparser.Error, KeyError) as error:
+            return WaypaperState(path=path, signature=signature, parse_error=str(error))
+
+        state_section: configparser.SectionProxy = section
+        if parse_bool(section.get("use_xdg_state", "False")):
+            state_path = Path.home() / ".local/state/waypaper/state.ini"
+            state_parser = configparser.ConfigParser(interpolation=None)
+            try:
+                state_parser.read(state_path, encoding="utf-8")
+                state_section = state_parser["State"]
+            except (OSError, configparser.Error, KeyError):
+                state_section = section
+
+        monitors = tuple(
+            line.strip()
+            for line in state_section.get("monitors", "All", raw=True).splitlines()
+            if line.strip()
+        )
+        wallpaper_paths = tuple(
+            str(Path(line.strip()).expanduser())
+            for line in state_section.get("wallpaper", "", raw=True).splitlines()
+            if line.strip()
+        )
+
+        assignments: dict[str, Wallpaper] = {}
+        for monitor, wallpaper_path in zip(monitors, wallpaper_paths):
+            wallpaper = self.wallpaper(wallpaper_path)
+            targets = connected_screens if monitor == "All" and connected_screens else (monitor,)
+            for target in targets:
+                assignments[target] = wallpaper
+
+        return WaypaperState(
+            path=path,
+            signature=signature,
+            backend=state_section.get("backend", section.get("backend", "")),
+            assignments=tuple(assignments.items()),
+            monitors=monitors,
+            wallpapers=wallpaper_paths,
+            transition=section.get("linux_wallpaperengine_transition", "random"),
+            fps=section.get("linux_wallpaperengine_fps", ""),
+            volume=section.get("linux_wallpaperengine_volume", ""),
+            audio_scale=section.get("linux_wallpaperengine_audio_scale", ""),
+            silent=parse_bool(section.get("linux_wallpaperengine_silent", "False")),
+            noautomute=parse_bool(section.get("linux_wallpaperengine_noautomute", "False")),
+        )
+
+    def read_socket(self, now: float) -> SocketInfo:
+        try:
+            reply, latency = socket_request(self.control_path, "memstats")
+            stats = parse_key_value_reply(reply)
+            if not stats:
+                raise RuntimeError(reply or "empty memstats reply")
+            self._socket_failures = 0
+            state = "online"
+            error = ""
+        except (OSError, RuntimeError) as exc:
+            self._socket_failures += 1
+            state = "busy" if self._socket_failures == 1 else "offline"
+            return SocketInfo(
+                path=self.control_path,
+                state=state,
+                error=str(exc),
+                latency_ms=None,
+                fbo_summary=self._last_fbo_summary,
+            )
+
+        if now - self._last_fbo_at >= 2.0:
+            try:
+                fbo_reply, _ = socket_request(self.control_path, "fbostats")
+                self._last_fbo_summary = fbo_reply.removeprefix("ok ").strip()
+                self._last_fbo_at = now
+            except OSError:
+                pass
+
+        return SocketInfo(
+            path=self.control_path,
+            state=state,
+            error=error,
+            latency_ms=latency,
+            stats=tuple(stats.items()),
+            fbo_summary=self._last_fbo_summary,
+        )
+
+    @staticmethod
+    def run_command(arguments: list[str], timeout: float = 3.0) -> tuple[str, str]:
+        try:
+            result = subprocess.run(
+                arguments,
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                timeout=timeout,
+                check=False,
+            )
+        except (OSError, subprocess.TimeoutExpired) as error:
+            return "", str(error)
+        if result.returncode not in (0, 1):
+            return result.stdout, result.stderr.strip() or f"exit code {result.returncode}"
+        return result.stdout, ""
+
+    @staticmethod
+    def crash_signal_name(number: int) -> str:
+        try:
+            return signal.Signals(number).name
+        except ValueError:
+            return f"SIG{number}"
+
+    def read_crash_detail(self, crash: CrashInfo) -> CrashInfo:
+        cached = self._crash_detail_cache.get(crash.pid)
+        if cached:
+            return cached
+        output, error = self.run_command(
+            ["coredumpctl", "info", str(crash.pid), "--no-pager"],
+            timeout=5.0,
+        )
+        if error or not output:
+            result = dataclasses.replace(
+                crash,
+                reason=error or "coredump detail unavailable",
+            )
+            self._crash_detail_cache[crash.pid] = result
+            return result
+
+        command = ""
+        frames: list[str] = []
+        in_first_stack = False
+        for raw_line in output.splitlines():
+            line = raw_line.strip()
+            if line.startswith("Command Line:"):
+                command = line.partition(":")[2].strip()
+            if line.startswith("Stack trace of thread"):
+                if in_first_stack:
+                    break
+                in_first_stack = True
+                continue
+            if in_first_stack and re.match(r"^#[0-9]+\s+", line):
+                frames.append(line)
+                if len(frames) >= 12:
+                    break
+
+        joined = " ".join(frames)
+        smashed = "__stack_chk_fail" in joined or "__fortify_fail" in joined
+        symbolized = self.frames_are_symbolized(frames)
+        if "MallocDumpProvider" in joined:
+            reason = "CEF MemoryInfra crashed in MallocDumpProvider"
+        elif smashed and "--type=" in command and " main " in joined:
+            reason = (
+                "stack guard tripped unwinding main in a CEF helper "
+                "(--change-stack-guard-on-fork rotates the canary after fork)"
+            )
+        elif smashed:
+            reason = "stack-smashing protection aborted the process"
+        elif not frames:
+            reason = "no stack frames reported"
+        elif symbolized:
+            reason = frames[0].split(" ", 2)[-1]
+        else:
+            # Reporting a raw "binary + 0x1234" offset as a cause is worse than admitting
+            # the stack could not be resolved, because it reads like a diagnosis.
+            reason = "unsymbolized stack; rebuild with debug info to resolve frames"
+        result = dataclasses.replace(
+            crash,
+            command=command,
+            reason=reason,
+            frames=tuple(frames),
+            symbolized=symbolized,
+        )
+        self._crash_detail_cache[crash.pid] = result
+        return result
+
+    @staticmethod
+    def frame_symbol(line: str) -> str:
+        """Pull the function name out of "#6  0x00007f.. main (binary + 0x506d)"."""
+        match = re.match(r"^#\d+\s+0x[0-9a-fA-F]+\s+(.+?)\s+\(", line)
+        return match.group(1).strip() if match else ""
+
+    @classmethod
+    def frames_are_symbolized(cls, frames: list[str]) -> bool:
+        if not frames:
+            return False
+        named = [
+            symbol
+            for symbol in (cls.frame_symbol(line) for line in frames)
+            if symbol and symbol != "n/a"
+        ]
+        return len(named) * 2 >= len(frames)
+
+    def check_symbols(self, executable: str) -> str:
+        """Report once whether the engine binary can produce meaningful stack traces."""
+        if self._symbol_note is not None:
+            return self._symbol_note
+        path = executable.removesuffix(" (deleted)")
+        if not path or not Path(path).exists():
+            self._symbol_note = ""
+            return self._symbol_note
+        output, error = self.run_command(["file", "-L", path], timeout=3.0)
+        if error or not output:
+            self._symbol_note = ""
+            return self._symbol_note
+        if "with debug_info" in output:
+            self._symbol_note = "engine binary carries debug info; stack traces resolve"
+        elif "not stripped" in output:
+            self._symbol_note = (
+                "engine binary has a symbol table but no debug info: frames resolve to "
+                "function names without source lines (build with -g for more)"
+            )
+        else:
+            self._symbol_note = (
+                "engine binary is stripped: crash frames will be raw offsets and the "
+                "crash reasons below cannot be trusted (build with -g)"
+            )
+        return self._symbol_note
+
+    def read_crashes(self) -> tuple[CrashInfo, ...]:
+        output, _ = self.run_command(
+            [
+                "coredumpctl",
+                "list",
+                "--since",
+                self.since,
+                "--json=short",
+                "--no-pager",
+            ],
+            timeout=5.0,
+        )
+        if not output.strip():
+            return ()
+        try:
+            entries = json.loads(output)
+        except (TypeError, ValueError):
+            return ()
+
+        crashes: list[CrashInfo] = []
+        for entry in entries:
+            executable = str(entry.get("exe", ""))
+            if Path(executable).name != "linux-wallpaperengine":
+                continue
+            try:
+                timestamp_us = int(entry.get("time", 0))
+                pid = int(entry.get("pid", 0))
+                signal_number = int(entry.get("sig", 0))
+                size = int(entry.get("size", 0))
+            except (TypeError, ValueError):
+                continue
+            stamp = dt.datetime.fromtimestamp(timestamp_us / 1_000_000).strftime("%H:%M:%S")
+            crashes.append(
+                CrashInfo(
+                    timestamp_us=timestamp_us,
+                    stamp=stamp,
+                    pid=pid,
+                    signal_number=signal_number,
+                    signal_name=self.crash_signal_name(signal_number),
+                    size=size,
+                )
+            )
+
+        crashes.sort(key=lambda item: item.timestamp_us)
+        for index in range(max(0, len(crashes) - 6), len(crashes)):
+            crashes[index] = self.read_crash_detail(crashes[index])
+        return tuple(crashes)
+
+    def read_engine_log(self) -> tuple[tuple[str, ...], str]:
+        path = Path(self.engine_log_path)
+        try:
+            lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
+        except FileNotFoundError:
+            return (), "no engine log file exists yet"
+        except OSError as error:
+            return (), str(error)
+        return tuple(lines[-300:]), ""
+
+    @staticmethod
+    def log_level(line: str) -> str:
+        """Level of an engine log line, or "" when the line predates level tagging.
+
+        The engine writes "HH:MM:SS.mmm [LEVEL] message"; older builds wrote the bare
+        message, in which case an error is indistinguishable from ordinary output and
+        the only honest answer is that the level is unknown.
+        """
+        match = LOG_LINE.match(line)
+        return match.group(2) if match else ""
+
+    @classmethod
+    def log_failures(cls, lines: Sequence[str]) -> tuple[str, ...]:
+        return tuple(line for line in lines if cls.log_level(line) in ("ERROR", "FATAL"))
+
+    def read_scope_journal(self) -> tuple[tuple[str, ...], str]:
+        output, error = self.run_command(
+            [
+                "journalctl",
+                "--user",
+                "--since",
+                self.since,
+                "--no-pager",
+                "-o",
+                "short-precise",
+                "--grep",
+                r"app-org\.chromium\.Chromium-[0-9]+\.scope|linux-wallpaperengine|waypaper",
+            ],
+            timeout=4.0,
+        )
+        lines = tuple(line for line in output.splitlines() if line.strip())[-120:]
+        return lines, error
+
+    def read_gpu_errors(self) -> tuple[tuple[str, ...], str]:
+        """Kernel DRM faults kill the engine without ever producing a coredump."""
+        output, error = self.run_command(
+            [
+                "journalctl",
+                "--since",
+                self.since,
+                "--no-pager",
+                "-k",
+                "-o",
+                "short-precise",
+                "--grep",
+                r"drm|amdgpu|i915|nouveau|nvidia|GPU (hang|reset|fault)|ring .*timeout",
+            ],
+            timeout=4.0,
+        )
+        lines = tuple(
+            line
+            for line in output.splitlines()
+            if line.strip()
+            and re.search(r"reset|timeout|fault|hang|error|fail", line, re.IGNORECASE)
+        )[-60:]
+        return lines, error
+
+    def read_oom_kill(self, pid: int) -> str:
+        """The OOM killer leaves no coredump, so the kernel log is the only record."""
+        output, _ = self.run_command(
+            [
+                "journalctl",
+                "--since",
+                self.since,
+                "--no-pager",
+                "-k",
+                "-o",
+                "cat",
+                "--grep",
+                r"oom-kill|Out of memory|Killed process",
+            ],
+            timeout=4.0,
+        )
+        for line in reversed(output.splitlines()):
+            if re.search(rf"\b(pid=)?{pid}\b", line) or "linux-wallpaper" in line:
+                return line.strip()
+        return ""
+
+    def read_scope_epitaph(self, pid: int) -> str:
+        """systemd logs lifetime, CPU and peak memory when the process scope goes away."""
+        output, _ = self.run_command(
+            [
+                "journalctl",
+                "--user",
+                "--since",
+                self.since,
+                "--no-pager",
+                "-o",
+                "cat",
+                "--grep",
+                rf"Chromium-{pid}\.scope",
+            ],
+            timeout=4.0,
+        )
+        for line in reversed(output.splitlines()):
+            if "Consumed" in line:
+                return line.strip().split(": ", 1)[-1]
+        return ""
+
+    def explain_death(self, pid: int) -> str:
+        """Say why an engine process vanished, including the cases that leave no core."""
+        crash = next(
+            (item for item in self.diagnostics.crashes if item.pid == pid),
+            None,
+        )
+        if crash is None:
+            for item in self.read_crashes():
+                if item.pid == pid:
+                    crash = self.read_crash_detail(item)
+                    break
+        if crash is not None:
+            return f"{crash.signal_name} with coredump: {crash.reason or 'no reason parsed'}"
+
+        oom = self.read_oom_kill(pid)
+        if oom:
+            return f"killed by the kernel OOM killer: {oom}"
+
+        epitaph = self.read_scope_epitaph(pid)
+        if epitaph:
+            return f"exited without a coredump ({epitaph})"
+        return "exited without a coredump, OOM record or scope epitaph (clean exit or external signal)"
+
+    def flight_summary(self) -> str:
+        """Describe the trailing sample window so a death has context, not just a timestamp."""
+        samples = [sample for sample in self._samples if sample.rss_bytes]
+        if len(samples) < 2:
+            return ""
+        first, last = samples[0], samples[-1]
+        span = max(0.001, last.wall - first.wall)
+        peak = max(sample.rss_bytes for sample in samples)
+        drift = (last.rss_bytes - first.rss_bytes) / span
+        return (
+            f"last {human_duration(span)} before death: RSS "
+            f"{human_bytes(first.rss_bytes)} -> {human_bytes(last.rss_bytes)} "
+            f"(peak {human_bytes(peak)}, {human_bytes(drift, signed=True)}/s), "
+            f"heap {human_bytes(last.heap_bytes)}, FBO {human_bytes(last.fbo_bytes)}, "
+            f"{last.children} CEF children at {human_bytes(last.children_pss_bytes)}"
+        )
+
+    def refresh_diagnostics(self, force: bool = False) -> Diagnostics:
+        now = time.monotonic()
+        if not force and now - self.diagnostics.updated < 5.0:
+            return self.diagnostics
+
+        # Re-resolve each pass: a restarted engine can be writing somewhere else entirely.
+        if self.log_override is None:
+            engine_pid = self.snapshot.engine.pid if self.snapshot and self.snapshot.engine else None
+            self.engine_log_path = discover_log_path(engine_pid)
+
+        log_lines, log_error = self.read_engine_log()
+        crashes = self.read_crashes()
+        journal_lines, journal_error = self.read_scope_journal()
+        gpu_lines, gpu_error = self.read_gpu_errors()
+        engine = self.snapshot.engine if self.snapshot else None
+        self.diagnostics = Diagnostics(
+            updated=now,
+            log_path=self.engine_log_path,
+            log_lines=log_lines,
+            log_errors=self.log_failures(log_lines),
+            log_error=log_error,
+            crashes=crashes,
+            journal_lines=journal_lines,
+            journal_error=journal_error,
+            gpu_lines=gpu_lines,
+            gpu_error=gpu_error,
+            symbol_note=self.check_symbols(engine.exe) if engine else "",
+        )
+
+        self.detect_log_errors(self.diagnostics.log_errors)
+
+        crash_pids = {crash.pid for crash in crashes}
+        first_pass = not self._known_crash_pids
+        unseen = [crash for crash in crashes if crash.pid not in self._known_crash_pids]
+        self._known_crash_pids = crash_pids
+
+        if first_pass:
+            # Announce the backlog once rather than replaying it as live events, but do not
+            # stay silent: a monitor started right after a crash must still surface it.
+            if crashes:
+                self.emit(
+                    "CRASH",
+                    f"{len(crashes)} existing coredump(s) since {self.since}; "
+                    f"newest: pid {crashes[-1].pid} {crashes[-1].signal_name} "
+                    f"at {crashes[-1].stamp}",
+                    "warning",
+                )
+            return self.diagnostics
+
+        wallpapers = self.active_wallpapers()
+        for crash in unseen[-4:]:
+            self.emit(
+                "CRASH",
+                f"pid {crash.pid} ({'CEF child' if crash.is_child else 'main process'}) "
+                f"died with {crash.signal_name}: {crash.reason or 'coredump captured'}"
+                + (f" [wallpaper: {wallpapers}]" if wallpapers else ""),
+                "error",
+            )
+
+        self.detect_crash_loop(crashes, now)
+        return self.diagnostics
+
+    def detect_log_errors(self, log_errors: Sequence[str]) -> None:
+        """Emit engine ERROR/FATAL lines as timeline events, each line only once."""
+        fresh = [line for line in log_errors if line not in self._known_log_errors]
+        if not fresh:
+            return
+
+        self._known_log_errors.update(fresh)
+
+        if self._log_errors_primed:
+            for line in fresh[-4:]:
+                match = LOG_LINE.match(line)
+                self.emit(
+                    "ENGINE",
+                    match.group(3) if match else line,
+                    "error" if not match or match.group(2) == "FATAL" else "warning",
+                )
+            return
+
+        # First pass sees whatever the log already held; summarise it instead of replaying
+        # a backlog as if it had just happened.
+        self._log_errors_primed = True
+        self.emit(
+            "ENGINE",
+            f"{len(fresh)} engine error(s) already in the log; newest: {fresh[-1]}",
+            "warning",
+        )
+
+    def active_wallpapers(self) -> str:
+        if not self.snapshot:
+            return ""
+        return ", ".join(
+            f"{monitor}={wallpaper.short_name}"
+            for monitor, wallpaper in self.snapshot.waypaper.assignments
+        )
+
+    def detect_crash_loop(self, crashes: tuple[CrashInfo, ...], now: float) -> None:
+        """Report a burst of deaths as one alert instead of a wall of separate lines."""
+        if len(crashes) < 3 or now - self._last_crash_loop_at < 60.0:
+            return
+        cutoff = crashes[-1].timestamp_us - 60_000_000
+        burst = [crash for crash in crashes if crash.timestamp_us >= cutoff]
+        if len(burst) < 3:
+            return
+        span = (burst[-1].timestamp_us - burst[0].timestamp_us) / 1_000_000
+        self._last_crash_loop_at = now
+        self.emit(
+            "LOOP",
+            f"crash loop: {len(burst)} deaths in {span:.0f}s "
+            f"(latest {burst[-1].signal_name}: {burst[-1].reason or 'no reason parsed'})",
+            "error",
+        )
+
+    @staticmethod
+    def resource_tuple(snapshot: Snapshot | None) -> tuple[int, int, int]:
+        if not snapshot:
+            return 0, 0, 0
+        rss = snapshot.engine.rss_bytes if snapshot.engine else 0
+        return rss, snapshot.control.get("inuse"), snapshot.control.get("fbo_bytes")
+
+    def detect_events(self, previous: Snapshot | None, current: Snapshot) -> None:
+        if previous is None:
+            self.emit("MONITOR", f"watching {self.control_path}")
+            if current.engine:
+                self.emit(
+                    "ENGINE",
+                    f"attached to pid {current.engine.pid} ({Path(current.engine.exe).name})",
+                )
+            else:
+                self.emit("ENGINE", "not running", "warning")
+            if current.control.state == "online":
+                self.emit(
+                    "SOCKET",
+                    f"online ({current.control.latency_ms:.1f} ms)",
+                )
+            else:
+                self.emit("SOCKET", f"{current.control.state}: {current.control.error}", "warning")
+            if current.waypaper.assignments:
+                summary = ", ".join(
+                    f"{monitor}={wallpaper.short_name}"
+                    for monitor, wallpaper in current.waypaper.assignments
+                )
+                self.emit("STATE", summary)
+            return
+
+        old_pid = previous.engine.pid if previous.engine else None
+        new_pid = current.engine.pid if current.engine else None
+        if old_pid != new_pid:
+            if old_pid:
+                # Capture the run-up before the ring buffer refills with the successor.
+                trailing = self.flight_summary()
+                verb = f"restarted {old_pid} -> {new_pid}" if new_pid else f"pid {old_pid} stopped"
+                self.emit("ENGINE", verb, "warning" if new_pid else "error")
+                self.emit("DIED", f"pid {old_pid} {self.explain_death(old_pid)}", "error")
+                if trailing:
+                    self.emit("BEFORE", trailing, "warning")
+                self._samples.clear()
+            elif new_pid:
+                self.emit("ENGINE", f"started as pid {new_pid}")
+
+        if previous.control.state != current.control.state:
+            if current.control.state == "online":
+                self.emit(
+                    "SOCKET",
+                    f"online ({current.control.latency_ms:.1f} ms)",
+                )
+            else:
+                level = "warning" if current.control.state == "busy" else "error"
+                self.emit("SOCKET", f"{current.control.state}: {current.control.error}", level)
+
+        old_waypaper = previous.waypaper
+        new_waypaper = current.waypaper
+        if not old_waypaper.parse_error and new_waypaper.parse_error:
+            self.emit("CONFIG", f"read failed: {new_waypaper.parse_error}", "error")
+        elif old_waypaper.parse_error and not new_waypaper.parse_error:
+            self.emit("CONFIG", "read recovered")
+
+        if (
+            old_waypaper.monitors != new_waypaper.monitors
+            or old_waypaper.wallpapers != new_waypaper.wallpapers
+        ):
+            if new_waypaper.monitors == ("All",) and new_waypaper.wallpapers:
+                selected = self.wallpaper(new_waypaper.wallpapers[0])
+                message = f"All -> {selected.short_name}"
+            else:
+                old_assignments = dict(old_waypaper.assignments)
+                changed = [
+                    f"{monitor} -> {wallpaper.short_name}"
+                    for monitor, wallpaper in new_waypaper.assignments
+                    if old_assignments.get(monitor) != wallpaper
+                ]
+                message = "; ".join(changed) or "saved assignment list changed"
+            self.emit("SELECT", message)
+            self._pending_selection = (
+                current.captured,
+                self.resource_tuple(previous),
+                message,
+            )
+
+        settings = (
+            ("transition", old_waypaper.transition, new_waypaper.transition),
+            ("fps", old_waypaper.fps, new_waypaper.fps),
+            ("volume", old_waypaper.volume, new_waypaper.volume),
+            ("audio scale", old_waypaper.audio_scale, new_waypaper.audio_scale),
+            ("silent", str(old_waypaper.silent), str(new_waypaper.silent)),
+            ("automute disabled", str(old_waypaper.noautomute), str(new_waypaper.noautomute)),
+        )
+        changed_settings = [
+            f"{name}: {before} -> {after}"
+            for name, before, after in settings
+            if before != after
+        ]
+        if changed_settings:
+            self.emit("SETTING", "; ".join(changed_settings))
+
+        old_deleted = previous.engine.deleted_mappings if previous.engine else 0
+        new_deleted = current.engine.deleted_mappings if current.engine else 0
+        if not old_deleted and new_deleted:
+            self.emit(
+                "STALE",
+                f"{new_deleted} deleted engine/library mappings; restart needed",
+                "warning",
+            )
+
+        # Child churn only means something while the engine itself is stable; when the engine
+        # dies its whole CEF tree goes with it and the DIED event already covers that.
+        if old_pid and old_pid == new_pid:
+            old_children = {child.pid: child.kind for child in previous.children}
+            new_children = {child.pid: child.kind for child in current.children}
+            gone = sorted(kind for pid, kind in old_children.items() if pid not in new_children)
+            born = sorted(kind for pid, kind in new_children.items() if pid not in old_children)
+            if gone:
+                self._child_restarts += len(gone)
+                self.emit(
+                    "CHILD",
+                    f"CEF {', '.join(gone)} exited "
+                    f"({self._child_restarts} child exit(s) this session)",
+                    "warning",
+                )
+            if born and previous.children:
+                self.emit("CHILD", f"CEF {', '.join(born)} started")
+
+        if self._pending_selection and current.captured - self._pending_selection[0] >= 1.5:
+            _, baseline, _ = self._pending_selection
+            current_resources = self.resource_tuple(current)
+            deltas = tuple(after - before for before, after in zip(baseline, current_resources))
+            self.emit(
+                "AFTER",
+                "RSS "
+                f"{human_bytes(current_resources[0])} ({human_bytes(deltas[0], signed=True)}), "
+                f"heap {human_bytes(current_resources[1])} "
+                f"({human_bytes(deltas[1], signed=True)}), "
+                f"FBO {human_bytes(current_resources[2])} "
+                f"({human_bytes(deltas[2], signed=True)})",
+            )
+            self._pending_selection = None
+
+    def record_sample(self, snapshot: Snapshot) -> None:
+        if not snapshot.engine:
+            return
+        sample = Sample(
+            wall=time.time(),
+            rss_bytes=snapshot.engine.rss_bytes,
+            children_pss_bytes=sum(child.pss_bytes for child in snapshot.children),
+            heap_bytes=snapshot.control.get("inuse"),
+            fbo_bytes=snapshot.control.get("fbo_bytes"),
+            tex_bytes=snapshot.control.get("tex_bytes"),
+            cpu_percent=snapshot.engine.cpu_percent,
+            threads=snapshot.engine.threads,
+            children=len(snapshot.children),
+        )
+        self._samples.append(sample)
+        if self._sample_record:
+            payload = sample.as_json()
+            payload["pid"] = snapshot.engine.pid
+            self._sample_record.write(json.dumps(payload) + "\n")
+
+    def refresh(self) -> Snapshot:
+        now = time.monotonic()
+        pid = find_engine_pid()
+        engine = self.read_process(pid) if pid else None
+        children = read_children(pid) if pid else ()
+        waypaper = self.read_waypaper(engine.screens if engine else ())
+        control = self.read_socket(now)
+        warnings: list[str] = []
+        if not engine:
+            warnings.append("engine is not running")
+        else:
+            if engine.stdout == "/dev/null" and engine.stderr == "/dev/null":
+                warnings.append("engine stdout/stderr are discarded")
+            if engine.deleted_mappings:
+                warnings.append(f"{engine.deleted_mappings} stale deleted mappings")
+            if engine.rss_bytes >= 2 * GIB:
+                warnings.append(f"high RSS: {human_bytes(engine.rss_bytes)}")
+        if control.state != "online":
+            warnings.append(f"control socket {control.state}")
+        if waypaper.backend and waypaper.backend != "linux-wallpaperengine":
+            warnings.append(f"Waypaper backend is {waypaper.backend}")
+        if waypaper.parse_error:
+            warnings.append("Waypaper config cannot be read")
+        recent_crashes = self.recent_crashes()
+        if recent_crashes:
+            warnings.append(
+                f"{len(recent_crashes)} coredump(s) in the last 5 min "
+                f"(newest pid {recent_crashes[-1].pid} {recent_crashes[-1].signal_name})"
+            )
+
+        previous = self.snapshot
+        snapshot = Snapshot(
+            captured=now,
+            engine=engine,
+            waypaper_pid=find_waypaper_pid(),
+            waypaper=waypaper,
+            control=control,
+            warnings=tuple(warnings),
+            children=children,
+        )
+        self.snapshot = snapshot
+        self.record_sample(snapshot)
+        # Diagnostics run on every refresh, throttled internally, so crash detection does not
+        # depend on which page is open or on the dashboard running at all.
+        self.refresh_diagnostics()
+        self.detect_events(previous, snapshot)
+        return snapshot
+
+    def recent_crashes(self, window_seconds: float = 300.0) -> tuple[CrashInfo, ...]:
+        cutoff = (time.time() - window_seconds) * 1_000_000
+        return tuple(
+            crash for crash in self.diagnostics.crashes if crash.timestamp_us >= cutoff
+        )
+
+
+def snapshot_lines(snapshot: Snapshot) -> list[str]:
+    engine = snapshot.engine
+    control = snapshot.control
+    waypaper = snapshot.waypaper
+    lines: list[str] = []
+    if engine:
+        cpu = "sampling" if engine.cpu_percent is None else f"{engine.cpu_percent:.1f}% CPU"
+        lines.append(
+            f"Engine  ONLINE  pid {engine.pid}  {human_duration(engine.uptime)}  "
+            f"{cpu}  RSS {human_bytes(engine.rss_bytes)}  {engine.threads} threads"
+        )
+        lines.append(f"Scope   {engine.cgroup}")
+    else:
+        lines.append("Engine  OFFLINE")
+
+    latency = f"  {control.latency_ms:.1f} ms" if control.latency_ms is not None else ""
+    lines.append(f"Socket  {control.state.upper()}{latency}  {control.path}")
+    if control.error:
+        lines.append(f"        {control.error}")
+
+    lines.append(
+        f"Waypaper pid {snapshot.waypaper_pid or '-'}  backend {waypaper.backend or '-'}  "
+        f"transition {waypaper.transition or '-'}  fps {waypaper.fps or '-'}  "
+        f"volume {waypaper.volume or '-'}"
+    )
+    for monitor, wallpaper in waypaper.assignments:
+        lines.append(f"  {monitor:<12} {wallpaper.short_name}  {wallpaper.project_dir}")
+
+    if control.stats:
+        lines.append(
+            f"Memory  heap {human_bytes(control.get('inuse'))}  "
+            f"arena {human_bytes(control.get('arena'))}  mmap {human_bytes(control.get('mmap'))}"
+        )
+        lines.append(
+            f"GPU     textures {control.get('tex_entries')} / "
+            f"{human_bytes(control.get('tex_bytes'))}  "
+            f"FBOs {control.get('fbo_live')} / {human_bytes(control.get('fbo_bytes'))}"
+        )
+    if snapshot.engine:
+        total = sum(child.pss_bytes for child in snapshot.children)
+        lines.append(
+            f"CEF     {len(snapshot.children)} children / {human_bytes(total)} PSS  "
+            f"{children_summary(snapshot.children)}"
+        )
+    if control.fbo_summary:
+        label = "Top FBO" if control.state == "online" else "Last FBO (stale)"
+        lines.append(f"{label} {control.fbo_summary.split(';', 1)[0]}")
+    if snapshot.warnings:
+        lines.append("Warn    " + "; ".join(snapshot.warnings))
+    return lines
+
+
+def run_plain(monitor: RuntimeMonitor, once: bool) -> int:
+    snapshot = monitor.refresh()
+    for line in snapshot_lines(snapshot):
+        print(line)
+    for event in monitor.events:
+        print(event.plain())
+    if once:
+        return 0
+
+    emitted = monitor.events[-1].sequence if monitor.events else 0
+    try:
+        while True:
+            time.sleep(monitor.interval)
+            monitor.refresh()
+            events = list(monitor.events)
+            for event in events:
+                if event.sequence <= emitted:
+                    continue
+                print(event.plain(), flush=True)
+            if events:
+                emitted = events[-1].sequence
+    except KeyboardInterrupt:
+        return 0
+
+
+class TerminalUI:
+    def __init__(self, monitor: RuntimeMonitor) -> None:
+        self.monitor = monitor
+        self.paused = False
+        self.colors: dict[str, int] = {}
+        self.page = 0
+        self.scroll = 0
+        self.max_scroll = 0
+        self.page_names = ("Overview", "Engine logs", "Details")
+        self.refresh_due = 0.0
+        self._wrap_source: list[tuple[str, str]] = []
+        self._wrap_width = 0
+        self._wrapped: list[tuple[str, str]] = []
+
+    def init_colors(self) -> None:
+        if not curses.has_colors():
+            return
+        curses.start_color()
+        curses.use_default_colors()
+        definitions = {
+            "title": (curses.COLOR_CYAN, -1),
+            "ok": (curses.COLOR_GREEN, -1),
+            "warning": (curses.COLOR_YELLOW, -1),
+            "error": (curses.COLOR_RED, -1),
+            "muted": (curses.COLOR_BLUE, -1),
+        }
+        for index, (name, pair) in enumerate(definitions.items(), start=1):
+            curses.init_pair(index, *pair)
+            self.colors[name] = curses.color_pair(index)
+
+    def color(self, name: str) -> int:
+        return self.colors.get(name, 0)
+
+    @staticmethod
+    def put(window: curses.window, row: int, column: int, text: str, attr: int = 0) -> None:
+        height, width = window.getmaxyx()
+        if row < 0 or row >= height or column >= width:
+            return
+        clipped = text[: max(0, width - column - 1)]
+        try:
+            window.addstr(row, column, clipped, attr)
+        except curses.error:
+            pass
+
+    @staticmethod
+    def content_line(
+        lines: list[tuple[str, str]],
+        text: str = "",
+        style: str = "",
+    ) -> None:
+        lines.append((text, style))
+
+    def content_section(
+        self,
+        lines: list[tuple[str, str]],
+        title: str,
+    ) -> None:
+        if lines:
+            self.content_line(lines)
+        self.content_line(lines, title, "title")
+
+    def draw_scrolling(
+        self,
+        window: curses.window,
+        start_row: int,
+        lines: list[tuple[str, str]],
+    ) -> None:
+        height, width = window.getmaxyx()
+        wrap_width = max(20, width - 1)
+
+        # Wrapping a full page costs more than the rest of a frame put together, and neither
+        # scrolling nor a redraw of unchanged data alters the result. Rewrap only when the
+        # content or the terminal width actually changes; comparing the source lines to decide
+        # is three orders of magnitude cheaper than wrapping them again.
+        if lines != self._wrap_source or wrap_width != self._wrap_width:
+            visual: list[tuple[str, str]] = []
+            for text, style in lines:
+                if not text:
+                    visual.append(("", style))
+                    continue
+                wrapped = textwrap.wrap(
+                    text,
+                    width=wrap_width,
+                    replace_whitespace=False,
+                    drop_whitespace=True,
+                    break_long_words=True,
+                    break_on_hyphens=False,
+                    subsequent_indent="  ",
+                )
+                visual.extend((line, style) for line in (wrapped or [""]))
+            self._wrap_source = list(lines)
+            self._wrap_width = wrap_width
+            self._wrapped = visual
+
+        visual = self._wrapped
+        available = max(1, height - start_row - 1)
+        self.max_scroll = max(0, len(visual) - available)
+        self.scroll = min(max(0, self.scroll), self.max_scroll)
+        for offset, (text, style) in enumerate(
+            visual[self.scroll : self.scroll + available]
+        ):
+            attr = self.color(style)
+            if style == "title":
+                attr |= curses.A_BOLD
+            self.put(window, start_row + offset, 0, text, attr)
+
+        position = (
+            f"lines {self.scroll + 1}-{min(len(visual), self.scroll + available)}"
+            f"/{len(visual)}  up/down scroll"
+            if visual
+            else "no detail available"
+        )
+        self.put(window, height - 1, 0, position, self.color("muted"))
+
+    def draw_logs(self, window: curses.window, start_row: int) -> None:
+        diagnostics = self.monitor.diagnostics
+        lines: list[tuple[str, str]] = []
+
+        self.content_section(lines, "ENGINE OUTPUT")
+        self.content_line(lines, f"File: {diagnostics.log_path}", "muted")
+        if diagnostics.log_lines:
+            if diagnostics.log_errors:
+                self.content_line(
+                    lines,
+                    f"{len(diagnostics.log_errors)} ERROR/FATAL line(s), newest first:",
+                    "error",
+                )
+                for line in reversed(diagnostics.log_errors[-20:]):
+                    self.content_line(lines, line, "error")
+                self.content_line(lines, "", "muted")
+            elif any(self.monitor.log_level(line) for line in diagnostics.log_lines):
+                self.content_line(lines, "No ERROR or FATAL lines logged.", "ok")
+            else:
+                self.content_line(
+                    lines,
+                    "Log has no level tags: this engine build predates level tagging, so "
+                    "errors cannot be told apart from ordinary output.",
+                    "warning",
+                )
+            self.content_line(lines, "Newest lines first:", "muted")
+            for line in reversed(diagnostics.log_lines[-120:]):
+                self.content_line(
+                    lines,
+                    line,
+                    "error" if self.monitor.log_level(line) in ("ERROR", "FATAL") else "",
+                )
+        else:
+            self.content_line(
+                lines,
+                "No engine log was captured. Launchers such as Waypaper connect "
+                "stdout/stderr to /dev/null; set WPE_LOG_FILE=<path> on the engine and pass "
+                "the same path to --log to capture it.",
+                "warning",
+            )
+            if diagnostics.log_error:
+                self.content_line(lines, diagnostics.log_error, "muted")
+            self.content_line(
+                lines,
+                "Crash reports and systemd scope history are still available below.",
+                "muted",
+            )
+
+        self.content_section(lines, "RECENT ENGINE / CEF CRASHES (LATEST 6)")
+        if diagnostics.symbol_note:
+            self.content_line(
+                lines,
+                diagnostics.symbol_note,
+                "ok" if "carries debug info" in diagnostics.symbol_note else "warning",
+            )
+        if diagnostics.crashes:
+            for crash in reversed(diagnostics.crashes[-6:]):
+                style = "error" if crash is diagnostics.crashes[-1] else "warning"
+                process_kind = "CEF child" if "--type=" in crash.command else "engine"
+                self.content_line(
+                    lines,
+                    f"{crash.stamp}  pid {crash.pid}  {crash.signal_name}  "
+                    f"{process_kind}  core {human_bytes(crash.size)}"
+                    + (f"  {crash.reason}" if crash.reason else ""),
+                    style,
+                )
+        else:
+            self.content_line(lines, "No recent linux-wallpaperengine coredumps.", "ok")
+
+        if diagnostics.crashes:
+            recent = diagnostics.crashes[-6:]
+            main_crash = next(
+                (crash for crash in reversed(recent) if not crash.is_child),
+                None,
+            )
+            # Falling back to a child crash under a "main process" heading turns a helper
+            # abort into a phantom engine crash, so label what was actually found.
+            latest = main_crash or recent[-1]
+            heading = "LATEST MAIN-PROCESS CRASH" if main_crash else "LATEST CRASH (CEF CHILD)"
+            self.content_section(lines, f"{heading}: PID {latest.pid}")
+            if not latest.symbolized:
+                self.content_line(lines, "Stack could not be symbolized.", "warning")
+            self.content_line(
+                lines,
+                f"{latest.signal_name} ({latest.signal_number}) — {latest.reason}",
+                "error",
+            )
+            if latest.command:
+                self.content_line(lines, "Command: " + latest.command)
+            for frame in latest.frames:
+                self.content_line(lines, frame, "muted")
+
+        self.content_section(lines, "KERNEL GPU / DRM MESSAGES")
+        if diagnostics.gpu_lines:
+            self.content_line(
+                lines,
+                "A GPU hang or reset kills the engine without producing a coredump.",
+                "muted",
+            )
+            for line in reversed(diagnostics.gpu_lines[-40:]):
+                self.content_line(lines, line, "warning")
+        else:
+            self.content_line(
+                lines,
+                diagnostics.gpu_error or "No GPU faults, resets or ring timeouts logged.",
+                "muted" if diagnostics.gpu_error else "ok",
+            )
+
+        self.content_section(lines, "SYSTEMD USER JOURNAL / SCOPE HISTORY")
+        if diagnostics.journal_lines:
+            for line in reversed(diagnostics.journal_lines[-80:]):
+                self.content_line(lines, line)
+        else:
+            self.content_line(
+                lines,
+                diagnostics.journal_error or "No matching scope messages.",
+                "muted",
+            )
+
+        self.content_section(lines, "FULL MONITOR EVENTS (NEWEST FIRST)")
+        for event in reversed(self.monitor.events):
+            self.content_line(lines, event.plain(), event.level)
+        self.draw_scrolling(window, start_row, lines)
+
+    def draw_details(self, window: curses.window, start_row: int) -> None:
+        snapshot = self.monitor.snapshot
+        if snapshot is None:
+            return
+        engine = snapshot.engine
+        control = snapshot.control
+        waypaper = snapshot.waypaper
+        lines: list[tuple[str, str]] = []
+
+        self.content_section(lines, "ENGINE PROCESS")
+        if engine:
+            self.content_line(lines, f"PID: {engine.pid}")
+            self.content_line(lines, f"Executable: {engine.exe}")
+            self.content_line(lines, "Command: " + shlex.join(engine.argv))
+            self.content_line(lines, f"Screens: {', '.join(engine.screens) or '-'}")
+            self.content_line(lines, f"Systemd scope: {engine.cgroup}")
+            self.content_line(lines, f"stdout: {engine.stdout}")
+            self.content_line(lines, f"stderr: {engine.stderr}")
+            self.content_line(
+                lines,
+                f"Uptime: {human_duration(engine.uptime)}  RSS: "
+                f"{human_bytes(engine.rss_bytes)}  Threads: {engine.threads}",
+            )
+            self.content_line(
+                lines,
+                f"Deleted engine/library mappings: {engine.deleted_mappings}",
+                "warning" if engine.deleted_mappings else "ok",
+            )
+        else:
+            self.content_line(lines, "Engine is not running.", "error")
+
+        self.content_section(lines, "CEF CHILD PROCESSES")
+        if snapshot.children:
+            total = sum(child.pss_bytes for child in snapshot.children)
+            self.content_line(
+                lines,
+                f"{len(snapshot.children)} children, {human_bytes(total)} PSS "
+                "(not included in the engine RSS above)",
+            )
+            for child in snapshot.children:
+                self.content_line(
+                    lines,
+                    f"pid {child.pid:<8} {child.kind:<28} "
+                    f"{human_bytes(child.pss_bytes):>10}  {child.threads} threads",
+                )
+            self.content_line(
+                lines,
+                "A single-threaded zygote is an idle fork server; a multi-threaded one is "
+                "really a forked child that inherited the zygote's argv.",
+                "muted",
+            )
+        elif engine:
+            self.content_line(lines, "No CEF children (browser subsystem not started).", "ok")
+        else:
+            self.content_line(lines, "Engine is not running.", "muted")
+
+        self.content_section(lines, "CONTROL SOCKET")
+        self.content_line(lines, f"Path: {control.path}")
+        self.content_line(
+            lines,
+            f"State: {control.state}"
+            + (
+                f"  latency: {control.latency_ms:.1f} ms"
+                if control.latency_ms is not None
+                else ""
+            ),
+            "ok" if control.state == "online" else "error",
+        )
+        if control.error:
+            self.content_line(lines, f"Error: {control.error}", "error")
+        for key, value in control.stats:
+            rendered = human_bytes(value) if "bytes" in key or key in {"inuse", "free", "arena", "mmap"} else str(value)
+            self.content_line(lines, f"{key}: {rendered}")
+
+        self.content_section(lines, "FRAMEBUFFER GROUPS")
+        if control.fbo_summary:
+            if control.state != "online":
+                self.content_line(lines, "Last successful sample (stale):", "warning")
+            for group in control.fbo_summary.split(";"):
+                self.content_line(lines, group)
+        else:
+            self.content_line(lines, "No framebuffer sample available.", "muted")
+
+        self.content_section(lines, "WAYPAPER")
+        self.content_line(lines, f"PID: {snapshot.waypaper_pid or '-'}")
+        self.content_line(lines, f"Config: {waypaper.path}")
+        self.content_line(lines, f"Backend: {waypaper.backend or '-'}")
+        self.content_line(lines, f"Saved monitors: {', '.join(waypaper.monitors) or '-'}")
+        self.content_line(lines, f"Transition: {waypaper.transition or '-'}")
+        self.content_line(lines, f"FPS: {waypaper.fps or '-'}")
+        self.content_line(lines, f"Volume: {waypaper.volume or '-'}")
+        self.content_line(lines, f"Audio scale: {waypaper.audio_scale or '-'}")
+        self.content_line(lines, f"Silent: {waypaper.silent}")
+        self.content_line(lines, f"Automute disabled: {waypaper.noautomute}")
+        for monitor_name, wallpaper in waypaper.assignments:
+            self.content_line(
+                lines,
+                f"{monitor_name}: {wallpaper.short_name} — {wallpaper.project_dir}",
+            )
+
+        self.content_section(lines, "WARNINGS")
+        if snapshot.warnings:
+            for warning in snapshot.warnings:
+                self.content_line(lines, warning, "warning")
+        else:
+            self.content_line(lines, "No monitor warnings.", "ok")
+        self.draw_scrolling(window, start_row, lines)
+
+    def draw(self, window: curses.window) -> None:
+        window.erase()
+        height, width = window.getmaxyx()
+        snapshot = self.monitor.snapshot
+        if snapshot is None:
+            self.put(window, 0, 0, "Waiting for first sample...")
+            window.refresh()
+            return
+
+        engine = snapshot.engine
+        control = snapshot.control
+        waypaper = snapshot.waypaper
+        live = "PAUSED" if self.paused else "LIVE"
+        live_color = self.color("warning" if self.paused else "ok")
+        controls = "q quit  tab pages"
+        self.put(window, 0, 0, "linux-wallpaperengine monitor", self.color("title") | curses.A_BOLD)
+        self.put(window, 0, min(34, max(0, width - 29)), live, live_color | curses.A_BOLD)
+        self.put(window, 0, max(0, width - len(controls) - 1), controls, self.color("muted"))
+        tabs = "  ".join(
+            f"[{index + 1} {name}]" if index == self.page else f" {index + 1} {name} "
+            for index, name in enumerate(self.page_names)
+        )
+        self.put(window, 1, 0, tabs, self.color("title"))
+
+        if self.page == 1:
+            self.draw_logs(window, 3)
+            window.refresh()
+            return
+        if self.page == 2:
+            self.draw_details(window, 3)
+            window.refresh()
+            return
+
+        row = 3
+        if engine:
+            cpu = "..." if engine.cpu_percent is None else f"{engine.cpu_percent:5.1f}%"
+            self.put(
+                window,
+                row,
+                0,
+                f"ENGINE  ONLINE  pid {engine.pid}  up {human_duration(engine.uptime):>8}  "
+                f"CPU {cpu}  RSS {human_bytes(engine.rss_bytes):>9}  threads {engine.threads}",
+                self.color("ok"),
+            )
+            row += 1
+            self.put(
+                window,
+                row,
+                8,
+                f"scope {engine.cgroup}  stdout {engine.stdout}  stderr {engine.stderr}",
+                self.color("muted"),
+            )
+        else:
+            self.put(window, row, 0, "ENGINE  OFFLINE", self.color("error") | curses.A_BOLD)
+        row += 2
+
+        socket_color = self.color(
+            "ok" if control.state == "online" else "warning" if control.state == "busy" else "error"
+        )
+        latency = f"{control.latency_ms:.1f} ms" if control.latency_ms is not None else "-"
+        self.put(
+            window,
+            row,
+            0,
+            f"SOCKET  {control.state.upper():<7} {latency:>9}  {control.path}",
+            socket_color,
+        )
+        row += 1
+        if control.error:
+            self.put(window, row, 8, control.error, self.color("error"))
+            row += 1
+
+        if control.stats:
+            self.put(
+                window,
+                row,
+                0,
+                f"MEMORY  RSS {human_bytes(engine.rss_bytes if engine else 0):>9}  "
+                f"heap {human_bytes(control.get('inuse')):>9}  "
+                f"arena {human_bytes(control.get('arena')):>9}  "
+                f"mmap {human_bytes(control.get('mmap')):>9}",
+            )
+            row += 1
+            self.put(
+                window,
+                row,
+                0,
+                f"GPU     textures {control.get('tex_entries'):>4} / "
+                f"{human_bytes(control.get('tex_bytes')):<9}  "
+                f"FBOs {control.get('fbo_live'):>4} / "
+                f"{human_bytes(control.get('fbo_bytes')):<9}",
+            )
+            row += 1
+        if engine:
+            children_pss = sum(child.pss_bytes for child in snapshot.children)
+            self.put(
+                window,
+                row,
+                0,
+                f"CEF     {len(snapshot.children):>4} children / "
+                f"{human_bytes(children_pss):<9}  {children_summary(snapshot.children)}",
+                self.color("muted"),
+            )
+            row += 1
+
+        diagnostics = self.monitor.diagnostics
+        if diagnostics.log_errors:
+            newest = LOG_LINE.match(diagnostics.log_errors[-1])
+            self.put(
+                window,
+                row,
+                0,
+                f"LOG     {len(diagnostics.log_errors):>4} error(s)     "
+                f"newest: {newest.group(3) if newest else diagnostics.log_errors[-1]}",
+                self.color("error"),
+            )
+            row += 1
+        elif not diagnostics.log_lines:
+            self.put(
+                window,
+                row,
+                0,
+                "LOG        no engine log captured (set WPE_LOG_FILE and pass --log)",
+                self.color("warning"),
+            )
+            row += 1
+
+        if control.fbo_summary:
+            self.put(
+                window,
+                row,
+                0,
+                ("TOP FBO " if control.state == "online" else "LAST FBO (STALE) ")
+                + control.fbo_summary.split(";", 1)[0],
+                self.color("muted" if control.state == "online" else "warning"),
+            )
+            row += 1
+
+        row += 1
+        self.put(
+            window,
+            row,
+            0,
+            f"WAYPAPER  pid {snapshot.waypaper_pid or '-'}  backend {waypaper.backend or '-'}  "
+            f"transition {waypaper.transition or '-'}  fps {waypaper.fps or '-'}  "
+            f"volume {waypaper.volume or '-'}  audio-scale {waypaper.audio_scale or '-'}",
+            self.color("title"),
+        )
+        row += 1
+        for monitor_name, wallpaper in waypaper.assignments:
+            self.put(
+                window,
+                row,
+                2,
+                f"{monitor_name:<12} {wallpaper.short_name:<42} {wallpaper.project_dir}",
+            )
+            row += 1
+
+        if snapshot.warnings:
+            row += 1
+            self.put(
+                window,
+                row,
+                0,
+                "WARN  " + "; ".join(snapshot.warnings),
+                self.color("warning") | curses.A_BOLD,
+            )
+            row += 1
+
+        row += 1
+        self.put(window, row, 0, "EVENTS", self.color("title") | curses.A_BOLD)
+        row += 1
+        available = max(0, height - row - 1)
+        visible_events = list(self.monitor.events)[-available:]
+        for event in visible_events:
+            color = self.color(event.level)
+            self.put(window, row, 0, event.plain(), color)
+            row += 1
+
+        if width < 76 or height < 18:
+            self.put(
+                window,
+                height - 1,
+                0,
+                "Tip: enlarge the terminal for the complete dashboard",
+                self.color("warning"),
+            )
+        window.refresh()
+
+    def handle_key(self, key: int) -> bool:
+        """Apply one keypress. Returns False when the key asks the monitor to quit."""
+        if key in (ord("q"), ord("Q"), 27):
+            return False
+        page_changed = False
+        if key in (9, curses.KEY_RIGHT, ord("l")):
+            self.page = (self.page + 1) % len(self.page_names)
+            self.scroll = 0
+            page_changed = True
+        elif key in (curses.KEY_LEFT, ord("h")):
+            self.page = (self.page - 1) % len(self.page_names)
+            self.scroll = 0
+            page_changed = True
+        elif key in (ord("1"), ord("2"), ord("3")):
+            self.page = int(chr(key)) - 1
+            self.scroll = 0
+            page_changed = True
+        elif key in (curses.KEY_DOWN, ord("j")):
+            self.scroll = min(self.max_scroll, self.scroll + 1)
+        elif key in (curses.KEY_UP, ord("k")):
+            self.scroll = max(0, self.scroll - 1)
+        elif key == curses.KEY_NPAGE:
+            self.scroll = min(self.max_scroll, self.scroll + 10)
+        elif key == curses.KEY_PPAGE:
+            self.scroll = max(0, self.scroll - 10)
+        elif key in (curses.KEY_HOME, ord("g")):
+            self.scroll = 0
+        elif key in (curses.KEY_END, ord("G")):
+            self.scroll = self.max_scroll
+        elif key in (ord("p"), ord("P")):
+            self.paused = not self.paused
+            if not self.paused:
+                self.refresh_due = 0.0
+        elif key in (ord("c"), ord("C")):
+            self.monitor.events.clear()
+            self.monitor.emit("MONITOR", "event view cleared")
+        elif key in (ord("r"), ord("R")):
+            self.refresh_due = 0.0
+            if self.page == 1:
+                self.monitor.refresh_diagnostics(force=True)
+
+        if page_changed and self.page == 1:
+            self.monitor.refresh_diagnostics(force=True)
+        return True
+
+    def run(self, window: curses.window) -> int:
+        try:
+            curses.curs_set(0)
+        except curses.error:
+            pass
+        window.keypad(True)
+        self.init_colors()
+        self.monitor.refresh()
+        self.refresh_due = time.monotonic() + self.monitor.interval
+        dirty = True
+
+        while True:
+            if dirty:
+                self.draw(window)
+                dirty = False
+
+            # Wait for a key or for the next sample to fall due, whichever comes first.
+            # A fixed sleep here instead capped input at 25 keys/sec and repainted the whole
+            # screen that often even when nothing had changed.
+            if self.paused:
+                window.timeout(-1)
+            else:
+                window.timeout(max(0, int((self.refresh_due - time.monotonic()) * 1000)))
+            key = window.getch()
+
+            # Drain the rest of the burst before repainting. Key repeat delivers scroll keys
+            # faster than a redraw completes, so handling one per frame leaves the view
+            # trailing the keyboard for as long as the user holds the key down.
+            window.timeout(0)
+            while key != -1:
+                if not self.handle_key(key):
+                    return 0
+                dirty = True
+                key = window.getch()
+
+            if not self.paused and time.monotonic() >= self.refresh_due:
+                # refresh() drives diagnostics itself, so crashes are detected on every page.
+                self.monitor.refresh()
+                self.refresh_due = time.monotonic() + self.monitor.interval
+                dirty = True
+
+
+def build_parser() -> argparse.ArgumentParser:
+    runtime_dir = os.environ.get("XDG_RUNTIME_DIR", f"/run/user/{os.getuid()}")
+    parser = argparse.ArgumentParser(
+        description="Live terminal dashboard for Waypaper and linux-wallpaperengine.",
+    )
+    parser.add_argument("--version", action="version", version=f"%(prog)s {VERSION}")
+    parser.add_argument(
+        "--socket",
+        default=os.environ.get(
+            "WPE_CONTROL_SOCKET",
+            str(Path(runtime_dir) / "linux-wallpaperengine.sock"),
+        ),
+        help="engine control socket path",
+    )
+    parser.add_argument(
+        "--config",
+        default=os.environ.get(
+            "WAYPAPER_CONFIG",
+            str(Path.home() / ".config/waypaper/config.ini"),
+        ),
+        help="Waypaper config path",
+    )
+    parser.add_argument(
+        "--interval",
+        type=float,
+        default=DEFAULT_INTERVAL,
+        help=f"polling interval in seconds (default: {DEFAULT_INTERVAL})",
+    )
+    parser.add_argument(
+        "--engine-log",
+        default=None,
+        help="engine log file to read (default: discover it from the running engine)",
+    )
+    parser.add_argument(
+        "--plain",
+        action="store_true",
+        help="stream timestamped events without the fullscreen dashboard",
+    )
+    parser.add_argument(
+        "--once",
+        action="store_true",
+        help="print one status snapshot and exit",
+    )
+    parser.add_argument(
+        "--record",
+        metavar="PATH",
+        help="append monitor events to a text file",
+    )
+    parser.add_argument(
+        "--record-samples",
+        metavar="PATH",
+        help="append one JSON object per resource sample, for post-hoc analysis",
+    )
+    parser.add_argument(
+        "--since",
+        default="1 hour ago",
+        metavar="WHEN",
+        help="how far back to search coredumps and journals (default: 1 hour ago)",
+    )
+    return parser
+
+
+def main(argv: list[str] | None = None) -> int:
+    args = build_parser().parse_args(argv)
+    if args.interval < 0.1:
+        print("lwe-monitor: --interval must be at least 0.1 seconds", file=sys.stderr)
+        return 2
+
+    monitor = RuntimeMonitor(
+        args.socket,
+        args.config,
+        args.interval,
+        args.engine_log,
+        args.record,
+        args.since,
+        args.record_samples,
+    )
+    try:
+        if args.once or args.plain or not (sys.stdin.isatty() and sys.stdout.isatty()):
+            return run_plain(monitor, args.once)
+        try:
+            return curses.wrapper(TerminalUI(monitor).run)
+        except KeyboardInterrupt:
+            return 0
+    finally:
+        monitor.close()
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
