@@ -12,6 +12,7 @@
 #include <sstream>
 
 #include <glm/glm.hpp>
+#include <glm/gtc/matrix_inverse.hpp>
 #include <glm/gtc/matrix_transform.hpp>
 #define GLM_ENABLE_EXPERIMENTAL
 #include <glm/gtx/rotate_vector.hpp>
@@ -1483,13 +1484,27 @@ void CImage::setup () {
 	));
     }
 
-    // if there's more than one pass the blendmode has to be moved from the beginning to the end
+    // If there is more than one pass, the first pass renders only to an intermediate FBO while the
+    // last pass draws the layer geometry into the scene. Move explicitly enabled depth state from
+    // the base material to that final composite pass. Keeping an effect's usual depthtest=disabled
+    // there lets a depth-tested background layer overwrite 3D models in front of it (Ventura 4K,
+    // Workshop 3298178668). Leave all-disabled 2D effect chains untouched: forcing their state
+    // breaks full-resolution blur results followed by another effect (Legendaries of Hoenn,
+    // Workshop 3101147701).
     if (this->m_passes.size () > 1) {
 	const auto first = this->m_passes.begin ();
 	const auto last = this->m_passes.rbegin ();
 
 	(*last)->setBlendingMode ((*first)->getBlendingMode ());
 	(*first)->setBlendingMode (BlendingMode_Normal);
+	if ((*first)->getDepthtestMode () == DepthtestMode_Enabled) {
+	    (*last)->setDepthtestMode (DepthtestMode_Enabled);
+	    (*first)->setDepthtestMode (DepthtestMode_Disabled);
+	}
+	if ((*first)->getDepthwriteMode () == DepthwriteMode_Enabled) {
+	    (*last)->setDepthwriteMode (DepthwriteMode_Enabled);
+	    (*first)->setDepthwriteMode (DepthwriteMode_Disabled);
+	}
     }
 
     CRenderable::setup ();
@@ -1538,6 +1553,7 @@ void CImage::setupPasses () {
 	if (!writesToTarget && this->shouldRenderFinalPass (std::next (cur) == end)) {
 	    // TODO: PROPERLY CHECK EFFECT'S VISIBILITY AND TAKE IT INTO ACCOUNT
 	    drawTo = this->getScene ().getFBO ();
+	    this->m_finalPassDrawsToScene = true;
 
 	    if (this->getImage ().model->passthrough && this->getImage ().model->fullscreen) {
 		// A fullscreen passthrough layer is a whole-frame post-process (it sampled the scene from
@@ -1554,6 +1570,17 @@ void CImage::setupPasses () {
 		spacePosition = this->getSceneSpacePosition ();
 		projection = &this->m_modelViewProjectionScreen;
 		inverseProjection = &this->m_modelViewProjectionScreenInverse;
+
+		// genericimage3/4's LIGHTING branch does not use g_ModelViewProjectionMatrix for
+		// vertex placement. It multiplies by g_ModelMatrix and g_ViewProjectionMatrix
+		// separately so lighting can retain world-space position and normals. Point the
+		// final scene pass at the same world/camera split used by 3D models; leaving the
+		// image-copy matrices here turns lit image layers into giant top-left slabs.
+		if (this->getScene ().getScene ().camera.projection.isPerspective) {
+		    pass->setModelMatrix (&this->m_sceneModelMatrix);
+		    pass->setViewProjectionMatrix (&this->m_sceneViewProjectionMatrix);
+		    pass->addUniform ("g_NormalModelMatrix", &this->m_sceneNormalModelMatrix);
+		}
 	    }
 
 	    // puppet warp deforms the final on-screen geometry only; every earlier pass works on
@@ -1646,7 +1673,15 @@ void CImage::render () {
 	return;
     }
 
-    if (!this->getImage ().visible->value->getBool ()) {
+    // A hidden layer still has to fill its own composite render target. 3D characters keep their
+    // face on a separate image layer and sample it from the model's material as
+    // _rt_imageLayerComposite_<id>_a, and those layers are authored invisible on purpose so the
+    // quad itself never appears in the scene (3737268876 does this for all 27 of its faces, plus
+    // its water normal map). Such a layer had no pass pointed at the scene FBO in the first place
+    // (shouldRenderFinalPass), so rendering it can only touch its own targets. Layers that were
+    // visible when their passes were built do reach the scene, and those still stop here when
+    // hidden at runtime.
+    if (!this->getImage ().visible->value->getBool () && this->m_finalPassDrawsToScene) {
 	return;
     }
 
@@ -1980,9 +2015,14 @@ void CImage::updateScreenSpacePosition () {
     // do not apply
     if (this->getScene ().getScene ().camera.projection.isPerspective) {
 	const glm::mat4 world = this->resolveWorldMatrix ();
+	const glm::mat4 viewProjection
+	    = this->getScene ().getCamera ().getProjection () * this->getScene ().getCamera ().getLookAt ();
+	const PerspectiveSceneMatrices matrices = calculatePerspectiveSceneMatrices (world, viewProjection);
 
-	this->m_modelViewProjectionScreen
-	    = this->getScene ().getCamera ().getProjection () * this->getScene ().getCamera ().getLookAt () * world;
+	this->m_sceneModelMatrix = matrices.model;
+	this->m_sceneViewProjectionMatrix = matrices.viewProjection;
+	this->m_sceneNormalModelMatrix = matrices.normalModel;
+	this->m_modelViewProjectionScreen = matrices.modelViewProjection;
 	this->m_modelViewProjectionScreenInverse = glm::inverse (this->m_modelViewProjectionScreen);
 
 	if (this->getImage ().model->passthrough) {
@@ -2063,6 +2103,16 @@ void CImage::updateScreenSpacePosition () {
 	this->m_modelViewProjectionCopy = this->m_modelViewProjectionScreen;
 	this->m_modelViewProjectionCopyInverse = this->m_modelViewProjectionScreenInverse;
     }
+}
+
+auto CImage::calculatePerspectiveSceneMatrices (const glm::mat4& world, const glm::mat4& viewProjection)
+    -> PerspectiveSceneMatrices {
+    return PerspectiveSceneMatrices {
+	.model = world,
+	.viewProjection = viewProjection,
+	.modelViewProjection = viewProjection * world,
+	.normalModel = glm::inverseTranspose (glm::mat3 (world)),
+    };
 }
 
 const Image& CImage::getImage () const { return this->m_image; }

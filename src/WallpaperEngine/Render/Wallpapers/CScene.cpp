@@ -447,9 +447,14 @@ Render::CObject* CScene::createObject (const Object& object) {
 	this->m_objectsInCreation.erase (object.id);
     });
 
-    std::vector<const Object*> deferredDependencies;
-
     // check dependencies too!
+    // a dependency parented to this very object is the normal shape for faces: the model
+    // samples the child image layer's _rt_imageLayerComposite_<id>_a, and the child hangs off
+    // the model for its transform. it has to be created first so the render target exists by
+    // the time this object's passes resolve their textures. the cycle that creates is broken by
+    // m_objectsInCreation above, and a child that resolves its transform before the parent
+    // exists simply skips the missing ancestor (CImage::resolveTransform) and corrects itself on
+    // the next frame, since render() re-resolves it every time
     for (const auto& cur : object.dependencies) {
 	// self-dependency is a possibility...
 	if (cur == object.id) {
@@ -460,12 +465,6 @@ Render::CObject* CScene::createObject (const Object& object) {
 	    = std::ranges::find_if (this->getScene ().objects, [&cur] (const auto& o) { return o->id == cur; });
 
 	if (dep != this->getScene ().objects.end ()) {
-	    const auto& depObject = **dep;
-	    if (depObject.parent.has_value () && depObject.parent.value () == object.id) {
-		deferredDependencies.push_back (&depObject);
-		continue;
-	    }
-
 	    this->createObject (**dep);
 	}
     }
@@ -489,10 +488,6 @@ Render::CObject* CScene::createObject (const Object& object) {
 
     if (renderObject != nullptr) {
 	this->m_objects.emplace (renderObject->getId (), renderObject);
-    }
-
-    for (const auto* deferred : deferredDependencies) {
-	this->createObject (*deferred);
     }
 
     return renderObject;
