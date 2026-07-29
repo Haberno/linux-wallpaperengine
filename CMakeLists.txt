@@ -729,6 +729,13 @@ add_executable(linux-wallpaperengine
 
 target_link_libraries (linux-wallpaperengine PUBLIC linux-wallpaperengine-lib)
 
+# CEF's prebuilt Linux library calls the legacy mallinfo() symbol. Export the
+# compatibility implementation in main.cpp so its 32-bit counters cannot
+# overflow inside Chromium's periodic memory dump.
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    set_property(TARGET linux-wallpaperengine PROPERTY ENABLE_EXPORTS TRUE)
+endif()
+
 # CEF resolves icudtl.dat and its other runtime resources relative to the loaded libcef.so.
 # Prefer the staged output directory over CEF's internal Release directory so the build-tree
 # executable loads the library beside the resources copied by COPY_FILES. Keep the same portable
