@@ -55,15 +55,24 @@ WallpaperEngine::Data::Builders::ColorBuilder::parse (const std::string& value, 
 	throw std::invalid_argument ("Invalid color value");
     }
 
-    if (copy.find ('.') == std::string::npos) {
-	const auto final = vectorSize == 3 ? glm::ivec4 (VectorBuilder::parse<glm::ivec3> (copy), alpha * 255)
-					   : VectorBuilder::parse<glm::ivec4> (copy);
+    if (vectorSize == 3) {
+	const auto parsedColor = VectorBuilder::parse<glm::vec3> (copy);
 
-	return { final.r / 255.0f, final.g / 255.0f, final.b / 255.0f, final.a / 255.0f };
+	// Wallpaper Engine serializes normalized color properties without forcing a
+	// decimal point, so "1 1 1" means white rather than the almost-black
+	// 8-bit color (1, 1, 1). Keep accepting legacy byte colors by looking at the
+	// component range instead of the string spelling.
+	if (parsedColor.r > 1.0f || parsedColor.g > 1.0f || parsedColor.b > 1.0f) {
+	    return { parsedColor.r / 255.0f, parsedColor.g / 255.0f, parsedColor.b / 255.0f, alpha };
+	}
+
+	return Model::Color (glm::vec4 (parsedColor, alpha));
     }
 
-    return Model::Color (
-	vectorSize == 3 ? glm::vec4 (VectorBuilder::parse<glm::vec3> (copy), alpha)
-			: VectorBuilder::parse<glm::vec4> (copy)
-    );
+    auto parsedColor = VectorBuilder::parse<glm::vec4> (copy);
+    if (parsedColor.r > 1.0f || parsedColor.g > 1.0f || parsedColor.b > 1.0f || parsedColor.a > 1.0f) {
+	parsedColor /= 255.0f;
+    }
+
+    return Model::Color (parsedColor);
 }
