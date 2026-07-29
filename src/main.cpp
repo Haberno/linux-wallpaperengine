@@ -1,5 +1,8 @@
 #include <csignal>
+#include <filesystem>
+#include <fstream>
 #include <iostream>
+#include <unistd.h>
 
 #if defined(__GLIBC__)
 #include <malloc.h>
@@ -23,6 +26,20 @@ void signalhandler (const int sig) {
     app->signal (sig);
 }
 
+/// default log location, so tools can find the log without being told where it is
+std::filesystem::path defaultLogFile () {
+    const char* stateHome = getenv ("XDG_STATE_HOME");
+    const char* home = getenv ("HOME");
+
+    if (stateHome != nullptr && stateHome[0] != '\0') {
+	return std::filesystem::path (stateHome) / "linux-wallpaperengine" / "engine.log";
+    }
+    if (home != nullptr && home[0] != '\0') {
+	return std::filesystem::path (home) / ".local/state/linux-wallpaperengine" / "engine.log";
+    }
+    return {};
+}
+
 void initLogging () {
     // Keep independent stream formatting state without heap-allocating objects that the
     // non-owning logger cannot release. Function-local statics outlive the logger singleton.
@@ -31,6 +48,40 @@ void initLogging () {
 
     sLog.addOutput (&output);
     sLog.addError (&error);
+
+    // Launchers such as Waypaper connect stdout/stderr to /dev/null, which loses the log entirely
+    // and leaves nothing to inspect after a crash, so the log always goes to a file as well.
+    // $WPE_LOG_FILE overrides the location; "off" disables the file sink completely.
+    const char* logFile = getenv ("WPE_LOG_FILE");
+    const std::string requested = logFile != nullptr ? logFile : "";
+
+    if (requested == "off") {
+	return;
+    }
+
+    const std::filesystem::path path = requested.empty () ? defaultLogFile () : std::filesystem::path (requested);
+    if (path.empty ()) {
+	return;
+    }
+
+    std::error_code ec;
+    if (!path.parent_path ().empty ()) {
+	std::filesystem::create_directories (path.parent_path (), ec);
+    }
+
+    // Keep exactly one previous run alongside the current one: a crash is usually diagnosed from
+    // the run that died, which is no longer the one being written. Anything older is dropped so
+    // the log cannot grow without bound.
+    std::filesystem::rename (path, path.string () + ".1", ec);
+
+    static std::ofstream logStream (path, std::ios::trunc);
+    if (!logStream.is_open ()) {
+	sLog.error ("Cannot open log file for writing: ", path.string ());
+	return;
+    }
+
+    sLog.addOutput (&logStream);
+    sLog.addError (&logStream);
 }
 
 int main (int argc, char* argv[]) {

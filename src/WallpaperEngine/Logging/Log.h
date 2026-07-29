@@ -18,33 +18,18 @@ public:
     void addError (std::ostream* stream);
 
     template <typename... Data> void out (Data... data) {
-	std::string str = this->buildBuffer (data...);
-
-	// then send it to all the outputs configured
-	for (const auto cur : this->mOutputs) {
-	    *cur << str << std::endl;
-	}
+	Log::emit (this->mOutputs, "INFO", this->buildBuffer (data...));
     }
 
     template <typename... Data> void debug (Data... data) {
 #if (!NDEBUG) && (!ERRORONLY)
-	std::string str = this->buildBuffer (data...);
-
-	// then send it to all the outputs configured
-	for (const auto cur : this->mOutputs) {
-	    *cur << str << std::endl;
-	}
+	Log::emit (this->mOutputs, "DEBUG", this->buildBuffer (data...));
 #endif /* DEBUG */
     }
 
     template <typename... Data> void debugerror (Data... data) {
 #if (!NDEBUG) && (ERRORONLY)
-	std::string str = this->buildBuffer (data...);
-
-	// then send it to all the outputs configured
-	for (const auto cur : this->mOutputs) {
-	    *cur << str << std::endl;
-	}
+	Log::emit (this->mOutputs, "DEBUG", this->buildBuffer (data...));
 #endif /* DEBUG */
     }
 
@@ -53,10 +38,7 @@ public:
 
 	Debug::RenderHealth::record ("log.error", str);
 
-	// then send it to all the outputs configured
-	for (const auto cur : this->mErrors) {
-	    *cur << str << std::endl;
-	}
+	Log::emit (this->mErrors, "ERROR", str);
     }
 
     template <class EX, typename... Data> [[noreturn]] void exception (Data... data) {
@@ -64,10 +46,7 @@ public:
 
 	Debug::RenderHealth::record ("log.exception", str);
 
-	// then send it to all the outputs configured
-	for (const auto cur : this->mErrors) {
-	    *cur << str << std::endl;
-	}
+	Log::emit (this->mErrors, "FATAL", str);
 
 	// now throw the exception
 	throw EX (str);
@@ -81,6 +60,9 @@ public:
 
 private:
     Log ();
+
+    /// writes one timestamped, level-tagged line to each of the given streams
+    static void emit (const std::vector<std::ostream*>& streams, const char* level, const std::string& message);
 
     template <typename... Data> std::string buildBuffer (Data... data) {
 	// buffer the string first
