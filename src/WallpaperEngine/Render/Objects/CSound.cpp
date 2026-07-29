@@ -32,11 +32,12 @@ CSound::~CSound () {
 }
 
 void CSound::load () {
-    for (const auto& cur : this->m_sound.sounds) {
-	auto stream
-	    = new Audio::AudioStream (this->getScene ().getAudioContext (), this->getAssetLocator ().read (cur));
+    const bool repeat = this->m_sound.playbackmode.has_value () && this->m_sound.playbackmode == "loop";
 
-	stream->setRepeat (this->m_sound.playbackmode.has_value () && this->m_sound.playbackmode == "loop");
+    for (const auto& cur : this->m_sound.sounds) {
+	auto stream = new Audio::AudioStream (
+	    this->getScene ().getAudioContext (), this->getAssetLocator ().read (cur), repeat
+	);
 
 	// add the stream to the context so it can be played
 	this->m_audioStreams.insert_or_assign (this->getScene ().getAudioContext ().addStream (stream), stream);
