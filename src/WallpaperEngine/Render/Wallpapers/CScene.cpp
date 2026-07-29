@@ -576,9 +576,21 @@ void CScene::addObjectToRenderOrder (const Object& object) {
 
 ScriptEngine& CScene::getScriptEngine () const { return *this->m_scriptEngine; }
 Camera& CScene::getCamera () const { return *this->m_camera; }
+
+void CScene::setScriptCameraTransform (const CameraTransform& transform) {
+    this->m_scriptCameraTransform = transform;
+}
+
 const CScene::SceneFog& CScene::getFog () const { return this->m_fog; }
 
 void CScene::renderFrame (const glm::ivec4& viewport) {
+    // Frame callbacks are per-output on Wayland. A 60 Hz scene can therefore render only once
+    // while a 165 Hz output advances the application loop several times. Deriving dt only from
+    // g_TimeLast loses those skipped intervals and stretches camera shots on the slower output.
+    const float globalDeltaTime = glm::max (0.0f, g_Time - g_TimeLast);
+    this->m_sceneDeltaTime = calculateSceneDeltaTime (g_Time, globalDeltaTime, this->m_previousSceneTime);
+    this->m_previousSceneTime = g_Time;
+
     // Camera layers are ordinary scriptable objects. Resolve their parent chain
     // before paths and mouse projection so a scripted camera rig supplies the
     // resting eye/orientation rather than the editor's top-level viewport.
@@ -597,7 +609,7 @@ void CScene::renderFrame (const glm::ivec4& viewport) {
 	&& !this->getContext ().getApp ().getContext ().settings.mouse.disableparallax) {
 	const float influence = this->getScene ().camera.parallax.mouseInfluence->value->getFloat ();
 	const float delay = this->getScene ().camera.parallax.delay->value->getFloat ();
-	const float alpha = calculateParallaxSmoothingAlpha (delay, g_Time - g_TimeLast);
+	const float alpha = calculateParallaxSmoothingAlpha (delay, this->getDeltaTime ());
 
 	// per-object depth and the global parallax amount are applied by each renderable,
 	// this only tracks the smoothed mouse offset (-1 to 1 across the screen) scaled by
@@ -627,6 +639,15 @@ void CScene::renderFrame (const glm::ivec4& viewport) {
 	    path.evaluate (this->m_cameraPathElapsed, this->m_camera->getDefaultTransform ())
 	);
     }
+    // A script that called setCameraTransforms took the camera on purpose (mouse-drag orbit
+    // controllers do this every frame); it wins over the layer rig and the path above. The pose is
+    // deliberately sticky rather than per-tick: the rig sits somewhere entirely different from where
+    // a controller puts the camera, so falling back to it on any frame the script does not produce a
+    // usable pose would snap the view across the scene and back.
+    if (this->m_scriptCameraTransform.has_value ()) {
+	this->m_camera->setTransform (*this->m_scriptCameraTransform);
+    }
+
 
     // Fog colors and ranges can be SceneScript- or user-property-driven.
     this->updateFogState ();
@@ -743,6 +764,12 @@ float CScene::calculateCameraFadeAlpha (const float elapsedTime, const float dur
 	return glm::clamp (1.0f - elapsedTime / CAMERA_FADE_DURATION, 0.0f, 1.0f);
     }
     return 0.0f;
+}
+
+float CScene::calculateSceneDeltaTime (
+    const float currentTime, const float globalDeltaTime, const std::optional<float> previousSceneTime
+) {
+    return glm::max (0.0f, previousSceneTime.has_value () ? currentTime - *previousSceneTime : globalDeltaTime);
 }
 
 float CScene::getSceneFadeAlpha () const {
@@ -884,7 +911,12 @@ void CScene::updateCameraObject () {
 	this->getScene ().camera.projection.zoom->value->getFloat ()
     );
     const bool pathActive = this->m_activeCameraPathSource != nullptr && this->m_activeCameraPathIndex.has_value ();
-    this->m_camera->setDefaultTransform (transform, !pathActive);
+    // Track the layer pose as the default, but only snap the live camera back to it when nothing
+    // else owns the camera. Drag controllers read getCameraTransforms() at the top of every tick and
+    // integrate from it, so re-applying the layer pose here would hand them a camera that resets
+    // between frames and make them oscillate against their own smoothing.
+    const bool scriptOwnsCamera = this->m_scriptCameraTransform.has_value ();
+    this->m_camera->setDefaultTransform (transform, !pathActive && !scriptOwnsCamera);
 }
 
 void CScene::updateCameraPath (const float deltaTime) {
@@ -1119,12 +1151,11 @@ int CScene::getHeight () const { return this->m_camera->getHeight (); }
 
 float CScene::getTime () const { return g_Time; }
 
-float CScene::getDeltaTime () const { return g_Time - g_TimeLast; }
+float CScene::getDeltaTime () const { return this->m_sceneDeltaTime; }
 
 float CScene::getFps () const {
-    const float dt = g_Time - g_TimeLast;
-    // Guard against the first frame (where g_TimeLast is 0 so dt == g_Time)
-    // and division by zero on the very first call.
+    const float dt = this->getDeltaTime ();
+    // Guard against duplicate renders at one timestamp and division by zero on the first call.
     if (dt <= 1e-6f) {
 	return 60.0f;
     }

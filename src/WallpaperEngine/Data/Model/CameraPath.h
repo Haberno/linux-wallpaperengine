@@ -9,6 +9,11 @@
 #include <glm/vec3.hpp>
 
 namespace WallpaperEngine::Data::Model {
+enum class CameraPathInterpolation {
+    AuthoredCurve,
+    LegacyHermite,
+};
+
 /** Tangent handle stored by Wallpaper Engine's animation-curve editor. The
  * offset is measured from its keyframe in seconds/value units. */
 struct CameraPathHandle {
@@ -26,6 +31,7 @@ struct CameraPathKeyframe {
 /** One scalar animation channel, used for vector components as well as FOV/zoom. */
 struct CameraPathChannel {
     std::vector<CameraPathKeyframe> keyframes = {};
+    CameraPathInterpolation interpolation = CameraPathInterpolation::AuthoredCurve;
 
     [[nodiscard]] float evaluate (float time, float fallback) const;
 };

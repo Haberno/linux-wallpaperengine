@@ -40,6 +40,11 @@ public:
     [[nodiscard]] Scripting::ScriptEngine& getScriptEngine () const;
     [[nodiscard]] Camera& getCamera () const;
 
+    /** Camera pose pushed by thisScene.setCameraTransforms(). Once a script has taken the camera it
+     *  owns it for the rest of the scene, overriding both the camera layers and any active camera
+     *  path; the pose persists until the script pushes a new one. */
+    void setScriptCameraTransform (const CameraTransform& transform);
+
     [[nodiscard]] const Scene& getScene () const;
 
     [[nodiscard]] int getWidth () const override;
@@ -70,6 +75,10 @@ public:
 
     [[nodiscard]] static float calculateParallaxSmoothingAlpha (float delay, float deltaTime);
     [[nodiscard]] static glm::vec2 calculateShaderParallaxPosition (const glm::vec2& displacement);
+    /** Recover the elapsed time for this scene rather than the application loop. Wayland outputs
+     * can present independently, so a slower monitor may skip several global render iterations. */
+    [[nodiscard]] static float
+    calculateSceneDeltaTime (float currentTime, float globalDeltaTime, std::optional<float> previousSceneTime);
     /** Pack the authoring start/end values into common_fog.h's
      * {start, range, startDensity, densityRange} uniform layout. */
     [[nodiscard]] static glm::vec4
@@ -230,9 +239,12 @@ private:
     glm::vec2 m_parallaxDisplacement = {};
     /** Parallax position fed to shaders via g_ParallaxPosition, 0.5,0.5 = centered */
     glm::vec2 m_parallaxPosition = { 0.5f, 0.5f };
+    std::optional<float> m_previousSceneTime = std::nullopt;
+    float m_sceneDeltaTime = 0.0f;
     const CameraPathSource* m_activeCameraPathSource = nullptr;
     std::optional<size_t> m_activeCameraPathIndex = std::nullopt;
     float m_cameraPathElapsed = 0.0f;
+    std::optional<CameraTransform> m_scriptCameraTransform = std::nullopt;
     std::mt19937 m_cameraPathRandom { std::random_device {} () };
     std::shared_ptr<const CFBO> _rt_4FrameBuffer = nullptr;
     std::shared_ptr<const CFBO> _rt_8FrameBuffer = nullptr;

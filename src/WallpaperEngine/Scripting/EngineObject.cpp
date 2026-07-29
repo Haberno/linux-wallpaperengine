@@ -7,6 +7,7 @@
 #include "WallpaperEngine/Logging/Log.h"
 #include "WallpaperEngine/Render/Wallpapers/CScene.h"
 
+#include <algorithm>
 #include <vector>
 
 using namespace WallpaperEngine::Scripting;
@@ -27,7 +28,11 @@ JSValue engine_open_user_shortcut (JSContext* ctx, JSValueConst this_val, int ar
 }
 
 JSValue engine_get_frametime (JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
-    return JS_NewFloat64 (ctx, g_Time - g_TimeLast);
+    // Never report a zero-length frame. The stock SceneScript idiom for framerate-normalizing a
+    // smoothing factor is `engine.frametime * (1 / engine.frametime)`, which is 0 * Infinity = NaN
+    // when the delta is exactly zero -- and it is zero on the first tick, before any frame has
+    // elapsed. That NaN gets integrated into the script's own state and never washes out.
+    return JS_NewFloat64 (ctx, std::max (g_Time - g_TimeLast, 0.0001f));
 }
 
 JSValue engine_get_runtime (JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
