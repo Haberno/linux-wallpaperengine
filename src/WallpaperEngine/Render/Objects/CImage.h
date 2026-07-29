@@ -32,6 +32,13 @@ class CImage final : public CRenderable, public ScriptableObject {
     friend CObject;
 
 public:
+    struct PerspectiveSceneMatrices {
+	glm::mat4 model;
+	glm::mat4 viewProjection;
+	glm::mat4 modelViewProjection;
+	glm::mat3 normalModel;
+    };
+
     CImage (Wallpapers::CScene& scene, const Image& image);
     ~CImage () override;
 
@@ -47,6 +54,11 @@ public:
     /** Return cursor coordinates local to this image when the world-space point
      *  intersects its authored quad; std::nullopt means the point is outside. */
     [[nodiscard]] std::optional<glm::vec3> cursorLocalPosition (const glm::vec3& worldPosition) const;
+
+    /** Split a perspective image transform into the matrices consumed by genericimage3/4.
+     *  Their LIGHTING path uses model and view-projection separately instead of the MVP. */
+    [[nodiscard]] static PerspectiveSceneMatrices
+    calculatePerspectiveSceneMatrices (const glm::mat4& world, const glm::mat4& viewProjection);
 
     [[nodiscard]] GLuint getSceneSpacePosition () const;
     [[nodiscard]] GLuint getCopySpacePosition () const;
@@ -190,6 +202,9 @@ private:
 
     glm::mat4 m_modelMatrix = {};
     glm::mat4 m_viewProjectionMatrix = {};
+    glm::mat4 m_sceneModelMatrix = glm::mat4 (1.0f);
+    glm::mat4 m_sceneViewProjectionMatrix = glm::mat4 (1.0f);
+    glm::mat3 m_sceneNormalModelMatrix = glm::mat3 (1.0f);
 
     /** rotation-only local->world matrix (and its inverse) fed to effect passes as
      * g_EffectTextureProjectionMatrix so depthparallax-style shaders can rotate the
@@ -220,6 +235,9 @@ private:
     bool m_geometryBufferCacheValid = false;
 
     bool m_initialized = false;
+    /** True when the last pass was pointed at the scene framebuffer, i.e. this layer can actually
+     *  draw into the scene. Layers built while invisible only ever write to their own targets. */
+    bool m_finalPassDrawsToScene = false;
 
     struct {
 	struct {

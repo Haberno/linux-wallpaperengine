@@ -2,6 +2,7 @@
 
 #include <functional>
 #include <glm/gtc/type_ptr.hpp>
+#include <set>
 #include <utility>
 
 #include "../../TextureProvider.h"
@@ -45,6 +46,10 @@ public:
     void setEffectTextureProjectionMatrix (const glm::mat4* matrix, const glm::mat4* inverse);
     void setBlendingMode (BlendingMode blendingmode);
     [[nodiscard]] BlendingMode getBlendingMode () const;
+    void setDepthtestMode (DepthtestMode depthtestmode);
+    [[nodiscard]] DepthtestMode getDepthtestMode () const;
+    void setDepthwriteMode (DepthwriteMode depthwritemode);
+    [[nodiscard]] DepthwriteMode getDepthwriteMode () const;
     [[nodiscard]] std::shared_ptr<const CFBO> resolveFBO (const std::string& name) const;
 
     [[nodiscard]] std::shared_ptr<const FBOProvider> getFBOProvider () const;
@@ -202,7 +207,12 @@ private:
     std::vector<std::unique_ptr<AttribEntry>> m_attribs = {};
     std::map<std::string, std::unique_ptr<UniformEntry>> m_uniforms = {};
     std::map<std::string, std::unique_ptr<ReferenceUniformEntry>> m_referenceUniforms = {};
+    /** Shader uniforms supplied by authored pass/effect constants. These take precedence over
+     *  generic object uniforms with the same GLSL name. */
+    std::set<std::string> m_constantUniforms = {};
     BlendingMode m_blendingmode = BlendingMode_Normal;
+    DepthtestMode m_depthtestmode = DepthtestMode_Disabled;
+    DepthwriteMode m_depthwritemode = DepthwriteMode_Disabled;
     /**
      * Default matrix the pointers below start at. Owners (CImage, CModel, ...) point these at their own
      * matrices before rendering; passes whose owner never does (e.g. plain copy passes) must still read
