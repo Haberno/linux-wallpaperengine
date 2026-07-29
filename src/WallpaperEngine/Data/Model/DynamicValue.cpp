@@ -5,6 +5,8 @@
 #include "WallpaperEngine/Logging/Log.h"
 #include "WallpaperEngine/Scripting/ScriptEngine.h"
 
+#include <cmath>
+
 using namespace WallpaperEngine::Data::Model;
 
 DynamicValue::DynamicValue (const DynamicValue& other) {
@@ -86,6 +88,13 @@ std::string DynamicValue::toString () const {
 }
 
 void DynamicValue::update (const float newValue, UpdateSource source) {
+    // A transient NaN from SceneScript must not replace the last usable authored value.
+    // Rendering uniforms fan one property out across many objects; a single non-finite
+    // light intensity otherwise poisons the complete PBR light sum.
+    if (source == UpdateSource::Script && !std::isfinite (newValue)) {
+	return;
+    }
+
     this->m_vec4 = glm::vec4 (newValue);
     this->m_vec3 = glm::vec3 (newValue);
     this->m_vec2 = glm::vec2 (newValue);
@@ -125,6 +134,11 @@ void DynamicValue::update (const bool newValue, UpdateSource source) {
 }
 
 void DynamicValue::update (const glm::vec2& newValue, UpdateSource source) {
+    if (source == UpdateSource::Script
+	&& (!std::isfinite (newValue.x) || !std::isfinite (newValue.y))) {
+	return;
+    }
+
     this->m_vec2 = newValue;
     this->m_vec3 = glm::vec3 (newValue, 0.0f);
     this->m_vec4 = glm::vec4 (newValue, 0.0f, 0.0f);
@@ -138,6 +152,11 @@ void DynamicValue::update (const glm::vec2& newValue, UpdateSource source) {
 }
 
 void DynamicValue::update (const glm::vec3& newValue, UpdateSource source) {
+    if (source == UpdateSource::Script
+	&& (!std::isfinite (newValue.x) || !std::isfinite (newValue.y) || !std::isfinite (newValue.z))) {
+	return;
+    }
+
     this->m_vec2 = glm::vec2 (newValue);
     this->m_vec3 = newValue;
     this->m_vec4 = glm::vec4 (newValue, 0.0f);
@@ -151,6 +170,12 @@ void DynamicValue::update (const glm::vec3& newValue, UpdateSource source) {
 }
 
 void DynamicValue::update (const glm::vec4& newValue, UpdateSource source) {
+    if (source == UpdateSource::Script
+	&& (!std::isfinite (newValue.x) || !std::isfinite (newValue.y) || !std::isfinite (newValue.z)
+	    || !std::isfinite (newValue.w))) {
+	return;
+    }
+
     this->m_vec2 = glm::vec2 (newValue);
     this->m_vec3 = glm::vec3 (newValue);
     this->m_vec4 = newValue;
