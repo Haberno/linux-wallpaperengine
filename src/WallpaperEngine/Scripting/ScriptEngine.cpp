@@ -795,46 +795,66 @@ void ScriptEngine::queueScript (const std::string& key, DynamicValue& currentVal
     }
 }
 
+void ScriptEngine::callLifecycleHook (const std::string& key, LoadedModule& loaded, const char* hook) {
+    this->m_runningModule = &loaded;
+
+    const bool angles = isAnglesProperty (key);
+    JSValue args[] = { angles ? anglesToJs (this->m_context, loaded.value) : this->dynamicToJs (loaded.value) };
+    JSValue result = this->call (loaded.module, 1, args, hook);
+
+    ScopeGuard guard2 ([this, args, result] () {
+	JS_FreeValue (this->m_context, result);
+	JS_FreeValue (this->m_context, args[0]);
+    });
+
+    if (JS_IsException (result)) {
+	logJSException (this->m_context, key.c_str ());
+	if (std::string_view (hook) == "update") {
+	    loaded.updateEnabled = false;
+	}
+	return;
+    }
+
+    if (angles) {
+	jsToAngles (this->m_context, result, args[0], loaded.value);
+    } else {
+	jsToDynamicValue (this->m_context, result, loaded.value);
+    }
+}
+
 void ScriptEngine::initializeModule (const std::string& key, LoadedModule& loaded) {
     if (loaded.initialized) {
 	return;
     }
 
     loaded.initialized = true;
-    this->m_runningModule = &loaded;
 
     // run the script's init hook (if any) followed by the first update, mirroring WE's lifecycle
-    const bool angles = isAnglesProperty (key);
-
-    for (const auto* hook : { "init", "update" }) {
-	JSValue args[] = { angles ? anglesToJs (this->m_context, loaded.value) : this->dynamicToJs (loaded.value) };
-	JSValue result = this->call (loaded.module, 1, args, hook);
-
-	ScopeGuard guard2 ([this, args, result] () {
-	    JS_FreeValue (this->m_context, result);
-	    JS_FreeValue (this->m_context, args[0]);
-	});
-
-	if (JS_IsException (result)) {
-	    logJSException (this->m_context, key.c_str ());
-	    if (std::string_view (hook) == "update") {
-		loaded.updateEnabled = false;
-	    }
-	    continue;
-	}
-
-	if (angles) {
-	    jsToAngles (this->m_context, result, args[0], loaded.value);
-	} else {
-	    jsToDynamicValue (this->m_context, result, loaded.value);
-	}
-    }
+    this->callLifecycleHook (key, loaded, "init");
+    this->callLifecycleHook (key, loaded, "update");
 }
 
 void ScriptEngine::initializeQueuedScripts () {
     this->m_sceneLayersReady = true;
+
+    // Every init() has to run before any first update(). Scripts publish cross-layer state onto the
+    // `shared` global from init() and consume it from update(), so interleaving the two makes an
+    // early layer's first update throw on state a later layer has not created yet — and a throw
+    // there disables that script's update permanently, for the rest of the scene's life.
+    std::vector<std::pair<const std::string*, LoadedModule*>> started;
+
     for (auto& [key, module] : this->m_scriptModules) {
-	this->initializeModule (key, module);
+	if (module.initialized) {
+	    continue;
+	}
+
+	module.initialized = true;
+	started.emplace_back (&key, &module);
+	this->callLifecycleHook (key, module, "init");
+    }
+
+    for (const auto& [key, module] : started) {
+	this->callLifecycleHook (*key, *module, "update");
     }
 }
 

@@ -161,6 +161,7 @@ public:
 private:
     JSValue call (JSValue module, int argc, JSValueConst argv[], const char* name);
     void queueScript (const std::string& key, DynamicValue& currentValue, ScriptableObject* object);
+    void callLifecycleHook (const std::string& key, LoadedModule& module, const char* hook);
     void initializeModule (const std::string& key, LoadedModule& module);
     void dispatchCursorEvents ();
     JSValue makeCursorEvent (const glm::vec3& worldPosition, const glm::vec3& localPosition);
