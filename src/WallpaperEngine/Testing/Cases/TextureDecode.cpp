@@ -1,5 +1,6 @@
 #include "WallpaperEngine/Data/Assets/Texture.h"
 #include "WallpaperEngine/Data/Parsers/TextureParser.h"
+#include "WallpaperEngine/Data/Utils/BinaryReader.h"
 
 #include <stb_image_write.h>
 
@@ -8,12 +9,22 @@
 #endif
 #include <catch2/catch_test_macros.hpp>
 
+#include <sstream>
+
 using WallpaperEngine::Data::Assets::FIF_PNG;
 using WallpaperEngine::Data::Assets::Mipmap;
 using WallpaperEngine::Data::Assets::Texture;
+using WallpaperEngine::Data::Assets::TextureFlags_ClampUVs;
+using WallpaperEngine::Data::Assets::TextureFlags_Video;
+using WallpaperEngine::Data::Assets::TextureFormat_ARGB8888;
 using WallpaperEngine::Data::Parsers::TextureParser;
+using WallpaperEngine::Data::Utils::BinaryReader;
 
 namespace {
+template <typename T> void appendValue (std::string& output, const T value) {
+    output.append (reinterpret_cast<const char*> (&value), sizeof (value));
+}
+
 /** A PNG of the given size, with pixels varying per position so a mixed-up decode shows up */
 std::string encodePng (const int size, const int seed) {
     std::vector<unsigned char> pixels (static_cast<size_t> (size) * size * 4);
@@ -57,6 +68,48 @@ std::unique_ptr<Texture> makePngTexture (const int mipmapCount, const int seed) 
     return texture;
 }
 } // namespace
+
+TEST_CASE ("TEXB0004 video mipmaps preserve their embedded MP4 payload", "[texture][video]") {
+    constexpr uint32_t width = 2324;
+    constexpr uint32_t height = 2474;
+    const std::string mp4 = std::string ("\0\0\0\x18" "ftypmp42\0\0\0\0mp42mp41", 24);
+
+    std::string bytes;
+    bytes.append ("TEXV0005", 9);
+    bytes.append ("TEXI0001", 9);
+    appendValue<uint32_t> (bytes, TextureFormat_ARGB8888);
+    appendValue<uint32_t> (bytes, TextureFlags_Video | TextureFlags_ClampUVs);
+    appendValue<uint32_t> (bytes, width);
+    appendValue<uint32_t> (bytes, height);
+    appendValue<uint32_t> (bytes, width);
+    appendValue<uint32_t> (bytes, height);
+    appendValue<uint32_t> (bytes, 0);
+    bytes.append ("TEXB0004", 9);
+    appendValue<uint32_t> (bytes, 1); // image count
+    appendValue<uint32_t> (bytes, UINT32_MAX); // FIF_UNKNOWN
+    appendValue<uint32_t> (bytes, 0); // no conditional images
+    appendValue<uint32_t> (bytes, 1); // mip count
+    appendValue<uint32_t> (bytes, width);
+    appendValue<uint32_t> (bytes, height);
+    appendValue<uint32_t> (bytes, 0); // compression
+    appendValue<int> (bytes, 0); // video containers leave the uncompressed size empty
+    appendValue<int> (bytes, static_cast<int> (mp4.size ()));
+    bytes.append (mp4);
+
+    const auto stream = std::make_shared<std::istringstream> (bytes, std::ios::in | std::ios::binary);
+    const auto texture = TextureParser::parse (BinaryReader (stream));
+
+    REQUIRE (texture->images.size () == 1);
+    REQUIRE (texture->images.at (0).size () == 1);
+    const auto& mipmap = texture->images.at (0).front ();
+    CHECK (mipmap->width == width);
+    CHECK (mipmap->height == height);
+    CHECK (mipmap->compression == 0);
+    CHECK (mipmap->compressedSize == static_cast<int> (mp4.size ()));
+    CHECK (mipmap->uncompressedSize == static_cast<int> (mp4.size ()));
+    REQUIRE (mipmap->uncompressedData != nullptr);
+    CHECK (std::memcmp (mipmap->uncompressedData.get (), mp4.data (), mp4.size ()) == 0);
+}
 
 TEST_CASE ("batched mipmap decoding matches decoding one texture at a time", "[texture][decode]") {
     // enough textures and mipmaps to hand every thread of the pool some work
