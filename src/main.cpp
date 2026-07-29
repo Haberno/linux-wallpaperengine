@@ -115,6 +115,15 @@ WPE_NO_STACK_PROTECTOR int main (int argc, char* argv[]) {
     // mid-arena where malloc_trim cannot return them: 232 MiB stuck per heavy switch instead
     // of 5. Two arenas keep that memory reclaimable and cost ~3% of the decode.
     mallopt (M_ARENA_MAX, 2);
+
+    // glibc's mmap threshold is adaptive: freeing an mmap'd block raises it towards 32 MiB so
+    // later allocations of that size come from the brk arena instead. After a few switches the
+    // decode buffers stop being mmap'd and start fragmenting the arena, which is what M_ARENA_MAX
+    // above is trying to avoid: observed arena 420 MiB holding 173 MiB live, with mmap at 0.
+    // Setting the threshold explicitly also pins it, so buffers this large keep going through
+    // mmap and free returns them to the OS outright instead of leaving holes malloc_trim cannot
+    // reach.
+    mallopt (M_MMAP_THRESHOLD, 1024 * 1024);
 #endif
 
     // arm the health report (if configured) before anything can fail so a report is
