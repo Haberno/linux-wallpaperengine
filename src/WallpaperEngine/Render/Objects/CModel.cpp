@@ -1,6 +1,7 @@
 #include "CModel.h"
 
 #include <algorithm>
+#include <numeric>
 #include <ranges>
 #include <sstream>
 
@@ -33,6 +34,20 @@ GLuint compileShadowStage (const std::string& source, const GLenum type) {
     }
 
     return shader;
+}
+
+int passRenderPriority (const BlendingMode mode) {
+    switch (mode) {
+	case BlendingMode_Translucent:
+	    return 1;
+	case BlendingMode_Additive:
+	    return 2;
+	case BlendingMode_Normal:
+	case BlendingMode_AlphaToCoverage:
+	case BlendingMode_Unknown:
+	default:
+	    return 0;
+    }
 }
 } // namespace
 
@@ -159,11 +174,34 @@ void CModel::setup () {
 	}
     }
 
+    std::vector<BlendingMode> passModes;
+    passModes.reserve (this->m_passes.size ());
+    for (const auto* pass : this->m_passes) {
+	passModes.push_back (pass->getBlendingMode ());
+    }
+
+    const std::vector<size_t> permutation = calculatePassRenderPermutation (passModes);
+    std::vector<Effects::CPass*> orderedPasses;
+    orderedPasses.reserve (this->m_passes.size ());
+    for (const size_t index : permutation) {
+	orderedPasses.push_back (this->m_passes[index]);
+    }
+    this->m_passes = std::move (orderedPasses);
+
     if (this->getScene ().getLights ().shadowViewCount > 0) {
 	this->setupShadowProgram ();
     }
 
     this->m_initialized = true;
+}
+
+std::vector<size_t> CModel::calculatePassRenderPermutation (const std::vector<BlendingMode>& modes) {
+    std::vector<size_t> permutation (modes.size ());
+    std::iota (permutation.begin (), permutation.end (), 0);
+    std::stable_sort (permutation.begin (), permutation.end (), [&modes] (const size_t left, const size_t right) {
+	return passRenderPriority (modes[left]) < passRenderPriority (modes[right]);
+    });
+    return permutation;
 }
 
 void CModel::setupShadowProgram () {

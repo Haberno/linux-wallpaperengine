@@ -39,6 +39,13 @@ public:
     [[nodiscard]] const glm::vec4& getColor4 () const override;
     [[nodiscard]] const glm::vec3& getCompositeColor () const override;
 
+    /**
+     * Keep authored order inside each render class, but submit opaque/alpha-to-coverage
+     * passes before translucent and additive passes so blended depth writers cannot
+     * occlude opaque submeshes that have not drawn yet.
+     */
+    [[nodiscard]] static std::vector<size_t> calculatePassRenderPermutation (const std::vector<BlendingMode>& modes);
+
 private:
     struct SubmeshBuffers {
 	GLuint vertexBuffer = GL_NONE;
