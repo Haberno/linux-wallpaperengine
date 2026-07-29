@@ -58,6 +58,7 @@ DBusMediaSource::DBusMediaSource (std::chrono::milliseconds updateInterval) : Me
     DBusError err;
 
     dbus_error_init (&err);
+    Data::Utils::ScopeGuard errorGuard ([&err] { dbus_error_free (&err); });
 
     this->m_connection = dbus_bus_get (DBUS_BUS_SESSION, &err);
 
@@ -238,6 +239,7 @@ DBusMessage* DBusMediaSource::dbusMessage (
 ) {
     DBusError err;
     dbus_error_init (&err);
+    Data::Utils::ScopeGuard errorGuard ([&err] { dbus_error_free (&err); });
 
     DBusMessage* msg = dbus_message_new_method_call (bus_name, path, interface, method);
     Data::Utils::ScopeGuard guard ([msg] { dbus_message_unref (msg); });
