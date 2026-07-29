@@ -54,7 +54,7 @@ CPass::CPass (
     m_pass (pass), m_binds (binds.has_value () ? binds.value ().get () : DEFAULT_BINDS),
     m_override (override.has_value () ? override.value ().get () : DEFAULT_OVERRIDE),
     m_runtimeCombos (std::move (runtimeCombos)), m_target (target),
-    m_blendingmode (pass.blending) {
+    m_blendingmode (pass.blending), m_depthtestmode (pass.depthtest), m_depthwritemode (pass.depthwrite) {
     this->setupShaders ();
     // NOTE: m_vao is created lazily in render(): VAOs are not shared between GL
     // contexts, so it cannot be created here when built on the async switch worker
@@ -160,7 +160,7 @@ void CPass::setupRenderFramebuffer () const {
 	    break;
     }
 
-    switch (this->m_pass.depthtest) {
+    switch (this->m_depthtestmode) {
 	case DepthtestMode_Enabled:
 	    glEnable (GL_DEPTH_TEST);
 	    glDepthFunc (GL_LEQUAL);
@@ -182,7 +182,7 @@ void CPass::setupRenderFramebuffer () const {
 	    break;
     }
 
-    switch (this->m_pass.depthwrite) {
+    switch (this->m_depthwritemode) {
 	case DepthwriteMode_Enabled:
 	    glDepthMask (true);
 	    break;
@@ -494,7 +494,8 @@ void CPass::render () {
 	    " drawTo=", this->m_drawTo ? this->m_drawTo->getName () : std::string ("<null>"),
 	    " drawSize=", textureSizeLabel (this->m_drawTo), " inputSize=", textureSizeLabel (this->m_input)
 	);
-	for (const auto* uniformName : { "g_TintColor", "g_CompositeColor", "g_BlendAlpha", "g_CompositeAlpha" }) {
+	for (const auto* uniformName :
+	     { "g_TintColor", "g_CompositeColor", "g_BlendAlpha", "g_CompositeAlpha", "g_UserAlpha" }) {
 	    const auto uniform = this->m_uniforms.find (uniformName);
 	    if (uniform == this->m_uniforms.end ()) {
 		continue;
@@ -581,6 +582,14 @@ void CPass::setEffectTextureProjectionMatrix (const glm::mat4* matrix, const glm
 void CPass::setBlendingMode (BlendingMode blendingmode) { this->m_blendingmode = blendingmode; }
 
 BlendingMode CPass::getBlendingMode () const { return this->m_blendingmode; }
+
+void CPass::setDepthtestMode (DepthtestMode depthtestmode) { this->m_depthtestmode = depthtestmode; }
+
+DepthtestMode CPass::getDepthtestMode () const { return this->m_depthtestmode; }
+
+void CPass::setDepthwriteMode (DepthwriteMode depthwritemode) { this->m_depthwritemode = depthwritemode; }
+
+DepthwriteMode CPass::getDepthwriteMode () const { return this->m_depthwritemode; }
 
 void CPass::setTexCoord (GLuint texcoord) { this->a_TexCoord = texcoord; }
 
@@ -1126,8 +1135,20 @@ void CPass::setupUniforms () {
     // frame: they can be driven by user-property bindings (e.g. alpha bound to a "brightness"
     // slider) that are applied after pass construction, so a by-value copy here would freeze the
     // pre-binding defaults (alpha = 1.0) and render e.g. darkening overlays fully opaque
-    this->addUniform ("g_Brightness", &renderable.getBrightness ());
-    this->addUniform ("g_UserAlpha", &renderable.getUserAlpha ());
+    // Effect/pass constants are the highest-priority source. Custom material shaders can map an
+    // authored constant onto a generic object uniform, so do not replace those values with object
+    // defaults. Passing Breeze (Workshop 2244339517), for example, maps "Bright" onto g_Brightness:
+    // replacing its authored 5.5/10 values with the model default of 1 turns its pow(..., 4) palm
+    // materials nearly black and keeps the pink triangle below the bloom threshold.
+    if (!this->m_constantUniforms.contains ("g_Brightness")) {
+	this->addUniform ("g_Brightness", &renderable.getBrightness ());
+    }
+    // Opacity effects similarly map their authored "alpha" constant onto g_UserAlpha; replacing
+    // that pointer with the object's static alpha makes scripted music overlays stay permanently
+    // opaque (Legendaries of Hoenn, Workshop 3101147701).
+    if (!this->m_constantUniforms.contains ("g_UserAlpha")) {
+	this->addUniform ("g_UserAlpha", &renderable.getUserAlpha ());
+    }
     this->addUniform ("g_Alpha", &renderable.getAlpha ());
     this->addUniform ("g_Color", &renderable.getColor ());
     this->m_effectiveColor4 = renderable.getColor4 ();
@@ -1245,6 +1266,7 @@ void CPass::setupShaderVariables () {
 
 	ShaderVariable* var = vertex == nullptr ? fragment : vertex;
 	this->addUniform (var, value->value.get ());
+	this->m_constantUniforms.emplace (var->getName ());
     }
 
     // apply override constants (highest priority, overrides both defaults and pass constants)
@@ -1257,6 +1279,7 @@ void CPass::setupShaderVariables () {
 
 	ShaderVariable* var = vertex == nullptr ? fragment : vertex;
 	this->addUniform (var, value->value.get ());
+	this->m_constantUniforms.emplace (var->getName ());
     }
 }
 

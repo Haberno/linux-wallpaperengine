@@ -1,4 +1,5 @@
 #include "WallpaperEngine/Render/Camera.h"
+#include "WallpaperEngine/Render/Objects/CImage.h"
 #include "WallpaperEngine/Render/Wallpapers/CScene.h"
 
 // CEF exposes its own CHECK macro through CScene's renderer includes. Catch must own the
@@ -16,6 +17,7 @@
 
 using WallpaperEngine::Data::Model::CameraTransform;
 using WallpaperEngine::Render::Camera;
+using WallpaperEngine::Render::Objects::CImage;
 using WallpaperEngine::Render::Wallpapers::CScene;
 
 /**
@@ -218,6 +220,44 @@ TEST_CASE ("Wallpaper Engine camera parallax delay response") {
     CHECK (CScene::calculateParallaxSmoothingAlpha (1.0f, 1.0f / 60.0f) == Catch::Approx (1.0f / 9.0f));
     CHECK (CScene::calculateParallaxSmoothingAlpha (2.0f, 1.0f / 60.0f) == Catch::Approx (1.0f / 18.0f));
     CHECK (CScene::calculateParallaxSmoothingAlpha (3.0f, 1.0f / 60.0f) == 0.0f);
+}
+
+TEST_CASE ("Scene timing includes global frames skipped by an asynchronous output") {
+    // The first render has no scene-local history, so it uses the application frame delta.
+    CHECK (CScene::calculateSceneDeltaTime (2.0f, 1.0f / 165.0f, std::nullopt) == Catch::Approx (1.0f / 165.0f));
+
+    // A 60 Hz output can render after several 165 Hz application iterations. Its scene clock
+    // must advance by the full time since that scene last rendered, not one 165 Hz iteration.
+    CHECK (CScene::calculateSceneDeltaTime (2.0f + 1.0f / 60.0f, 1.0f / 165.0f, 2.0f) == Catch::Approx (1.0f / 60.0f));
+
+    // Duplicate renders of a shared/span scene at one application timestamp do not advance twice.
+    CHECK (CScene::calculateSceneDeltaTime (2.0f, 1.0f / 165.0f, 2.0f) == 0.0f);
+    CHECK (CScene::calculateSceneDeltaTime (1.0f, 1.0f / 165.0f, 2.0f) == 0.0f);
+}
+
+TEST_CASE ("Lit perspective images use the authored world transform") {
+    glm::mat4 world = glm::translate (glm::mat4 (1.0f), glm::vec3 (-4.31196f, 1.66488f, 2.36022f));
+    world = glm::rotate (world, 1.57080f, glm::vec3 (0.0f, 0.0f, 1.0f));
+    world = glm::rotate (world, 1.41049f, glm::vec3 (0.0f, 1.0f, 0.0f));
+    world = glm::rotate (world, 1.57080f, glm::vec3 (1.0f, 0.0f, 0.0f));
+    world = glm::scale (world, glm::vec3 (0.002f));
+
+    const glm::mat4 view = glm::lookAt (
+	glm::vec3 (-1.21766f, 1.04065f, 2.12913f), glm::vec3 (-2.16943f, 0.87410f, 2.38680f),
+	glm::vec3 (0.0f, 1.0f, 0.0f)
+    );
+    const glm::mat4 projection = glm::perspective (glm::radians (50.0f), 16.0f / 9.0f, 0.1f, 10000.0f);
+    const glm::mat4 viewProjection = projection * view;
+    const CImage::PerspectiveSceneMatrices matrices = CImage::calculatePerspectiveSceneMatrices (world, viewProjection);
+
+    const glm::vec4 localCorner (108.0f, 155.0f, 0.0f, 1.0f);
+    const glm::vec4 litShaderPosition = matrices.viewProjection * matrices.model * localCorner;
+    const glm::vec4 regularShaderPosition = matrices.modelViewProjection * localCorner;
+
+    for (int component = 0; component < 4; component++) {
+	CHECK (litShaderPosition[component] == Catch::Approx (regularShaderPosition[component]));
+    }
+    CHECK (glm::length (glm::vec3 (matrices.model * localCorner) - glm::vec3 (world * localCorner)) < 1e-6f);
 }
 
 TEST_CASE ("Wallpaper Engine fog authoring values map to shader parameters") {
