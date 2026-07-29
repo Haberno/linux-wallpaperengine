@@ -1,4 +1,6 @@
+#include <climits>
 #include <csignal>
+#include <cstddef>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
@@ -17,6 +19,55 @@
 #include <cstring>
 
 WallpaperEngine::Application::WallpaperApplication* app;
+
+#if defined(__GLIBC__) && __GLIBC_PREREQ(2, 33)
+namespace {
+constexpr int toLegacyMallinfoValue (const std::size_t value) {
+    return value > static_cast<std::size_t> (INT_MAX) ? INT_MAX : static_cast<int> (value);
+}
+
+constexpr int toLegacyMallinfoRemainder (const std::size_t value, const int used) {
+    const auto remaining = static_cast<std::size_t> (INT_MAX - used);
+    return value > remaining ? static_cast<int> (remaining) : static_cast<int> (value);
+}
+
+static_assert (
+    toLegacyMallinfoValue (static_cast<std::size_t> (INT_MAX) - 1)
+	+ toLegacyMallinfoRemainder (1024, toLegacyMallinfoValue (static_cast<std::size_t> (INT_MAX) - 1))
+    == INT_MAX
+);
+}
+
+/**
+ * Official CEF Linux binaries use an old sysroot and therefore call glibc's
+ * deprecated 32-bit mallinfo(), even on systems where mallinfo2() is
+ * available. Chromium adds arena and hblkhd as signed ints before converting
+ * the result to size_t. A normal process whose combined heap mappings exceed
+ * INT_MAX consequently reaches Chromium's deliberate overflow trap.
+ *
+ * Export a coherent legacy snapshot from the executable. The combined
+ * arena/hblkhd value is saturated as a pair so Chromium's signed addition
+ * remains representable. The engine's control-socket memstats continue to
+ * call mallinfo2() directly and retain their full 64-bit values.
+ */
+extern "C" struct mallinfo mallinfo () noexcept {
+    const auto wide = mallinfo2 ();
+    struct mallinfo legacy {};
+
+    legacy.arena = toLegacyMallinfoValue (wide.arena);
+    legacy.ordblks = toLegacyMallinfoValue (wide.ordblks);
+    legacy.smblks = toLegacyMallinfoValue (wide.smblks);
+    legacy.hblks = toLegacyMallinfoValue (wide.hblks);
+    legacy.hblkhd = toLegacyMallinfoRemainder (wide.hblkhd, legacy.arena);
+    legacy.usmblks = toLegacyMallinfoValue (wide.usmblks);
+    legacy.fsmblks = toLegacyMallinfoValue (wide.fsmblks);
+    legacy.uordblks = toLegacyMallinfoValue (wide.uordblks);
+    legacy.fordblks = toLegacyMallinfoValue (wide.fordblks);
+    legacy.keepcost = toLegacyMallinfoValue (wide.keepcost);
+
+    return legacy;
+}
+#endif
 
 void signalhandler (const int sig) {
     if (app == nullptr) {
