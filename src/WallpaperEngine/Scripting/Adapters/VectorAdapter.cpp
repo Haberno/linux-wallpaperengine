@@ -558,8 +558,9 @@ JSValue vector_subtract (JSContext* ctx, JSValueConst this_val, int argc, JSValu
 
     VEC_MAGIC_CHECK_EXCEPTION (newContainer, components);
 
+    // a.subtract(b) is a - b, not b - a
     newContainer->value.update (
-	*operand - vector_get<components> (container->value),
+	vector_get<components> (container->value) - *operand,
 	DynamicValue::UpdateSource::Initialization
     );
 
@@ -623,8 +624,9 @@ template <int components> JSValue vector_divide (JSContext* ctx, JSValueConst th
 
     VEC_MAGIC_CHECK_EXCEPTION (newContainer, components);
 
+    // a.divide(b) is a / b, not b / a -- scripts normalize with `v.divide(v.length())`
     newContainer->value.update (
-	*operand / vector_get<components> (container->value),
+	vector_get<components> (container->value) / *operand,
 	DynamicValue::UpdateSource::Initialization
     );
 
@@ -688,7 +690,8 @@ template <int components> JSValue vector_cross (JSContext* ctx, JSValueConst thi
     VEC_MAGIC_CHECK_EXCEPTION (newContainer, components);
 
     newContainer->value.update (
-	glm::cross (*operand, vector_get<components> (container->value)),
+	// a.cross(b) is cross(a, b); the reversed order returns the negated normal
+	glm::cross (vector_get<components> (container->value), *operand),
 	DynamicValue::UpdateSource::Initialization
     );
 
@@ -726,7 +729,8 @@ template <int components> JSValue vector_mix (JSContext* ctx, JSValueConst this_
     VEC_MAGIC_CHECK_EXCEPTION (newContainer, components);
 
     newContainer->value.update (
-	glm::mix (*operand, vector_get<components> (container->value), amount),
+	// a.mix(b, t) interpolates from a toward b; the reversed order interpolates at 1 - t
+	glm::mix (vector_get<components> (container->value), *operand, amount),
 	DynamicValue::UpdateSource::Initialization
     );
 

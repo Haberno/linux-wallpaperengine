@@ -39,8 +39,23 @@ float CameraPathChannel::evaluate (const float time, const float fallback) const
 	    return next.value;
 	}
 
+	const float amount = (time - previous.time) / span;
+	if (this->interpolation == CameraPathInterpolation::LegacyHermite) {
+	    // The legacy runtime gives both ends of each segment the same tangent:
+	    // half of that segment's value delta. This is not linear except at the
+	    // midpoint, and it is independent of the neighboring segments.
+	    const float amountSquared = amount * amount;
+	    const float amountCubed = amountSquared * amount;
+	    const float tangent = (next.value - previous.value) * 0.5f;
+	    const float previousWeight = 2.0f * amountCubed - 3.0f * amountSquared + 1.0f;
+	    const float previousTangentWeight = amountCubed - 2.0f * amountSquared + amount;
+	    const float nextWeight = -2.0f * amountCubed + 3.0f * amountSquared;
+	    const float nextTangentWeight = amountCubed - amountSquared;
+	    return previousWeight * previous.value + previousTangentWeight * tangent + nextWeight * next.value
+		+ nextTangentWeight * tangent;
+	}
+
 	if (!previous.outgoing.enabled || !next.incoming.enabled) {
-	    const float amount = (time - previous.time) / span;
 	    return glm::mix (previous.value, next.value, amount);
 	}
 

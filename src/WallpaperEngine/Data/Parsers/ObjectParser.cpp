@@ -29,6 +29,9 @@ ObjectUniquePtr ObjectParser::parse (const JSON& it, const Project& project) {
     const auto lightIt = it.find ("light");
     // use shape to refer to VolumeLight
     const auto shapeIt = it.find ("shape");
+    // the runtime camera of a 3D scene is an object too, but WallpaperParser consumes it
+    // (origin/angles/fov/zoom plus its path/queuemode) before the object list is built
+    const auto cameraIt = it.find ("camera");
 
     // Parse base object data
     // Some particle objects have numeric 'name' fields, so handle type mismatches gracefully
@@ -93,6 +96,8 @@ ObjectUniquePtr ObjectParser::parse (const JSON& it, const Project& project) {
 	return parseLight (it, project, std::move (basedata), *lightIt);
     } else if (shapeIt != it.end ()) {
 	sLog.error ("VolumeLight objects are not supported yet");
+    } else if (cameraIt != it.end ()) {
+	// already handled by WallpaperParser, nothing to render for it
     } else {
 	if (!it.optional ("solid", false)) {
 	    // dump the object for now, might want to change later

@@ -42,8 +42,10 @@ globalThis.MediaPlaybackEvent = globalThis.MediaPlaybackEvent || {
   globalThis.WEMath = globalThis.WEMath || {
     smoothStep: smoothStepNum,
     mix: function (a, b, t) { return a * (1 - t) + b * t; },
-    deg2rad: function (v) { return v * DEG2RAD; },
-    rad2deg: function (v) { return v * RAD2DEG; }
+    // Constants, not converters: scripts use them as scalars (`angle * WEMath.rad2deg`,
+    // `vec.multiply(WEMath.deg2rad)`). Matches MathModule's WEMath exports.
+    deg2rad: DEG2RAD,
+    rad2deg: RAD2DEG
   };
 
   globalThis.WEVector = globalThis.WEVector || {
