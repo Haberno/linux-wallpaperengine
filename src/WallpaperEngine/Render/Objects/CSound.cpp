@@ -7,7 +7,11 @@
 using namespace WallpaperEngine::Render::Objects;
 
 CSound::CSound (Wallpapers::CScene& scene, const Sound& sound) : CObject (scene, sound), m_sound (sound) {
-    if (this->getContext ().getApp ().getContext ().settings.audio.enabled) {
+    const auto& audioSettings = this->getContext ().getApp ().getContext ().settings.audio;
+    if (audioSettings.enabled && audioSettings.volume > 0) {
+	// A zero-volume wallpaper can still use live audio-input processing, but its authored
+	// soundtrack must not open decoders. Audio-heavy scenes may list hundreds of candidate
+	// files, and decoding them into an inaudible mix wastes a full CPU core and gigabytes.
 	// Value keys: screens showing the same wallpaper parse their own Project copies, so data
 	// addresses differ — but title/workshop id (wallpaper) and object id/file list (sound)
 	// are identical, collapsing duplicates into one playback candidate per authored sound.
