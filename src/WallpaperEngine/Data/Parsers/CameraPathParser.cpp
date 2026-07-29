@@ -71,42 +71,57 @@ float findDuration (const CameraPath& path) {
     return duration;
 }
 
+void setLegacyInterpolation (CameraPath& path) {
+    for (int channel = 0; channel < 3; channel++) {
+	path.center[channel].interpolation = CameraPathInterpolation::LegacyHermite;
+	path.eye[channel].interpolation = CameraPathInterpolation::LegacyHermite;
+	path.up[channel].interpolation = CameraPathInterpolation::LegacyHermite;
+    }
+    path.zoom.interpolation = CameraPathInterpolation::LegacyHermite;
+}
+
 CameraPath parseLegacyPath (const JSON& data) {
     CameraPath result {
 	.name = data.optional<std::string> ("name", ""),
 	.duration = data.optional ("duration", 0.0f),
     };
+    setLegacyInterpolation (result);
+
     const auto transforms = data.optional ("transforms");
     if (!transforms.has_value () || !transforms->is_array ()) {
 	return result;
     }
 
-    for (const auto& transform : *transforms) {
+    const size_t transformCount = transforms->size ();
+    for (size_t index = 0; index < transformCount; index++) {
+	const auto& transform = (*transforms)[index];
 	if (!transform.is_object ()) {
 	    continue;
 	}
-	const float time = transform.optional ("timestamp", 0.0f);
+	if (transform.optional ("disabled", false)) {
+	    continue;
+	}
+
+	float time = 0.0f;
+	if (const auto timestamp = transform.optional<float> ("timestamp"); timestamp.has_value ()) {
+	    time = *timestamp;
+	} else if (index != 0 && transformCount > 1) {
+	    // Disabled and malformed entries still occupy an index in the official
+	    // timestamp formula because it uses the original JSON array length.
+	    time = static_cast<float> (index) / static_cast<float> (transformCount - 1) * result.duration;
+	}
 	const glm::vec3 center = transform.optional ("center", glm::vec3 (0.0f));
 	const glm::vec3 eye = transform.optional ("eye", glm::vec3 (0.0f));
-	const glm::vec3 up = transform.optional ("up", glm::vec3 (0.0f, 1.0f, 0.0f));
+	const glm::vec3 up = transform.optional ("up", glm::vec3 (0.0f));
+	const float zoom = transform.optional ("zoom", 1.0f);
 	for (int channel = 0; channel < 3; channel++) {
 	    result.center[channel].keyframes.push_back ({ .time = time, .value = center[channel] });
 	    result.eye[channel].keyframes.push_back ({ .time = time, .value = eye[channel] });
 	    result.up[channel].keyframes.push_back ({ .time = time, .value = up[channel] });
 	}
-	if (transform.find ("zoom") != transform.end ()) {
-	    result.zoom.keyframes.push_back ({ .time = time, .value = transform.optional ("zoom", 1.0f) });
-	}
+	result.zoom.keyframes.push_back ({ .time = time, .value = zoom });
     }
 
-    for (int channel = 0; channel < 3; channel++) {
-	std::ranges::sort (result.center[channel].keyframes, {}, &CameraPathKeyframe::time);
-	std::ranges::sort (result.eye[channel].keyframes, {}, &CameraPathKeyframe::time);
-	std::ranges::sort (result.up[channel].keyframes, {}, &CameraPathKeyframe::time);
-    }
-    std::ranges::sort (result.zoom.keyframes, {}, &CameraPathKeyframe::time);
-
-    result.duration = findDuration (result);
     return result;
 }
 
@@ -148,10 +163,26 @@ std::vector<CameraPath> CameraPathParser::parse (const WallpaperEngine::Data::JS
     }
 
     for (const auto& path : *paths) {
-	if (!path.is_object () || !path.optional ("visible", true)) {
+	if (!path.is_object ()) {
 	    continue;
 	}
-	CameraPath parsed = path.find ("transforms") != path.end () ? parseLegacyPath (path) : parseCurvePath (path);
+
+	if (path.find ("transforms") != path.end ()) {
+	    const auto transforms = path.optional ("transforms");
+	    if (!transforms.has_value () || !transforms->is_array () || transforms->empty ()
+		|| path.optional ("disabled", false)) {
+		continue;
+	    }
+	    // Legacy paths use "disabled"; their editor-only "visible" state is not
+	    // consulted by the runtime loader.
+	    result.push_back (parseLegacyPath (path));
+	    continue;
+	}
+
+	if (!path.optional ("visible", true)) {
+	    continue;
+	}
+	CameraPath parsed = parseCurvePath (path);
 	if (parsed.duration > 0.0f) {
 	    result.push_back (std::move (parsed));
 	}

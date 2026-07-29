@@ -7,6 +7,7 @@
 #include "WallpaperEngine/Render/Camera.h"
 #include "WallpaperEngine/Render/Wallpapers/CScene.h"
 
+#include <cmath>
 #include <cstdlib>
 
 using namespace WallpaperEngine::Scripting;
@@ -195,8 +196,11 @@ JSValue scene_set_value (JSContext* ctx, JSValueConst this_val, int argc, JSValu
     return JS_ThrowTypeError (ctx, "Cannot assign to read-only property");
 }
 
-static JSValue make_script_vec3 (JSContext* ctx, const glm::vec3& value) {
-    JSValue result = JS_NewObject (ctx);
+// Instantiate a real engine Vec3 rather than a bare {x,y,z} bag: stock camera controllers chain
+// vector math straight off getCameraTransforms() (`p2.subtract(p1).divide(len)`), so a plain
+// object throws "not a function" on the first tick and kills the whole script.
+static JSValue make_script_vec3 (JSContext* ctx, ScriptEngine& engine, const glm::vec3& value) {
+    JSValue result = engine.getAdapters ().vec3->instantiate ();
     JS_SetPropertyStr (ctx, result, "x", JS_NewFloat64 (ctx, value.x));
     JS_SetPropertyStr (ctx, result, "y", JS_NewFloat64 (ctx, value.y));
     JS_SetPropertyStr (ctx, result, "z", JS_NewFloat64 (ctx, value.z));
@@ -207,15 +211,92 @@ JSValue scene_get_camera_transforms (JSContext* ctx, JSValueConst this_val, int 
     auto* container = get_opaque (this_val);
     const auto& camera = container->getScene ().getCamera ();
 
+    auto& engine = container->getEngine ();
     JSValue result = JS_NewObject (ctx);
-    JS_SetPropertyStr (ctx, result, "eye", make_script_vec3 (ctx, camera.getEye ()));
-    JS_SetPropertyStr (ctx, result, "center", make_script_vec3 (ctx, camera.getCenter ()));
-    JS_SetPropertyStr (ctx, result, "up", make_script_vec3 (ctx, camera.getUp ()));
+    JS_SetPropertyStr (ctx, result, "eye", make_script_vec3 (ctx, engine, camera.getEye ()));
+    JS_SetPropertyStr (ctx, result, "center", make_script_vec3 (ctx, engine, camera.getCenter ()));
+    JS_SetPropertyStr (ctx, result, "up", make_script_vec3 (ctx, engine, camera.getUp ()));
     JS_SetPropertyStr (ctx, result, "fov", JS_NewFloat64 (ctx, camera.getFov ()));
     return result;
 }
 
+static bool read_script_vec3 (JSContext* ctx, JSValueConst value, glm::vec3& result) {
+    if (!JS_IsObject (value)) {
+	return false;
+    }
+
+    JSValue fields[] = {
+	JS_GetPropertyStr (ctx, value, "x"),
+	JS_GetPropertyStr (ctx, value, "y"),
+	JS_GetPropertyStr (ctx, value, "z"),
+    };
+    const bool valid = JS_IsNumber (fields[0]) && JS_IsNumber (fields[1]) && JS_IsNumber (fields[2]);
+    double components[] = {0.0, 0.0, 0.0};
+    if (valid) {
+	JS_ToFloat64 (ctx, &components[0], fields[0]);
+	JS_ToFloat64 (ctx, &components[1], fields[1]);
+	JS_ToFloat64 (ctx, &components[2], fields[2]);
+    }
+    for (const auto& field : fields) {
+	JS_FreeValue (ctx, field);
+    }
+
+    result = glm::vec3 (components[0], components[1], components[2]);
+    return valid;
+}
+
+// thisScene.setCameraTransforms({eye, center, up, fov}) -> hands the camera to the script for
+// this frame. This is how stock 3D scenes implement mouse-drag orbiting: a controller layer
+// reads input.cursorScreenPosition/cursorLeftDown, integrates it, and pushes the result here.
+// Fields are optional; anything omitted keeps the value getCameraTransforms would have returned.
 JSValue scene_set_camera_transforms (JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    if (argc < 1 || !JS_IsObject (argv[0])) {
+	return JS_ThrowTypeError (ctx, "setCameraTransforms() expects a transform object");
+    }
+
+    auto* container = get_opaque (this_val);
+    auto& scene = container->getScene ();
+    const auto& camera = scene.getCamera ();
+
+    CameraTransform transform = {
+	.center = camera.getCenter (),
+	.eye = camera.getEye (),
+	.up = camera.getUp (),
+	.fov = camera.getFov (),
+	.zoom = camera.getZoom (),
+    };
+
+    const auto readInto = [ctx, &argv] (const char* name, glm::vec3& target) {
+	JSValue value = JS_GetPropertyStr (ctx, argv[0], name);
+	read_script_vec3 (ctx, value, target);
+	JS_FreeValue (ctx, value);
+    };
+    readInto ("eye", transform.eye);
+    readInto ("center", transform.center);
+    readInto ("up", transform.up);
+
+    JSValue fov = JS_GetPropertyStr (ctx, argv[0], "fov");
+    if (JS_IsNumber (fov)) {
+	double value = 0.0;
+	JS_ToFloat64 (ctx, &value, fov);
+	transform.fov = static_cast<float> (value);
+    }
+    JS_FreeValue (ctx, fov);
+
+    // Drop a pose that is not finite instead of latching it. Controllers integrate from whatever
+    // getCameraTransforms() hands back, so a single inf/NaN frame — these scripts divide by a vector
+    // length that is zero until the scene settles — would otherwise feed itself forever. Ignoring
+    // the call leaves the last good pose in place, which is what the script reads next tick.
+    const auto finite = [] (const glm::vec3& value) {
+	return std::isfinite (value.x) && std::isfinite (value.y) && std::isfinite (value.z);
+    };
+
+    if (!finite (transform.eye) || !finite (transform.center) || !finite (transform.up)
+	|| !std::isfinite (transform.fov)) {
+	return JS_UNDEFINED;
+    }
+
+    scene.setScriptCameraTransform (transform);
     return JS_UNDEFINED;
 }
 
