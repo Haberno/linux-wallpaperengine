@@ -30,6 +30,11 @@ struct OpaqueScriptableObjectAdapter {
     WallpaperEngine::Scripting::ScriptableObject& object;
 };
 
+static void scriptableobject_finalizer (JSRuntime* runtime, JSValueConst value) {
+    JSClassID classId = 0;
+    delete static_cast<OpaqueScriptableObjectAdapter*> (JS_GetAnyOpaque (value, &classId));
+}
+
 enum AnimationCommand {
     AnimationCommand_Play,
     AnimationCommand_Pause,
@@ -836,6 +841,7 @@ ScriptableObjectAdapter::ScriptableObjectAdapter (ScriptEngine& engine, std::str
     this->registerType (
 	{
 	    .class_name = m_name.c_str (),
+	    .finalizer = scriptableobject_finalizer,
 	    .exotic = &m_exoticMethods,
 	}
     );
