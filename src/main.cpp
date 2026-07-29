@@ -84,12 +84,29 @@ void initLogging () {
     sLog.addError (&logStream);
 }
 
-int main (int argc, char* argv[]) {
+// Chromium rotates the stack guard cookie in every process the zygote forks
+// (--change-stack-guard-on-fork=enable). main's canary is written before the fork under the old
+// cookie, so any exit path in the forked child compares it against the new %fs:0x28 and aborts in
+// __stack_chk_fail, dumping a core per helper teardown. The check is emitted ahead of the exit
+// call, so _exit alone cannot skip it: main must not carry a canary at all. Only main is exempted;
+// every other function keeps the protector.
+#if defined(__has_attribute)
+#if __has_attribute(no_stack_protector)
+#define WPE_NO_STACK_PROTECTOR __attribute__ ((no_stack_protector))
+#endif
+#endif
+#if !defined(WPE_NO_STACK_PROTECTOR)
+#define WPE_NO_STACK_PROTECTOR
+#endif
+
+WPE_NO_STACK_PROTECTOR int main (int argc, char* argv[]) {
     // CEF process bootstrap must be the first operation in every process. Helper processes run to
     // completion here; the browser process returns -1 and continues with normal engine startup.
     const int cefExitCode = WallpaperEngine::WebBrowser::WebBrowserContext::executeSubprocess (argc, argv);
     if (cefExitCode >= 0) {
-	return cefExitCode;
+	// Forked helpers must not unwind through main: the engine objects they would run destructors
+	// for belong to the pre-fork parent. CEF has already run its own shutdown by this point.
+	_exit (cefExitCode);
     }
 
 #if defined(__GLIBC__)
