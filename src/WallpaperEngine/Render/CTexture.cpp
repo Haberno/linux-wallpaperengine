@@ -103,9 +103,16 @@ CTexture::CTexture (RenderContext& context, TextureUniquePtr header) :
 		    );
 		}
 	    } else {
+		// Texture payloads are tightly packed, with no per-row padding. GL defaults
+		// GL_UNPACK_ALIGNMENT to 4, so for any format whose row is not a multiple of four
+		// bytes the driver reads a padded row stride and runs off the end of the buffer.
+		// RG88 at an odd width is the case that bites: 1181 * 2 = 2362 bytes per row, which
+		// the driver rounds to 2364, overrunning a 1181x1168 payload by 2336 bytes and
+		// faulting inside libnvidia-eglcore. Setting it once per upload also avoids relying
+		// on the previous texture happening to have left it at 1.
+		glPixelStorei (GL_UNPACK_ALIGNMENT, 1);
+
 		if (this->m_header->format == TextureFormat_R8) {
-		    // red textures are 1-byte-per-pixel, so it's alignment has to be set manually
-		    glPixelStorei (GL_UNPACK_ALIGNMENT, 1);
 		    textureFormat = GL_RED;
 		} else if (this->m_header->format == TextureFormat_RG88) {
 		    textureFormat = GL_RG;
