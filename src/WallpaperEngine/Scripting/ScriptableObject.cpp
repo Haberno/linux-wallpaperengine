@@ -8,6 +8,14 @@
 using namespace WallpaperEngine::Render;
 using namespace WallpaperEngine::Scripting;
 
+ScriptableObject::~ScriptableObject () {
+    // registerProperty queued a script per property, each holding this object by reference and by
+    // raw pointer. CScene::dispatchObjectType deletes objects whose setup() throws, and
+    // CScene::destroyObjects deletes every object while the engine is still alive, so both paths
+    // would otherwise leave the engine calling hooks on freed memory.
+    this->getScene ().getScriptEngine ().unregisterScriptable (this);
+}
+
 ScriptableObject::ScriptableObject (Wallpapers::CScene& scene, const Object& object) : CObject (scene, object) {
     // register common dynamic values
     this->registerProperty ("origin", *object.origin->value);

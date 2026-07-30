@@ -15,7 +15,8 @@ public:
     };
 
     ScriptableObject (Wallpapers::CScene& scene, const Object& object);
-    virtual ~ScriptableObject () = default;
+    /** Drops this object's queued scripts, which hold a reference to it. */
+    ~ScriptableObject () override;
 
     DynamicValue& getProperty (const std::string& name);
 

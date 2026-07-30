@@ -96,6 +96,16 @@ public:
     void initializeQueuedScripts ();
 
     /**
+     * Drop every queued script bound to a scriptable object that is going away.
+     *
+     * queueScript stores a raw ScriptableObject* and a DynamicValue& taken from the object, and
+     * hands QuickJS a wrapper holding the same reference. Objects register in their constructor
+     * but can still be destroyed afterwards — CScene::dispatchObjectType deletes anything whose
+     * setup() throws — so without this the engine keeps running scripts against freed memory.
+     */
+    void unregisterScriptable (const ScriptableObject* object);
+
+    /**
      * Runs a frame tick in the javascript engine. Dispatches any pending events,
      * timeouts, intervals AND calls any update() functions.
      */
