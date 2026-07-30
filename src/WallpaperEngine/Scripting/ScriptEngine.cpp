@@ -834,6 +834,29 @@ void ScriptEngine::initializeModule (const std::string& key, LoadedModule& loade
     this->callLifecycleHook (key, loaded, "update");
 }
 
+void ScriptEngine::unregisterScriptable (const ScriptableObject* object) {
+    if (object == nullptr) {
+	return;
+    }
+
+    for (auto it = this->m_scriptModules.begin (); it != this->m_scriptModules.end ();) {
+	if (it->second.object != object) {
+	    ++it;
+	    continue;
+	}
+
+	// A hook that is running right now can only be running against this object if the object is
+	// being destroyed from inside its own script, which the engine never does; clear the pointer
+	// anyway so a later getRunningModule() cannot hand out the entry that is about to be erased.
+	if (this->m_runningModule == &it->second) {
+	    this->m_runningModule = nullptr;
+	}
+
+	JS_FreeValue (this->m_context, it->second.module);
+	it = this->m_scriptModules.erase (it);
+    }
+}
+
 void ScriptEngine::initializeQueuedScripts () {
     this->m_sceneLayersReady = true;
 
