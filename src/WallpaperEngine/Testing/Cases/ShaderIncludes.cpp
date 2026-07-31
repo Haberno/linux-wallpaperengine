@@ -69,6 +69,8 @@ TEST_CASE (
     REQUIRE (includedHelper != std::string::npos);
     CHECK (define < authoredHelper);
     CHECK (nestedDefine < authoredHelper);
+    CHECK (define < includedHelper);
+    CHECK (nestedDefine < includedHelper);
     CHECK (uniform < includedHelper);
 
     const auto translated = GLSLContext::get ().toGlsl (
