@@ -541,6 +541,12 @@ void CPass::render () {
     // older shaders that consume g_UserAlpha directly.
     this->m_effectiveColor4 = this->m_renderable.getColor4 ();
     this->m_effectiveColor4.a *= this->m_renderable.getUserAlpha ();
+    // Feedback simulations such as Wallpaper Engine's cursor-ripple effect multiply both
+    // force injection and propagation by g_Frametime. Leaving the native global unbound
+    // gives GLSL's zero default and freezes the simulation completely. Use CScene's
+    // per-output delta so a slower monitor receives all elapsed time instead of only the
+    // most recent application-loop interval.
+    this->m_frameTime = this->m_renderable.getScene ().getDeltaTime ();
     this->setupRenderUniforms ();
     this->setupRenderReferenceUniforms ();
     this->setupRenderAttributes ();
@@ -1171,6 +1177,7 @@ void CPass::setupUniforms () {
     }
     // add some external variables
     this->addUniform ("g_Time", &g_Time);
+    this->addUniform ("g_Frametime", &this->m_frameTime);
     this->addUniform ("g_Daytime", &g_Daytime);
     // add model-view-projection matrix
     this->addUniform ("g_ModelViewProjectionMatrixInverse", &this->m_modelViewProjectionMatrixInverse);
