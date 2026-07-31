@@ -447,6 +447,8 @@ set(COMMON_SOURCES
     src/WallpaperEngine/Render/Objects/CRenderable.h
     src/WallpaperEngine/Render/Objects/CImage.h
     src/WallpaperEngine/Render/Objects/CImage.cpp
+    src/WallpaperEngine/Render/Objects/PuppetClippingPlan.h
+    src/WallpaperEngine/Render/Objects/PuppetClippingPlan.cpp
     src/WallpaperEngine/Render/Objects/CSound.h
     src/WallpaperEngine/Render/Objects/CSound.cpp
     src/WallpaperEngine/Render/Objects/CParticle.h
@@ -600,6 +602,7 @@ if(BUILD_TESTING)
         src/WallpaperEngine/Testing/Cases/TextureUpload.cpp
         src/WallpaperEngine/Testing/Cases/TextureDecode.cpp
         src/WallpaperEngine/Testing/Cases/MdlParser.cpp
+        src/WallpaperEngine/Testing/Cases/PuppetClippingPlan.cpp
         src/WallpaperEngine/Testing/Cases/MdlAnimation.cpp
         src/WallpaperEngine/Testing/Cases/ModelPassOrder.cpp
         src/WallpaperEngine/Testing/Cases/AudioSpectrum.cpp

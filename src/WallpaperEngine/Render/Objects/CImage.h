@@ -4,6 +4,7 @@
 #include "WallpaperEngine/Data/Model/MdlAnimation.h"
 #include "WallpaperEngine/Render/CObject.h"
 #include "WallpaperEngine/Render/Objects/Effects/CPass.h"
+#include "WallpaperEngine/Render/Objects/PuppetClippingPlan.h"
 #include "WallpaperEngine/Render/Wallpapers/CScene.h"
 
 #include "WallpaperEngine/Render/Shaders/Shader.h"
@@ -14,6 +15,7 @@
 #include <array>
 #include <glm/vec3.hpp>
 #include <map>
+#include <memory>
 #include <optional>
 #include <string>
 #include <unordered_map>
@@ -123,22 +125,24 @@ private:
 	float visibilityWeight = 0.0f;
     };
 
-    /** Overlay vertex glued to a body triangle so it follows the same deformation. */
-    struct PuppetOverlayBinding {
-	std::array<GLushort, 3> vertices = {};
-	glm::vec3 weights = glm::vec3 (0.0f);
-    };
-
     bool loadPuppetMesh (const glm::vec2& size);
-    void
-    loadPuppetOverlay (const std::vector<char>& data, const std::vector<GLushort>& bodyIndices, const glm::vec2& size);
-    void bindPuppetOverlayToBody (const std::vector<GLushort>& bodyIndices);
-    void setupPuppetOverlayPass ();
-    void updatePuppetOverlayBuffer (const glm::vec2& size);
+    void loadPuppetOverlay (const WallpaperEngine::Data::Model::MdlMesh& mesh, const glm::vec2& size);
+    void setupPuppetAlbedoPasses ();
+    void renderPuppetAlbedo ();
     void selectPuppetAnimations (float sceneTime);
     void updatePuppetPositionBuffer (const glm::vec2& size);
     [[nodiscard]] std::optional<ResolvedTransform> puppetAttachmentTransform (const std::string& name) const;
     void setupPuppetGeometryCallback (Effects::CPass* pass, bool samplesSourceTexture) const;
+    void setupPuppetRangeGeometryCallback (
+	Effects::CPass* pass, bool samplesSourceTexture,
+	const std::vector<WallpaperEngine::Data::Model::MdlDrawRange>& ranges
+    ) const;
+    bool setupPuppetClippingPasses (
+	Effects::CPass& finalPass, const std::shared_ptr<const TextureProvider>& input,
+	const std::shared_ptr<const CFBO>& destination, const glm::mat4* projection,
+	const glm::mat4* inverseProjection, bool samplesSourceTexture
+    );
+    void renderPuppetClipping ();
     ResolvedTransform updateGeometryBuffers ();
     [[nodiscard]] glm::vec2 resolveGeometrySize (float sceneWidth, float sceneHeight, glm::vec3& origin) const;
     void updateScenePosition (
@@ -175,23 +179,33 @@ private:
     std::unordered_map<int, PuppetLayerPlayback> m_puppetLayerPlayback = {};
 
     /**
-     * Channelmap overlay: a second puppet submesh of static quads drawn over the body with
-     * the puppettexturechannels shader, whose opacity comes from the clip's blend tracks.
-     * This is how authored eye blinks work (Kirby in 3441873795, Sonic in 2915841260).
+     * Channelmap overlay: a second puppet submesh of static quads composited into
+     * _rt_imageLayerAlbedo_<id> before effects and body deformation. This mirrors
+     * Wallpaper Engine's puppettexturechannels path for authored eye blinks.
      */
     GLuint m_puppetOverlayPosition = GL_NONE;
     GLuint m_puppetOverlayTexCoord = GL_NONE;
     GLuint m_puppetOverlayBlendIndices = GL_NONE;
     GLuint m_puppetOverlayIndices = GL_NONE;
     GLsizei m_puppetOverlayIndexCount = 0;
-    size_t m_puppetOverlayPositionBytes = 0;
     std::string m_puppetOverlayMaterial = {};
-    std::vector<GLfloat> m_puppetOverlayRawPositions = {};
-    std::vector<GLfloat> m_puppetOverlayPositions = {};
-    std::vector<PuppetOverlayBinding> m_puppetOverlayBindings = {};
     /** g_BlendMap row zero; the shader indexes it with a_BlendIndices.x. */
     glm::vec4 m_puppetBlendMap = glm::vec4 (0.0f);
+    Effects::CPass* m_puppetAlbedoCopyPass = nullptr;
     Effects::CPass* m_puppetOverlayPass = nullptr;
+    std::shared_ptr<const CFBO> m_puppetAlbedoFBO = nullptr;
+    const ImageEffectPassOverride* m_puppetAlbedoInputOverride = nullptr;
+
+    struct PuppetClippingRenderCommand {
+	bool buildsMask = false;
+	Effects::CPass* pass = nullptr;
+    };
+    std::vector<Effects::CPass*> m_puppetClippingPasses = {};
+    std::vector<PuppetClippingRenderCommand> m_puppetClippingCommands = {};
+    std::vector<std::unique_ptr<TextureMap>> m_puppetClippingBinds = {};
+    std::vector<std::unique_ptr<glm::vec4>> m_puppetClippingRenderVars = {};
+    std::shared_ptr<const CFBO> m_puppetClippingFBO = nullptr;
+    bool m_hasPuppetClipping = false;
 
     glm::mat4 m_modelViewProjectionScreen = {};
     glm::mat4 m_modelViewProjectionPass = {};

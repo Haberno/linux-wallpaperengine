@@ -1,5 +1,6 @@
 #include "MdlParser.h"
 
+#include <cmath>
 #include <cstring>
 
 #include "WallpaperEngine/Assets/AssetLocator.h"
@@ -57,7 +58,21 @@ constexpr uint32_t KNOWN_VERTEX_BITS = 0x0181002f;
  * Derives the vertex layout from the attribute bitmask. Returns a zero stride for masks
  * carrying bits we cannot size, since guessing would desynchronize the whole submesh.
  */
-VertexLayout getVertexLayout (uint32_t tag) {
+VertexLayout getVertexLayout (uint32_t tag, uint32_t version) {
+    // MDLV0013/0014 puppet bodies serialize the compact skinned layout with a
+    // zero tag. Later revisions carry the actual skin/uv bits.
+    if (tag == 0 && version < 16) {
+	return VertexLayout {
+	    .tag = tag,
+	    .strideBytes = 52,
+	    .positionOffset = 0,
+	    .uvOffset = 44,
+	    .skinned = true,
+	    .blendIndicesOffset = 12,
+	    .blendWeightsOffset = 28,
+	};
+    }
+
     if ((tag & ~KNOWN_VERTEX_BITS) != 0) {
 	return {};
     }
@@ -91,6 +106,44 @@ template <typename T> T readValue (const std::vector<char>& data, size_t& offset
     std::memcpy (&value, data.data () + offset, sizeof (T));
     offset += sizeof (T);
     return value;
+}
+
+std::string readString (const std::vector<char>& data, size_t& offset, const std::string& filename) {
+    constexpr size_t maximumAssetPathLength = 4096;
+    const size_t available = data.size () - offset;
+    const size_t searchLength = std::min (available, maximumAssetPathLength + 1);
+    const auto* end = static_cast<const char*> (std::memchr (data.data () + offset, '\0', searchLength));
+
+    if (end == nullptr) {
+	sLog.exception ("Malformed MDLV clipping asset path in ", filename);
+    }
+
+    const size_t length = static_cast<size_t> (end - (data.data () + offset));
+    std::string result (data.data () + offset, length);
+    offset += length + 1;
+    return result;
+}
+
+std::vector<uint32_t> readRangeReferences (
+    const std::vector<char>& data, size_t& offset, const std::string& filename, const size_t rangeCount,
+    const char* label
+) {
+    const auto count = readValue<uint32_t> (data, offset, filename);
+    if (count > (data.size () - offset) / sizeof (uint32_t)) {
+	sLog.exception ("Invalid MDLV clipping ", label, " count in ", filename);
+    }
+
+    std::vector<uint32_t> result;
+    result.reserve (count);
+    for (uint32_t index = 0; index < count; index++) {
+	const auto reference = readValue<uint32_t> (data, offset, filename);
+	if (reference >= rangeCount) {
+	    sLog.exception ("MDLV clipping ", label, " range out of bounds in ", filename);
+	}
+	result.push_back (reference);
+    }
+
+    return result;
 }
 } // namespace
 
@@ -132,7 +185,7 @@ MdlMesh MdlParser::parse (const std::vector<char>& data, const std::string& file
 	sLog.exception ("Unsupported MDLV submesh count ", submeshCount, " in ", filename);
     }
 
-    MdlMesh mesh {};
+    MdlMesh mesh {.version = version};
 
     for (uint32_t submeshIndex = 0; submeshIndex < submeshCount; submeshIndex++) {
 	MdlSubmesh submesh {};
@@ -194,7 +247,7 @@ MdlMesh MdlParser::parse (const std::vector<char>& data, const std::string& file
 	// revisions before 16 describe every submesh with the tag from the file header
 	const auto tag = version >= 16 ? readValue<uint32_t> (data, offset, filename) : headerVertexTag;
 	const auto vertexBytes = readValue<uint32_t> (data, offset, filename);
-	const auto layout = getVertexLayout (tag);
+	const auto layout = getVertexLayout (tag, version);
 
 	if (layout.strideBytes == 0 || vertexBytes % layout.strideBytes != 0) {
 	    sLog.exception ("Unsupported MDLV vertex layout (tag ", tag, ") in ", filename);
@@ -203,6 +256,8 @@ MdlMesh MdlParser::parse (const std::vector<char>& data, const std::string& file
 	submesh.vertexTag = tag;
 	submesh.strideBytes = layout.strideBytes;
 	submesh.blendIndicesOffset = layout.blendIndicesOffset;
+	submesh.blendWeightsOffset = layout.blendWeightsOffset;
+	submesh.uvOffset = layout.uvOffset;
 	submesh.texCoordVec4Offset = layout.texCoordVec4Offset;
 
 	// the mesh-level layout describes the first submesh; consumers that draw the whole
@@ -257,6 +312,89 @@ MdlMesh MdlParser::parse (const std::vector<char>& data, const std::string& file
 	}
 
 	mesh.submeshes.push_back (std::move (submesh));
+    }
+
+    // Revisions 21 and newer append two independently optional blocks after the
+    // final submesh and before the MDLS animation section.
+    if (version >= 21) {
+	const bool hasAuxiliaryPositions = readValue<uint8_t> (data, offset, filename) != 0;
+	if (hasAuxiliaryPositions) {
+	    mesh.auxiliaryHeader = readValue<uint32_t> (data, offset, filename);
+	    const auto byteCount = readValue<uint32_t> (data, offset, filename);
+	    constexpr uint32_t vec3Bytes = sizeof (float) * 3;
+
+	    if (byteCount % vec3Bytes != 0 || byteCount > data.size () - offset) {
+		sLog.exception ("Invalid MDLV auxiliary position block in ", filename);
+	    }
+
+	    mesh.auxiliaryPositions.reserve (byteCount / vec3Bytes);
+	    const size_t end = offset + byteCount;
+	    while (offset < end) {
+		glm::vec3 position;
+		position.x = readValue<float> (data, offset, filename);
+		position.y = readValue<float> (data, offset, filename);
+		position.z = readValue<float> (data, offset, filename);
+		if (!std::isfinite (position.x) || !std::isfinite (position.y) || !std::isfinite (position.z)) {
+		    sLog.exception ("MDLV auxiliary position contains a non-finite value in ", filename);
+		}
+		mesh.auxiliaryPositions.push_back (position);
+	    }
+	}
+
+	const bool hasDrawRanges = readValue<uint8_t> (data, offset, filename) != 0;
+	if (hasDrawRanges) {
+	    const auto byteCount = readValue<uint32_t> (data, offset, filename);
+	    constexpr uint32_t recordBytes = sizeof (uint32_t) * 4;
+
+	    if (byteCount % recordBytes != 0 || byteCount > data.size () - offset) {
+		sLog.exception ("Invalid MDLV draw range block in ", filename);
+	    }
+
+	    mesh.drawRanges.reserve (byteCount / recordBytes);
+	    const size_t end = offset + byteCount;
+	    while (offset < end) {
+		MdlDrawRange range {
+		    .partId = readValue<uint32_t> (data, offset, filename),
+		    .submeshIndex = readValue<uint32_t> (data, offset, filename),
+		    .firstIndex = readValue<uint32_t> (data, offset, filename),
+		    .indexCount = readValue<uint32_t> (data, offset, filename),
+		};
+
+		if (range.submeshIndex >= mesh.submeshes.size ()) {
+		    sLog.exception ("MDLV draw range references an invalid submesh in ", filename);
+		}
+		const size_t submeshIndexCount = mesh.submeshes[range.submeshIndex].indices.size ();
+		if (range.firstIndex > submeshIndexCount || range.indexCount > submeshIndexCount - range.firstIndex) {
+		    sLog.exception ("MDLV draw range exceeds its submesh index buffer in ", filename);
+		}
+
+		mesh.drawRanges.push_back (range);
+	    }
+	}
+    }
+
+    if (version >= 23) {
+	const auto descriptorCount = readValue<uint32_t> (data, offset, filename);
+	// Every descriptor needs at least its id, an empty string terminator, flags,
+	// and two zero list counts. This also bounds reserve() on malformed input.
+	constexpr size_t minimumDescriptorBytes
+	    = sizeof (uint64_t) + sizeof (char) + sizeof (uint32_t) * 3;
+	if (descriptorCount > (data.size () - offset) / minimumDescriptorBytes) {
+	    sLog.exception ("Invalid MDLV clipping descriptor count in ", filename);
+	}
+
+	mesh.clippingDescriptors.reserve (descriptorCount);
+	for (uint32_t descriptorIndex = 0; descriptorIndex < descriptorCount; descriptorIndex++) {
+	    MdlClippingDescriptor descriptor;
+	    descriptor.opaqueId = readValue<uint64_t> (data, offset, filename);
+	    descriptor.maskAsset = readString (data, offset, filename);
+	    descriptor.flags = readValue<uint32_t> (data, offset, filename);
+	    descriptor.targets
+		= readRangeReferences (data, offset, filename, mesh.drawRanges.size (), "target");
+	    descriptor.sources
+		= readRangeReferences (data, offset, filename, mesh.drawRanges.size (), "source");
+	    mesh.clippingDescriptors.push_back (std::move (descriptor));
+	}
     }
 
     return mesh;
