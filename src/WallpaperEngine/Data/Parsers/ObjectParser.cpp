@@ -313,7 +313,24 @@ std::vector<ImageEffectUniquePtr> ObjectParser::parseEffects (const JSON& it, co
     std::vector<ImageEffectUniquePtr> result = {};
 
     for (const auto& cur : it) {
-	result.push_back (parseEffect (cur, project));
+	if (!cur.is_object ()) {
+	    continue;
+	}
+
+	// Wallpaper Engine treats an effect as an optional part of the layer. Its
+	// loader logs "Failed loading effect" and continues iterating the authored
+	// effect list without appending the failed entry. Keep valid effects on
+	// either side of a missing external workshop dependency.
+	const auto filename = cur.optional<std::string> ("file");
+	if (!filename.has_value ()) {
+	    continue;
+	}
+
+	try {
+	    result.push_back (parseEffect (cur, project));
+	} catch (const std::exception& e) {
+	    sLog.error ("Failed loading effect: ", *filename, " - ", e.what ());
+	}
     }
 
     return result;
@@ -588,6 +605,7 @@ ParticleUniquePtr ObjectParser::parseParticle (const JSON& it, const Project& pr
 		    .width = std::nullopt,
 		    .height = std::nullopt,
 		    .puppet = std::nullopt,
+		    .puppetMesh = std::nullopt,
 		});
 	    } catch (std::runtime_error& e) {
 		sLog.error ("Cannot load particle material: ", materialIt->get<std::string> (), " - ", e.what ());
