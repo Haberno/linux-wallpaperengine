@@ -162,6 +162,11 @@ TextureCache::resolve (const std::string& filename, const AssetLocator& assetLoc
 void TextureCache::store (const std::string& name, std::shared_ptr<const TextureProvider> texture) {
     const size_t bytes = estimateTextureBytes (*texture);
 
+    // A cache-key replacement must not stop a still-rendered scene's video.
+    // Keep a non-owning registry of every provider handed out by the cache and
+    // retire entries only after their final scene reference disappears.
+    this->m_liveTextures.insert_or_assign (texture.get (), texture);
+
     if (const auto it = this->m_textureCache.find (name); it != this->m_textureCache.end ()) {
 	this->m_cacheBytes -= it->second.approximateBytes;
 	it->second = CacheEntry {std::move (texture), ++this->m_useCounter, bytes};
@@ -184,11 +189,25 @@ std::string TextureCache::scopedKey (const std::string& name, const AssetLocator
 }
 
 void TextureCache::updateAll () {
-    // textures only referenced as effect/pass inputs have no CImage driving their
-    // update, so tick every cached texture; update() is a no-op for static textures
-    // and for videos whose usage count is zero
-    for (const auto& entry : this->m_textureCache | std::views::values) {
-	entry.texture->update ();
+    // Multiple Wayland outputs can render during one driver frame. Updating the
+    // shared registry once is enough and avoids asking libmpv to render the same
+    // frame once per output.
+    const uint32_t currentFrame = this->getContext ().getDriver ().getFrameCounter ();
+    if (currentFrame != this->m_lastTextureUpdateFrame) {
+	this->m_lastTextureUpdateFrame = currentFrame;
+
+	// Walk every still-live provider, not only the provider currently occupying
+	// its cache key. Two monitors can load the same project independently; the
+	// second store replaces the first cache entry while the first scene retains
+	// and renders its own video texture instance.
+	for (auto it = this->m_liveTextures.begin (); it != this->m_liveTextures.end ();) {
+	    if (const auto texture = it->second.lock ()) {
+		texture->update ();
+		++it;
+	    } else {
+		it = this->m_liveTextures.erase (it);
+	    }
+	}
     }
 
     // A store performed while the outgoing wallpaper is still crossfading can
