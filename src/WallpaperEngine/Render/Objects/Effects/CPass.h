@@ -254,6 +254,9 @@ private:
     std::shared_ptr<const TextureProvider> m_input = nullptr;
     std::shared_ptr<const TextureProvider> m_previousInput = nullptr;
     glm::vec4 m_texture0Resolution = {};
+    /** Wallpaper Engine's g_Frametime global. Refresh this from the scene-local clock before
+     * every draw so feedback effects advance correctly on independently paced outputs. */
+    float m_frameTime = 0.0f;
     /**
      * Effective object tint uploaded to shaders that use the newer g_Color4 convention.
      * Those shaders fold opacity into the tint alpha instead of declaring g_UserAlpha,
