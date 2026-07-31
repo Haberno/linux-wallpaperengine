@@ -32,6 +32,12 @@ WallpaperEngine::Render::Objects::convertParticleRotationForRender (const glm::v
     return { -rotation.x, rotation.y, -rotation.z };
 }
 
+float WallpaperEngine::Render::Objects::calculateRopeTrailVisualValue (
+    const float currentValue, const float trailPosition, const bool fadeAlongTrail
+) {
+    return currentValue * (fadeAlongTrail ? std::clamp (trailPosition, 0.0f, 1.0f) : 1.0f);
+}
+
 CParticle::CParticle (Wallpapers::CScene& scene, const Particle& particle) :
     CObject (scene, particle), CRenderable (scene, particle, *particle.material->material),
     ScriptableObject (scene, particle), m_particle (particle) {
@@ -412,21 +418,11 @@ void CParticle::updateRopeTrailHistory (float dt) {
     const int firstSample = std::max (0, sampleCount - maxSegments);
 
     auto snapshot = [] (const ParticleInstance& particle) {
-	return ParticleInstance::TrailPoint {
-	    .position = particle.position,
-	    .color = particle.color,
-	    .alpha = particle.alpha,
-	    .size = particle.size,
-	};
+	return ParticleInstance::TrailPoint { .position = particle.position };
     };
 
     auto interpolate = [] (const ParticleInstance::TrailPoint& from, const ParticleInstance::TrailPoint& to, float t) {
-	return ParticleInstance::TrailPoint {
-	    .position = glm::mix (from.position, to.position, t),
-	    .color = glm::mix (from.color, to.color, t),
-	    .alpha = glm::mix (from.alpha, to.alpha, t),
-	    .size = glm::mix (from.size, to.size, t),
-	};
+	return ParticleInstance::TrailPoint { .position = glm::mix (from.position, to.position, t) };
     };
 
     for (uint32_t i = 0; i < m_particleCount; i++) {
@@ -2340,8 +2336,8 @@ void CParticle::renderRopeTrail () {
 	points.clear ();
 
 	auto appendPoint = [&] (const ParticleInstance::TrailPoint& point) {
-	    if (!std::isfinite (point.position.x) || !std::isfinite (point.position.y)
-		|| !std::isfinite (point.position.z) || !std::isfinite (point.size)) {
+	if (!std::isfinite (point.position.x) || !std::isfinite (point.position.y)
+	    || !std::isfinite (point.position.z)) {
 		return;
 	    }
 
@@ -2363,9 +2359,6 @@ void CParticle::renderRopeTrail () {
 	appendPoint (
 	    ParticleInstance::TrailPoint {
 		.position = particle.position,
-		.color = particle.color,
-		.alpha = particle.alpha,
-		.size = particle.size,
 	    }
 	);
 
@@ -2390,27 +2383,27 @@ void CParticle::renderRopeTrail () {
 		const uint32_t index = segment * subdivision + step;
 		splinePositions[index]
 		    = catmullRom (point0.position, point1.position, point2.position, point3.position, t);
-		splineSizes[index] = glm::mix (point1.size, point2.size, t);
-		splineColors[index]
-		    = glm::mix (glm::vec4 (point1.color, point1.alpha), glm::vec4 (point2.color, point2.alpha), t);
+		// Wallpaper Engine's rope history contains positions only. Visual state
+		// remains attached to the live particle so alpha/size operators fade the
+		// complete trail instead of leaving bright historical samples behind.
+		splineSizes[index] = particle.size;
+		splineColors[index] = glm::vec4 (particle.color, particle.alpha);
 	    }
 	}
 
 	const auto& lastPoint = points.back ();
 	splinePositions.back () = lastPoint.position;
-	splineSizes.back () = lastPoint.size;
-	splineColors.back () = glm::vec4 (lastPoint.color, lastPoint.alpha);
+	splineSizes.back () = particle.size;
+	splineColors.back () = glm::vec4 (particle.color, particle.alpha);
 
 	if (m_ropeFadeAlpha || m_ropeFadeSize) {
 	    const float denominator = static_cast<float> (totalPoints - 1);
 	    for (uint32_t pointIndex = 0; pointIndex < totalPoints; pointIndex++) {
 		const float tailFade = static_cast<float> (pointIndex) / denominator;
-		if (m_ropeFadeAlpha) {
-		    splineColors[pointIndex].a *= tailFade;
-		}
-		if (m_ropeFadeSize) {
-		    splineSizes[pointIndex] *= tailFade;
-		}
+		splineColors[pointIndex].a
+		    = calculateRopeTrailVisualValue (particle.alpha, tailFade, m_ropeFadeAlpha);
+		splineSizes[pointIndex]
+		    = calculateRopeTrailVisualValue (particle.size, tailFade, m_ropeFadeSize);
 	    }
 	}
 

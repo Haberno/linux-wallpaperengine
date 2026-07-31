@@ -9,6 +9,7 @@
 
 using WallpaperEngine::Render::Objects::calculateParticleEmissionRate;
 using WallpaperEngine::Render::Objects::calculateParticleSimulationDelta;
+using WallpaperEngine::Render::Objects::calculateRopeTrailVisualValue;
 using WallpaperEngine::Render::Objects::convertParticleRotationForRender;
 
 TEST_CASE ("particle instance rate scales the complete simulation", "[particle]") {
@@ -26,4 +27,14 @@ TEST_CASE ("particle instance count scales emission independently", "[particle]"
 
 TEST_CASE ("particle rotations cross the Y-down scene boundary", "[particle]") {
     CHECK (convertParticleRotationForRender ({ 1.0f, 2.0f, 3.0f }) == glm::vec3 (-1.0f, 2.0f, -3.0f));
+}
+
+TEST_CASE ("rope trails use the live particle visual state", "[particle]") {
+    CHECK (calculateRopeTrailVisualValue (0.25f, 0.0f, false) == Catch::Approx (0.25f));
+    CHECK (calculateRopeTrailVisualValue (0.25f, 0.5f, false) == Catch::Approx (0.25f));
+    CHECK (calculateRopeTrailVisualValue (0.25f, 1.0f, false) == Catch::Approx (0.25f));
+
+    CHECK (calculateRopeTrailVisualValue (0.25f, 0.0f, true) == Catch::Approx (0.0f));
+    CHECK (calculateRopeTrailVisualValue (0.25f, 0.5f, true) == Catch::Approx (0.125f));
+    CHECK (calculateRopeTrailVisualValue (0.25f, 1.0f, true) == Catch::Approx (0.25f));
 }
