@@ -22,6 +22,10 @@ namespace WallpaperEngine::Render::Objects {
 
 constexpr uint32_t DEFAULT_MAX_PARTICLES = 1000;
 
+[[nodiscard]] float calculateParticleSimulationDelta (float elapsed, float rate);
+[[nodiscard]] float calculateParticleEmissionRate (float emitterRate, float count);
+[[nodiscard]] glm::vec3 convertParticleRotationForRender (const glm::vec3& rotation);
+
 /**
  * Runtime particle instance state
  */
@@ -203,6 +207,7 @@ private:
     std::vector<uint32_t> m_indices;
 
     double m_time { 0.0 };
+    float m_simulationTime { 0.0f };
 
     // CPass-based rendering
     Effects::CPass* m_pass { nullptr };
