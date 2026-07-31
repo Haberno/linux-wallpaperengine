@@ -1320,12 +1320,19 @@ std::string ShaderUnit::applyFragmentTexCoordCompatibility (std::string source) 
     static const std::regex wideTexCoordDecl (R"(\bvarying\s+vec[34]\s+v_TexCoord\s*;)");
     static const std::regex narrowTexCoordDecl (R"(\bvarying\s+vec2\s+v_TexCoord\s*;)");
 
-    if (std::regex_search (source, narrowTexCoordDecl) && this->m_link != nullptr
-	&& std::regex_search (this->m_link->m_preprocessed, wideTexCoordDecl)) {
+    const bool linkedHasWideTexCoord = this->m_link != nullptr
+	&& std::regex_search (this->m_link->m_preprocessed, wideTexCoordDecl);
+    const bool linkedHasNarrowTexCoord = this->m_link != nullptr
+	&& std::regex_search (this->m_link->m_preprocessed, narrowTexCoordDecl);
+
+    if (std::regex_search (source, narrowTexCoordDecl) && linkedHasWideTexCoord && !linkedHasNarrowTexCoord) {
 	// the linked vertex shader outputs a wider v_TexCoord, so glslang widens this input at
 	// link time and every bare (vec2) use of it becomes an implicit vec4 truncation; widen
-	// the declaration ourselves and qualify all uses with .xy. declarations are shielded
-	// first: shaders like genericparticle declare both widths in different #if branches
+	// the declaration ourselves and qualify all uses with .xy. If both units declare vec2
+	// and vec4 variants behind matching combo branches, preserve those branches: widening
+	// the fragment's inactive vec2 declaration makes its active interface disagree with the
+	// vertex shader when the combo selects the narrow path (as in Fragments' generic shader).
+	// Declarations are shielded first so their identifiers are not treated as expression uses.
 	static const std::regex anyTexCoordDecl (R"(\bvarying\s+(vec[234])\s+v_TexCoord\s*;)");
 	static const std::regex bareTexCoordUse (R"(\bv_TexCoord\b(?!\s*\.))");
 	static const std::regex shieldedNarrowDecl (R"(\bvarying\s+vec2\s+V_TEXCOORD_DECL\s*;)");
