@@ -17,6 +17,21 @@ using namespace WallpaperEngine::Render::Objects;
 using namespace WallpaperEngine::Render::Utils;
 using namespace WallpaperEngine::Data::Model;
 
+float WallpaperEngine::Render::Objects::calculateParticleSimulationDelta (const float elapsed, const float rate) {
+    return glm::max (elapsed, 0.0f) * glm::max (rate, 0.0f);
+}
+
+float WallpaperEngine::Render::Objects::calculateParticleEmissionRate (const float emitterRate, const float count) {
+    return glm::max (emitterRate, 0.0f) * glm::max (count, 0.0f);
+}
+
+glm::vec3
+WallpaperEngine::Render::Objects::convertParticleRotationForRender (const glm::vec3& rotation) {
+    // Particle definitions use Wallpaper Engine's Y-down scene space. Reflection across
+    // Y changes the handedness of axial rotation vectors, so X and Z change sign.
+    return { -rotation.x, rotation.y, -rotation.z };
+}
+
 CParticle::CParticle (Wallpapers::CScene& scene, const Particle& particle) :
     CObject (scene, particle), CRenderable (scene, particle, *particle.material->material),
     ScriptableObject (scene, particle), m_particle (particle) {
@@ -66,12 +81,9 @@ CParticle::CParticle (Wallpapers::CScene& scene, const Particle& particle) :
 	}
     }
 
-    // Apply count instance override to particle pool size
-    float countMultiplier = particle.instanceOverride.count->value->getFloat ();
-    uint32_t adjustedMaxCount = static_cast<uint32_t> (particle.maxCount * countMultiplier);
-
-    // Use wallpaper's specified count, or default if maxCount is 0
-    m_maxParticles = (adjustedMaxCount > 0) ? adjustedMaxCount : DEFAULT_MAX_PARTICLES;
+    // maxCount is the authored capacity. The instance count override changes emission,
+    // not the pool size.
+    m_maxParticles = particle.maxCount > 0 ? particle.maxCount : DEFAULT_MAX_PARTICLES;
 
     m_particles.resize (m_maxParticles);
 
@@ -230,7 +242,11 @@ void CParticle::render () {
 	// Cap dt to prevent simulation instability
 	// Also provides more consistent behavior across different FPS
 	dt = std::min (dt, 0.1f);
-	update (dt);
+	dt = calculateParticleSimulationDelta (dt, m_particle.instanceOverride.rate->value->getFloat ());
+	if (dt > 0.0f) {
+	    m_simulationTime += dt;
+	    update (dt);
+	}
     }
 
     // Render particles
@@ -321,7 +337,7 @@ void CParticle::update (float dt) {
 
     // Apply operators to living particles (including alphafade)
     for (auto& op : m_operators) {
-	op (m_particles, m_particleCount, m_controlPoints, static_cast<float> (m_time), dt);
+	op (m_particles, m_particleCount, m_controlPoints, m_simulationTime, dt);
     }
 
     // Update animation frames
@@ -492,7 +508,7 @@ void CParticle::setupEmitters () {
 }
 
 EmitterFunc CParticle::createBoxEmitter (const ParticleEmitter& emitter) {
-    float rate = emitter.rate * m_particle.instanceOverride.rate->value->getFloat ();
+    DynamicValue* countOverride = m_particle.instanceOverride.count->value.get ();
 
     glm::vec3 transformedEmitterOrigin = emitter.origin;
     transformedEmitterOrigin.y = -transformedEmitterOrigin.y;
@@ -512,7 +528,7 @@ EmitterFunc CParticle::createBoxEmitter (const ParticleEmitter& emitter) {
     bool randomPeriodicEmission = (emitter.flags & 4) != 0;
 
     return
-	[this, emitter, transformedEmitterOrigin, controlPointIndex, rate, flippedDirections, limitOnePerFrame,
+	[this, emitter, transformedEmitterOrigin, controlPointIndex, countOverride, flippedDirections, limitOnePerFrame,
 	 randomPeriodicEmission, emissionTimer = 0.0f, delayTimer = emitter.delay, durationTimer = 0.0f,
 	 periodicTimer = 0.0f, periodicDuration = 0.0f, periodicDelay = 0.0f, emitting = false,
 	 instantaneousEmitted = false] (std::vector<ParticleInstance>& particles, uint32_t& count, float dt) mutable {
@@ -571,6 +587,7 @@ EmitterFunc CParticle::createBoxEmitter (const ParticleEmitter& emitter) {
 
 	    // Rate-based emission with optional cap at 1 per frame
 	    if (emitter.rate > 0.0f) {
+		const float rate = calculateParticleEmissionRate (emitter.rate, countOverride->getFloat ());
 		emissionTimer += dt * rate;
 		uint32_t rateEmit = static_cast<uint32_t> (emissionTimer);
 		emissionTimer -= static_cast<float> (rateEmit);
@@ -646,7 +663,7 @@ EmitterFunc CParticle::createBoxEmitter (const ParticleEmitter& emitter) {
 }
 
 EmitterFunc CParticle::createSphereEmitter (const ParticleEmitter& emitter) {
-    float rate = emitter.rate * m_particle.instanceOverride.rate->value->getFloat ();
+    DynamicValue* countOverride = m_particle.instanceOverride.count->value.get ();
     float lifetime = 1.0f * m_particle.instanceOverride.lifetime->value->getFloat ();
 
     // Convert emitter origin from screen space (Y down) to centered space (Y up)
@@ -665,7 +682,7 @@ EmitterFunc CParticle::createSphereEmitter (const ParticleEmitter& emitter) {
 
     bool limitOnePerFrame = (emitter.flags & 2) != 0;
 
-    return [this, emitter, transformedEmitterOrigin, controlPointIndex, rate, lifetime, limitOnePerFrame,
+    return [this, emitter, transformedEmitterOrigin, controlPointIndex, countOverride, lifetime, limitOnePerFrame,
 	    emissionTimer = 0.0f,
 	    remaining
 	    = emitter.instantaneous] (std::vector<ParticleInstance>& particles, uint32_t& count, float dt) mutable {
@@ -674,6 +691,7 @@ EmitterFunc CParticle::createSphereEmitter (const ParticleEmitter& emitter) {
 	}
 
 	// Rate-based emission with optional cap at 1 per frame
+	const float rate = calculateParticleEmissionRate (emitter.rate, countOverride->getFloat ());
 	emissionTimer += dt * rate;
 	uint32_t toEmit = static_cast<uint32_t> (emissionTimer);
 	emissionTimer -= static_cast<float> (toEmit);
@@ -1230,7 +1248,7 @@ OperatorFunc CParticle::createAngularMovementOperator (const AngularMovementOper
 	    }
 
 	    // Update rotation using current angular velocity
-	    p.rotation += p.angularVelocity * dt * speed;
+	    p.rotation += p.angularVelocity * dt;
 
 	    // Apply force (angular acceleration)
 	    p.angularVelocity += force * dt * speed;
@@ -2170,6 +2188,8 @@ void CParticle::renderSprites () {
 	    continue;
 	}
 
+	const glm::vec3 renderRotation = convertParticleRotationForRender (p.rotation);
+
 	// Skip particles with invalid values
 	if (!std::isfinite (p.position.x) || !std::isfinite (p.position.y) || !std::isfinite (p.position.z)
 	    || !std::isfinite (p.size) || p.size <= 0.0f || p.size > 10000.0f) {
@@ -2204,7 +2224,7 @@ void CParticle::renderSprites () {
 	    // a_TexCoordVec4 (vec4: uv.x, uv.y, rotZ, size)
 	    m_vertices[base + 3] = u;
 	    m_vertices[base + 4] = v;
-	    m_vertices[base + 5] = p.rotation.z;
+	    m_vertices[base + 5] = renderRotation.z;
 	    m_vertices[base + 6] = p.size;
 	    // a_Color (vec4: r, g, b, a)
 	    m_vertices[base + 7] = p.color.r;
@@ -2217,8 +2237,8 @@ void CParticle::renderSprites () {
 	    m_vertices[base + 13] = p.velocity.z;
 	    m_vertices[base + 14] = lifetime;
 	    // a_TexCoordC2 (vec2: rotX, rotY)
-	    m_vertices[base + 15] = p.rotation.x;
-	    m_vertices[base + 16] = p.rotation.y;
+	    m_vertices[base + 15] = renderRotation.x;
+	    m_vertices[base + 16] = renderRotation.y;
 	    vertexIndex++;
 	};
 
