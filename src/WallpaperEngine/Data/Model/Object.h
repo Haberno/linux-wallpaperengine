@@ -622,7 +622,7 @@ struct TextData {
     std::string font;
     /** Font size in points, optionally bound to a user setting or script */
     UserSettingUniquePtr pointSize;
-    /** Bounding box size */
+    /** Serialized/editor layer size; native glyph placement is driven by font metrics */
     glm::vec2 size;
     /** Scale (x, y, z) */
     UserSettingUniquePtr scale;
@@ -638,8 +638,8 @@ struct TextData {
     std::string alignment;
     /** Vertical alignment: "top", "center", "bottom" */
     std::string verticalalign;
-    /** Padding inside the bounding box, in pixels. Older scenes author a single number
-     *  (uniform padding); newer editors write an "x y" vector. */
+    /** Padding around the generated text surface, in pixels. Older scenes author a single
+     *  number (uniform padding); newer editors write an "x y" vector. */
     glm::vec2 padding;
     /** Layer brightness multiplier, applied to the text color at draw time */
     UserSettingUniquePtr brightness;

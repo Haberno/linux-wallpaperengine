@@ -15,15 +15,15 @@
 #include "WallpaperEngine/Data/Model/DynamicValue.h"
 #include "WallpaperEngine/Data/Model/Effect.h"
 #include "WallpaperEngine/Data/Model/Material.h"
+#include "WallpaperEngine/Data/Model/Object.h"
+#include "WallpaperEngine/Data/Model/UserSetting.h"
 #include "WallpaperEngine/Data/Parsers/MaterialParser.h"
+#include "WallpaperEngine/Logging/Log.h"
 #include "WallpaperEngine/Render/CFBO.h"
+#include "WallpaperEngine/Render/Camera.h"
 #include "WallpaperEngine/Render/FBOProvider.h"
 #include "WallpaperEngine/Render/Objects/CRenderable.h"
 #include "WallpaperEngine/Render/Objects/Effects/CPass.h"
-#include "WallpaperEngine/Data/Model/Object.h"
-#include "WallpaperEngine/Data/Model/UserSetting.h"
-#include "WallpaperEngine/Logging/Log.h"
-#include "WallpaperEngine/Render/Camera.h"
 #include "WallpaperEngine/Render/Wallpapers/CScene.h"
 #include "WallpaperEngine/Scripting/ScriptEngine.h"
 
@@ -138,6 +138,33 @@ uint32_t WallpaperEngine::Render::Objects::nextUtf8Codepoint (const std::string&
     return code;
 }
 
+glm::vec2 WallpaperEngine::Render::Objects::computeTextAlignmentOffset (
+    const std::string& horizontalAlign, const std::string& verticalAlign, const glm::vec4& glyphBounds,
+    const float ascender, const float descender, const float lineSpacing, const size_t lineCount
+) {
+    const float width = glyphBounds.z - glyphBounds.x;
+    const float boundsCenterY = (glyphBounds.y + glyphBounds.w) * 0.5f;
+    const float followingRows = static_cast<float> (lineCount > 0 ? lineCount - 1 : 0);
+
+    float x = 0.0f;
+    if (horizontalAlign == "left") {
+	x = width * 0.5f;
+    } else if (horizontalAlign == "right") {
+	x = width * -0.5f;
+    }
+
+    float verticalReference;
+    if (verticalAlign == "top") {
+	verticalReference = ascender;
+    } else if (verticalAlign == "bottom") {
+	verticalReference = descender - followingRows * lineSpacing;
+    } else {
+	verticalReference = (ascender - followingRows * lineSpacing) * 0.5f;
+    }
+
+    return { x, boundsCenterY - verticalReference };
+}
+
 namespace WallpaperEngine::Render::Objects {
 /**
  * CPass needs a CRenderable owner for its uniform sources (brightness/alpha/color) and the
@@ -250,32 +277,28 @@ void CText::setup () {
 }
 
 glm::vec2 CText::computeEffectSurface () const {
-    // Half-extents around the box center: whichever reaches farther, the authored box or
-    // the current ink quad (its center is m_quadOffset in box-center space). WE text
-    // overflows its box when limitwidth is off, so the box alone is NOT a safe raster
-    // surface. The margin gives blur-style effects bleed room past the ink.
+    // Half-extents around the layer origin: whichever reaches farther, the serialized
+    // editor size or the current aligned glyph quad. The size is not used for glyph
+    // placement, but retaining it as a lower bound keeps authored effect surfaces stable.
+    // The margin gives blur-style effects bleed room past the ink.
     const glm::vec2 margin = glm::max (m_text.padding, glm::vec2 (32.0f));
-    const float hx = std::max (
-	m_text.size.x * 0.5f, std::abs (m_quadOffset.x) + m_quadSize.x * 0.5f + margin.x
-    );
-    const float hy = std::max (
-	m_text.size.y * 0.5f, std::abs (m_quadOffset.y) + m_quadSize.y * 0.5f + margin.y
-    );
+    const float hx = std::max (m_text.size.x * 0.5f, std::abs (m_quadOffset.x) + m_quadSize.x * 0.5f + margin.x);
+    const float hy = std::max (m_text.size.y * 0.5f, std::abs (m_quadOffset.y) + m_quadSize.y * 0.5f + margin.y);
     return { hx * 2.0f, hy * 2.0f };
 }
 
 void CText::setupEffectChain () {
-    // The chain renders on a fixed surface sized to cover BOTH the authored box and the
-    // current ink (WE text overflows its box when limitwidth is off — MyGO 3558034522's
-    // day/date line is ~3.5x its box), plus blur headroom (the authored padding, floored
-    // at 32, exists exactly for that). The surface is centered on the box center, so the
-    // quad's box-relative placement carries over unchanged. Text changes only re-rasterize
+    // The chain renders on a fixed surface sized to cover BOTH the serialized editor size
+    // and current aligned glyphs, plus blur headroom (the authored padding, floored at 32).
+    // The surface is centered on the layer origin, so the native glyph-metric placement
+    // carries over unchanged. Text changes only re-rasterize
     // glyphs; if scripted text later outgrows the surface, render() degrades to plain text.
     m_effectSurface = computeEffectSurface ();
     const glm::vec2 surface = m_effectSurface;
 
-    m_effectMaterial
-	= Data::Parsers::MaterialParser::load (this->getScene ().getScene ().project, "materials/util/effectpassthrough.json");
+    m_effectMaterial = Data::Parsers::MaterialParser::load (
+	this->getScene ().getScene ().project, "materials/util/effectpassthrough.json"
+    );
     m_effectHost = std::make_unique<CTextEffectHost> (this->getScene (), m_text, *m_effectMaterial);
 
     m_fboA = std::make_shared<CFBO> (
@@ -334,7 +357,8 @@ void CText::setupEffectChain () {
 		    ? *effectPass->target
 		    : std::optional<std::reference_wrapper<std::string>> (std::nullopt);
 
-		auto* cpass = new Effects::CPass (*m_effectHost, fboProvider, *pass, override, effectPass->binds, target);
+		auto* cpass
+		    = new Effects::CPass (*m_effectHost, fboProvider, *pass, override, effectPass->binds, target);
 
 		const std::shared_ptr<const CFBO> prevDrawTo = drawTo;
 		bool writesToTarget = false;
@@ -412,18 +436,18 @@ void CText::setupEffectChain () {
     m_cuMVP = glGetUniformLocation (m_compositeProgram, "uMVP");
     m_cuTexture = glGetUniformLocation (m_compositeProgram, "uTexture");
 
-    // raster MVP: maps the quad's box-center-relative y-down coordinates onto the box FBO,
-    // top of the box (y=-H/2) at texture row 0 so the standard v=0-at-top UVs stay valid
+    // raster MVP: maps the quad's origin-relative y-down coordinates onto the effect FBO,
+    // whose top (y=-H/2) is texture row 0 so the standard v=0-at-top UVs stay valid
     m_baseMVP = glm::ortho (-surface.x * 0.5f, surface.x * 0.5f, -surface.y * 0.5f, surface.y * 0.5f);
 
-    // composite quad: the whole box centered on the object origin, same y-down local
+    // composite quad: the whole effect surface centered on the object origin, same y-down local
     // convention and v=0-at-top UV layout as the glyph quad, so the world MVP of the
     // direct path positions it identically
     const float hx = surface.x * 0.5f;
     const float hy = surface.y * 0.5f;
     const float quad[] = {
 	// pos      // uv
-	-hx, -hy, 0.0f, 0.0f, hx, -hy, 1.0f, 0.0f, hx,	hy, 1.0f, 1.0f,
+	-hx, -hy, 0.0f, 0.0f, hx, -hy, 1.0f, 0.0f, hx,  hy, 1.0f, 1.0f,
 	-hx, -hy, 0.0f, 0.0f, hx, hy,  1.0f, 1.0f, -hx, hy, 0.0f, 1.0f,
     };
 
@@ -630,20 +654,22 @@ void CText::initScriptLayer () {
 }
 
 void CText::rebuildTextureFrom (const std::string& text) {
-    // Lays the text out like Wallpaper Engine: lines split on \n are aligned inside the
-    // authored bounding box (horizontalalign/verticalalign, inset by padding), the box
-    // being centered on the object origin. Text may overflow the box — limitwidth and
-    // limitrows are not implemented. The texture covers the ink bounding box only and
-    // the quad is offset from the box center accordingly (see uploadQuadVertices).
+    // Wallpaper Engine lays out a glyph mesh, then aligns that mesh around the layer
+    // origin from its actual bounds and the font's ascender/descender. The serialized
+    // layer size is editor metadata, not a text box, and padding grows the optional
+    // background/effect surface rather than insetting the glyphs. This behavior and the
+    // slightly unusual vertical-center formula are recovered from wallpaper64.exe's
+    // text update and matrix routines (FUN_140256f20/FUN_140256e10).
     //
     // Safe to call repeatedly: GL handles (texture, VAO, VBO) are reused when
     // already allocated, so dynamic/scripted text can regenerate the glyph
     // bitmap every time the rendered string changes without leaking.
     FT_GlyphSlot slot = m_ftFace->glyph;
 
-    // metrics-based line boxes: stable across glyph mixes and meaningful for empty lines
+    // Metrics-based row spacing is stable across glyph mixes and meaningful for empty rows.
     const int lineHeight = static_cast<int> (m_ftFace->size->metrics.height >> 6);
     const int ascender = static_cast<int> (m_ftFace->size->metrics.ascender >> 6);
+    const int descender = static_cast<int> (m_ftFace->size->metrics.descender >> 6);
 
     // \n splitting is UTF-8 safe: continuation bytes are always >= 0x80
     struct Line {
@@ -671,60 +697,71 @@ void CText::rebuildTextureFrom (const std::string& text) {
 	maxLineWidth = std::max (maxLineWidth, line.width);
     }
 
-    const int blockHeight = static_cast<int> (lines.size ()) * lineHeight;
-
-    // authored box centered on the origin; scenes without one get the ink extents
-    glm::vec2 box = m_text.size;
-    if (box.x <= 0.0f || box.y <= 0.0f) {
-	box = { static_cast<float> (maxLineWidth), static_cast<float> (blockHeight) };
-    }
-
-    // content rect after padding, in box-local raster coordinates (top-left origin, +y down —
-    // the same convention the quad's local space uses)
-    const glm::vec2 padding = m_text.padding;
-    const float contentX0 = padding.x;
-    const float contentX1 = box.x - padding.x;
-    const float contentY0 = padding.y;
-    const float contentY1 = box.y - padding.y;
-
-    float blockTop;
-    if (m_text.verticalalign == "top") {
-	blockTop = contentY0;
-    } else if (m_text.verticalalign == "bottom") {
-	blockTop = contentY1 - static_cast<float> (blockHeight);
-    } else {
-	blockTop = contentY0 + ((contentY1 - contentY0) - static_cast<float> (blockHeight)) * 0.5f;
-    }
-
-    float inkX0 = std::numeric_limits<float>::max ();
-    float inkX1 = std::numeric_limits<float>::lowest ();
+    // The same alignment also controls how shorter rows sit inside the generated block.
     for (auto& line : lines) {
-	float x;
 	if (m_text.alignment == "left") {
-	    x = contentX0;
+	    line.x = 0;
 	} else if (m_text.alignment == "right") {
-	    x = contentX1 - static_cast<float> (line.width);
+	    line.x = maxLineWidth - line.width;
 	} else {
-	    x = contentX0 + ((contentX1 - contentX0) - static_cast<float> (line.width)) * 0.5f;
+	    line.x = static_cast<int> (std::round ((maxLineWidth - line.width) * 0.5f));
 	}
-	line.x = static_cast<int> (std::round (x));
-	inkX0 = std::min (inkX0, x);
-	inkX1 = std::max (inkX1, x + static_cast<float> (line.width));
     }
 
-    // ink bounding box, with a margin for glyphs poking past the font's ascender/descender
+    // Measure the actual bitmap bounds in a first-baseline coordinate system with +y down.
+    // Native alignment uses these glyph bounds rather than advances or a line-height box.
+    int inkLeft = std::numeric_limits<int>::max ();
+    int inkTop = std::numeric_limits<int>::max ();
+    int inkRight = std::numeric_limits<int>::lowest ();
+    int inkBottom = std::numeric_limits<int>::lowest ();
+    bool hasInk = false;
+
+    for (size_t i = 0; i < lines.size (); ++i) {
+	const auto& line = lines[i];
+	int penX = line.x;
+	const int baseline = static_cast<int> (i) * lineHeight;
+
+	for (size_t offset = 0; offset < line.text.size ();) {
+	    if (FT_Load_Char (m_ftFace, static_cast<FT_ULong> (nextUtf8Codepoint (line.text, offset)), FT_LOAD_RENDER)
+		!= 0) {
+		continue;
+	    }
+
+	    const auto& bmp = slot->bitmap;
+	    if (bmp.width != 0 && bmp.rows != 0) {
+		const int glyphLeft = penX + slot->bitmap_left;
+		const int glyphTop = baseline - slot->bitmap_top;
+		inkLeft = std::min (inkLeft, glyphLeft);
+		inkTop = std::min (inkTop, glyphTop);
+		inkRight = std::max (inkRight, glyphLeft + static_cast<int> (bmp.width));
+		inkBottom = std::max (inkBottom, glyphTop + static_cast<int> (bmp.rows));
+		hasInk = true;
+	    }
+	    penX += slot->advance.x >> 6;
+	}
+    }
+
+    if (!hasInk) {
+	// A scripted layer is initially represented by a space. Keep a meaningful,
+	// transparent surface and native font-metric alignment until it gets real glyphs.
+	inkLeft = 0;
+	inkRight = std::max (1, maxLineWidth);
+	inkTop = -ascender;
+	inkBottom = -descender + static_cast<int> (lines.size () - 1) * lineHeight;
+    }
+
+    // Equal margins preserve the glyph-bounds center while protecting filter sampling.
     constexpr int kInkMargin = 4;
-    const int x0 = static_cast<int> (std::floor (inkX0)) - kInkMargin;
-    const int y0 = static_cast<int> (std::floor (blockTop)) - kInkMargin;
-    const int width = std::max (1, static_cast<int> (std::ceil (inkX1 - inkX0)) + kInkMargin * 2);
-    const int height = std::max (1, blockHeight + kInkMargin * 2);
+    const int x0 = inkLeft - kInkMargin;
+    const int y0 = inkTop - kInkMargin;
+    const int width = std::max (1, inkRight - inkLeft + kInkMargin * 2);
+    const int height = std::max (1, inkBottom - inkTop + kInkMargin * 2);
     std::vector<uint8_t> pixels (static_cast<size_t> (width) * height, 0);
 
     for (size_t i = 0; i < lines.size (); i++) {
 	const auto& line = lines[i];
 	int penX = line.x - x0;
-	const int baseline
-	    = static_cast<int> (std::round (blockTop)) - y0 + ascender + static_cast<int> (i) * lineHeight;
+	const int baseline = static_cast<int> (i) * lineHeight - y0;
 
 	for (size_t offset = 0; offset < line.text.size ();) {
 	    if (FT_Load_Char (m_ftFace, static_cast<FT_ULong> (nextUtf8Codepoint (line.text, offset)), FT_LOAD_RENDER)
@@ -767,12 +804,18 @@ void CText::rebuildTextureFrom (const std::string& text) {
 
     m_textureSize = { width, height };
     m_quadSize = { static_cast<float> (width), static_cast<float> (height) };
-    // offset from the object origin (= the authored box center) to the ink bbox center,
-    // in the quad's local +y-down space
-    m_quadOffset = {
-	(static_cast<float> (x0) + static_cast<float> (width) * 0.5f) - box.x * 0.5f,
-	(static_cast<float> (y0) + static_cast<float> (height) * 0.5f) - box.y * 0.5f,
+    const glm::vec4 glyphBounds = {
+	static_cast<float> (inkLeft),
+	static_cast<float> (-inkBottom),
+	static_cast<float> (inkRight),
+	static_cast<float> (-inkTop),
     };
+    const glm::vec2 nativeOffset = computeTextAlignmentOffset (
+	m_text.alignment, m_text.verticalalign, glyphBounds, static_cast<float> (ascender),
+	static_cast<float> (descender), static_cast<float> (lineHeight), lines.size ()
+    );
+    // The glyph VBO uses +y down; the recovered native offset is in FreeType's +y-up space.
+    m_quadOffset = { nativeOffset.x, -nativeOffset.y };
     m_lastRenderedText = text;
 
     uploadQuadVertices ();
@@ -817,8 +860,8 @@ void CText::buildShader () {
 void CText::uploadQuadVertices () {
     // Quad in local raster-space coordinates (+y down, matching the texture rows; render()'s
     // mirror pair maps this into the y-up world so the glyphs stay upright). The quad covers
-    // the ink bounding box, offset from the object origin (the authored box center) so the
-    // authored alignment inside the box is preserved. VBO contents are re-uploaded whenever
+    // the glyph bounding box, offset from the object origin by native font-metric alignment.
+    // VBO contents are re-uploaded whenever
     // the glyph bitmap is rebuilt so the quad always matches the current texture.
     const float hx = m_quadSize.x * 0.5f;
     const float hy = m_quadSize.y * 0.5f;
@@ -854,9 +897,7 @@ void CText::ensureVao () {
     glEnableVertexAttribArray (0);
     glVertexAttribPointer (0, 2, GL_FLOAT, GL_FALSE, 4 * sizeof (float), reinterpret_cast<void*> (0));
     glEnableVertexAttribArray (1);
-    glVertexAttribPointer (
-	1, 2, GL_FLOAT, GL_FALSE, 4 * sizeof (float), reinterpret_cast<void*> (2 * sizeof (float))
-    );
+    glVertexAttribPointer (1, 2, GL_FLOAT, GL_FALSE, 4 * sizeof (float), reinterpret_cast<void*> (2 * sizeof (float)));
     glBindVertexArray (0);
 }
 
@@ -936,8 +977,7 @@ void CText::render () {
 	// space is y-up, so mirror the centered quad back around its own center
 	const glm::mat4 model
 	    = this->resolveWorldMatrix () * glm::scale (glm::mat4 (1.0f), glm::vec3 (1.0f, -1.0f, 1.0f));
-	const glm::mat4 mvp
-	    = getScene ().getCamera ().getProjection () * getScene ().getCamera ().getLookAt () * model;
+	const glm::mat4 mvp = getScene ().getCamera ().getProjection () * getScene ().getCamera ().getLookAt () * model;
 
 	if (m_effectsEnabled) {
 	    renderEffectChain (mvp, brightness, alpha);
@@ -991,8 +1031,10 @@ void CText::render () {
 	const glm::vec2 depth = this->resolveParallaxDepth ();
 	const glm::vec2* displacement = getScene ().getParallaxDisplacement ();
 	// per-axis reference: y uses height so vertical travel isn't over-scaled, see CImage
-	const float referenceX = static_cast<float> (getScene ().getWidth ()) * Wallpapers::CScene::PARALLAX_TRANSLATION_SPAN;
-	const float referenceY = static_cast<float> (getScene ().getHeight ()) * Wallpapers::CScene::PARALLAX_TRANSLATION_SPAN;
+	const float referenceX
+	    = static_cast<float> (getScene ().getWidth ()) * Wallpapers::CScene::PARALLAX_TRANSLATION_SPAN;
+	const float referenceY
+	    = static_cast<float> (getScene ().getHeight ()) * Wallpapers::CScene::PARALLAX_TRANSLATION_SPAN;
 
 	parallaxShift.x = -depth.x * amount * displacement->x * referenceX;
 	parallaxShift.y = depth.y * amount * displacement->y * referenceY;

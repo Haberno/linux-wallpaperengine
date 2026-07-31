@@ -40,6 +40,19 @@ using namespace WallpaperEngine::Data::Model;
 uint32_t nextUtf8Codepoint (const std::string& text, size_t& offset);
 
 /**
+ * Return Wallpaper Engine's glyph-bounds alignment offset in y-up font space.
+ *
+ * The native renderer aligns the generated glyph mesh around the layer origin; the
+ * serialized layer size is not an inset layout box. Horizontal alignment uses the
+ * actual mesh width. Vertical alignment uses FreeType's ascender/descender and the
+ * generated row spacing (recovered from wallpaper64.exe's text update routine).
+ */
+glm::vec2 computeTextAlignmentOffset (
+    const std::string& horizontalAlign, const std::string& verticalAlign, const glm::vec4& glyphBounds, float ascender,
+    float descender, float lineSpacing, size_t lineCount
+);
+
+/**
  * Phase 1 text renderer.
  *
  * Renders static text objects as a single FreeType-rasterized RGBA texture
@@ -79,7 +92,7 @@ private:
     void setupEffectChain ();
     void destroyEffectChain ();
     void renderEffectChain (const glm::mat4& mvp, float brightness, float alpha);
-    /** chain surface: covers the authored box and the current ink quad plus blur headroom */
+    /** chain surface: covers serialized editor size and the aligned glyph quad plus blur headroom */
     [[nodiscard]] glm::vec2 computeEffectSurface () const;
 
     const Text& m_text;
@@ -110,7 +123,7 @@ private:
 
     glm::ivec2 m_textureSize = { 0, 0 };
     glm::vec2 m_quadSize = { 0.0f, 0.0f };
-    /** ink bbox center relative to the authored box center, local +y-down space */
+    /** glyph bbox center relative to the layer origin, local +y-down space */
     glm::vec2 m_quadOffset = { 0.0f, 0.0f };
 
     // ---- text-effect chain state (only used when the object authors effects) ----
