@@ -237,14 +237,13 @@ constexpr std::string_view CONDITIONAL_INCLUDE_END = "// LWE conditional include
  * GLSL cannot do both by pasting the whole header at either location: early header functions
  * cannot see later uniforms, and late header macros cannot affect earlier authored helpers.
  *
- * Split only unconditional #defines out of the fully expanded header text. They are safe to
- * expose at the include site; declarations and function bodies stay in the existing insertion
- * point after the shader's interface declarations. Conditional defines remain in place so their
+ * Copy only unconditional #defines out of the fully expanded header text. They are safe to
+ * expose at the include site; the complete header also stays at the existing insertion point
+ * after the shader's interface declarations. Conditional defines remain in place so their
  * #if/#endif scope is unchanged.
  */
-std::string extractUnconditionalIncludeDefines (std::string& includes) {
+std::string collectUnconditionalIncludeDefines (const std::string& includes) {
     std::string defines;
-    std::string body;
     size_t conditionalDepth = 0;
     size_t conditionalIncludeDepth = 0;
     size_t cursor = 0;
@@ -264,9 +263,6 @@ std::string extractUnconditionalIncludeDefines (std::string& includes) {
 		conditionalIncludeDepth++;
 	    } else if (conditionalIncludeDepth > 0) {
 		conditionalIncludeDepth--;
-	    }
-	    if (hasNewline) {
-		body.push_back ('\n');
 	    }
 	    cursor = hasNewline ? lineEnd + 1 : lineEnd;
 	    continue;
@@ -292,18 +288,9 @@ std::string extractUnconditionalIncludeDefines (std::string& includes) {
 		defines.push_back ('\n');
 	    }
 
-	    // Preserve line breaks in the late header body so debug dumps still line up.
-	    for (size_t position = cursor; position < logicalEnd; position++) {
-		if (includes [position] == '\n') {
-		    body.push_back ('\n');
-		}
-	    }
-
 	    cursor = logicalEnd;
 	    continue;
 	}
-
-	body.append (includes, cursor, (hasNewline ? lineEnd + 1 : lineEnd) - cursor);
 
 	if (directive == "if" || directive == "ifdef" || directive == "ifndef") {
 	    conditionalDepth++;
@@ -314,7 +301,6 @@ std::string extractUnconditionalIncludeDefines (std::string& includes) {
 	cursor = hasNewline ? lineEnd + 1 : lineEnd;
     }
 
-    includes = std::move (body);
     return defines;
 }
 } // namespace
@@ -418,9 +404,10 @@ void ShaderUnit::preprocessIncludes () {
 	end = start;
     }
 
-    // Keep macros at the authored include location, but leave declarations and helper
-    // functions in m_includes so uniforms declared by the shader remain visible to them.
-    const std::string includeDefines = extractUnconditionalIncludeDefines (this->m_includes);
+    // Also expose macros at the authored include location. Keep the original definitions
+    // in m_includes because that block is relocated before the authored include line and
+    // its own later helper functions must already be able to use those macros.
+    const std::string includeDefines = collectUnconditionalIncludeDefines (this->m_includes);
     if (!includeDefines.empty () && firstUnconditionalInclude != std::string::npos) {
 	this->m_preprocessed.insert (firstUnconditionalInclude, includeDefines);
     }
