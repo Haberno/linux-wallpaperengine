@@ -141,7 +141,7 @@ def parse_telemetry (log: Path) -> dict [str, int]:
     return keys
 
 
-def run_engine (exe: Path, item_id: str, outdir: Path, args) -> dict:
+def run_engine (exe: Path, item: Path, outdir: Path, args) -> dict:
     """Run one background in its own process; return raw run facts."""
     shaders = outdir / "shaders"
     shaders.mkdir (parents = True, exist_ok = True)
@@ -152,11 +152,14 @@ def run_engine (exe: Path, item_id: str, outdir: Path, args) -> dict:
     env ["WPE_HEALTH_REPORT"] = str (health_path)
     env ["WPE_DUMP_SHADERS"] = str (shaders)
     # A validation process must not replace the live desktop engine's socket.
-    env ["WPE_CONTROL_SOCKET"] = f"/tmp/linux-wallpaperengine-validator-{os.getpid ()}-{item_id}.sock"
+    env ["WPE_CONTROL_SOCKET"] = f"/tmp/linux-wallpaperengine-validator-{os.getpid ()}-{item.name}.sock"
     if args.telemetry:
         env ["WPE_JSON_TELEMETRY"] = "1"
 
-    cmd = [str (exe), "--window", args.window, "--silent", "--fps", str (args.fps), item_id]
+    # Pass the discovered item path, not just its directory name. The latter
+    # silently redirected explicit/custom corpora back to Steam's Workshop
+    # directory whenever the item happened to use a numeric name.
+    cmd = [str (exe), "--window", args.window, "--silent", "--fps", str (args.fps), str (item)]
     facts = {"cmd": " ".join (cmd), "hung": False, "early_exit": False}
 
     with open (outdir / "log.txt", "wb") as log:
@@ -331,7 +334,7 @@ def main () -> int:
             continue
 
         try:
-            facts = run_engine (exe, item.name, outdir, args)
+            facts = run_engine (exe, item, outdir, args)
             shader_total, shader_failures = compile_shaders (outdir / "shaders", args.glslang)
             status, reasons = classify (facts, shader_total, shader_failures)
         except Exception as error:  # noqa: BLE001 - one item must never abort the corpus run
