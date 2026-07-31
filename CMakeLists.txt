@@ -605,6 +605,7 @@ if(BUILD_TESTING)
         src/WallpaperEngine/Testing/Cases/PuppetClippingPlan.cpp
         src/WallpaperEngine/Testing/Cases/MdlAnimation.cpp
         src/WallpaperEngine/Testing/Cases/ModelPassOrder.cpp
+        src/WallpaperEngine/Testing/Cases/ParticleSemantics.cpp
         src/WallpaperEngine/Testing/Cases/AudioSpectrum.cpp
         src/WallpaperEngine/Testing/Cases/AudioStreamLoop.cpp
         src/WallpaperEngine/Testing/Cases/ShaderIncludes.cpp
