@@ -73,7 +73,7 @@ bool animationRecordFits (
 	    return false;
 	}
 	const float fps = readValue<float> (data, offset, sectionEnd);
-	if (!std::isfinite (fps) || fps <= 0.0f || fps > 1000.0f) {
+	if (!std::isnormal (fps) || fps <= 0.0f || fps > 1000.0f) {
 	    return false;
 	}
 	const uint32_t frameCount = readValue<uint32_t> (data, offset, sectionEnd);
@@ -97,6 +97,53 @@ bool animationRecordFits (
     }
 }
 
+bool isValidUtf8 (const std::string& value) {
+    size_t offset = 0;
+    while (offset < value.size ()) {
+	const auto lead = static_cast<unsigned char> (value[offset]);
+	if (lead < 0x80) {
+	    if (lead < 0x20 && lead != '\t') {
+		return false;
+	    }
+	    offset++;
+	    continue;
+	}
+
+	size_t continuationCount = 0;
+	uint32_t codepoint = 0;
+	if ((lead & 0xe0) == 0xc0) {
+	    continuationCount = 1;
+	    codepoint = lead & 0x1f;
+	} else if ((lead & 0xf0) == 0xe0) {
+	    continuationCount = 2;
+	    codepoint = lead & 0x0f;
+	} else if ((lead & 0xf8) == 0xf0) {
+	    continuationCount = 3;
+	    codepoint = lead & 0x07;
+	} else {
+	    return false;
+	}
+	if (offset + continuationCount >= value.size ()) {
+	    return false;
+	}
+	for (size_t continuation = 0; continuation < continuationCount; continuation++) {
+	    const auto byte = static_cast<unsigned char> (value[offset + continuation + 1]);
+	    if ((byte & 0xc0) != 0x80) {
+		return false;
+	    }
+	    codepoint = (codepoint << 6) | (byte & 0x3f);
+	}
+
+	const uint32_t minimum
+	    = continuationCount == 1 ? 0x80 : continuationCount == 2 ? 0x800 : 0x10000;
+	if (codepoint < minimum || codepoint > 0x10ffff || (codepoint >= 0xd800 && codepoint <= 0xdfff)) {
+	    return false;
+	}
+	offset += continuationCount + 1;
+    }
+    return true;
+}
+
 std::optional<size_t> findNextAnimationRecord (
     const std::vector<char>& data, const size_t searchFrom, const size_t sectionEnd, const size_t expectedBoneCount
 ) {
@@ -105,7 +152,11 @@ std::optional<size_t> findNextAnimationRecord (
     // relying on a textual mode marker.
     for (size_t candidate = searchFrom; candidate + sizeof (uint32_t) * 8 < sectionEnd; candidate++) {
 	if (animationRecordFits (data, candidate, sectionEnd, expectedBoneCount)) {
-	    return candidate;
+	    size_t offset = candidate + sizeof (uint32_t) * 2;
+	    const std::string name = readString (data, offset, sectionEnd);
+	    if (isValidUtf8 (name)) {
+		return candidate;
+	    }
 	}
     }
     return std::nullopt;
@@ -226,9 +277,12 @@ bool readBlendTracks (
 
     try {
 	const uint32_t trackCount = readValue<uint32_t> (data, offset, sectionEnd);
-	if (trackCount == 0 || trackCount > MAX_TRACKS) {
+	if (trackCount > MAX_TRACKS) {
 	    offset = start;
 	    return false;
+	}
+	if (trackCount == 0) {
+	    return true;
 	}
 
 	std::vector<std::vector<float>> tracks;
@@ -247,6 +301,45 @@ bool readBlendTracks (
 	}
 
 	animation.blendTracks = std::move (tracks);
+	return true;
+    } catch (const std::runtime_error&) {
+	offset = start;
+	return false;
+    }
+}
+
+/**
+ * MDLA0002 and newer append one optional per-bone float stream after the blend
+ * tracks. Wallpaper Engine consumes it before the version-specific event and
+ * constraint metadata. The values are not rendered yet, but stepping over the
+ * stream is required to locate the next clip without scanning through its
+ * sample payload.
+ */
+bool skipBoneScalarTracks (
+    const std::vector<char>& data, size_t& offset, const size_t sectionEnd, const MdlAnimationClip& animation
+) {
+    const size_t start = offset;
+    try {
+	const bool present = readValue<uint8_t> (data, offset, sectionEnd) != 0;
+	if (!present) {
+	    return true;
+	}
+
+	const size_t expectedBytes = (static_cast<size_t> (animation.frameCount) + 1) * sizeof (float);
+	for (size_t bone = 0; bone < animation.boneFrames.size (); bone++) {
+	    readValue<uint32_t> (data, offset, sectionEnd);
+	    const uint32_t byteCount = readValue<uint32_t> (data, offset, sectionEnd);
+	    if (byteCount != expectedBytes || byteCount > sectionEnd - offset) {
+		offset = start;
+		return false;
+	    }
+	    for (size_t sample = 0; sample < byteCount / sizeof (float); sample++) {
+		if (!std::isfinite (readValue<float> (data, offset, sectionEnd))) {
+		    offset = start;
+		    return false;
+		}
+	    }
+	}
 	return true;
     } catch (const std::runtime_error&) {
 	offset = start;
@@ -312,6 +405,9 @@ void parseAnimations (
 	}
 
 	readBlendTracks (data, offset, sectionEnd, animation);
+	if (version != "MDLA0001") {
+	    skipBoneScalarTracks (data, offset, sectionEnd, animation);
+	}
 
 	result.animations.push_back (std::move (animation));
 	if (index + 1 < animationCount) {

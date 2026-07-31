@@ -19,7 +19,8 @@ template <typename T> void appendValue (std::vector<char>& data, const T& value)
 
 std::vector<char> makeModel (
     uint32_t submeshFlags, uint32_t vertexTag = 15, uint32_t vertexStride = 48,
-    const std::array<float, 6>& bounds = {}, uint32_t version = 23, uint32_t materialCount = 1
+    const std::array<float, 6>& bounds = {}, uint32_t version = 23, uint32_t materialCount = 1,
+    bool appendEmptyTail = true
 ) {
     std::vector<char> data;
     const std::string marker =
@@ -67,6 +68,14 @@ std::vector<char> makeModel (
 	} else {
 	    appendValue (data, static_cast<uint16_t> (index));
 	}
+    }
+
+    if (appendEmptyTail && version >= 21) {
+	appendValue<uint8_t> (data, 0);
+	appendValue<uint8_t> (data, 0);
+    }
+    if (appendEmptyTail && version >= 23) {
+	appendValue<uint32_t> (data, 0);
     }
 
     return data;
@@ -128,6 +137,43 @@ std::vector<char> makeTwoLayoutModel () {
 	first = false;
     }
 
+    appendValue<uint8_t> (data, 0);
+    appendValue<uint8_t> (data, 0);
+    appendValue<uint32_t> (data, 0);
+
+    return data;
+}
+
+std::vector<char> makeClippingModel () {
+    auto data = makeModel (0, 15, 48, {}, 23, 1, false);
+
+    appendValue<uint8_t> (data, 1);
+    appendValue<uint32_t> (data, 1);
+    appendValue<uint32_t> (data, 3 * 3 * sizeof (float));
+    for (const glm::vec3 position :
+	 { glm::vec3 (1.0f, 2.0f, 3.0f), glm::vec3 (4.0f, 5.0f, 6.0f), glm::vec3 (7.0f, 8.0f, 9.0f) }) {
+	appendValue (data, position.x);
+	appendValue (data, position.y);
+	appendValue (data, position.z);
+    }
+
+    appendValue<uint8_t> (data, 1);
+    appendValue<uint32_t> (data, 2 * 4 * sizeof (uint32_t));
+    for (const uint32_t value : { 17u, 0u, 0u, 3u, 18u, 0u, 0u, 3u }) {
+	appendValue (data, value);
+    }
+
+    appendValue<uint32_t> (data, 1);
+    appendValue<uint64_t> (data, 0x1122334455667788ull);
+    const std::string asset = "masks/clipping_mask_test";
+    data.insert (data.end (), asset.begin (), asset.end ());
+    data.push_back ('\0');
+    appendValue<uint32_t> (data, 1);
+    appendValue<uint32_t> (data, 1);
+    appendValue<uint32_t> (data, 1);
+    appendValue<uint32_t> (data, 1);
+    appendValue<uint32_t> (data, 0);
+
     return data;
 }
 
@@ -153,6 +199,66 @@ TEST_CASE ("MDLV parser exposes model bounds for SceneScript") {
     CHECK (mesh.boundingBoxMax.x == 4.0f);
     CHECK (mesh.boundingBoxMax.y == 5.0f);
     CHECK (mesh.boundingBoxMax.z == 6.0f);
+}
+
+TEST_CASE ("MDLV parser reads auxiliary positions, draw ranges and clipping descriptors") {
+    const auto mesh = MdlParser::parse (makeClippingModel (), "test-clipping.mdl");
+
+    CHECK (mesh.version == 23);
+    CHECK (mesh.auxiliaryHeader == 1);
+    REQUIRE (mesh.auxiliaryPositions.size () == 3);
+    CHECK (mesh.auxiliaryPositions[2] == glm::vec3 (7.0f, 8.0f, 9.0f));
+
+    REQUIRE (mesh.drawRanges.size () == 2);
+    CHECK (mesh.drawRanges[0].partId == 17);
+    CHECK (mesh.drawRanges[0].submeshIndex == 0);
+    CHECK (mesh.drawRanges[0].firstIndex == 0);
+    CHECK (mesh.drawRanges[0].indexCount == 3);
+
+    REQUIRE (mesh.clippingDescriptors.size () == 1);
+    const auto& descriptor = mesh.clippingDescriptors[0];
+    CHECK (descriptor.opaqueId == 0x1122334455667788ull);
+    CHECK (descriptor.maskAsset == "masks/clipping_mask_test");
+    CHECK (descriptor.flags == 1);
+    CHECK (descriptor.targets == std::vector<uint32_t> { 1 });
+    CHECK (descriptor.sources == std::vector<uint32_t> { 0 });
+}
+
+TEST_CASE ("MDLV parser rejects malformed draw range blocks") {
+    auto data = makeModel (0, 15, 48, {}, 23, 1, false);
+    appendValue<uint8_t> (data, 0);
+    appendValue<uint8_t> (data, 1);
+    appendValue<uint32_t> (data, 15);
+    data.resize (data.size () + 15);
+
+    CHECK_THROWS_AS (MdlParser::parse (data, "test-bad-range-size.mdl"), std::runtime_error);
+}
+
+TEST_CASE ("MDLV parser rejects draw ranges outside their submesh") {
+    auto data = makeModel (0, 15, 48, {}, 23, 1, false);
+    appendValue<uint8_t> (data, 0);
+    appendValue<uint8_t> (data, 1);
+    appendValue<uint32_t> (data, 4 * sizeof (uint32_t));
+    for (const uint32_t value : { 17u, 0u, 2u, 3u }) {
+	appendValue (data, value);
+    }
+
+    CHECK_THROWS_AS (MdlParser::parse (data, "test-bad-range-bounds.mdl"), std::runtime_error);
+}
+
+TEST_CASE ("MDLV parser rejects clipping descriptors with invalid range references") {
+    auto data = makeModel (0, 15, 48, {}, 23, 1, false);
+    appendValue<uint8_t> (data, 0);
+    appendValue<uint8_t> (data, 0);
+    appendValue<uint32_t> (data, 1);
+    appendValue<uint64_t> (data, 42);
+    data.push_back ('\0');
+    appendValue<uint32_t> (data, 0);
+    appendValue<uint32_t> (data, 1);
+    appendValue<uint32_t> (data, 0);
+    appendValue<uint32_t> (data, 0);
+
+    CHECK_THROWS_AS (MdlParser::parse (data, "test-bad-clipping-reference.mdl"), std::runtime_error);
 }
 } // namespace
 
@@ -201,6 +307,17 @@ TEST_CASE ("MDLV revisions before 16 take the vertex tag from the header") {
     CHECK (mesh.skinned);
     CHECK (mesh.strideBytes == 80);
     CHECK (mesh.uvOffset == 72);
+}
+
+TEST_CASE ("MDLV revision 14 zero tag uses the legacy compact puppet layout") {
+    const auto mesh = MdlParser::parse (makeModel (0, 0, 52, {}, 14), "test-r14-puppet.mdl");
+
+    REQUIRE (mesh.submeshes.size () == 1);
+    CHECK (mesh.skinned);
+    CHECK (mesh.strideBytes == 52);
+    CHECK (mesh.blendIndicesOffset == 12);
+    CHECK (mesh.blendWeightsOffset == 28);
+    CHECK (mesh.uvOffset == 44);
 }
 
 TEST_CASE ("MDLV vertex layout omits attributes the tag leaves out") {
