@@ -165,6 +165,41 @@ glm::vec2 WallpaperEngine::Render::Objects::computeTextAlignmentOffset (
     return { x, boundsCenterY - verticalReference };
 }
 
+TextEffectLayout WallpaperEngine::Render::Objects::computeTextEffectLayout (
+    const std::string& horizontalAlign, const std::string& verticalAlign, const glm::vec4& glyphBounds,
+    const float ascender, const float descender, const float lineSpacing, const size_t lineCount,
+    const glm::vec2& padding
+) {
+    // wallpaper64.exe's font generator starts every mesh bound at zero, then expands
+    // the vertical range to [ascender - rows * lineSpacing, ascender]. This is the
+    // generated line box stored at mesh offsets 0x90..0x9c and used to size effects.
+    const float rows = static_cast<float> (std::max<size_t> (lineCount, 1));
+    const glm::vec4 lineBounds = {
+	std::min (0.0f, glyphBounds.x),
+	std::min ({ 0.0f, glyphBounds.y, ascender - rows * lineSpacing }),
+	std::max (0.0f, glyphBounds.z),
+	std::max ({ 0.0f, glyphBounds.w, ascender }),
+    };
+
+    const glm::vec2 glyphAlignment = computeTextAlignmentOffset (
+	horizontalAlign, verticalAlign, glyphBounds, ascender, descender, lineSpacing, lineCount
+    );
+    const glm::vec2 surfaceAlignment = computeTextAlignmentOffset (
+	horizontalAlign, verticalAlign, lineBounds, ascender, descender, lineSpacing, lineCount
+    );
+    const glm::vec2 glyphDown = { glyphAlignment.x, -glyphAlignment.y };
+    const glm::vec2 surfaceDown = { surfaceAlignment.x, -surfaceAlignment.y };
+
+    return {
+	.surfaceSize = {
+	    lineBounds.z - lineBounds.x + std::max (padding.x, 0.0f) * 2.0f,
+	    lineBounds.w - lineBounds.y + std::max (padding.y, 0.0f) * 2.0f,
+	},
+	.rasterOffset = glyphDown - surfaceDown,
+	.compositeOffset = surfaceDown,
+    };
+}
+
 namespace WallpaperEngine::Render::Objects {
 /**
  * CPass needs a CRenderable owner for its uniform sources (brightness/alpha/color) and the
@@ -276,29 +311,9 @@ void CText::setup () {
     m_valid = m_texture != 0 && m_program != 0 && m_vbo != 0;
 }
 
-glm::vec2 CText::computeEffectSurface () const {
-    // Half-extents around the layer origin: whichever reaches farther, the serialized
-    // editor size or the current aligned glyph quad. The size is not used for glyph
-    // placement, but retaining it as a lower bound keeps authored effect surfaces stable.
-    // The margin gives blur-style effects bleed room past the ink.
-    const glm::vec2 margin = glm::max (m_text.padding, glm::vec2 (32.0f));
-    // Native surfaces are glyph/editor extents plus padding on both sides. Including the
-    // margin in the serialized-size branch also leaves room for scripted digit changes
-    // (Shin Godzilla's Summer85 clock varies by a few pixels between timestamps).
-    const float hx
-	= std::max (m_text.size.x * 0.5f + margin.x, std::abs (m_quadOffset.x) + m_quadSize.x * 0.5f + margin.x);
-    const float hy
-	= std::max (m_text.size.y * 0.5f + margin.y, std::abs (m_quadOffset.y) + m_quadSize.y * 0.5f + margin.y);
-    return { hx * 2.0f, hy * 2.0f };
-}
-
 void CText::setupEffectChain () {
-    // The chain renders on a fixed surface sized to cover BOTH the serialized editor size
-    // and current aligned glyphs, plus blur headroom (the authored padding, floored at 32).
-    // The surface is centered on the layer origin, so the native glyph-metric placement
-    // carries over unchanged. Text changes only re-rasterize
-    // glyphs; if scripted text later outgrows the surface, render() degrades to plain text.
-    m_effectSurface = computeEffectSurface ();
+    // wallpaper64.exe sizes this surface from the generated font line box plus the
+    // authored padding. The serialized editor size is not part of text rendering.
     const glm::vec2 surface = m_effectSurface;
 
     m_effectMaterial = Data::Parsers::MaterialParser::load (
@@ -441,19 +456,23 @@ void CText::setupEffectChain () {
     m_cuMVP = glGetUniformLocation (m_compositeProgram, "uMVP");
     m_cuTexture = glGetUniformLocation (m_compositeProgram, "uTexture");
 
-    // raster MVP: maps the quad's origin-relative y-down coordinates onto the effect FBO,
-    // whose top (y=-H/2) is texture row 0 so the standard v=0-at-top UVs stay valid
-    m_baseMVP = glm::ortho (-surface.x * 0.5f, surface.x * 0.5f, -surface.y * 0.5f, surface.y * 0.5f);
+    // The direct glyph VBO already contains m_quadOffset. Cancel that and move it to
+    // its native center inside the line-box FBO. Alignment is applied separately to
+    // the whole surface by the composite quad below.
+    m_baseMVP = glm::ortho (-surface.x * 0.5f, surface.x * 0.5f, -surface.y * 0.5f, surface.y * 0.5f)
+	* glm::translate (glm::mat4 (1.0f), glm::vec3 (m_effectRasterOffset - m_quadOffset, 0.0f));
 
-    // composite quad: the whole effect surface centered on the object origin, same y-down local
-    // convention and v=0-at-top UV layout as the glyph quad, so the world MVP of the
-    // direct path positions it identically
+    // Composite the tight native surface at its font-metric alignment offset.
     const float hx = surface.x * 0.5f;
     const float hy = surface.y * 0.5f;
+    const float x0 = m_effectCompositeOffset.x - hx;
+    const float x1 = m_effectCompositeOffset.x + hx;
+    const float y0 = m_effectCompositeOffset.y - hy;
+    const float y1 = m_effectCompositeOffset.y + hy;
     const float quad[] = {
 	// pos      // uv
-	-hx, -hy, 0.0f, 0.0f, hx, -hy, 1.0f, 0.0f, hx,  hy, 1.0f, 1.0f,
-	-hx, -hy, 0.0f, 0.0f, hx, hy,  1.0f, 1.0f, -hx, hy, 0.0f, 1.0f,
+	x0, y0, 0.0f, 0.0f, x1, y0, 1.0f, 0.0f, x1, y1, 1.0f, 1.0f,
+	x0, y0, 0.0f, 0.0f, x1, y1, 1.0f, 1.0f, x0, y1, 0.0f, 1.0f,
     };
 
     // VBO only (shared GL object, safe on the async build worker); the VAO is created
@@ -821,6 +840,13 @@ void CText::rebuildTextureFrom (const std::string& text) {
     );
     // The glyph VBO uses +y down; the recovered native offset is in FreeType's +y-up space.
     m_quadOffset = { nativeOffset.x, -nativeOffset.y };
+    const TextEffectLayout effectLayout = computeTextEffectLayout (
+	m_text.alignment, m_text.verticalalign, glyphBounds, static_cast<float> (ascender),
+	static_cast<float> (descender), static_cast<float> (lineHeight), lines.size (), m_text.padding
+    );
+    m_effectSurface = glm::max (effectLayout.surfaceSize, glm::vec2 (1.0f));
+    m_effectRasterOffset = effectLayout.rasterOffset;
+    m_effectCompositeOffset = effectLayout.compositeOffset;
     m_lastRenderedText = text;
 
     uploadQuadVertices ();
@@ -949,24 +975,27 @@ void CText::render () {
 	renderedText = current.empty () ? std::string (" ") : current;
     }
 
+    bool rebuiltGlyphs = false;
     const unsigned int pixelSize = computeEffectivePixelSize ();
     if (pixelSize != m_lastPixelSize) {
 	m_lastPixelSize = pixelSize;
 	FT_Set_Pixel_Sizes (m_ftFace, 0, static_cast<FT_UInt> (m_lastPixelSize));
 	rebuildTextureFrom (renderedText);
+	rebuiltGlyphs = true;
     } else if (renderedText != m_lastRenderedText) {
 	rebuildTextureFrom (renderedText);
+	rebuiltGlyphs = true;
     }
 
-    // scripted text can outgrow the chain surface sized at setup (the FBOs and pass texture
-    // chains are fixed); degrade to plain rendering permanently rather than clipping
-    if (m_effectsEnabled) {
-	const glm::vec2 needed = computeEffectSurface ();
-	if (needed.x > m_effectSurface.x || needed.y > m_effectSurface.y) {
-	    sLog.error (
-		"CText: text outgrew the effect surface for '", m_text.name, "' (", needed.x, "x", needed.y, " > ",
-		m_effectSurface.x, "x", m_effectSurface.y, "), disabling its effects"
-	    );
+    // Native text regenerates its tight effect target when dynamic glyph metrics change.
+    // Rebuilding here keeps scripted clocks at native resolution instead of reserving a
+    // larger editor-size surface whose UV scale changes authored effects.
+    if (rebuiltGlyphs && m_effectsEnabled) {
+	destroyEffectChain ();
+	try {
+	    setupEffectChain ();
+	} catch (const std::exception& e) {
+	    sLog.error ("CText: effect-chain rebuild failed for '", m_text.name, "': ", e.what ());
 	    destroyEffectChain ();
 	}
     }

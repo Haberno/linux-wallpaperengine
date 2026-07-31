@@ -52,6 +52,28 @@ glm::vec2 computeTextAlignmentOffset (
     float descender, float lineSpacing, size_t lineCount
 );
 
+struct TextEffectLayout {
+    /** Native line-box surface dimensions, including authored padding on both sides. */
+    glm::vec2 surfaceSize;
+    /** Glyph center inside the effect surface, in local +y-down coordinates. */
+    glm::vec2 rasterOffset;
+    /** Effect-surface center relative to the layer origin, in local +y-down coordinates. */
+    glm::vec2 compositeOffset;
+};
+
+/**
+ * Reproduce Wallpaper Engine's split text-effect placement.
+ *
+ * The generated font mesh stores a line box expanded to the ascender and full row
+ * height. Native code centers glyphs inside that padded box, then aligns the whole
+ * effect surface around the layer origin. Keeping those two offsets separate matters
+ * to resolution-dependent effects even though their sum equals direct glyph placement.
+ */
+TextEffectLayout computeTextEffectLayout (
+    const std::string& horizontalAlign, const std::string& verticalAlign, const glm::vec4& glyphBounds, float ascender,
+    float descender, float lineSpacing, size_t lineCount, const glm::vec2& padding
+);
+
 /**
  * Phase 1 text renderer.
  *
@@ -88,12 +110,10 @@ private:
     unsigned int computeEffectivePixelSize () const;
     void initScriptLayer ();
 
-    // text-effect chain (built once at setup; FBOs sized by computeEffectSurface)
+    // text-effect chain (rebuilt when dynamic glyph metrics change, like the native renderer)
     void setupEffectChain ();
     void destroyEffectChain ();
     void renderEffectChain (const glm::mat4& mvp, float brightness, float alpha);
-    /** chain surface: covers serialized editor size and the aligned glyph quad plus blur headroom */
-    [[nodiscard]] glm::vec2 computeEffectSurface () const;
 
     const Text& m_text;
     std::string m_lastRenderedText;
@@ -146,6 +166,8 @@ private:
     GLint m_cuTexture = -1;
     glm::mat4 m_baseMVP = glm::mat4 (1.0f);
     glm::vec2 m_effectSurface = { 0.0f, 0.0f };
+    glm::vec2 m_effectRasterOffset = { 0.0f, 0.0f };
+    glm::vec2 m_effectCompositeOffset = { 0.0f, 0.0f };
     bool m_effectsEnabled = false;
 
     bool m_valid = false;

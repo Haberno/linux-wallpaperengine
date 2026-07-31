@@ -3,6 +3,7 @@
 #include "WallpaperEngine/Render/Objects/CText.h"
 
 using WallpaperEngine::Render::Objects::computeTextAlignmentOffset;
+using WallpaperEngine::Render::Objects::computeTextEffectLayout;
 using WallpaperEngine::Render::Objects::nextUtf8Codepoint;
 
 TEST_CASE ("utf8 codepoint decoding") {
@@ -60,4 +61,17 @@ TEST_CASE ("native text vertical alignment accounts for following rows") {
 
     const glm::vec2 bottom = computeTextAlignmentOffset ("center", "bottom", bounds, 100.0f, -20.0f, 120.0f, 2);
     REQUIRE (bottom.y == 110.0f); // -30 - (-20 - 120)
+}
+
+TEST_CASE ("text effects use the native padded line box and split placement") {
+    // Summer85 at 30pt/300DPI for "12:34": ink bounds are -4,-8..283,94,
+    // while native expands the generated line box to -4,-31..283,114.
+    const glm::vec4 glyphBounds = { -4.0f, -8.0f, 283.0f, 94.0f };
+    const auto layout
+	= computeTextEffectLayout ("center", "center", glyphBounds, 114.0f, -27.0f, 145.0f, 1, { 32, 32 });
+
+    REQUIRE (layout.surfaceSize == glm::vec2 (351.0f, 209.0f));
+    REQUIRE (layout.rasterOffset == glm::vec2 (0.0f, -1.5f));
+    REQUIRE (layout.compositeOffset == glm::vec2 (0.0f, 15.5f));
+    REQUIRE (layout.rasterOffset + layout.compositeOffset == glm::vec2 (0.0f, 14.0f));
 }
