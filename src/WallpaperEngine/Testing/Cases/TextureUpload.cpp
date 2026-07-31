@@ -1,4 +1,5 @@
 #include "WallpaperEngine/Data/Assets/Texture.h"
+#include "WallpaperEngine/Render/CFBO.h"
 #include "WallpaperEngine/Render/CTexture.h"
 #include "WallpaperEngine/Render/TextureCache.h"
 
@@ -11,6 +12,7 @@ using WallpaperEngine::Data::Assets::TextureFormat_ARGB8888;
 using WallpaperEngine::Data::Assets::TextureFormat_DXT1;
 using WallpaperEngine::Data::Assets::TextureFormat_DXT5;
 using WallpaperEngine::Data::Assets::TextureFormat_RG88;
+using WallpaperEngine::Render::CFBO;
 using WallpaperEngine::Render::CTexture;
 using WallpaperEngine::Render::TextureCache;
 
@@ -42,4 +44,11 @@ TEST_CASE ("only unscoped runtime texture aliases are pinned", "[texture][cache]
 	+ "materials/background.tex";
     CHECK_FALSE (TextureCache::isPinnedRuntimeTextureKey (authoredKey));
     CHECK_FALSE (TextureCache::isPinnedRuntimeTextureKey ("materials/background.tex"));
+}
+
+TEST_CASE ("only the dedicated reflection framebuffer generates mipmaps", "[texture][fbo]") {
+    CHECK (CFBO::targetUsesMipmaps ("_rt_MipMappedFrameBuffer"));
+    CHECK_FALSE (CFBO::targetUsesMipmaps ("_rt_FullFrameBuffer"));
+    CHECK_FALSE (CFBO::targetUsesMipmaps ("_rt_imageLayerComposite_206_a"));
+    CHECK_FALSE (CFBO::targetUsesMipmaps ("_rt_imageLayerComposite_206_b"));
 }
