@@ -5,12 +5,14 @@
 #include "WallpaperEngine/Data/Model/Wallpaper.h"
 #include "WallpaperEngine/Data/Parsers/MaterialParser.h"
 #include "WallpaperEngine/Data/Parsers/ObjectParser.h"
+#include "WallpaperEngine/FileSystem/Container.h"
 
 using WallpaperEngine::Data::JSON::JSON;
 using WallpaperEngine::Data::JSON::parseCompatible;
 using namespace WallpaperEngine::Data::Model;
 using WallpaperEngine::Data::Parsers::MaterialParser;
 using WallpaperEngine::Data::Parsers::ObjectParser;
+using WallpaperEngine::FileSystem::Container;
 
 TEST_CASE ("optional tolerates authored type drift") {
     // workshop 3758354038 authors text "padding" as a vector string where older scenes
@@ -36,6 +38,36 @@ TEST_CASE ("dependencies tolerate the structured authoring form") {
 
     const auto object = ObjectParser::parse (data, project);
     REQUIRE (object->dependencies == std::vector {7, 104});
+}
+
+TEST_CASE ("missing image effects are skipped without discarding neighboring effects") {
+    auto filesystem = std::make_unique<Container> ();
+    filesystem->getVFS ().add ("effects/before.json", R"({"name":"before","passes":[]})");
+    filesystem->getVFS ().add ("effects/after.json", R"({"name":"after","passes":[]})");
+
+    Project project {};
+    project.assetLocator = std::make_unique<WallpaperEngine::Assets::AssetLocator> (std::move (filesystem));
+
+    const auto data = JSON::parse (
+	R"({
+	    "id": 42,
+	    "name": "text with optional effects",
+	    "text": "still visible",
+	    "effects": [
+		{"id": 1, "file": "effects/before.json"},
+		{"id": 2, "file": "effects/missing-workshop-dependency.json"},
+		{"id": 3},
+		{"id": 4, "file": "effects/after.json"}
+	    ]
+	})"
+    );
+
+    const auto object = ObjectParser::parse (data, project);
+    REQUIRE (object->is<Text> ());
+    const auto* text = object->as<Text> ();
+    REQUIRE (text->effects.size () == 2);
+    CHECK (text->effects[0]->effect->name == "before");
+    CHECK (text->effects[1]->effect->name == "after");
 }
 
 TEST_CASE ("alpha-to-coverage material blending is preserved") {
