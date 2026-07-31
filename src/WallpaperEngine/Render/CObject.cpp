@@ -24,28 +24,25 @@ RenderSortClass classifyMaterial (const Material& material) {
 }
 
 glm::mat4 localMatrix (const Object& object, const float time) {
-    glm::vec3 origin = object.origin->value->getVec3 ();
-
-    if (object.origin->animation != nullptr) {
-	origin = object.origin->animation->evaluateVec3 (origin, time);
-    }
+    const glm::vec3 origin = object.origin->evaluateVec3 (time);
 
     glm::vec3 scale = glm::vec3 (1.0f);
     glm::vec3 angles = glm::vec3 (0.0f);
 
     if (object.is<Image> ()) {
 	const auto* image = object.as<Image> ();
-	scale = image->scale->value->getVec3 ();
-	angles = image->angles->value->getVec3 ();
+	scale = image->scale->evaluateVec3 (time);
+	angles = image->angles->evaluateVec3 (time);
     } else if (object.is<Particle> ()) {
 	const auto* particle = object.as<Particle> ();
-	scale = particle->scale->value->getVec3 ();
-	angles = particle->angles->value->getVec3 ();
+	scale = particle->scale->evaluateVec3 (time);
+	angles = particle->angles->evaluateVec3 (time);
     } else if (object.is<Text> ()) {
-	scale = object.as<Text> ()->scale->value->getVec3 ();
+	scale = object.as<Text> ()->scale->evaluateVec3 (time);
+	angles = object.groupAngles->evaluateVec3 (time);
     } else {
-	scale = object.groupScale->value->getVec3 ();
-	angles = object.groupAngles->value->getVec3 ();
+	scale = object.groupScale->evaluateVec3 (time);
+	angles = object.groupAngles->evaluateVec3 (time);
     }
 
     glm::mat4 local = glm::translate (glm::mat4 (1.0f), origin);

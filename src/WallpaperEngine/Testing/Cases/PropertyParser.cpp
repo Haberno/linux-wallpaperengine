@@ -7,6 +7,7 @@
 #include "WallpaperEngine/Data/Model/Property.h"
 #include "WallpaperEngine/Data/Model/PropertyAnimation.h"
 #include "WallpaperEngine/Data/Parsers/PropertyParser.h"
+#include "WallpaperEngine/Data/Parsers/UserSettingParser.h"
 
 using WallpaperEngine::Data::JSON::JSON;
 using WallpaperEngine::Data::Builders::ColorBuilder;
@@ -14,6 +15,7 @@ using WallpaperEngine::Data::Model::DynamicValue;
 using WallpaperEngine::Data::Model::PropertyAnimation;
 using WallpaperEngine::Data::Model::PropertyKeyframe;
 using WallpaperEngine::Data::Parsers::PropertyParser;
+using WallpaperEngine::Data::Parsers::UserSettingParser;
 
 TEST_CASE ("Bool properties without a value default to false") {
     const JSON propertyData = {
@@ -59,6 +61,30 @@ TEST_CASE ("Scalar property animations evaluate absolute and relative values") {
 	.relative = true,
     };
     CHECK (relative.evaluateFloat (0.25f, 0.5f) == Catch::Approx (0.5f));
+}
+
+TEST_CASE ("Relative angle animations resolve from the authored transform value") {
+    // Tui and La (workshop 3642693674) rotate five times over a 75-second
+    // timeline. The body stores four full turns in the base value and offsets
+    // it with a relative c2 channel; all complete turns are visually identical.
+    const auto data = JSON::parse (
+	R"({
+	    "value": "0 0 -31.41593",
+	    "animation": {
+		"c0": [{"frame": 0, "value": 0}, {"frame": 2249, "value": 0}],
+		"c1": [{"frame": 0, "value": 0}, {"frame": 2249, "value": 0}],
+		"c2": [{"frame": 0, "value": 6.2831898}, {"frame": 2249, "value": -25.132741}],
+		"options": {"fps": 30, "length": 2250, "mode": "loop", "wraploop": true},
+		"relative": true
+	    }
+	})"
+    );
+
+    const auto setting = UserSettingParser::parse (data, {});
+    REQUIRE (setting->animation != nullptr);
+    CHECK (setting->evaluateVec3 (0.0f).z == Catch::Approx (-25.1327402f));
+    CHECK (setting->evaluateVec3 (2249.0f / 30.0f).z == Catch::Approx (-56.548671f));
+    CHECK (setting->evaluateVec3 (75.0f).z == Catch::Approx (-25.1327402f));
 }
 
 TEST_CASE ("Scripted values retain their last finite result") {

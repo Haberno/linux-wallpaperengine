@@ -96,25 +96,23 @@ std::optional<glm::vec3> findMagentaCompositeTint (const Image& image, const std
 }
 
 CImage::ResolvedTransform CImage::localTransform (const Object& object, float time) {
-    glm::vec3 origin = object.origin->value->getVec3 ();
-
-    // keyframed origin animations (e.g. the train moving across workshop scene 2488626583)
-    if (object.origin->animation != nullptr) {
-	origin = object.origin->animation->evaluateVec3 (origin, time);
-    }
+    // Keyframed transform properties are sampled as a unit. Wallpaper Engine's
+    // generic property parser allows animation on origin, scale, and angles.
+    const glm::vec3 origin = object.origin->evaluateVec3 (time);
     glm::vec3 scale = glm::vec3 (1.0f);
     glm::vec3 angles = glm::vec3 (0.0f);
 
     if (object.is<Image> ()) {
 	const auto* image = object.as<Image> ();
-	scale = image->scale->value->getVec3 ();
-	angles = image->angles->value->getVec3 ();
+	scale = image->scale->evaluateVec3 (time);
+	angles = image->angles->evaluateVec3 (time);
     } else if (object.is<Text> ()) {
 	const auto* text = object.as<Text> ();
-	scale = text->scale->value->getVec3 ();
+	scale = text->scale->evaluateVec3 (time);
+	angles = object.groupAngles->evaluateVec3 (time);
     } else {
-	scale = object.groupScale->value->getVec3 ();
-	angles = object.groupAngles->value->getVec3 ();
+	scale = object.groupScale->evaluateVec3 (time);
+	angles = object.groupAngles->evaluateVec3 (time);
     }
 
     return { origin, scale, angles };
@@ -1786,11 +1784,7 @@ void CImage::render () {
     // retain a pointer returned by getAlpha()/getUserAlpha(). This is especially
     // important for authored opening overlays that fade away to reveal the live
     // scene below them.
-    this->m_resolvedAlpha = this->m_image.alpha->value->getFloat ();
-    if (this->m_image.alpha->animation != nullptr) {
-	this->m_resolvedAlpha
-	    = this->m_image.alpha->animation->evaluateFloat (this->m_resolvedAlpha, this->getScene ().getTime ());
-    }
+    this->m_resolvedAlpha = this->m_image.alpha->evaluateFloat (this->getScene ().getTime ());
 
     glColorMask (true, true, true, true);
 
