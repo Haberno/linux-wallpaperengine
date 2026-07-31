@@ -757,6 +757,11 @@ std::set<std::string> collectProjectTextures (const Project& project) {
 	    if (image->model != nullptr && image->model->material != nullptr) {
 		collectMaterialTextures (*image->model->material, result);
 	    }
+	    if (image->model != nullptr && image->model->puppetMesh.has_value ()) {
+		for (const auto& descriptor : image->model->puppetMesh->clippingDescriptors) {
+		    result.insert (descriptor.maskAsset);
+		}
+	    }
 
 	    collectImageEffectTextures (image->effects, result);
 	} else if (object->is<Particle> ()) {

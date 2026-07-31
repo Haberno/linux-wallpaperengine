@@ -136,6 +136,9 @@ void CPass::setupRenderFramebuffer () const {
     // Alpha-to-coverage is sticky OpenGL state, so always reset it before
     // selecting the pass' blending mode.
     glDisable (GL_SAMPLE_ALPHA_TO_COVERAGE);
+    // Blend equations are sticky state. Most passes use ordinary addition, while
+    // puppet mask generation selects MAX for RGB to union overlapping source parts.
+    glBlendEquationSeparate (this->m_colorBlendEquation, this->m_alphaBlendEquation);
 
     // set texture blending
     switch (this->getBlendingMode ()) {
@@ -544,9 +547,8 @@ void CPass::render () {
     this->renderGeometry ();
     this->cleanupRenderSetup ();
 
-    // Refresh the mip chain for layer composite targets so a later pass that maps this
-    // FBO onto grazing 3D geometry can filter it instead of aliasing (self-guards to
-    // composite FBOs only).
+    // Refresh only Wallpaper Engine's dedicated mipmapped target. Ordinary
+    // _rt_imageLayerComposite_* targets intentionally remain single-level.
     this->m_drawTo->generateMipmaps ();
 }
 
@@ -591,11 +593,20 @@ void CPass::setDepthwriteMode (DepthwriteMode depthwritemode) { this->m_depthwri
 
 DepthwriteMode CPass::getDepthwriteMode () const { return this->m_depthwritemode; }
 
+void CPass::setBlendEquation (const GLenum color, const GLenum alpha) {
+    this->m_colorBlendEquation = color;
+    this->m_alphaBlendEquation = alpha;
+}
+
 void CPass::setTexCoord (GLuint texcoord) { this->a_TexCoord = texcoord; }
 
 void CPass::setPosition (GLuint position) { this->a_Position = position; }
 
 const MaterialPass& CPass::getPass () const { return this->m_pass; }
+
+const ImageEffectPassOverride& CPass::getOverride () const { return this->m_override; }
+
+const TextureMap& CPass::getBinds () const { return this->m_binds; }
 
 std::optional<std::reference_wrapper<std::string>> CPass::getTarget () const { return this->m_target; }
 
@@ -997,6 +1008,7 @@ void CPass::setupTextureUniforms () {
     this->addUniform ("g_Texture5", 5);
     this->addUniform ("g_Texture6", 6);
     this->addUniform ("g_Texture7", 7);
+    this->addUniform ("g_Texture8", 8);
     this->addUniform ("g_TextureReductionScale", 1.0f);
 
     // Wallpaper Engine initializes resolution uniforms even when the matching texture
@@ -1006,7 +1018,7 @@ void CPass::setupTextureUniforms () {
     // OpenGL's zero default turns the ratio below into 0/0 and makes the mask sample
     // undefined. Identity dimensions preserve the authored UVs; resolved textures
     // overwrite their own slots below.
-    for (int index = 0; index < 8; index++) {
+    for (int index = 0; index < 9; index++) {
 	this->addUniform ("g_Texture" + std::to_string (index) + "Resolution", glm::vec4 (1.0f));
     }
 

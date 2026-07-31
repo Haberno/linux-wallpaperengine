@@ -3,6 +3,7 @@
 #include <optional>
 #include <string>
 
+#include "MdlMesh.h"
 #include "Types.h"
 
 namespace WallpaperEngine::Data::Model {
@@ -28,5 +29,7 @@ struct ModelStruct {
     std::optional<int> height;
     /** Model file for puppet */
     std::optional<std::string> puppet;
+    /** Parsed puppet container, loaded with the JSON model so render setup never reparses it. */
+    std::optional<MdlMesh> puppetMesh;
 };
 } // namespace WallpaperEngine::Data::Model

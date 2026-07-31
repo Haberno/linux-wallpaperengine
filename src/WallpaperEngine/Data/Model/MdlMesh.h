@@ -37,11 +37,41 @@ struct MdlSubmesh {
     uint32_t vertexTag = 0;
     uint32_t strideBytes = 0;
     uint32_t blendIndicesOffset = MdlAttributeAbsent;
+    uint32_t blendWeightsOffset = MdlAttributeAbsent;
+    uint32_t uvOffset = MdlAttributeAbsent;
     uint32_t texCoordVec4Offset = MdlAttributeAbsent;
+};
+
+/**
+ * One independently drawable span of a submesh index buffer. Clipping descriptors
+ * refer to these records by their position in MdlMesh::drawRanges.
+ */
+struct MdlDrawRange {
+    /** Authored part/bone grouping identifier; its editor-facing meaning is not yet known. */
+    uint32_t partId = 0;
+    uint32_t submeshIndex = 0;
+    uint32_t firstIndex = 0;
+    uint32_t indexCount = 0;
+};
+
+/** A puppet clipping relationship serialized at the end of revision 23 MDLV files. */
+struct MdlClippingDescriptor {
+    /** Stable authored identifier. Wallpaper Engine does not use it while drawing. */
+    uint64_t opaqueId = 0;
+    /** Texture name relative to materials/, without the .tex suffix. */
+    std::string maskAsset;
+    /** Authored clipping/composition flags. Preserve all bits even when not yet consumed. */
+    uint32_t flags = 0;
+    /** Indices into MdlMesh::drawRanges that receive the generated mask. */
+    std::vector<uint32_t> targets;
+    /** Indices into MdlMesh::drawRanges that generate the mask. */
+    std::vector<uint32_t> sources;
 };
 
 struct MdlMesh {
     static constexpr uint32_t AttributeAbsent = MdlAttributeAbsent;
+    /** Numeric MDLV container revision. */
+    uint32_t version = 0;
     /** Layout of the first submesh; submeshes with a different tag are not described here. */
     uint32_t vertexTag = 0;
     /** Vertex stride in bytes */
@@ -60,5 +90,16 @@ struct MdlMesh {
     glm::vec3 boundingBoxMax = glm::vec3 (0.0f);
     bool hasBoundingBox = false;
     std::vector<MdlSubmesh> submeshes;
+    /**
+     * Optional revision-21 auxiliary vec3 stream. Every observed file stores one
+     * vector per first-submesh vertex and auxiliaryHeader == 1, but consumers must
+     * not infer clipping semantics from it.
+     */
+    uint32_t auxiliaryHeader = 0;
+    std::vector<glm::vec3> auxiliaryPositions;
+    /** Optional revision-21 independently drawable index-buffer spans. */
+    std::vector<MdlDrawRange> drawRanges;
+    /** Revision-23 clipping mask relationships. */
+    std::vector<MdlClippingDescriptor> clippingDescriptors;
 };
 } // namespace WallpaperEngine::Data::Model

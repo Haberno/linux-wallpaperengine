@@ -1,5 +1,6 @@
 #include <cstdint>
 #include <cstring>
+#include <limits>
 #include <string>
 #include <vector>
 
@@ -98,11 +99,29 @@ std::vector<char> makeAnimatedModelSections () {
 	appendFrame (data, bone == 0 ? glm::vec3 (2.0f, 0.0f, 0.0f) : glm::vec3 (0.0f, 2.0f, 0.0f));
     }
 
-    // MDLA metadata has no serialized byte length. The parser locates the next
-    // validated record across this payload, including records with an empty mode.
-    appendValue<uint32_t> (data, 0xdeadbeef);
-    appendValue<float> (data, 42.0f);
-    appendString (data, R"({"frame":1,"name":"event"})");
+    // MDLA0002+ places an optional per-bone scalar stream after the legacy
+    // blend tracks. Reze's MDLA0006 file uses this shape before a large block
+    // of version-specific metadata.
+    appendValue<uint32_t> (data, 0); // no legacy blend tracks
+    appendValue<uint8_t> (data, 1); // per-bone scalar stream present
+    for (uint32_t bone = 0; bone < 2; bone++) {
+	appendValue<uint32_t> (data, 0);
+	appendValue<uint32_t> (data, sizeof (float) * 2);
+	appendValue<float> (data, 1.0f);
+	appendValue<float> (data, bone == 0 ? 1.0f : 0.5f);
+    }
+
+    // Newer metadata has no enclosing byte length. Include the exact kind of
+    // false header that the old scanner accepted inside Reze's scalar payload:
+    // invalid UTF-8 and a positive subnormal frame rate.
+    appendValue<uint32_t> (data, 16256);
+    appendValue<uint32_t> (data, 0);
+    appendString (data, std::string ("\xff?", 2));
+    appendString (data, "");
+    appendValue<float> (data, std::numeric_limits<float>::denorm_min ());
+    appendValue<uint32_t> (data, 16256);
+    appendValue<uint32_t> (data, 0);
+    appendValue<uint32_t> (data, 0);
 
     appendValue<uint32_t> (data, 9);
     appendValue<uint32_t> (data, 0);

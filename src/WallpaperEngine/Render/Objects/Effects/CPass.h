@@ -50,11 +50,15 @@ public:
     [[nodiscard]] DepthtestMode getDepthtestMode () const;
     void setDepthwriteMode (DepthwriteMode depthwritemode);
     [[nodiscard]] DepthwriteMode getDepthwriteMode () const;
+    /** Selects the RGB/alpha blend equations; defaults to ordinary additive blending. */
+    void setBlendEquation (GLenum color, GLenum alpha);
     [[nodiscard]] std::shared_ptr<const CFBO> resolveFBO (const std::string& name) const;
 
     [[nodiscard]] std::shared_ptr<const FBOProvider> getFBOProvider () const;
     [[nodiscard]] const CRenderable& getRenderable () const;
     [[nodiscard]] const MaterialPass& getPass () const;
+    [[nodiscard]] const ImageEffectPassOverride& getOverride () const;
+    [[nodiscard]] const TextureMap& getBinds () const;
     [[nodiscard]] std::optional<std::reference_wrapper<std::string>> getTarget () const;
     [[nodiscard]] Render::Shaders::Shader* getShader () const;
     [[nodiscard]] GLuint getProgramID () const;
@@ -213,6 +217,8 @@ private:
     BlendingMode m_blendingmode = BlendingMode_Normal;
     DepthtestMode m_depthtestmode = DepthtestMode_Disabled;
     DepthwriteMode m_depthwritemode = DepthwriteMode_Disabled;
+    GLenum m_colorBlendEquation = GL_FUNC_ADD;
+    GLenum m_alphaBlendEquation = GL_FUNC_ADD;
     /**
      * Default matrix the pointers below start at. Owners (CImage, CModel, ...) point these at their own
      * matrices before rendering; passes whose owner never does (e.g. plain copy passes) must still read
