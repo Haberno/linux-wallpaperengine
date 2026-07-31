@@ -19,11 +19,13 @@ WaylandMouseInput::WaylandMouseInput (const WallpaperEngine::Render::Drivers::Wa
 void WaylandMouseInput::update () {
     if (!this->m_waylandDriver.getApp ().getContext ().settings.mouse.enabled) {
 	this->m_pos = { 0, 0 };
+	this->m_hasPosition = false;
 	return;
     }
 
     if (m_waylandDriver.viewportInFocus && m_waylandDriver.viewportInFocus->rendering) {
 	this->m_pos = m_waylandDriver.viewportInFocus->mousePos;
+	this->m_hasPosition = true;
 	return;
     }
 
@@ -36,6 +38,7 @@ void WaylandMouseInput::update () {
     const auto globalCursor = this->queryHyprlandCursorPosition ();
     if (!globalCursor.has_value ()) {
 	this->m_pos = { 0, 0 };
+	this->m_hasPosition = false;
 	return;
     }
 
@@ -51,10 +54,12 @@ void WaylandMouseInput::update () {
 	}
 
 	this->m_pos = { localX * viewport->scale, (viewport->size.y - localY) * viewport->scale };
+	this->m_hasPosition = true;
 	return;
     }
 
     this->m_pos = { 0, 0 };
+    this->m_hasPosition = false;
 }
 
 glm::dvec2 WaylandMouseInput::position () const {
@@ -70,6 +75,10 @@ glm::dvec2 WaylandMouseInput::position () const {
 
     if (viewport == m_waylandDriver.viewportInFocus) {
 	return viewport->mousePos;
+    }
+
+    if (this->m_hasPosition) {
+	return this->m_pos;
     }
 
     if (viewport->mousePos.x != 0 || viewport->mousePos.y != 0) {
