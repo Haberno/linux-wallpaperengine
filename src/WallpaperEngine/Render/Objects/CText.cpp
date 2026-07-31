@@ -282,8 +282,13 @@ glm::vec2 CText::computeEffectSurface () const {
     // placement, but retaining it as a lower bound keeps authored effect surfaces stable.
     // The margin gives blur-style effects bleed room past the ink.
     const glm::vec2 margin = glm::max (m_text.padding, glm::vec2 (32.0f));
-    const float hx = std::max (m_text.size.x * 0.5f, std::abs (m_quadOffset.x) + m_quadSize.x * 0.5f + margin.x);
-    const float hy = std::max (m_text.size.y * 0.5f, std::abs (m_quadOffset.y) + m_quadSize.y * 0.5f + margin.y);
+    // Native surfaces are glyph/editor extents plus padding on both sides. Including the
+    // margin in the serialized-size branch also leaves room for scripted digit changes
+    // (Shin Godzilla's Summer85 clock varies by a few pixels between timestamps).
+    const float hx
+	= std::max (m_text.size.x * 0.5f + margin.x, std::abs (m_quadOffset.x) + m_quadSize.x * 0.5f + margin.x);
+    const float hy
+	= std::max (m_text.size.y * 0.5f + margin.y, std::abs (m_quadOffset.y) + m_quadSize.y * 0.5f + margin.y);
     return { hx * 2.0f, hy * 2.0f };
 }
 
