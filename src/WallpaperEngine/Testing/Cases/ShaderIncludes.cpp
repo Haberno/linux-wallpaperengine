@@ -34,6 +34,24 @@ compileFragment (const std::string& header, const std::string& source, const std
     );
     return unit.compile ();
 }
+
+std::pair<std::string, std::string>
+compileLinked (const std::string& vertexSource, const std::string& fragmentSource, const ComboMap& combos) {
+    const auto assets = shaderAssets ("");
+    const ShaderConstantMap constants;
+    const TextureMap textures;
+    ShaderUnit vertex (
+	GLSLContext::UnitType_Vertex, "test_linked.vert", vertexSource, *assets, constants, textures, textures, combos,
+	combos
+    );
+    ShaderUnit fragment (
+	GLSLContext::UnitType_Fragment, "test_linked.frag", fragmentSource, *assets, constants, textures, textures,
+	combos, combos
+    );
+    vertex.linkToUnit (&fragment);
+    fragment.linkToUnit (&vertex);
+    return { vertex.compile (), fragment.compile () };
+}
 } // namespace
 
 TEST_CASE (
@@ -136,4 +154,43 @@ TEST_CASE ("conditionally included headers do not contribute early macros", "[sh
     REQUIRE (includedHelper != std::string::npos);
     CHECK (rootEndif < define);
     CHECK (uniform < includedHelper);
+}
+
+TEST_CASE ("matching conditional TexCoord widths stay synchronized", "[shader][compat]") {
+    const std::string vertexSource =
+	"uniform float g_Test;\n"
+	"#if LIGHTMAP\n"
+	"attribute vec4 a_TexCoordVec4;\n"
+	"varying vec4 v_TexCoord;\n"
+	"#else\n"
+	"attribute vec2 a_TexCoord;\n"
+	"varying vec2 v_TexCoord;\n"
+	"#endif\n"
+	"void main() {\n"
+	"#if LIGHTMAP\n"
+	"    v_TexCoord = a_TexCoordVec4;\n"
+	"#else\n"
+	"    v_TexCoord = a_TexCoord;\n"
+	"#endif\n"
+	"    gl_Position = vec4(0.0);\n"
+	"}\n";
+    const std::string fragmentSource =
+	"uniform float g_Test;\n"
+	"#if LIGHTMAP\n"
+	"varying vec4 v_TexCoord;\n"
+	"#else\n"
+	"varying vec2 v_TexCoord;\n"
+	"#endif\n"
+	"void main() { out_FragColor = vec4(v_TexCoord.xy, 0.0, 1.0); }\n";
+    const ComboMap combos { { "LIGHTMAP", 0 } };
+
+    const auto [vertex, fragment] = compileLinked (vertexSource, fragmentSource, combos);
+    CHECK (vertex.find ("varying vec2 v_TexCoord;") != std::string::npos);
+    CHECK (fragment.find ("varying vec2 v_TexCoord;") != std::string::npos);
+
+    const auto translated = GLSLContext::get ().toGlsl (vertex, fragment);
+    REQUIRE_FALSE (translated.first.empty ());
+    REQUIRE_FALSE (translated.second.empty ());
+    CHECK (translated.first.find ("out vec2 v_TexCoord;") != std::string::npos);
+    CHECK (translated.second.find ("in vec2 v_TexCoord;") != std::string::npos);
 }
