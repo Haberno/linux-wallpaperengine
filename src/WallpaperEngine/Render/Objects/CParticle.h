@@ -25,6 +25,7 @@ constexpr uint32_t DEFAULT_MAX_PARTICLES = 1000;
 [[nodiscard]] float calculateParticleSimulationDelta (float elapsed, float rate);
 [[nodiscard]] float calculateParticleEmissionRate (float emitterRate, float count);
 [[nodiscard]] glm::vec3 convertParticleRotationForRender (const glm::vec3& rotation);
+[[nodiscard]] float calculateRopeTrailVisualValue (float currentValue, float trailPosition, bool fadeAlongTrail);
 
 /**
  * Runtime particle instance state
@@ -32,9 +33,6 @@ constexpr uint32_t DEFAULT_MAX_PARTICLES = 1000;
 struct ParticleInstance {
     struct TrailPoint {
 	glm::vec3 position { 0.0f };
-	glm::vec3 color { 1.0f };
-	float alpha { 1.0f };
-	float size { 20.0f };
     };
 
     // Position and movement
