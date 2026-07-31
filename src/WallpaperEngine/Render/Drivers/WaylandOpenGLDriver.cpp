@@ -39,7 +39,12 @@ static void handlePointerEnter (
 }
 
 static void
-handlePointerLeave (void* data, struct wl_pointer* wl_pointer, uint32_t serial, struct wl_surface* surface) { }
+handlePointerLeave (void* data, struct wl_pointer* wl_pointer, uint32_t serial, struct wl_surface* surface) {
+    const auto driver = static_cast<WaylandOpenGLDriver*> (data);
+    if (driver->viewportInFocus && driver->viewportInFocus->surface == surface) {
+	driver->viewportInFocus = nullptr;
+    }
+}
 
 static void handlePointerAxis (void* data, wl_pointer* wl_pointer, uint32_t time, uint32_t axis, wl_fixed_t value) { }
 
