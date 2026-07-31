@@ -58,8 +58,8 @@ public:
     );
 
     /**
-     * Runs a per-frame update on every cached texture so animated textures
-     * (videos, gifs) keep decoding even when nothing else drives their update
+     * Runs a per-frame update on every live texture handed out by the cache so
+     * animated textures keep decoding even after their cache key is replaced
      */
     void updateAll ();
     [[nodiscard]] TextureCacheStats getStats () const;
@@ -92,6 +92,17 @@ private:
     std::shared_ptr<const AlbumTexture> m_currentThumbnail = nullptr;
     /** Cached textures */
     std::map<std::string, CacheEntry> m_textureCache = {};
+    /**
+     * Every texture instance that may still be referenced by a live scene.
+     *
+     * Cache entries can be replaced when two outputs load the same project
+     * independently. The replaced provider must keep receiving video updates
+     * until the scene that owns it is destroyed, so this registry deliberately
+     * uses weak references instead of mirroring cache ownership.
+     */
+    std::map<const TextureProvider*, std::weak_ptr<const TextureProvider>> m_liveTextures = {};
+    /** Driver frame most recently used to update the live texture registry. */
+    uint32_t m_lastTextureUpdateFrame = UINT32_MAX;
     /** Monotonic use counter for LRU ordering */
     uint64_t m_useCounter = 0;
     /** Estimated total bytes held by cached textures */
