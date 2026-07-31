@@ -5,7 +5,6 @@
 #include <algorithm>
 #include <cmath>
 #include <cstring>
-#include <iterator>
 #include <limits>
 #include <optional>
 #include <ranges>
@@ -24,7 +23,6 @@
 #include "WallpaperEngine/Data/Model/UserSetting.h"
 #include "WallpaperEngine/Data/Parsers/MaterialParser.h"
 #include "WallpaperEngine/Data/Parsers/MdlAnimationParser.h"
-#include "WallpaperEngine/Data/Parsers/MdlParser.h"
 #include "WallpaperEngine/Data/Utils/BinaryReader.h"
 #include "WallpaperEngine/Data/Utils/MemoryStream.h"
 #include "WallpaperEngine/Logging/Log.h"
@@ -39,22 +37,6 @@ using namespace WallpaperEngine::Data::Builders;
 using namespace WallpaperEngine::Data::Utils;
 
 namespace {
-/** 2D barycentric coordinates of a point in a triangle; a degenerate triangle misses everywhere. */
-glm::vec3 barycentric (const glm::vec2& point, const glm::vec2& a, const glm::vec2& b, const glm::vec2& c) {
-    const glm::vec2 ab = b - a;
-    const glm::vec2 ac = c - a;
-    const glm::vec2 ap = point - a;
-    const float area = ab.x * ac.y - ac.x * ab.y;
-
-    if (std::abs (area) < 1e-6f) {
-	return glm::vec3 (-1.0f);
-    }
-
-    const float v = (ap.x * ac.y - ac.x * ap.y) / area;
-    const float w = (ab.x * ap.y - ap.x * ab.y) / area;
-    return { 1.0f - v - w, v, w };
-}
-
 glm::vec2 rotateVec2 (const glm::vec2& value, float angle) {
     const float cosAngle = std::cos (angle);
     const float sinAngle = std::sin (angle);
@@ -106,85 +88,6 @@ std::optional<glm::vec3> findMagentaCompositeTint (const Image& image, const std
 		return tint;
 	    }
 	}
-    }
-
-    return std::nullopt;
-}
-
-struct PuppetMeshBlock {
-    size_t headerOffset = 0;
-    uint32_t vertexBytes = 0;
-    uint32_t indexBytes = 0;
-};
-
-struct PuppetVertexLayout {
-    uint32_t formatMask = 0;
-    size_t stride = 0;
-    size_t blendIndicesOffset = 0;
-    size_t uvOffset = 0;
-};
-
-template <typename T> T puppetRead (const std::vector<char>& data, size_t& offset) {
-    if (offset + sizeof (T) > data.size ()) {
-	throw std::runtime_error ("puppet data ends unexpectedly");
-    }
-
-    T value;
-    std::memcpy (&value, data.data () + offset, sizeof (value));
-    offset += sizeof (value);
-    return value;
-}
-
-size_t findPuppetSection (const std::vector<char>& data, const char* marker, size_t from) {
-    const size_t markerLength = strlen (marker);
-    constexpr size_t sectionHeaderLength = 9;
-    for (size_t offset = from; offset + sectionHeaderLength <= data.size (); offset++) {
-	if (std::memcmp (data.data () + offset, marker, markerLength) == 0
-	    && std::all_of (
-		data.begin () + static_cast<ptrdiff_t> (offset + markerLength),
-		data.begin () + static_cast<ptrdiff_t> (offset + sectionHeaderLength - 1),
-		[] (const char value) { return value >= '0' && value <= '9'; }
-	    )
-	    && data[offset + sectionHeaderLength - 1] == '\0') {
-	    return offset;
-	}
-    }
-    return data.size ();
-}
-
-// The official loader uses the serialized vertex-format mask, not the MDLV version,
-// to calculate the record stride. Scan for a known mask whose vertex/index byte
-// lengths are also self-consistent; this accepts versions such as MDLV0019 without
-// treating an unknown format as the newest layout.
-std::optional<PuppetMeshBlock> findPuppetMeshBlock (
-    const std::vector<char>& data, size_t markerSize, size_t mdlsOffset, const PuppetVertexLayout& layout
-) {
-    constexpr size_t meshHeaderSize = sizeof (uint32_t) * 2;
-    for (size_t offset = markerSize; offset + meshHeaderSize + sizeof (uint32_t) < mdlsOffset; offset++) {
-	size_t cursor = offset;
-	const auto candidateFormatMask = puppetRead<uint32_t> (data, cursor);
-	if (candidateFormatMask != layout.formatMask) {
-	    continue;
-	}
-	const auto candidateVertexBytes = puppetRead<uint32_t> (data, cursor);
-	const size_t verticesOffset = offset + meshHeaderSize;
-	const size_t indexLengthOffset = verticesOffset + candidateVertexBytes;
-
-	if (candidateVertexBytes == 0 || candidateVertexBytes % layout.stride != 0
-	    || indexLengthOffset + sizeof (uint32_t) > mdlsOffset) {
-	    continue;
-	}
-
-	cursor = indexLengthOffset;
-	const auto candidateIndexBytes = puppetRead<uint32_t> (data, cursor);
-	if (candidateIndexBytes == 0 || candidateIndexBytes % (sizeof (uint16_t) * 3) != 0
-	    || cursor + candidateIndexBytes > mdlsOffset) {
-	    continue;
-	}
-
-	return PuppetMeshBlock { .headerOffset = offset,
-				 .vertexBytes = candidateVertexBytes,
-				 .indexBytes = candidateIndexBytes };
     }
 
     return std::nullopt;
@@ -513,7 +416,12 @@ CImage::~CImage () {
     }
 
     this->m_passes.clear ();
+    delete this->m_puppetAlbedoCopyPass;
     delete this->m_puppetOverlayPass;
+    for (auto* pass : this->m_puppetClippingPasses) {
+	delete pass;
+    }
+    this->m_puppetClippingPasses.clear ();
 
     // free any gl resources
     glDeleteBuffers (1, &this->m_sceneSpacePosition);
@@ -542,56 +450,24 @@ CImage::~CImage () {
 }
 
 bool CImage::loadPuppetMesh (const glm::vec2& size) {
-    if (!this->getImage ().model->puppet.has_value ()) {
+    if (!this->getImage ().model->puppet.has_value () || !this->getImage ().model->puppetMesh.has_value ()) {
 	return false;
     }
 
     try {
-	const auto stream = this->getScene ().getScene ().project.assetLocator->read (*this->getImage ().model->puppet);
-	std::vector<char> data { std::istreambuf_iterator<char> (*stream), std::istreambuf_iterator<char> () };
-
-	constexpr size_t markerSize = 9;
-	constexpr size_t positionOffset = 0;
-	constexpr std::array vertexLayouts {
-	    // Newer weighted layout with one additional packed vertex field. Observed
-	    // in MDLV0023 files that also carry MDMP/MDLE sections.
-	    PuppetVertexLayout { .formatMask = 0x0181000e, .stride = 84, .blendIndicesOffset = 44, .uvOffset = 76 },
-	    // Current weighted puppet layout. Observed in MDLV0017/0019/0021/0023.
-	    PuppetVertexLayout { .formatMask = 0x0180000f, .stride = 80, .blendIndicesOffset = 40, .uvOffset = 72 },
-	    // Compact weighted layout as serialized by MDLV0016.
-	    PuppetVertexLayout { .formatMask = 0x01800009, .stride = 52, .blendIndicesOffset = 12, .uvOffset = 44 },
-	    // Legacy compact weighted layout. Observed in MDLV0013/0014.
-	    PuppetVertexLayout { .formatMask = 0x00000000, .stride = 52, .blendIndicesOffset = 12, .uvOffset = 44 },
-	};
-
-	const std::string puppetVersion
-	    = data.size () >= markerSize ? std::string (data.data (), strlen ("MDLV0021")) : "";
-	if (!puppetVersion.starts_with ("MDLV00")) {
-	    sLog.error ("Unsupported puppet model header ", puppetVersion, " in ", *this->getImage ().model->puppet);
-	    return false;
-	}
-	const size_t mdlsOffset = findPuppetSection (data, "MDLS", markerSize);
-	const PuppetVertexLayout* vertexLayout = nullptr;
-	std::optional<PuppetMeshBlock> meshBlock;
-	for (const auto& candidate : vertexLayouts) {
-	    meshBlock = findPuppetMeshBlock (data, markerSize, mdlsOffset, candidate);
-	    if (meshBlock.has_value ()) {
-		vertexLayout = &candidate;
-		break;
-	    }
-	}
-	if (!meshBlock.has_value ()) {
-	    sLog.error (
-		"Unsupported or malformed puppet vertex format ", puppetVersion, " in ",
-		*this->getImage ().model->puppet
-	    );
-	    return false;
+	const auto& mesh = *this->getImage ().model->puppetMesh;
+	if (mesh.submeshes.empty ()) {
+	    throw std::runtime_error ("puppet model has no submeshes");
 	}
 
-	const size_t vertexCount = meshBlock->vertexBytes / vertexLayout->stride;
-	const size_t verticesOffset = meshBlock->headerOffset + sizeof (uint32_t) * 2;
-	const size_t indicesOffset = verticesOffset + meshBlock->vertexBytes + sizeof (uint32_t);
-	const size_t indexCount = meshBlock->indexBytes / sizeof (uint16_t);
+	const auto& body = mesh.submeshes.front ();
+	if (body.strideBytes == 0 || body.vertices.size () * sizeof (float) % body.strideBytes != 0
+	    || body.blendIndicesOffset == MdlMesh::AttributeAbsent
+	    || body.blendWeightsOffset == MdlMesh::AttributeAbsent || body.uvOffset == MdlMesh::AttributeAbsent) {
+	    throw std::runtime_error ("puppet body does not use a supported skinned vertex layout");
+	}
+
+	const size_t vertexCount = body.vertices.size () * sizeof (float) / body.strideBytes;
 	std::vector<GLfloat> texcoords;
 	std::vector<GLushort> indices;
 
@@ -602,36 +478,40 @@ bool CImage::loadPuppetMesh (const glm::vec2& size) {
 	this->m_puppetBlendWeights.clear ();
 	this->m_puppetBlendWeights.reserve (vertexCount * 4);
 	texcoords.reserve (vertexCount * 2);
-	indices.reserve (indexCount);
+	indices.reserve (body.indices.size ());
 
 	for (size_t index = 0; index < vertexCount; index++) {
-	    const size_t vertexOffset = verticesOffset + index * vertexLayout->stride;
-	    size_t cursor = vertexOffset + positionOffset;
-	    const glm::vec3 position {
-		puppetRead<float> (data, cursor),
-		puppetRead<float> (data, cursor),
-		puppetRead<float> (data, cursor),
-	    };
+	    const auto* vertex
+		= reinterpret_cast<const char*> (body.vertices.data ()) + static_cast<ptrdiff_t> (index * body.strideBytes);
+	    glm::vec3 position;
+	    std::memcpy (&position.x, vertex, sizeof (float));
+	    std::memcpy (&position.y, vertex + sizeof (float), sizeof (float));
+	    std::memcpy (&position.z, vertex + sizeof (float) * 2, sizeof (float));
 	    if (!std::isfinite (position.x) || !std::isfinite (position.y) || !std::isfinite (position.z)) {
 		throw std::runtime_error ("puppet vertex contains a non-finite position");
 	    }
 	    this->m_puppetRawPositions.insert (
 		this->m_puppetRawPositions.end (), { position.x, position.y, position.z }
 	    );
-	    cursor = vertexOffset + vertexLayout->blendIndicesOffset;
 	    for (int component = 0; component < 4; component++) {
-		this->m_puppetBlendIndices.push_back (puppetRead<uint32_t> (data, cursor));
+		uint32_t value;
+		std::memcpy (
+		    &value, vertex + body.blendIndicesOffset + component * sizeof (uint32_t), sizeof (value)
+		);
+		this->m_puppetBlendIndices.push_back (value);
 	    }
 	    for (int component = 0; component < 4; component++) {
-		const float weight = puppetRead<float> (data, cursor);
+		float weight;
+		std::memcpy (&weight, vertex + body.blendWeightsOffset + component * sizeof (float), sizeof (weight));
 		if (!std::isfinite (weight) || weight < 0.0f) {
 		    throw std::runtime_error ("puppet vertex contains an invalid blend weight");
 		}
 		this->m_puppetBlendWeights.push_back (weight);
 	    }
-	    cursor = vertexOffset + vertexLayout->uvOffset;
-	    const float u = puppetRead<float> (data, cursor);
-	    const float v = puppetRead<float> (data, cursor);
+	    float u;
+	    float v;
+	    std::memcpy (&u, vertex + body.uvOffset, sizeof (u));
+	    std::memcpy (&v, vertex + body.uvOffset + sizeof (float), sizeof (v));
 	    if (!std::isfinite (u) || !std::isfinite (v)) {
 		throw std::runtime_error ("puppet vertex contains a non-finite texture coordinate");
 	    }
@@ -639,20 +519,20 @@ bool CImage::loadPuppetMesh (const glm::vec2& size) {
 	    texcoords.push_back (v);
 	}
 
-	size_t indexCursor = indicesOffset;
-	for (size_t index = 0; index < indexCount; index++) {
-	    const auto value = puppetRead<uint16_t> (data, indexCursor);
-	    if (value >= vertexCount) {
+	for (const auto value : body.indices) {
+	    if (value >= vertexCount || value > std::numeric_limits<GLushort>::max ()) {
 		sLog.error ("Invalid puppet mesh index ", value, " in ", *this->getImage ().model->puppet);
 		return false;
 	    }
-	    indices.push_back (value);
+	    indices.push_back (static_cast<GLushort> (value));
 	}
 
 	// MDLV vertices are already assembled even when their texture UVs point into a parts
 	// atlas. The shared animation parser supplies MDLS bones, MDAT attachments, and MDLA clips.
 	try {
-	    this->m_puppetAnimation = MdlAnimationParser::parse (data, *this->getImage ().model->puppet);
+	    this->m_puppetAnimation = MdlAnimationParser::load (
+		this->getScene ().getScene ().project, *this->getImage ().model->puppet
+	    );
 	    const auto bindPose = MdlAnimationEvaluator::evaluate (this->m_puppetAnimation, {});
 	    this->m_puppetWorldBones = bindPose.worldBones;
 	    sLog.out (
@@ -667,7 +547,7 @@ bool CImage::loadPuppetMesh (const glm::vec2& size) {
 	    this->m_puppetWorldBones.clear ();
 	}
 
-	this->loadPuppetOverlay (data, indices, size);
+	this->loadPuppetOverlay (mesh, size);
 	this->updatePuppetPositionBuffer (size);
 
 	glGenBuffers (1, &this->m_puppetTexCoord);
@@ -707,8 +587,8 @@ bool CImage::loadPuppetMesh (const glm::vec2& size) {
 
 	this->m_puppetIndexCount = static_cast<GLsizei> (indices.size ());
 	sLog.out (
-	    "Loaded puppet mesh ", *this->getImage ().model->puppet, " version=", puppetVersion, " format=0x", std::hex,
-	    vertexLayout->formatMask, std::dec, " stride=", vertexLayout->stride, " vertices=", vertexCount,
+	    "Loaded puppet mesh ", *this->getImage ().model->puppet, " version=", mesh.version, " format=0x", std::hex,
+	    body.vertexTag, std::dec, " stride=", body.strideBytes, " vertices=", vertexCount,
 	    " indices=", this->m_puppetIndexCount
 	);
 
@@ -719,20 +599,10 @@ bool CImage::loadPuppetMesh (const glm::vec2& size) {
     }
 }
 
-void CImage::loadPuppetOverlay (
-    const std::vector<char>& data, const std::vector<GLushort>& bodyIndices, const glm::vec2& size
-) {
+void CImage::loadPuppetOverlay (const MdlMesh& mesh, const glm::vec2& size) {
     // The overlay lives in a second submesh whose vertices carry a vec4 texcoord (the
     // channelmap atlas uv in xy) instead of the body's skin weights. The container parser
     // reads the whole file; the scanner above only ever finds the first mesh block.
-    MdlMesh mesh;
-    try {
-	mesh = MdlParser::parse (data, *this->getImage ().model->puppet);
-    } catch (const std::exception& ex) {
-	sLog.error ("Could not read puppet submeshes ", *this->getImage ().model->puppet, ": ", ex.what ());
-	return;
-    }
-
     const MdlSubmesh* overlay = nullptr;
     for (const auto& submesh : mesh.submeshes) {
 	if (submesh.texCoordVec4Offset != MdlMesh::AttributeAbsent && !submesh.indices.empty ()) {
@@ -754,7 +624,8 @@ void CImage::loadPuppetOverlay (
     std::vector<GLfloat> texcoords;
     std::vector<GLuint> blendIndices;
     std::vector<GLushort> indices;
-    this->m_puppetOverlayRawPositions.reserve (vertexCount * 3);
+    std::vector<GLfloat> positions;
+    positions.reserve (vertexCount * 3);
     texcoords.reserve (vertexCount * 4);
     blendIndices.reserve (vertexCount * 4);
     indices.reserve (overlay->indices.size ());
@@ -767,13 +638,12 @@ void CImage::loadPuppetOverlay (
 
     for (size_t vertex = 0; vertex < vertexCount; vertex++) {
 	const float* base = overlay->vertices.data () + vertex * stride;
-	// The overlay quads are stored in bottom-left-origin image pixels while the body mesh is
-	// centered on the image; shift them so both meshes share one rest space. Cross-checked
-	// against the base-texture uv these same vertices carry (Kirby 443,650 -> 0.2985,0.5327
-	// on a 1484x1391 image, which is exactly 0.5 + x/w and 0.5 - y/h after the shift).
-	this->m_puppetOverlayRawPositions.push_back (base[0] - size.x / 2.0f);
-	this->m_puppetOverlayRawPositions.push_back (base[1] - size.y / 2.0f);
-	this->m_puppetOverlayRawPositions.push_back (base[2]);
+	// Channel quads are authored in top-left-origin image pixels. They are texture
+	// composition geometry, not skinned body geometry: flip Y into the local FBO's
+	// bottom-left coordinate system and keep them entirely in albedo space.
+	positions.push_back (base[0]);
+	positions.push_back (size.y - base[1]);
+	positions.push_back (base[2]);
 
 	for (int component = 0; component < 4; component++) {
 	    texcoords.push_back (base[uvElement + component]);
@@ -792,13 +662,14 @@ void CImage::loadPuppetOverlay (
     for (const auto index : overlay->indices) {
 	if (index >= vertexCount) {
 	    sLog.error ("Invalid puppet overlay index ", index, " in ", *this->getImage ().model->puppet);
-	    this->m_puppetOverlayRawPositions.clear ();
 	    return;
 	}
 	indices.push_back (static_cast<GLushort> (index));
     }
 
-    this->bindPuppetOverlayToBody (bodyIndices);
+    glGenBuffers (1, &this->m_puppetOverlayPosition);
+    glBindBuffer (GL_ARRAY_BUFFER, this->m_puppetOverlayPosition);
+    glBufferData (GL_ARRAY_BUFFER, positions.size () * sizeof (GLfloat), positions.data (), GL_STATIC_DRAW);
 
     glGenBuffers (1, &this->m_puppetOverlayTexCoord);
     glBindBuffer (GL_ARRAY_BUFFER, this->m_puppetOverlayTexCoord);
@@ -818,60 +689,6 @@ void CImage::loadPuppetOverlay (
 	"Loaded puppet channelmap overlay ", overlay->materialPath, " vertices=", vertexCount,
 	" indices=", this->m_puppetOverlayIndexCount
     );
-}
-
-void CImage::bindPuppetOverlayToBody (const std::vector<GLushort>& bodyIndices) {
-    this->m_puppetOverlayBindings.clear ();
-
-    const size_t bodyVertices = this->m_puppetRawPositions.size () / 3;
-    if (bodyVertices == 0 || bodyIndices.size () < 3) {
-	return;
-    }
-
-    const auto bodyPoint = [this] (const GLushort vertex) {
-	return glm::vec2 (this->m_puppetRawPositions[vertex * 3], this->m_puppetRawPositions[vertex * 3 + 1]);
-    };
-
-    // The overlay carries no skin weights of its own, so on its own it would stay in the rest
-    // pose while the body deforms around it (Sonic's head is posed well away from where the
-    // atlas puts it, which lands the blink on his ears). Both meshes are authored in the same
-    // rest space, so gluing each overlay vertex to the body triangle containing it makes the
-    // quad follow whatever the skinning does, without duplicating the skinning itself.
-    for (size_t index = 0; index + 2 < this->m_puppetOverlayRawPositions.size (); index += 3) {
-	const glm::vec2 point (
-	    this->m_puppetOverlayRawPositions[index], this->m_puppetOverlayRawPositions[index + 1]
-	);
-
-	PuppetOverlayBinding best = {};
-	float bestMiss = std::numeric_limits<float>::max ();
-
-	for (size_t corner = 0; corner + 2 < bodyIndices.size (); corner += 3) {
-	    const std::array triangle { bodyIndices[corner], bodyIndices[corner + 1], bodyIndices[corner + 2] };
-	    const glm::vec3 weights = barycentric (
-		point, bodyPoint (triangle[0]), bodyPoint (triangle[1]), bodyPoint (triangle[2])
-	    );
-
-	    // how far outside the triangle the point sits; zero means it is inside
-	    const float miss = std::max (0.0f, -weights.x) + std::max (0.0f, -weights.y) + std::max (0.0f, -weights.z);
-	    if (miss >= bestMiss) {
-		continue;
-	    }
-
-	    best = { triangle, weights };
-	    bestMiss = miss;
-	    if (miss == 0.0f) {
-		break;
-	    }
-	}
-
-	if (bestMiss == std::numeric_limits<float>::max ()) {
-	    // every triangle was degenerate, leave the overlay unbound so it falls back
-	    this->m_puppetOverlayBindings.clear ();
-	    return;
-	}
-
-	this->m_puppetOverlayBindings.push_back (best);
-    }
 }
 
 void CImage::selectPuppetAnimations (const float sceneTime) {
@@ -1050,139 +867,162 @@ void CImage::updatePuppetPositionBuffer (const glm::vec2& size) {
     } else if (positionBytes > 0) {
 	glBufferSubData (GL_ARRAY_BUFFER, 0, positionBytes, this->m_puppetPositions.data ());
     }
-
-    this->updatePuppetOverlayBuffer (size);
 }
 
-void CImage::updatePuppetOverlayBuffer (const glm::vec2& size) {
-    if (this->m_puppetOverlayRawPositions.empty ()) {
-	return;
-    }
-
-    this->m_puppetOverlayPositions.clear ();
-    this->m_puppetOverlayPositions.reserve (this->m_puppetOverlayRawPositions.size ());
-    for (size_t index = 0; index + 2 < this->m_puppetOverlayRawPositions.size (); index += 3) {
-	const size_t vertex = index / 3;
-
-	// The quads carry no skin weights, so they ride on the body triangle they were bound to
-	// and land wherever the skinning put it. m_puppetPositions is already posed scene space.
-	if (vertex < this->m_puppetOverlayBindings.size ()) {
-	    const auto& binding = this->m_puppetOverlayBindings[vertex];
-	    glm::vec2 posed (0.0f);
-	    for (int corner = 0; corner < 3; corner++) {
-		const size_t base = static_cast<size_t> (binding.vertices[corner]) * 3;
-		if (base + 1 >= this->m_puppetPositions.size ()) {
-		    continue;
-		}
-		posed += binding.weights[corner]
-		    * glm::vec2 (this->m_puppetPositions[base], this->m_puppetPositions[base + 1]);
-	    }
-	    this->m_puppetOverlayPositions.push_back (posed.x);
-	    this->m_puppetOverlayPositions.push_back (posed.y);
-	    this->m_puppetOverlayPositions.push_back (0.0f);
-	    continue;
-	}
-
-	// unbound fallback: place it on the quad the same way the body's rest pose maps
-	const float u = 0.5f + this->m_puppetOverlayRawPositions[index] / size.x;
-	const float v = 0.5f - this->m_puppetOverlayRawPositions[index + 1] / size.y;
-	this->m_puppetOverlayPositions.push_back (this->m_pos.x + u * (this->m_pos.z - this->m_pos.x));
-	this->m_puppetOverlayPositions.push_back (this->m_pos.w + v * (this->m_pos.y - this->m_pos.w));
-	this->m_puppetOverlayPositions.push_back (0.0f);
-    }
-
-    if (this->m_puppetOverlayPosition == GL_NONE) {
-	glGenBuffers (1, &this->m_puppetOverlayPosition);
-    }
-    glBindBuffer (GL_ARRAY_BUFFER, this->m_puppetOverlayPosition);
-    const size_t positionBytes = this->m_puppetOverlayPositions.size () * sizeof (GLfloat);
-    if (positionBytes != this->m_puppetOverlayPositionBytes) {
-	glBufferData (GL_ARRAY_BUFFER, positionBytes, this->m_puppetOverlayPositions.data (), GL_DYNAMIC_DRAW);
-	this->m_puppetOverlayPositionBytes = positionBytes;
-    } else if (positionBytes > 0) {
-	glBufferSubData (GL_ARRAY_BUFFER, 0, positionBytes, this->m_puppetOverlayPositions.data ());
-    }
-}
-
-void CImage::setupPuppetOverlayPass () {
+void CImage::setupPuppetAlbedoPasses () {
     if (this->m_puppetOverlayIndexCount == 0 || this->m_puppetOverlayMaterial.empty ()) {
 	return;
     }
 
+    if (this->m_material.passes.empty ()) {
+	sLog.error ("Puppet channelmap has no base texture for object ", this->getId ());
+	return;
+    }
+    const auto baseTexture = this->m_material.passes.front ()->textures.find (0);
+    if (baseTexture == this->m_material.passes.front ()->textures.end ()) {
+	sLog.error ("Puppet channelmap has no base texture for object ", this->getId ());
+	return;
+    }
+
     try {
-	this->m_materials.compatibilityMaterials.emplace_back (
-	    MaterialParser::load (this->getScene ().getScene ().project, this->m_puppetOverlayMaterial)
+	// Wallpaper Engine creates this exact target, copies the layer's base image
+	// into it with fullscreenlayer, and only then draws puppettexturechannels.
+	const std::string albedoName = "_rt_imageLayerAlbedo_" + std::to_string (this->getId ());
+	auto copyMaterial = MaterialParser::load (
+	    this->getScene ().getScene ().project, "materials/util/fullscreenlayer.json"
 	);
-    } catch (const std::exception& ex) {
-	sLog.error ("Could not load puppet overlay material ", this->m_puppetOverlayMaterial, ": ", ex.what ());
-	return;
-    }
+	auto overlayMaterial
+	    = MaterialParser::load (this->getScene ().getScene ().project, this->m_puppetOverlayMaterial);
+	if (copyMaterial->passes.empty () || overlayMaterial->passes.empty ()) {
+	    throw std::runtime_error ("puppet albedo material has no passes");
+	}
 
-    const auto& material = this->m_materials.compatibilityMaterials.back ();
-    if (material->passes.empty ()) {
-	return;
-    }
+	const auto* stableCopyMaterial
+	    = this->m_materials.compatibilityMaterials.emplace_back (std::move (copyMaterial)).get ();
+	const auto* stableOverlayMaterial
+	    = this->m_materials.compatibilityMaterials.emplace_back (std::move (overlayMaterial)).get ();
 
-    this->m_puppetOverlayPass = new CPass (
-	*this, std::make_shared<FBOProvider> (this), **material->passes.begin (), std::nullopt, std::nullopt,
-	std::nullopt
-    );
+	this->m_puppetAlbedoFBO = this->create (
+	    albedoName, TextureFormat_ARGB8888, this->getTexture ()->getFlags (), 1.0f, this->m_size, this->m_size
+	);
 
-    // the overlay composites straight onto the scene after the image's own passes; its
-    // g_Texture0 comes from the material (the channelmap), not from the pass chain
-    this->m_puppetOverlayPass->setDestination (this->getScene ().getFBO ());
-    this->m_puppetOverlayPass->setInput (this->getTexture ());
-    this->m_puppetOverlayPass->setModelViewProjectionMatrix (&this->m_modelViewProjectionScreen);
-    this->m_puppetOverlayPass->setModelViewProjectionMatrixInverse (&this->m_modelViewProjectionScreenInverse);
-    this->m_puppetOverlayPass->setModelMatrix (&this->m_modelMatrix);
-    this->m_puppetOverlayPass->setViewProjectionMatrix (&this->m_viewProjectionMatrix);
-    this->m_puppetOverlayPass->addUniform ("g_BlendMap", &this->m_puppetBlendMap, 1);
+	auto copyOverride = std::make_unique<ImageEffectPassOverride> (ImageEffectPassOverride {
+	    .id = -1,
+	    .combos = this->getTexture ()->isAnimated () ? ComboMap { { "SPRITESHEET", 1 } } : ComboMap {},
+	    .constants = {},
+	    .textures = { { 0, baseTexture->second } },
+	});
+	const auto& stableCopyOverride = *this->m_materials.compatibilityOverrides.emplace_back (
+	    std::move (copyOverride)
+	);
 
-    CPass* pass = this->m_puppetOverlayPass;
-    pass->setGeometryCallback (
-	[this, pass] () {
-	    const GLint position = glGetAttribLocation (pass->getProgramID (), "a_Position");
-	    const GLint texCoord = glGetAttribLocation (pass->getProgramID (), "a_TexCoordVec4");
-	    const GLint blendIndices = glGetAttribLocation (pass->getProgramID (), "a_BlendIndices");
+	auto inputOverride = std::make_unique<ImageEffectPassOverride> (ImageEffectPassOverride {
+	    .id = -1,
+	    .combos = {},
+	    .constants = {},
+	    .textures = { { 0, albedoName } },
+	});
+	this->m_puppetAlbedoInputOverride
+	    = this->m_materials.compatibilityOverrides.emplace_back (std::move (inputOverride)).get ();
 
-	    if (position >= 0) {
-		glEnableVertexAttribArray (position);
-		glBindBuffer (GL_ARRAY_BUFFER, this->m_puppetOverlayPosition);
-		glVertexAttribPointer (position, 3, GL_FLOAT, GL_FALSE, 0, nullptr);
-	    }
+	this->m_puppetAlbedoCopyPass = new CPass (
+	    *this, std::make_shared<FBOProvider> (this), **stableCopyMaterial->passes.begin (), stableCopyOverride,
+	    std::nullopt, std::nullopt
+	);
+	this->m_puppetAlbedoCopyPass->setBlendingMode (BlendingMode_Normal);
+	this->m_puppetAlbedoCopyPass->setDestination (this->m_puppetAlbedoFBO);
+	this->m_puppetAlbedoCopyPass->setInput (this->getTexture ());
+	this->m_puppetAlbedoCopyPass->setPosition (this->getPassSpacePosition ());
+	this->m_puppetAlbedoCopyPass->setTexCoord (this->getTexCoordCopy ());
+	this->m_puppetAlbedoCopyPass->setModelViewProjectionMatrix (&this->m_modelViewProjectionPass);
+	this->m_puppetAlbedoCopyPass->setModelViewProjectionMatrixInverse (&this->m_modelViewProjectionPassInverse);
+	this->m_puppetAlbedoCopyPass->setModelMatrix (&this->m_modelMatrix);
+	this->m_puppetAlbedoCopyPass->setViewProjectionMatrix (&this->m_viewProjectionMatrix);
 
-	    if (texCoord >= 0) {
-		glEnableVertexAttribArray (texCoord);
-		glBindBuffer (GL_ARRAY_BUFFER, this->m_puppetOverlayTexCoord);
-		glVertexAttribPointer (texCoord, 4, GL_FLOAT, GL_FALSE, 0, nullptr);
-	    }
+	this->m_puppetOverlayPass = new CPass (
+	    *this, std::make_shared<FBOProvider> (this), **stableOverlayMaterial->passes.begin (), std::nullopt,
+	    std::nullopt, std::nullopt
+	);
 
-	    if (blendIndices >= 0) {
-		glEnableVertexAttribArray (blendIndices);
-		glBindBuffer (GL_ARRAY_BUFFER, this->m_puppetOverlayBlendIndices);
-		// an integer attribute must not go through the float path or it reads as 0.0
-		glVertexAttribIPointer (blendIndices, 4, GL_UNSIGNED_INT, 0, nullptr);
-	    }
-	},
-	[this] () {
-	    // same Y-flip winding problem the body mesh has, and the material is nocull anyway
-	    const GLboolean cullFaceEnabled = glIsEnabled (GL_CULL_FACE);
-	    glDisable (GL_CULL_FACE);
-	    glBindBuffer (GL_ELEMENT_ARRAY_BUFFER, this->m_puppetOverlayIndices);
-	    glDrawElements (GL_TRIANGLES, this->m_puppetOverlayIndexCount, GL_UNSIGNED_SHORT, nullptr);
-	    if (cullFaceEnabled) {
-		glEnable (GL_CULL_FACE);
-	    }
-	},
-	[pass] () {
-	    for (const auto* name : { "a_Position", "a_TexCoordVec4", "a_BlendIndices" }) {
-		const GLint attribute = glGetAttribLocation (pass->getProgramID (), name);
-		if (attribute >= 0) {
-		    glDisableVertexAttribArray (attribute);
+	// The channel material supplies the channel atlas in texture 0 and the
+	// original base image in texture 1. Its DOUBLEBUFFERED path mixes those
+	// pixels using g_BlendMap, directly into the local albedo target.
+	this->m_puppetOverlayPass->setDestination (this->m_puppetAlbedoFBO);
+	this->m_puppetOverlayPass->setInput (this->getTexture ());
+	this->m_puppetOverlayPass->setModelViewProjectionMatrix (&this->m_modelViewProjectionCopy);
+	this->m_puppetOverlayPass->setModelViewProjectionMatrixInverse (&this->m_modelViewProjectionCopyInverse);
+	this->m_puppetOverlayPass->setModelMatrix (&this->m_modelMatrix);
+	this->m_puppetOverlayPass->setViewProjectionMatrix (&this->m_viewProjectionMatrix);
+	this->m_puppetOverlayPass->addUniform ("g_BlendMap", &this->m_puppetBlendMap, 1);
+
+	CPass* pass = this->m_puppetOverlayPass;
+	pass->setGeometryCallback (
+	    [this, pass] () {
+		const GLint position = glGetAttribLocation (pass->getProgramID (), "a_Position");
+		const GLint texCoord = glGetAttribLocation (pass->getProgramID (), "a_TexCoordVec4");
+		const GLint blendIndices = glGetAttribLocation (pass->getProgramID (), "a_BlendIndices");
+
+		if (position >= 0) {
+		    glEnableVertexAttribArray (position);
+		    glBindBuffer (GL_ARRAY_BUFFER, this->m_puppetOverlayPosition);
+		    glVertexAttribPointer (position, 3, GL_FLOAT, GL_FALSE, 0, nullptr);
+		}
+
+		if (texCoord >= 0) {
+		    glEnableVertexAttribArray (texCoord);
+		    glBindBuffer (GL_ARRAY_BUFFER, this->m_puppetOverlayTexCoord);
+		    glVertexAttribPointer (texCoord, 4, GL_FLOAT, GL_FALSE, 0, nullptr);
+		}
+
+		if (blendIndices >= 0) {
+		    glEnableVertexAttribArray (blendIndices);
+		    glBindBuffer (GL_ARRAY_BUFFER, this->m_puppetOverlayBlendIndices);
+		    // an integer attribute must not go through the float path or it reads as 0.0
+		    glVertexAttribIPointer (blendIndices, 4, GL_UNSIGNED_INT, 0, nullptr);
+		}
+	    },
+	    [this] () {
+		const GLboolean cullFaceEnabled = glIsEnabled (GL_CULL_FACE);
+		glDisable (GL_CULL_FACE);
+		glBindBuffer (GL_ELEMENT_ARRAY_BUFFER, this->m_puppetOverlayIndices);
+		glDrawElements (GL_TRIANGLES, this->m_puppetOverlayIndexCount, GL_UNSIGNED_SHORT, nullptr);
+		if (cullFaceEnabled) {
+		    glEnable (GL_CULL_FACE);
+		}
+	    },
+	    [pass] () {
+		for (const auto* name : { "a_Position", "a_TexCoordVec4", "a_BlendIndices" }) {
+		    const GLint attribute = glGetAttribLocation (pass->getProgramID (), name);
+		    if (attribute >= 0) {
+			glDisableVertexAttribArray (attribute);
+		    }
 		}
 	    }
-	}
-    );
+	);
+
+	sLog.out (
+	    "Loaded puppet albedo compositor ", this->m_puppetOverlayMaterial,
+	    " target=", this->m_puppetAlbedoFBO->getName ()
+	);
+    } catch (const std::exception& ex) {
+	sLog.error ("Could not set up puppet albedo composition ", this->m_puppetOverlayMaterial, ": ", ex.what ());
+	delete this->m_puppetAlbedoCopyPass;
+	delete this->m_puppetOverlayPass;
+	this->m_puppetAlbedoCopyPass = nullptr;
+	this->m_puppetOverlayPass = nullptr;
+	this->m_puppetAlbedoFBO = nullptr;
+	this->m_puppetAlbedoInputOverride = nullptr;
+    }
+}
+
+void CImage::renderPuppetAlbedo () {
+    if (this->m_puppetAlbedoCopyPass == nullptr || this->m_puppetOverlayPass == nullptr) {
+	return;
+    }
+
+    glColorMask (true, true, true, true);
+    this->m_puppetAlbedoCopyPass->render ();
+    this->m_puppetOverlayPass->render ();
 }
 
 std::optional<CImage::ResolvedTransform> CImage::puppetAttachmentTransform (const std::string& name) const {
@@ -1219,6 +1059,19 @@ std::optional<CImage::ResolvedTransform> CImage::puppetAttachmentTransform (cons
 }
 
 void CImage::setupPuppetGeometryCallback (Effects::CPass* pass, bool samplesSourceTexture) const {
+    this->setupPuppetRangeGeometryCallback (
+	pass, samplesSourceTexture,
+	{ MdlDrawRange {
+	    .submeshIndex = 0,
+	    .firstIndex = 0,
+	    .indexCount = static_cast<uint32_t> (this->m_puppetIndexCount),
+	} }
+    );
+}
+
+void CImage::setupPuppetRangeGeometryCallback (
+    Effects::CPass* pass, const bool samplesSourceTexture, const std::vector<MdlDrawRange>& ranges
+) const {
     // when the final pass samples the source texture directly (no effects) the UVs need the
     // same padding compensation the copy texcoords get; FBO content always spans the full range
     const GLuint texCoordBuffer = samplesSourceTexture ? this->m_puppetTexCoordFirstPass : this->m_puppetTexCoord;
@@ -1240,13 +1093,22 @@ void CImage::setupPuppetGeometryCallback (Effects::CPass* pass, bool samplesSour
 		glVertexAttribPointer (texCoord, 2, GL_FLOAT, GL_FALSE, 0, nullptr);
 	    }
 	},
-	[this] () {
+	[this, ranges] () {
 	    // the Y-flip into scene space inverts triangle winding, so materials with
 	    // cullmode "normal" would cull the whole mesh (e.g. the eye layer in 3558034522)
 	    const GLboolean cullFaceEnabled = glIsEnabled (GL_CULL_FACE);
 	    glDisable (GL_CULL_FACE);
 	    glBindBuffer (GL_ELEMENT_ARRAY_BUFFER, this->m_puppetIndices);
-	    glDrawElements (GL_TRIANGLES, this->m_puppetIndexCount, GL_UNSIGNED_SHORT, nullptr);
+	    for (const auto& range : ranges) {
+		if (range.submeshIndex != 0 || range.indexCount == 0) {
+		    continue;
+		}
+		const auto byteOffset = static_cast<uintptr_t> (range.firstIndex) * sizeof (GLushort);
+		glDrawElements (
+		    GL_TRIANGLES, static_cast<GLsizei> (range.indexCount), GL_UNSIGNED_SHORT,
+		    reinterpret_cast<const void*> (byteOffset)
+		);
+	    }
 	    if (cullFaceEnabled) {
 		glEnable (GL_CULL_FACE);
 	    }
@@ -1264,6 +1126,215 @@ void CImage::setupPuppetGeometryCallback (Effects::CPass* pass, bool samplesSour
 	    }
 	}
     );
+}
+
+bool CImage::setupPuppetClippingPasses (
+    Effects::CPass& finalPass, const std::shared_ptr<const TextureProvider>& input,
+    const std::shared_ptr<const CFBO>& destination, const glm::mat4* projection,
+    const glm::mat4* inverseProjection, const bool samplesSourceTexture
+) {
+    const auto& model = *this->getImage ().model;
+    if (!model.puppetMesh.has_value () || model.puppetMesh->clippingDescriptors.empty ()) {
+	return false;
+    }
+
+    try {
+	const auto& mesh = *model.puppetMesh;
+	const auto plan = buildPuppetClippingPlan (mesh, 0);
+	if (plan.requiresComposition) {
+	    sLog.error (
+		"Puppet clipping for ", *model.puppet,
+		" requires the multi-mask composition path; rendering the un-clipped body for now"
+	    );
+	    return false;
+	}
+	for (const auto& mask : plan.masks) {
+	    const auto& descriptor = mesh.clippingDescriptors[mask.descriptorIndex];
+	    if (descriptor.flags != 0) {
+		sLog.error (
+		    "Puppet clipping for ", *model.puppet, " uses unsupported descriptor flags 0x", std::hex,
+		    descriptor.flags, std::dec, "; rendering the un-clipped body for now"
+		);
+		return false;
+	    }
+	    for (const uint32_t rangeIndex : mask.sourceRanges) {
+		if (mesh.drawRanges[rangeIndex].submeshIndex != 0) {
+		    sLog.error (
+			"Puppet clipping source references unsupported submesh ",
+			mesh.drawRanges[rangeIndex].submeshIndex, " in ", *model.puppet
+		    );
+		    return false;
+		}
+	    }
+	}
+	for (const auto& draw : plan.draws) {
+	    if (draw.submeshIndex != 0) {
+		sLog.error ("Puppet clipping draw references unsupported submesh ", draw.submeshIndex, " in ", *model.puppet);
+		return false;
+	    }
+	}
+
+	// CLIPPINGTARGET and CLIPPINGUVS are implemented by genericimage4. Puppet
+	// effect chains deliberately end in effectpassthrough_4 when descriptors exist.
+	if (finalPass.getPass ().shader != "genericimage4") {
+	    sLog.error (
+		"Puppet clipping final shader ", finalPass.getPass ().shader,
+		" has no genericimage4 clipping path in ", *model.puppet
+	    );
+	    return false;
+	}
+
+	const auto sceneSize = glm::vec2 (this->getScene ().getWidth (), this->getScene ().getHeight ());
+	const std::string maskName = "_rt_puppetClipping_" + std::to_string (this->getId ());
+	this->m_puppetClippingFBO = this->create (
+	    maskName, TextureFormat_ARGB8888, TextureFlags_ClampUVs, 1.0f, sceneSize, sceneSize
+	);
+
+	this->m_materials.compatibilityMaterials.emplace_back (
+	    MaterialParser::load (this->getScene ().getScene ().project, "materials/util/clippingmaskimage4.json")
+	);
+	const auto& maskMaterial = *this->m_materials.compatibilityMaterials.back ();
+	const auto provider = std::make_shared<FBOProvider> (this);
+	std::vector<Effects::CPass*> maskPasses;
+	maskPasses.reserve (plan.masks.size ());
+
+	const auto configurePass = [this, &input, &destination, projection, inverseProjection] (Effects::CPass& pass) {
+	    pass.setDestination (destination);
+	    pass.setInput (input);
+	    pass.setModelViewProjectionMatrix (projection);
+	    pass.setModelViewProjectionMatrixInverse (inverseProjection);
+	    pass.setModelMatrix (&this->m_modelMatrix);
+	    pass.setViewProjectionMatrix (&this->m_viewProjectionMatrix);
+	    pass.setEffectTextureProjectionMatrix (
+		&this->m_effectTextureProjectionMatrix, &this->m_effectTextureProjectionMatrixInverse
+	    );
+	    if (this->getScene ().getScene ().camera.projection.isPerspective) {
+		pass.setModelMatrix (&this->m_sceneModelMatrix);
+		pass.setViewProjectionMatrix (&this->m_sceneViewProjectionMatrix);
+		pass.addUniform ("g_NormalModelMatrix", &this->m_sceneNormalModelMatrix);
+	    }
+	};
+
+	for (const auto& mask : plan.masks) {
+	    const auto& descriptor = mesh.clippingDescriptors[mask.descriptorIndex];
+	    auto maskOverride = std::make_unique<ImageEffectPassOverride> (ImageEffectPassOverride {
+		.id = -1,
+		.combos = {},
+		.constants = {},
+		.textures = { { 1, descriptor.maskAsset } },
+	    });
+	    const auto& stableOverride = *this->m_materials.compatibilityOverrides.emplace_back (
+		std::move (maskOverride)
+	    );
+
+	    auto* pass = new CPass (
+		*this, provider, **maskMaterial.passes.begin (), stableOverride, std::nullopt, std::nullopt
+	    );
+	    this->m_puppetClippingPasses.push_back (pass);
+	    maskPasses.push_back (pass);
+	    pass->setDestination (this->m_puppetClippingFBO);
+	    pass->setInput (input);
+	    pass->setModelViewProjectionMatrix (projection);
+	    pass->setModelViewProjectionMatrixInverse (inverseProjection);
+	    pass->setModelMatrix (&this->m_modelMatrix);
+	    pass->setViewProjectionMatrix (&this->m_viewProjectionMatrix);
+	    pass->setEffectTextureProjectionMatrix (
+		&this->m_effectTextureProjectionMatrix, &this->m_effectTextureProjectionMatrixInverse
+	    );
+	    pass->setBlendEquation (GL_MAX, GL_FUNC_ADD);
+	    this->m_puppetClippingRenderVars.emplace_back (std::make_unique<glm::vec4> (0.0f));
+	    pass->addUniform ("g_RenderVar0", this->m_puppetClippingRenderVars.back ().get ());
+
+	    std::vector<MdlDrawRange> sourceRanges;
+	    sourceRanges.reserve (mask.sourceRanges.size ());
+	    for (const uint32_t rangeIndex : mask.sourceRanges) {
+		sourceRanges.push_back (mesh.drawRanges[rangeIndex]);
+	    }
+	    this->setupPuppetRangeGeometryCallback (pass, samplesSourceTexture, sourceRanges);
+	}
+
+	size_t activeMask = std::numeric_limits<size_t>::max ();
+	for (const auto& draw : plan.draws) {
+	    const bool clipped = !draw.masks.empty ();
+	    if (clipped && activeMask != draw.masks.front ()) {
+		activeMask = draw.masks.front ();
+		this->m_puppetClippingCommands.push_back (PuppetClippingRenderCommand {
+		    .buildsMask = true,
+		    .pass = maskPasses[activeMask],
+		});
+	    }
+
+	    std::optional<std::reference_wrapper<const TextureMap>> binds = finalPass.getBinds ();
+	    ComboMap runtimeCombos;
+	    if (clipped) {
+		auto targetBinds = std::make_unique<TextureMap> (finalPass.getBinds ());
+		targetBinds->insert_or_assign (8, maskName);
+		binds = *this->m_puppetClippingBinds.emplace_back (std::move (targetBinds));
+		runtimeCombos = {
+		    { "CLIPPINGUVS", 1 },
+		    { "CLIPPINGTARGET", 1 },
+		};
+	    }
+
+	    auto* pass = new CPass (
+		*this, provider, finalPass.getPass (), finalPass.getOverride (), binds, std::nullopt,
+		std::move (runtimeCombos)
+	    );
+	    this->m_puppetClippingPasses.push_back (pass);
+	    configurePass (*pass);
+	    pass->setBlendingMode (finalPass.getBlendingMode ());
+	    pass->setDepthtestMode (finalPass.getDepthtestMode ());
+	    pass->setDepthwriteMode (finalPass.getDepthwriteMode ());
+	    this->setupPuppetRangeGeometryCallback (
+		pass, samplesSourceTexture,
+		{ MdlDrawRange {
+		    .submeshIndex = draw.submeshIndex,
+		    .firstIndex = draw.firstIndex,
+		    .indexCount = draw.indexCount,
+		} }
+	    );
+	    this->m_puppetClippingCommands.push_back (PuppetClippingRenderCommand {
+		.buildsMask = false,
+		.pass = pass,
+	    });
+	}
+
+	sLog.out (
+	    "Loaded puppet clipping ", *model.puppet, " masks=", plan.masks.size (), " draws=", plan.draws.size ()
+	);
+	return !this->m_puppetClippingCommands.empty ();
+    } catch (const std::exception& ex) {
+	sLog.error ("Could not set up puppet clipping for ", *model.puppet, ": ", ex.what ());
+	this->m_puppetClippingCommands.clear ();
+	return false;
+    }
+}
+
+void CImage::renderPuppetClipping () {
+    GLfloat clearColor[4];
+    glGetFloatv (GL_COLOR_CLEAR_VALUE, clearColor);
+
+    for (const auto& command : this->m_puppetClippingCommands) {
+	if (command.buildsMask) {
+	    const GLboolean scissorEnabled = glIsEnabled (GL_SCISSOR_TEST);
+	    glDisable (GL_SCISSOR_TEST);
+	    glColorMask (true, true, true, true);
+	    glBindFramebuffer (GL_FRAMEBUFFER, this->m_puppetClippingFBO->getFramebuffer ());
+	    glViewport (
+		0, 0, this->m_puppetClippingFBO->getRealWidth (), this->m_puppetClippingFBO->getRealHeight ()
+	    );
+	    glClearColor (0.0f, 0.0f, 0.0f, 0.0f);
+	    glClear (GL_COLOR_BUFFER_BIT);
+	    if (scissorEnabled) {
+		glEnable (GL_SCISSOR_TEST);
+	    }
+	} else {
+	    glColorMask (true, true, true, false);
+	}
+	command.pass->render ();
+    }
+
+    glClearColor (clearColor[0], clearColor[1], clearColor[2], clearColor[3]);
 }
 
 void CImage::setup () {
@@ -1297,10 +1368,19 @@ void CImage::setup () {
 
     const auto& debug = this->getScene ().getContext ().getApp ().getContext ().settings.render.debug;
 
+    // Build the binary-compatible channelmap prepass before the base material:
+    // the base pass receives _rt_imageLayerAlbedo_<id> instead of the source
+    // texture when a channelmap submesh is present.
+    this->setupPuppetAlbedoPasses ();
+    const std::optional<std::reference_wrapper<const ImageEffectPassOverride>> baseOverride
+	= this->m_puppetAlbedoInputOverride != nullptr
+	? std::optional<std::reference_wrapper<const ImageEffectPassOverride>> (*this->m_puppetAlbedoInputOverride)
+	: std::nullopt;
+
     // copy pass to the composite layer
     for (const auto& cur : this->getImage ().model->material->passes) {
 	this->m_passes.push_back (
-	    new CPass (*this, std::make_shared<FBOProvider> (this), *cur, std::nullopt, std::nullopt, std::nullopt)
+	    new CPass (*this, std::make_shared<FBOProvider> (this), *cur, baseOverride, std::nullopt, std::nullopt)
 	);
     }
 
@@ -1465,8 +1545,13 @@ void CImage::setup () {
     // effect pass with scene-space puppet geometry mangles the mesh (gojo in 3100265648);
     // a passthrough pass is position-neutral and safe to warp
     if (this->m_hasPuppetMesh && this->m_passes.size () > 1) {
+	const bool hasClipping = this->getImage ().model->puppetMesh.has_value ()
+	    && !this->getImage ().model->puppetMesh->clippingDescriptors.empty ();
 	this->m_materials.compatibilityMaterials.emplace_back (
-	    MaterialParser::load (this->getScene ().getScene ().project, "materials/util/effectpassthrough.json")
+	    MaterialParser::load (
+		this->getScene ().getScene ().project,
+		hasClipping ? "materials/util/effectpassthrough_4.json" : "materials/util/effectpassthrough.json"
+	    )
 	);
 	this->m_materials.compatibilityOverrides.emplace_back (
 	    std::make_unique<ImageEffectPassOverride> (ImageEffectPassOverride {
@@ -1510,15 +1595,15 @@ void CImage::setup () {
     CRenderable::setup ();
 
     this->setupPasses ();
-    this->setupPuppetOverlayPass ();
     this->m_initialized = true;
 }
 
 void CImage::setupPasses () {
     // do a pass on everything and setup proper inputs and values
     std::shared_ptr<const CFBO> drawTo = this->m_currentMainFBO;
-    std::shared_ptr<const TextureProvider> asInput = this->getTexture ();
-    GLuint texcoord = this->getTexCoordCopy ();
+    std::shared_ptr<const TextureProvider> asInput
+	= this->m_puppetAlbedoFBO != nullptr ? this->m_puppetAlbedoFBO : this->getTexture ();
+    GLuint texcoord = this->m_puppetAlbedoFBO != nullptr ? this->getTexCoordPass () : this->getTexCoordCopy ();
 
     auto cur = this->m_passes.begin ();
     auto end = this->m_passes.end ();
@@ -1583,11 +1668,17 @@ void CImage::setupPasses () {
 		}
 	    }
 
-	    // puppet warp deforms the final on-screen geometry only; every earlier pass works on
-	    // the untouched image so effect masks keep lining up with it in the intermediate FBOs
-	    if (this->m_hasPuppetMesh) {
-		this->setupPuppetGeometryCallback (pass, isFirstPass);
-	    }
+		    // puppet warp deforms the final on-screen geometry only; every earlier pass works on
+		    // the untouched image so effect masks keep lining up with it in the intermediate FBOs
+		    if (this->m_hasPuppetMesh) {
+			const bool samplesSourceTexture = isFirstPass && this->m_puppetAlbedoFBO == nullptr;
+			this->m_hasPuppetClipping = this->setupPuppetClippingPasses (
+			    *pass, asInput, drawTo, projection, inverseProjection, samplesSourceTexture
+			);
+			if (!this->m_hasPuppetClipping) {
+			    this->setupPuppetGeometryCallback (pass, samplesSourceTexture);
+			}
+		    }
 	}
 
 	pass->setDestination (drawTo);
@@ -1703,6 +1794,10 @@ void CImage::render () {
 
     glColorMask (true, true, true, true);
 
+    // Compose animated channel-map quads into the base albedo before any effect
+    // pass or puppet deformation consumes it.
+    this->renderPuppetAlbedo ();
+
     // Always update screen transform (handles rotation + parallax dynamically);
     // fullscreen/autosize/locked layers are excluded from parallax inside
     this->updateScreenSpacePosition ();
@@ -1724,17 +1819,14 @@ void CImage::render () {
 
     for (const auto end = this->m_passes.end (); cur != end; ++cur) {
 	if (std::next (cur) == end) {
+	    if (this->m_hasPuppetClipping) {
+		this->renderPuppetClipping ();
+		continue;
+	    }
 	    glColorMask (true, true, true, false);
 	}
 
 	(*cur)->render ();
-    }
-
-    // the channelmap overlay composites onto the scene after the body, with alpha writes still
-    // masked off like the last pass, so it blends instead of punching a hole
-    if (this->m_puppetOverlayPass != nullptr) {
-	glColorMask (true, true, true, false);
-	this->m_puppetOverlayPass->render ();
     }
 
     // Restore alpha writes: leaving the mask disabled leaks it into the next frame's scene clear (the
