@@ -13,6 +13,7 @@
 #include <sstream>
 #include <stack>
 #include <string>
+#include <string_view>
 #include <unordered_map>
 #include <utility>
 
@@ -170,6 +171,152 @@ std::string buildIncludeCacheKey (const std::string& locatorIdentity, const std:
     key += std::to_string (std::hash<std::string> {} (content));
     return key;
 }
+
+std::string_view preprocessorDirective (std::string_view line) {
+    size_t cursor = 0;
+    while (cursor < line.size () && std::isspace (static_cast<unsigned char> (line [cursor]))) {
+	cursor++;
+    }
+
+    if (cursor == line.size () || line [cursor] != '#') {
+	return {};
+    }
+
+    cursor++;
+    while (cursor < line.size () && std::isspace (static_cast<unsigned char> (line [cursor]))) {
+	cursor++;
+    }
+
+    const size_t start = cursor;
+    while (
+	cursor < line.size ()
+	&& (std::isalnum (static_cast<unsigned char> (line [cursor])) || line [cursor] == '_')) {
+	cursor++;
+    }
+
+    return line.substr (start, cursor - start);
+}
+
+bool continuesOnNextLine (std::string_view line) {
+    while (!line.empty () && std::isspace (static_cast<unsigned char> (line.back ()))) {
+	line.remove_suffix (1);
+    }
+
+    return !line.empty () && line.back () == '\\';
+}
+
+size_t preprocessorConditionalDepthBefore (std::string_view source, const size_t limit) {
+    size_t conditionalDepth = 0;
+    size_t cursor = 0;
+
+    while (cursor < limit) {
+	size_t lineEnd = source.find ('\n', cursor);
+	if (lineEnd == std::string_view::npos || lineEnd > limit) {
+	    lineEnd = limit;
+	}
+
+	const std::string_view directive = preprocessorDirective (source.substr (cursor, lineEnd - cursor));
+	if (directive == "if" || directive == "ifdef" || directive == "ifndef") {
+	    conditionalDepth++;
+	} else if (directive == "endif" && conditionalDepth > 0) {
+	    conditionalDepth--;
+	}
+
+	cursor = lineEnd < limit ? lineEnd + 1 : limit;
+    }
+
+    return conditionalDepth;
+}
+
+constexpr std::string_view CONDITIONAL_INCLUDE_BEGIN = "// LWE conditional include begin";
+constexpr std::string_view CONDITIONAL_INCLUDE_END = "// LWE conditional include end";
+
+/**
+ * Wallpaper Engine's shader compiler lets header macros affect the authored source at the
+ * #include site while resolving global declarations used by header functions later. Desktop
+ * GLSL cannot do both by pasting the whole header at either location: early header functions
+ * cannot see later uniforms, and late header macros cannot affect earlier authored helpers.
+ *
+ * Split only unconditional #defines out of the fully expanded header text. They are safe to
+ * expose at the include site; declarations and function bodies stay in the existing insertion
+ * point after the shader's interface declarations. Conditional defines remain in place so their
+ * #if/#endif scope is unchanged.
+ */
+std::string extractUnconditionalIncludeDefines (std::string& includes) {
+    std::string defines;
+    std::string body;
+    size_t conditionalDepth = 0;
+    size_t conditionalIncludeDepth = 0;
+    size_t cursor = 0;
+
+    while (cursor < includes.size ()) {
+	size_t lineEnd = includes.find ('\n', cursor);
+	const bool hasNewline = lineEnd != std::string::npos;
+	if (!hasNewline) {
+	    lineEnd = includes.size ();
+	}
+
+	const std::string_view line (includes.data () + cursor, lineEnd - cursor);
+	const std::string_view directive = preprocessorDirective (line);
+
+	if (line == CONDITIONAL_INCLUDE_BEGIN || line == CONDITIONAL_INCLUDE_END) {
+	    if (line == CONDITIONAL_INCLUDE_BEGIN) {
+		conditionalIncludeDepth++;
+	    } else if (conditionalIncludeDepth > 0) {
+		conditionalIncludeDepth--;
+	    }
+	    if (hasNewline) {
+		body.push_back ('\n');
+	    }
+	    cursor = hasNewline ? lineEnd + 1 : lineEnd;
+	    continue;
+	}
+
+	if (directive == "define" && conditionalDepth == 0 && conditionalIncludeDepth == 0) {
+	    size_t logicalEnd = hasNewline ? lineEnd + 1 : lineEnd;
+	    std::string_view logicalLine = line;
+
+	    while (continuesOnNextLine (logicalLine) && logicalEnd < includes.size ()) {
+		const size_t nextEnd = includes.find ('\n', logicalEnd);
+		if (nextEnd == std::string::npos) {
+		    logicalLine = std::string_view (includes.data () + logicalEnd, includes.size () - logicalEnd);
+		    logicalEnd = includes.size ();
+		} else {
+		    logicalLine = std::string_view (includes.data () + logicalEnd, nextEnd - logicalEnd);
+		    logicalEnd = nextEnd + 1;
+		}
+	    }
+
+	    defines.append (includes, cursor, logicalEnd - cursor);
+	    if (!defines.empty () && defines.back () != '\n') {
+		defines.push_back ('\n');
+	    }
+
+	    // Preserve line breaks in the late header body so debug dumps still line up.
+	    for (size_t position = cursor; position < logicalEnd; position++) {
+		if (includes [position] == '\n') {
+		    body.push_back ('\n');
+		}
+	    }
+
+	    cursor = logicalEnd;
+	    continue;
+	}
+
+	body.append (includes, cursor, (hasNewline ? lineEnd + 1 : lineEnd) - cursor);
+
+	if (directive == "if" || directive == "ifdef" || directive == "ifndef") {
+	    conditionalDepth++;
+	} else if (directive == "endif" && conditionalDepth > 0) {
+	    conditionalDepth--;
+	}
+
+	cursor = hasNewline ? lineEnd + 1 : lineEnd;
+    }
+
+    includes = std::move (body);
+    return defines;
+}
 } // namespace
 
 void ShaderUnit::preprocessIncludes () {
@@ -187,8 +334,14 @@ void ShaderUnit::preprocessIncludes () {
     }
 
     size_t start = 0, end = 0;
+    size_t firstUnconditionalInclude = std::string::npos;
     // prepare the include content
     while ((start = this->m_preprocessed.find ("#include", end)) != std::string::npos) {
+	const bool conditionalInclude = preprocessorConditionalDepthBefore (this->m_preprocessed, start) > 0;
+	if (!conditionalInclude && firstUnconditionalInclude == std::string::npos) {
+	    firstUnconditionalInclude = start;
+	}
+
 	// TODO: CHECK FOR ERRORS HERE, MALFORMED INCLUDES WILL NOT BE PROPERLY HANDLED
 	const size_t quoteStart = this->m_preprocessed.find_first_of ('"', start) + 1;
 	const size_t quoteEnd = this->m_preprocessed.find_first_of ('"', quoteStart);
@@ -211,6 +364,12 @@ void ShaderUnit::preprocessIncludes () {
 	    content += "// tried including file ";
 	    content += filename;
 	    content += " but was not found\n";
+	}
+
+	if (conditionalInclude) {
+	    content.insert (0, std::string (CONDITIONAL_INCLUDE_BEGIN) + '\n');
+	    content += CONDITIONAL_INCLUDE_END;
+	    content += '\n';
 	}
 
 	// replace the first two letters with a comment so the filelength doesn't change
@@ -257,6 +416,13 @@ void ShaderUnit::preprocessIncludes () {
 
 	// go back to the beginning of the line to properly continue detecting things
 	end = start;
+    }
+
+    // Keep macros at the authored include location, but leave declarations and helper
+    // functions in m_includes so uniforms declared by the shader remain visible to them.
+    const std::string includeDefines = extractUnconditionalIncludeDefines (this->m_includes);
+    if (!includeDefines.empty () && firstUnconditionalInclude != std::string::npos) {
+	this->m_preprocessed.insert (firstUnconditionalInclude, includeDefines);
     }
 
     // search for the main function and add the includes before that for now
