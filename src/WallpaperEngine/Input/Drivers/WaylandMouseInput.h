@@ -53,6 +53,7 @@ private:
     const WallpaperEngine::Render::Drivers::WaylandOpenGLDriver& m_waylandDriver;
 
     glm::dvec2 m_pos = {};
+    bool m_hasPosition = false;
     std::chrono::steady_clock::time_point m_lastHyprlandQuery = {};
 };
 } // namespace WallpaperEngine::Input::Drivers
