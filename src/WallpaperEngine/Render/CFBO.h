@@ -2,6 +2,7 @@
 
 #include <atomic>
 #include <string>
+#include <string_view>
 
 #include "TextureProvider.h"
 
@@ -24,9 +25,8 @@ public:
     [[nodiscard]] GLuint getFramebuffer () const;
     [[nodiscard]] GLuint getDepthbuffer () const;
     /**
-     * Regenerates the mip chain from level 0 for layer composite targets (a no-op for
-     * every other FBO). These targets get sampled onto grazing 3D geometry in the final
-     * pass, so a fresh mip chain lets the anisotropic filter damp minification aliasing.
+     * Regenerates the mip chain from level 0 for Wallpaper Engine's dedicated
+     * _rt_MipMappedFrameBuffer target (a no-op for ordinary layer composites).
      */
     void generateMipmaps () const;
     [[nodiscard]] GLuint getTextureID (uint32_t imageIndex) const override;
@@ -50,6 +50,8 @@ public:
 
     [[nodiscard]] static size_t getLiveCount ();
     [[nodiscard]] static size_t getLiveGpuBytes ();
+    /** Wallpaper Engine generates mip levels only for this named reflection target. */
+    [[nodiscard]] static bool targetUsesMipmaps (std::string_view name);
     /** Largest live render-target groups, for the control socket's fbostats command. */
     [[nodiscard]] static std::string getLiveDebugSummary (size_t limit = 20);
 

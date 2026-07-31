@@ -79,10 +79,10 @@ CFBO::CFBO (
 	glTexParameteri (GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
     } else {
 	glTexParameteri (GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-	// Layer composite targets get sampled onto grazing 3D geometry in the final pass
-	// (e.g. the reflective water-road panels in 3708206626). A mip chain lets the
-	// anisotropic filter above damp that minification instead of aliasing into rainbow
-	// scanlines. Every other FBO is sampled ~1:1 and stays on plain GL_LINEAR.
+	// Wallpaper Engine reserves mip generation for its dedicated
+	// _rt_MipMappedFrameBuffer. Ordinary image-layer composites must stay on level 0:
+	// their transparent RGB is not premultiplied, so averaging it into generated mip
+	// levels produces bright fringes around translucent artwork.
 	glTexParameteri (
 	    GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, this->hasMipmaps () ? GL_LINEAR_MIPMAP_LINEAR : GL_LINEAR
 	);
@@ -252,8 +252,10 @@ void CFBO::ensureFramebuffer () const {
 }
 
 bool CFBO::hasMipmaps () const {
-    return !this->m_depthTexture && this->m_name.starts_with ("_rt_imageLayerComposite");
+    return !this->m_depthTexture && targetUsesMipmaps (this->m_name);
 }
+
+bool CFBO::targetUsesMipmaps (const std::string_view name) { return name == "_rt_MipMappedFrameBuffer"; }
 
 void CFBO::generateMipmaps () const {
     if (!this->hasMipmaps ()) {
