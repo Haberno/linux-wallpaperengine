@@ -124,7 +124,7 @@ MdlPose MdlAnimationEvaluator::evaluate (
 	glm::mat4 local = animationData.bones[bone].bindLocal;
 	size_t firstComposedLayer = 0;
 
-	if (!activeAnimations.empty ()) {
+	if (!activeAnimations.empty () && !activeAnimations.front ().additive) {
 	    const auto& baseLayer = activeAnimations.front ();
 	    if (baseLayer.animation != nullptr && bone < baseLayer.animation->boneFrames.size ()) {
 		const auto& baseFrames = baseLayer.animation->boneFrames[bone];
@@ -149,7 +149,12 @@ MdlPose MdlAnimationEvaluator::evaluate (
 
 	    const glm::mat4 sampled = poseMatrix (sampleBone (layer, bone));
 	    if (layer.additive) {
-		const glm::mat4 reference = poseMatrix (frames.front ());
+		// Additive MDL tracks are authored relative to the skeleton bind pose,
+		// not relative to their first sample. One-shot entrance clips commonly
+		// start away from the model and finish exactly at bind; using frame zero
+		// as the reference makes those clips start at bind and leave a permanent
+		// inverse overshoot after they finish.
+		const glm::mat4& reference = animationData.bones[bone].bindLocal;
 		const glm::mat4 delta = glm::inverse (reference) * sampled;
 		local *= blendMatrix (glm::mat4 (1.0f), delta, layer.weight);
 	    } else {
