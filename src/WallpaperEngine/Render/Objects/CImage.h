@@ -48,6 +48,9 @@ public:
     void render () override;
 
     [[nodiscard]] const Image& getImage () const;
+    [[nodiscard]] bool isCompositionLayer () const;
+    [[nodiscard]] bool copiesCompositionBackground () const;
+    [[nodiscard]] std::shared_ptr<const CFBO> getCompositionFBO () const;
     [[nodiscard]] glm::vec2 getSize () const;
     [[nodiscard]] std::optional<glm::mat4> getAttachmentTransform (const std::string& name) const override;
     [[nodiscard]] std::optional<size_t> getAttachmentIndex (const std::string& name) const override;
@@ -230,6 +233,8 @@ private:
     std::shared_ptr<const CFBO> m_subFBO = nullptr;
     std::shared_ptr<const CFBO> m_currentMainFBO = nullptr;
     std::shared_ptr<const CFBO> m_currentSubFBO = nullptr;
+    /** Isolated child surface used by models/util/composelayer.json. */
+    std::shared_ptr<CFBO> m_compositionFBO = nullptr;
 
     const Image& m_image;
     // Stable storage is required because effect-pass uniforms keep pointers to

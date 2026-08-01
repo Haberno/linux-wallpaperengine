@@ -181,7 +181,7 @@ private:
     template <typename T> void addUniform (const std::string& name, UniformType type, T* value, int count = 1);
     template <typename T> void addUniform (const std::string& name, UniformType type, T** value);
 
-    void setupRenderFramebuffer () const;
+    void setupRenderFramebuffer (const std::shared_ptr<const CFBO>& drawTo) const;
     void setupRenderTexture ();
     [[nodiscard]] std::shared_ptr<const TextureProvider> resolveTexture0 ();
     [[nodiscard]] TextureAnimationState

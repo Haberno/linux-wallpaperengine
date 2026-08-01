@@ -16,6 +16,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <functional>
 #include <numeric>
 #include <ranges>
 
@@ -682,16 +683,110 @@ void CScene::renderFrame (const glm::ivec4& viewport) {
     glClear (GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
     const std::vector<CObject*> renderOrder = this->buildFrameRenderOrder ();
-    for (const auto& cur : renderOrder) {
-	const auto& debug = this->getContext ().getApp ().getContext ().settings.render.debug;
-	if (debug.objectFilter.has_value () && cur->getId () != debug.objectFilter.value ()) {
-	    continue;
+    const auto& debug = this->getContext ().getApp ().getContext ().settings.render.debug;
+    const auto enabledByDebug = [&debug] (const CObject* object) {
+	if (debug.objectFilter.has_value () && object->getId () != debug.objectFilter.value ()) {
+	    return false;
 	}
-	if (std::ranges::find (debug.skipObjects, cur->getId ()) != debug.skipObjects.end ()) {
-	    continue;
+	return std::ranges::find (debug.skipObjects, object->getId ()) == debug.skipObjects.end ();
+    };
+
+    // Wallpaper Engine renders a composition layer's child subtree into the
+    // layer surface first. Reconstruct only that relationship around the otherwise
+    // flat render order so ordinary layer/dependency ordering remains unchanged.
+    const auto compositionAncestor = [this] (const CObject* object) -> Objects::CImage* {
+	const Object* current = &object->getObject ();
+	for (int depth = 0; current->parent.has_value () && depth < 32; depth++) {
+	    const auto parentIt = this->m_objects.find (*current->parent);
+	    if (parentIt == this->m_objects.end ()) {
+		break;
+	    }
+	    CObject* parent = parentIt->second;
+	    auto* image = dynamic_cast<Objects::CImage*> (parent);
+	    if (image != nullptr && image->isCompositionLayer ()) {
+		return image;
+	    }
+	    current = &parent->getObject ();
+	}
+	return nullptr;
+    };
+
+    std::set<int> submitted;
+    std::function<void (Objects::CImage*)> renderComposition;
+    renderComposition = [&] (Objects::CImage* composition) {
+	if (composition == nullptr || submitted.contains (composition->getId ())) {
+	    return;
+	}
+	submitted.insert (composition->getId ());
+
+	const auto target = composition->getCompositionFBO ();
+	if (target == nullptr) {
+	    if (enabledByDebug (composition)) {
+		composition->render ();
+	    }
+	    return;
 	}
 
-	cur->render ();
+	const auto previousTarget = this->m_compositionRenderTarget;
+	const auto source = this->getActiveRenderTarget ();
+	GLfloat previousClearColor[4];
+	glGetFloatv (GL_COLOR_CLEAR_VALUE, previousClearColor);
+	glBindFramebuffer (GL_FRAMEBUFFER, target->getFramebuffer ());
+	glViewport (0, 0, target->getRealWidth (), target->getRealHeight ());
+	glColorMask (true, true, true, true);
+	glDepthMask (true);
+	glClearColor (0.0f, 0.0f, 0.0f, 0.0f);
+	glClear (GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+	glClearColor (
+	    previousClearColor[0], previousClearColor[1], previousClearColor[2], previousClearColor[3]
+	);
+
+	if (composition->copiesCompositionBackground () && source != nullptr && source != target) {
+	    glBindFramebuffer (GL_READ_FRAMEBUFFER, source->getFramebuffer ());
+	    glBindFramebuffer (GL_DRAW_FRAMEBUFFER, target->getFramebuffer ());
+	    glBlitFramebuffer (
+		0, 0, source->getRealWidth (), source->getRealHeight (), 0, 0, target->getRealWidth (),
+		target->getRealHeight (), GL_COLOR_BUFFER_BIT, GL_LINEAR
+	    );
+	}
+
+	this->m_compositionRenderTarget = target;
+	for (CObject* child : renderOrder) {
+	    if (submitted.contains (child->getId ()) || compositionAncestor (child) != composition) {
+		continue;
+	    }
+	    if (auto* nested = dynamic_cast<Objects::CImage*> (child);
+		nested != nullptr && nested->isCompositionLayer ()) {
+		renderComposition (nested);
+	    } else {
+		submitted.insert (child->getId ());
+		if (enabledByDebug (child)) {
+		    child->render ();
+		}
+	    }
+	}
+	this->m_compositionRenderTarget = previousTarget;
+
+	// The stock composelayer material samples the locally shadowed
+	// _rt_FullFrameBuffer and composites the effected group into the prior target.
+	if (enabledByDebug (composition)) {
+	    composition->render ();
+	}
+    };
+
+    for (const auto& cur : renderOrder) {
+	if (submitted.contains (cur->getId ()) || compositionAncestor (cur) != nullptr) {
+	    continue;
+	}
+	if (auto* composition = dynamic_cast<Objects::CImage*> (cur);
+	    composition != nullptr && composition->isCompositionLayer ()) {
+	    renderComposition (composition);
+	    continue;
+	}
+	submitted.insert (cur->getId ());
+	if (enabledByDebug (cur)) {
+	    cur->render ();
+	}
     }
 }
 
@@ -1184,6 +1279,20 @@ const CObject* CScene::getObject (int id) const {
     const auto object = this->m_objects.find (id);
     return object == this->m_objects.end () ? nullptr : object->second;
 }
+
+std::shared_ptr<const CFBO> CScene::getActiveRenderTarget () const {
+    return this->m_compositionRenderTarget != nullptr ? this->m_compositionRenderTarget : this->getFBO ();
+}
+
+std::shared_ptr<const CFBO>
+CScene::resolveRenderTarget (const std::shared_ptr<const CFBO>& requested) const {
+    if (requested == this->getFBO () && this->m_compositionRenderTarget != nullptr) {
+	return this->m_compositionRenderTarget;
+    }
+    return requested;
+}
+
+bool CScene::isRenderingToComposition () const { return this->m_compositionRenderTarget != nullptr; }
 
 Render::CObject* CScene::createLayer (const std::string& modelPath, const std::string& workshopId) {
     // Resolve the asset path: scripts reference bar models by their bare workshop-relative path

@@ -1850,7 +1850,7 @@ void CParticle::setupPass () {
     // black reads on NVIDIA. By placing a copy FBO with the same name in our FBOProvider,
     // CPass resolves g_Texture3 to the copy instead. We blit the scene content before each render.
     if (m_hasRefract) {
-	auto sceneFBO = getScene ().getFBO ();
+	auto sceneFBO = getScene ().getActiveRenderTarget ();
 	float w = static_cast<float> (sceneFBO->getRealWidth ());
 	float h = static_cast<float> (sceneFBO->getRealHeight ());
 	m_refractFBO = m_passFBOProvider->create (
@@ -2278,7 +2278,7 @@ void CParticle::renderSprites () {
     // This gives the shader a snapshot of what's behind the particles for refraction,
     // without a feedback loop (rendering to scene FBO while reading from copy FBO).
     if (m_hasRefract && m_refractFBO) {
-	auto sceneFBO = getScene ().getFBO ();
+	auto sceneFBO = getScene ().getActiveRenderTarget ();
 	GLint w = static_cast<GLint> (sceneFBO->getRealWidth ());
 	GLint h = static_cast<GLint> (sceneFBO->getRealHeight ());
 	glBindFramebuffer (GL_READ_FRAMEBUFFER, sceneFBO->getFramebuffer ());
@@ -2492,7 +2492,7 @@ void CParticle::renderRopeTrail () {
     updateMatrices ();
 
     if (m_hasRefract && m_refractFBO) {
-	auto sceneFBO = getScene ().getFBO ();
+	auto sceneFBO = getScene ().getActiveRenderTarget ();
 	const GLint width = static_cast<GLint> (sceneFBO->getRealWidth ());
 	const GLint height = static_cast<GLint> (sceneFBO->getRealHeight ());
 	glBindFramebuffer (GL_READ_FRAMEBUFFER, sceneFBO->getFramebuffer ());
@@ -2716,7 +2716,7 @@ void CParticle::renderRope () {
 
     // For REFRACT: blit current scene content into the copy FBO before rendering
     if (m_hasRefract && m_refractFBO) {
-	auto sceneFBO = getScene ().getFBO ();
+	auto sceneFBO = getScene ().getActiveRenderTarget ();
 	GLint w = static_cast<GLint> (sceneFBO->getRealWidth ());
 	GLint h = static_cast<GLint> (sceneFBO->getRealHeight ());
 	glBindFramebuffer (GL_READ_FRAMEBUFFER, sceneFBO->getFramebuffer ());
