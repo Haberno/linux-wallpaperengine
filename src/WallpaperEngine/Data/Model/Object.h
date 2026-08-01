@@ -130,6 +130,8 @@ struct ImageData {
     UserSettingUniquePtr colorBlendMode;
     /** The brightness of the image */
     UserSettingUniquePtr brightness;
+    /** Composition layers optionally seed their isolated child surface with the scene behind them. */
+    bool copyBackground;
     /** The material in use for this image */
     ModelUniquePtr model;
     /** The effects applied to this image after the material is rendered */

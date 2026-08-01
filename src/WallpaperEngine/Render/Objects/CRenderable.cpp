@@ -21,7 +21,10 @@ void CRenderable::detectTexture () {
 	std::string textureName = textures->begin ()->second;
 
 	if (textureName.find ("_rt_") == 0 || textureName.find ("_alias_") == 0) {
-	    this->m_texture = this->getScene ().findFBO (textureName);
+	    // Renderables may shadow a scene target locally. Composition layers use this
+	    // to make their stock composelayer material sample the isolated child surface
+	    // instead of feeding the completed scene back through their effects.
+	    this->m_texture = this->find (textureName);
 	} else {
 	    this->m_texture = this->getContext ().resolveTexture (textureName, this->getScene ().getAssetLocator ());
 	}

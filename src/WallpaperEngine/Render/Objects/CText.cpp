@@ -563,8 +563,9 @@ void CText::renderEffectChain (const glm::mat4& mvp, const float brightness, con
     }
 
     // 4. composite the result onto the scene with the object's world transform
-    glBindFramebuffer (GL_FRAMEBUFFER, this->getScene ().getWallpaperFramebuffer ());
-    glViewport (0, 0, this->getScene ().getFBO ()->getRealWidth (), this->getScene ().getFBO ()->getRealHeight ());
+    const auto sceneTarget = this->getScene ().getActiveRenderTarget ();
+    glBindFramebuffer (GL_FRAMEBUFFER, sceneTarget->getFramebuffer ());
+    glViewport (0, 0, sceneTarget->getRealWidth (), sceneTarget->getRealHeight ());
 
     glEnable (GL_BLEND);
     glBlendFunc (GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);

@@ -1,5 +1,6 @@
 #include "FBOProvider.h"
 #include <gmpxx.h>
+#include <utility>
 
 using namespace WallpaperEngine::Render;
 using namespace WallpaperEngine::Data::Model;
@@ -27,6 +28,10 @@ std::shared_ptr<CFBO> FBOProvider::create (
 
 std::shared_ptr<CFBO> FBOProvider::alias (const std::string& newName, const std::string& original) {
     return this->m_fbos[newName] = this->m_fbos[original];
+}
+
+std::shared_ptr<CFBO> FBOProvider::alias (const std::string& newName, std::shared_ptr<CFBO> original) {
+    return this->m_fbos[newName] = std::move (original);
 }
 
 std::shared_ptr<CFBO> FBOProvider::find (const std::string& name) const {

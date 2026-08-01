@@ -126,12 +126,12 @@ std::shared_ptr<const CFBO> CPass::resolveFBO (const std::string& name) const {
     return fbo;
 }
 
-void CPass::setupRenderFramebuffer () const {
+void CPass::setupRenderFramebuffer (const std::shared_ptr<const CFBO>& drawTo) const {
     // set the framebuffer we're drawing to
-    glBindFramebuffer (GL_FRAMEBUFFER, this->m_drawTo->getFramebuffer ());
+    glBindFramebuffer (GL_FRAMEBUFFER, drawTo->getFramebuffer ());
 
     // set proper viewport based on what we're drawing to
-    glViewport (0, 0, this->m_drawTo->getRealWidth (), this->m_drawTo->getRealHeight ());
+    glViewport (0, 0, drawTo->getRealWidth (), drawTo->getRealHeight ());
 
     // Alpha-to-coverage is sticky OpenGL state, so always reset it before
     // selecting the pass' blending mode.
@@ -523,7 +523,8 @@ void CPass::render () {
 	}
     }
 
-    if (this->m_drawTo == nullptr) {
+    const auto drawTo = this->m_renderable.getScene ().resolveRenderTarget (this->m_drawTo);
+    if (drawTo == nullptr) {
 	sLog.error ("Skipping render pass for object ", this->m_renderable.getId (), ": no destination FBO set");
 	return;
     }
@@ -533,7 +534,7 @@ void CPass::render () {
 	return;
     }
 
-    this->setupRenderFramebuffer ();
+    this->setupRenderFramebuffer (drawTo);
     this->setupRenderTexture ();
     // genericimage3/4 (and VERSION-enabled genericimage2) encode object opacity in
     // g_Color4.a and do not expose g_UserAlpha. Refresh the combined value here so
@@ -555,7 +556,7 @@ void CPass::render () {
 
     // Refresh only Wallpaper Engine's dedicated mipmapped target. Ordinary
     // _rt_imageLayerComposite_* targets intentionally remain single-level.
-    this->m_drawTo->generateMipmaps ();
+    drawTo->generateMipmaps ();
 }
 
 std::shared_ptr<const FBOProvider> CPass::getFBOProvider () const { return this->m_fboProvider; }

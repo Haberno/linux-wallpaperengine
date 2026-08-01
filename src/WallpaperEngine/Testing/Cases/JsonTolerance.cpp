@@ -113,6 +113,40 @@ TEST_CASE ("missing image effects are skipped without discarding neighboring eff
     CHECK (text->effects[1]->effect->name == "after");
 }
 
+TEST_CASE ("image composition layers retain copybackground") {
+    const auto parseLayer = [] (const std::string& objectJson) {
+	auto filesystem = std::make_unique<Container> ();
+	filesystem->getVFS ().add (
+	    "models/util/composelayer.json",
+	    R"({"material":"materials/util/composelayer.json","passthrough":true})"
+	);
+	filesystem->getVFS ().add (
+	    "materials/util/composelayer.json",
+	    R"({"passes":[{"shader":"composelayer","textures":["_rt_FullFrameBuffer"]}]})"
+	);
+	Project project {};
+	project.assetLocator
+	    = std::make_unique<WallpaperEngine::Assets::AssetLocator> (std::move (filesystem));
+	return ObjectParser::parse (JSON::parse (objectJson), project);
+    };
+
+    const auto isolated = parseLayer (
+	R"({"id":1,"name":"isolated","image":"models/util/composelayer.json","copybackground":false})"
+    );
+    const auto copied = parseLayer (
+	R"({"id":2,"name":"copied","image":"models/util/composelayer.json","copybackground":true})"
+    );
+    const auto omitted
+	= parseLayer (R"({"id":3,"name":"omitted","image":"models/util/composelayer.json"})");
+
+    REQUIRE (isolated->is<Image> ());
+    REQUIRE_FALSE (isolated->as<Image> ()->copyBackground);
+    REQUIRE (copied->is<Image> ());
+    REQUIRE (copied->as<Image> ()->copyBackground);
+    REQUIRE (omitted->is<Image> ());
+    REQUIRE_FALSE (omitted->as<Image> ()->copyBackground);
+}
+
 TEST_CASE ("alpha-to-coverage material blending is preserved") {
     REQUIRE (MaterialParser::parseBlendMode ("alphatocoverage") == BlendingMode_AlphaToCoverage);
 }
