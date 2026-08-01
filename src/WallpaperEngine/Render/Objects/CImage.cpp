@@ -202,6 +202,20 @@ CImage::CImage (Wallpapers::CScene& scene, const Image& image) :
     glm::vec2 size = this->getSize ();
     glm::vec3 scale = transform.scale;
 
+    if (this->isCompositionLayer ()) {
+	const glm::vec2 compositionSize = {
+	    static_cast<float> (scene.getWidth ()), static_cast<float> (scene.getHeight ())
+	};
+	this->m_compositionFBO = scene.create (
+	    "_rt_compositionLayer_" + std::to_string (image.id), TextureFormat_ARGB8888,
+	    TextureFlags_ClampUVs, 1.0f, compositionSize, compositionSize, true
+	);
+	// Every pass created for this image receives an FBOProvider parented to the
+	// image, so this alias also redirects an authored texture slot named
+	// _rt_FullFrameBuffer, not only CRenderable's primary input.
+	this->alias ("_rt_FullFrameBuffer", this->m_compositionFBO);
+    }
+
     this->detectTexture ();
 
     // detect texture (if any)
@@ -1327,7 +1341,11 @@ void CImage::renderPuppetClipping () {
 		glEnable (GL_SCISSOR_TEST);
 	    }
 	} else {
-	    glColorMask (true, true, true, false);
+	    // Scene alpha is owned by the wallpaper compositor, but an isolated
+	    // composition surface needs child alpha so its parent can blend the group.
+	    glColorMask (
+		true, true, true, this->getScene ().isRenderingToComposition () ? GL_TRUE : GL_FALSE
+	    );
 	}
 	command.pass->render ();
     }
@@ -1817,7 +1835,11 @@ void CImage::render () {
 		this->renderPuppetClipping ();
 		continue;
 	    }
-	    glColorMask (true, true, true, false);
+	    // Preserve alpha only on the real scene target. A child image rendered
+	    // into a composition layer must contribute its authored alpha.
+	    glColorMask (
+		true, true, true, this->getScene ().isRenderingToComposition () ? GL_TRUE : GL_FALSE
+	    );
 	}
 
 	(*cur)->render ();
@@ -2202,6 +2224,15 @@ auto CImage::calculatePerspectiveSceneMatrices (const glm::mat4& world, const gl
 }
 
 const Image& CImage::getImage () const { return this->m_image; }
+
+bool CImage::isCompositionLayer () const {
+    return this->m_image.model != nullptr
+	&& this->m_image.model->filename == "models/util/composelayer.json";
+}
+
+bool CImage::copiesCompositionBackground () const { return this->m_image.copyBackground; }
+
+std::shared_ptr<const CFBO> CImage::getCompositionFBO () const { return this->m_compositionFBO; }
 
 glm::vec2 CImage::getSize () const {
     if (this->m_size.x > 0.0f && this->m_size.y > 0.0f) {

@@ -23,6 +23,7 @@ class CObject;
 
 namespace WallpaperEngine::Render::Objects {
 class CLight;
+class CImage;
 }
 
 namespace WallpaperEngine::Render::Wallpapers {
@@ -108,6 +109,13 @@ public:
 
     [[nodiscard]] const std::vector<CObject*>& getObjectsByRenderOrder () const;
     [[nodiscard]] const CObject* getObject (int id) const;
+
+    /** Destination selected while a native composition layer renders its child subtree. */
+    [[nodiscard]] std::shared_ptr<const CFBO> getActiveRenderTarget () const;
+    /** Redirect an ordinary scene destination into the active composition target. */
+    [[nodiscard]] std::shared_ptr<const CFBO>
+    resolveRenderTarget (const std::shared_ptr<const CFBO>& requested) const;
+    [[nodiscard]] bool isRenderingToComposition () const;
 
     /**
      * Per-frame light state for 3D scenes, laid out to match the LightingV1
@@ -250,6 +258,7 @@ private:
     std::shared_ptr<const CFBO> _rt_8FrameBuffer = nullptr;
     std::shared_ptr<const CFBO> _rt_Bloom = nullptr;
     std::shared_ptr<const CFBO> _rt_shadowAtlas = nullptr;
+    std::shared_ptr<const CFBO> m_compositionRenderTarget = nullptr;
 
     static constexpr int SHADOW_ATLAS_SIZE = 2048;
     static constexpr int SHADOW_ATLAS_GUARD = 2;
