@@ -173,3 +173,58 @@ TEST_CASE ("MDL animation evaluator interpolates and composes parent bones") {
     CHECK ((*attachmentWorld)[3].z == Catch::Approx (3.0f));
     CHECK_FALSE (MdlAnimationEvaluator::attachmentTransform (animationData, pose.worldBones, "missing").has_value ());
 }
+
+TEST_CASE ("additive MDL entrance clips resolve against the bind pose") {
+    MdlAnimationData animationData;
+    const glm::mat4 bind = glm::translate (glm::mat4 (1.0f), glm::vec3 (10.0f, 20.0f, 0.0f));
+    animationData.bones.push_back (
+	{
+	    .name = "root",
+	    .bindLocal = bind,
+	    .inverseBindWorld = glm::inverse (bind),
+	}
+    );
+
+    MdlAnimationClip base {
+	.id = 1,
+	.mode = "loop",
+	.fps = 1.0f,
+	.frameCount = 1,
+	.boneFrames = { {
+	    { .translation = { 10.0f, 20.0f, 0.0f } },
+	    { .translation = { 10.0f, 20.0f, 0.0f } },
+	} },
+    };
+    MdlAnimationClip entrance {
+	.id = 2,
+	.mode = "single",
+	.fps = 1.0f,
+	.frameCount = 1,
+	.boneFrames = { {
+	    { .translation = { 4.0f, 8.0f, 0.0f }, .scale = { 0.8f, 0.8f, 1.0f } },
+	    { .translation = { 10.0f, 20.0f, 0.0f }, .scale = { 1.0f, 1.0f, 1.0f } },
+	} },
+    };
+
+    const auto evaluateAt = [&] (const float time) {
+	return MdlAnimationEvaluator::evaluate (
+	    animationData,
+	    {
+		{ .animation = &base, .time = time },
+		{ .animation = &entrance, .time = time, .additive = true },
+	    }
+	);
+    };
+
+    const auto opening = evaluateAt (0.0f);
+    REQUIRE (opening.worldBones.size () == 1);
+    CHECK (opening.worldBones[0][3].x == Catch::Approx (4.0f));
+    CHECK (opening.worldBones[0][3].y == Catch::Approx (8.0f));
+    CHECK (glm::length (glm::vec3 (opening.worldBones[0][0])) == Catch::Approx (0.8f));
+
+    const auto resting = evaluateAt (1.0f);
+    REQUIRE (resting.worldBones.size () == 1);
+    CHECK (resting.worldBones[0][3].x == Catch::Approx (10.0f));
+    CHECK (resting.worldBones[0][3].y == Catch::Approx (20.0f));
+    CHECK (glm::length (glm::vec3 (resting.worldBones[0][0])) == Catch::Approx (1.0f));
+}
