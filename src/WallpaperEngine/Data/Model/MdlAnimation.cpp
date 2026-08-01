@@ -91,6 +91,27 @@ MdlBoneFrame sampleBone (const MdlActiveAnimation& layer, const size_t bone) {
     return blendPose (current, next, blend);
 }
 
+/**
+ * Wallpaper Engine evaluates every layer against one persistent model reference
+ * pose. The embedded frame-zero pose is the constraint-resolved form of that
+ * reference: older MDLS0002 puppets can differ substantially from the raw bind
+ * transform on constrained bones, while newer puppets such as Lucy serialize
+ * the same pose in both places.
+ */
+MdlBoneFrame referenceBone (
+    const MdlAnimationData& animationData, const size_t bone, const MdlBoneFrame& bind
+) {
+    for (const auto& animation : animationData.animations) {
+	if (bone < animation.boneFrames.size ()) {
+	    const auto& frames = animation.boneFrames[bone];
+	    if (!frames.empty ()) {
+		return frames.front ();
+	    }
+	}
+    }
+    return bind;
+}
+
 /** Same playhead and interpolation as the bones, on a scalar track instead of a pose. */
 float sampleBlendTrack (const MdlActiveAnimation& layer, const size_t row) {
     const auto& track = layer.animation->blendTracks[row];
@@ -112,7 +133,8 @@ MdlPose MdlAnimationEvaluator::evaluate (
 
     for (size_t bone = 0; bone < animationData.bones.size (); bone++) {
 	const MdlBoneFrame bind = matrixPose (animationData.bones[bone].bindLocal);
-	MdlBoneFrame local = bind;
+	const MdlBoneFrame reference = referenceBone (animationData, bone, bind);
+	MdlBoneFrame local = reference;
 
 	for (size_t layerIndex = 0; layerIndex < activeAnimations.size (); layerIndex++) {
 	    const auto& layer = activeAnimations[layerIndex];
@@ -128,16 +150,15 @@ MdlPose MdlAnimationEvaluator::evaluate (
 	    const float weight = std::clamp (layer.weight, 0.0f, 1.0f);
 	    if (layer.additive) {
 		// The native evaluator keeps translation, rotation, and scale as separate
-		// arrays. Additive layers subtract the skeleton bind pose component-wise,
-		// then accumulate the weighted delta into the current pose. Multiplying
-		// local matrices instead makes a preceding layer's scale/rotation distort
-		// later translation deltas (notably Gojo, workshop 3100265648).
-		local.translation += (sampled.translation - bind.translation) * weight;
-		const glm::quat delta = glm::normalize (glm::inverse (bind.rotation) * sampled.rotation);
+		// arrays and gives every additive layer the same persistent reference
+		// buffer. Using raw MDLS here scatters constraint-resolved MDLS0002 bones;
+		// using each clip's frame zero cancels later one-shot entrance clips.
+		local.translation += (sampled.translation - reference.translation) * weight;
+		const glm::quat delta = glm::normalize (glm::inverse (reference.rotation) * sampled.rotation);
 		local.rotation = glm::normalize (
 		    local.rotation * glm::slerp (glm::quat (1.0f, 0.0f, 0.0f, 0.0f), delta, weight)
 		);
-		local.scale += (sampled.scale - bind.scale) * weight;
+		local.scale += (sampled.scale - reference.scale) * weight;
 	    } else {
 		local = blendPose (local, sampled, weight);
 	    }
