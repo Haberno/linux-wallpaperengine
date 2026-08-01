@@ -174,7 +174,7 @@ TEST_CASE ("MDL animation evaluator interpolates and composes parent bones") {
     CHECK_FALSE (MdlAnimationEvaluator::attachmentTransform (animationData, pose.worldBones, "missing").has_value ());
 }
 
-TEST_CASE ("additive MDL entrance clips resolve against the bind pose") {
+TEST_CASE ("additive MDL entrance clips resolve against the shared reference pose") {
     MdlAnimationData animationData;
     const glm::mat4 bind = glm::translate (glm::mat4 (1.0f), glm::vec3 (10.0f, 20.0f, 0.0f));
     animationData.bones.push_back (
@@ -206,12 +206,14 @@ TEST_CASE ("additive MDL entrance clips resolve against the bind pose") {
 	} },
     };
 
+    animationData.animations = { base, entrance };
+
     const auto evaluateAt = [&] (const float time) {
 	return MdlAnimationEvaluator::evaluate (
 	    animationData,
 	    {
-		{ .animation = &base, .time = time },
-		{ .animation = &entrance, .time = time, .additive = true },
+		{ .animation = &animationData.animations[0], .time = time, .additive = true },
+		{ .animation = &animationData.animations[1], .time = time, .additive = true },
 	    }
 	);
     };
@@ -253,14 +255,16 @@ TEST_CASE ("additive bone deltas are composed per component") {
 	.mode = "loop",
 	.fps = 1.0f,
 	.frameCount = 0,
-	.boneFrames = { { { .translation = { 12.0f, 20.0f, 0.0f }, .scale = { 3.0f, 2.0f, 1.0f } } } },
+	.boneFrames = { { { .translation = { 6.0f, 8.0f, 0.0f }, .scale = { 1.8f, 0.8f, 1.0f } } } },
     };
+
+    animationData.animations = { base, detail };
 
     const auto pose = MdlAnimationEvaluator::evaluate (
 	animationData,
 	{
-	    { .animation = &base, .additive = true },
-	    { .animation = &detail, .weight = 0.5f, .additive = true },
+	    { .animation = &animationData.animations[0], .additive = true },
+	    { .animation = &animationData.animations[1], .weight = 0.5f, .additive = true },
 	}
     );
 
@@ -269,4 +273,54 @@ TEST_CASE ("additive bone deltas are composed per component") {
     CHECK (pose.worldBones[0][3].y == Catch::Approx (8.0f));
     CHECK (glm::length (glm::vec3 (pose.worldBones[0][0])) == Catch::Approx (1.3f));
     CHECK (glm::length (glm::vec3 (pose.worldBones[0][1])) == Catch::Approx (0.8f));
+}
+
+TEST_CASE ("legacy constrained puppets use one shared resolved reference pose") {
+    MdlAnimationData animationData;
+    const glm::mat4 bind = glm::translate (glm::mat4 (1.0f), { 1000.0f, -400.0f, 0.0f });
+    animationData.bones.push_back (
+	{
+	    .name = "constrained",
+	    .bindLocal = bind,
+	    .inverseBindWorld = glm::inverse (bind),
+	}
+    );
+    animationData.animations = {
+	{
+	    .id = 0,
+	    .name = "event only",
+	},
+	{
+	    .id = 1,
+	    .mode = "single",
+	    .fps = 1.0f,
+	    .frameCount = 1,
+	    .boneFrames = { {
+		{ .translation = { 10.0f, 20.0f, 0.0f } },
+		{ .translation = { 14.0f, 26.0f, 0.0f } },
+	    } },
+	},
+	{
+	    .id = 2,
+	    .mode = "single",
+	    .fps = 1.0f,
+	    .frameCount = 1,
+	    .boneFrames = { {
+		{ .translation = { 10.0f, 20.0f, 0.0f } },
+		{ .translation = { 8.0f, 24.0f, 0.0f } },
+	    } },
+	},
+    };
+
+    const auto pose = MdlAnimationEvaluator::evaluate (
+	animationData,
+	{
+	    { .animation = &animationData.animations[1], .time = 1.0f, .weight = 0.5f, .additive = true },
+	    { .animation = &animationData.animations[2], .time = 1.0f, .weight = 0.25f, .additive = true },
+	}
+    );
+
+    REQUIRE (pose.worldBones.size () == 1);
+    CHECK (pose.worldBones[0][3].x == Catch::Approx (11.5f));
+    CHECK (pose.worldBones[0][3].y == Catch::Approx (24.0f));
 }
