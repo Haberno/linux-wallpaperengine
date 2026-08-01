@@ -883,6 +883,7 @@ const CameraPathSource* CScene::findActiveCameraPathSource () const {
 
 void CScene::updateCameraObject () {
     const CObject* active = nullptr;
+    const SceneData::Camera::ObjectProjection* activeProjection = nullptr;
     for (const int id : this->getScene ().camera.objectIds) {
 	const CObject* object = this->getObject (id);
 	if (object == nullptr || !object->getObject ().groupVisible->value->getBool ()
@@ -892,6 +893,12 @@ void CScene::updateCameraObject () {
 	// Later visible camera layers override earlier/default cameras, matching
 	// the selection rule already used by camera path sources.
 	active = object;
+	const auto projection = std::ranges::find_if (
+	    this->getScene ().camera.objectProjections,
+	    [id] (const SceneData::Camera::ObjectProjection& candidate) { return candidate.id == id; }
+	);
+	activeProjection
+	    = projection != this->getScene ().camera.objectProjections.end () ? &*projection : nullptr;
     }
 
     if (active == nullptr) {
@@ -899,9 +906,15 @@ void CScene::updateCameraObject () {
     }
 
     const float sceneTime = this->getTime ();
+    const auto& fallback = this->getScene ().camera.projection;
+    const float fov = activeProjection != nullptr && activeProjection->fov != nullptr
+	? activeProjection->fov->evaluateFloat (sceneTime)
+	: fallback.fov->evaluateFloat (sceneTime);
+    const float zoom = activeProjection != nullptr && activeProjection->zoom != nullptr
+	? activeProjection->zoom->evaluateFloat (sceneTime)
+	: fallback.zoom->evaluateFloat (sceneTime);
     const CameraTransform transform = Camera::objectTransform (
-	active->resolveWorldMatrix (), this->getScene ().camera.projection.fov->evaluateFloat (sceneTime),
-	this->getScene ().camera.projection.zoom->evaluateFloat (sceneTime)
+	active->resolveWorldMatrix (), fov, zoom
     );
     const bool pathActive = this->m_activeCameraPathSource != nullptr && this->m_activeCameraPathIndex.has_value ();
     // Track the layer pose as the default, but only snap the live camera back to it when nothing

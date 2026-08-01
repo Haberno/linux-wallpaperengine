@@ -75,6 +75,15 @@ struct SceneData {
 	/** Camera layer ids in authored order. Their live world transforms select and
 	 *  position the runtime camera after SceneScript updates. */
 	std::vector<int> objectIds;
+	/** Projection settings authored on each camera layer. These must follow the
+	 *  same visible layer as the transform; an inactive camera must not change
+	 *  the scene framing. */
+	struct ObjectProjection {
+	    int id;
+	    UserSettingUniquePtr fov;
+	    UserSettingUniquePtr zoom;
+	};
+	std::vector<ObjectProjection> objectProjections;
 
 	/**
 	 * Bloom effect configuration
