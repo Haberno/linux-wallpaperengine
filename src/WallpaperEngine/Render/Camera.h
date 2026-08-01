@@ -68,6 +68,9 @@ private:
     glm::mat4 m_lookat = {};
     CameraTransform m_defaultTransform = {};
     CameraTransform m_transform = {};
+    /** The editor viewport is canceled out in legacy 2D scenes. A runtime camera
+     *  layer or path instead moves the orthographic view and must not be canceled. */
+    bool m_hasRuntimeTransform = false;
     const SceneData::Camera& m_camera;
     Wallpapers::CScene& m_scene;
 

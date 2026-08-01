@@ -585,6 +585,7 @@ void CScene::renderFrame (const glm::ivec4& viewport) {
     const float globalDeltaTime = glm::max (0.0f, g_Time - g_TimeLast);
     this->m_sceneDeltaTime = calculateSceneDeltaTime (g_Time, globalDeltaTime, this->m_previousSceneTime);
     this->m_previousSceneTime = g_Time;
+    this->m_sceneElapsedTime += this->m_sceneDeltaTime;
 
     // Camera layers are ordinary scriptable objects. Resolve their parent chain
     // before paths and mouse projection so a scripted camera rig supplies the
@@ -881,10 +882,6 @@ const CameraPathSource* CScene::findActiveCameraPathSource () const {
 }
 
 void CScene::updateCameraObject () {
-    if (!this->getScene ().camera.projection.isPerspective) {
-	return;
-    }
-
     const CObject* active = nullptr;
     for (const int id : this->getScene ().camera.objectIds) {
 	const CObject* object = this->getObject (id);
@@ -901,9 +898,10 @@ void CScene::updateCameraObject () {
 	return;
     }
 
+    const float sceneTime = this->getTime ();
     const CameraTransform transform = Camera::objectTransform (
-	active->resolveWorldMatrix (), this->getScene ().camera.projection.fov->value->getFloat (),
-	this->getScene ().camera.projection.zoom->value->getFloat ()
+	active->resolveWorldMatrix (), this->getScene ().camera.projection.fov->evaluateFloat (sceneTime),
+	this->getScene ().camera.projection.zoom->evaluateFloat (sceneTime)
     );
     const bool pathActive = this->m_activeCameraPathSource != nullptr && this->m_activeCameraPathIndex.has_value ();
     // Track the layer pose as the default, but only snap the live camera back to it when nothing
@@ -1144,7 +1142,7 @@ int CScene::getWidth () const { return this->m_camera->getWidth (); }
 
 int CScene::getHeight () const { return this->m_camera->getHeight (); }
 
-float CScene::getTime () const { return g_Time; }
+float CScene::getTime () const { return this->m_sceneElapsedTime; }
 
 float CScene::getDeltaTime () const { return this->m_sceneDeltaTime; }
 

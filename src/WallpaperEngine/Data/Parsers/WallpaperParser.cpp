@@ -57,6 +57,7 @@ SceneUniquePtr WallpaperParser::parseScene (const JSON& file, Project& project) 
     std::vector<CameraPathSource> cameraPaths;
     std::vector<int> cameraObjectIds;
     std::map<std::string, std::vector<CameraPath>> parsedPathFiles;
+    auto cameraObject = std::optional<JSON> {};
     const auto loadCameraPathFile = [&project, &parsedPathFiles] (const std::string& path) -> const std::vector<CameraPath>& {
 	const auto existing = parsedPathFiles.find (path);
 	if (existing != parsedPathFiles.end ()) {
@@ -82,8 +83,6 @@ SceneUniquePtr WallpaperParser::parseScene (const JSON& file, Project& project) 
 	    cameraPaths.push_back (CameraPathSource { .objectId = std::nullopt, .queueMode = "sequence", .paths = paths });
 	}
     }
-    auto cameraObject = std::optional<JSON> {};
-
     // Camera paths exist in two scene formats: older/global scenes list path files
     // in camera.paths, while newer editor output attaches a path directly to one
     // or more camera objects. Both forms enable the renderer's camera fade.
@@ -93,6 +92,9 @@ SceneUniquePtr WallpaperParser::parseScene (const JSON& file, Project& project) 
 	}
 	if (const auto id = cur.optional<int> ("id"); id.has_value ()) {
 	    cameraObjectIds.push_back (*id);
+	}
+	if (!cameraObject.has_value ()) {
+	    cameraObject = cur;
 	}
 	if (const auto path = cur.optional<std::string> ("path"); path.has_value ()) {
 	    const auto& paths = loadCameraPathFile (*path);

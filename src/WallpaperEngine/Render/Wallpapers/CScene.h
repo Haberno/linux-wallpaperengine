@@ -50,9 +50,8 @@ public:
     [[nodiscard]] int getWidth () const override;
     [[nodiscard]] int getHeight () const override;
 
-    // Time accessors used by dynamic text layers (CText + ScriptEngine).
-    // Read from the application-wide g_Time/g_TimeLast globals that other
-    // renderers already consume via extern (e.g. CParticle).
+    // Scene-local time accessors used by property, model, and script animations.
+    // A newly loaded wallpaper starts at zero even when the engine process stays alive.
     [[nodiscard]] float getTime () const;
     [[nodiscard]] float getDeltaTime () const;
     [[nodiscard]] float getFps () const;
@@ -241,6 +240,7 @@ private:
     glm::vec2 m_parallaxPosition = { 0.5f, 0.5f };
     std::optional<float> m_previousSceneTime = std::nullopt;
     float m_sceneDeltaTime = 0.0f;
+    float m_sceneElapsedTime = 0.0f;
     const CameraPathSource* m_activeCameraPathSource = nullptr;
     std::optional<size_t> m_activeCameraPathIndex = std::nullopt;
     float m_cameraPathElapsed = 0.0f;

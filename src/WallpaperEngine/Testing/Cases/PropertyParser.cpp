@@ -87,6 +87,52 @@ TEST_CASE ("Relative angle animations resolve from the authored transform value"
     CHECK (setting->evaluateVec3 (75.0f).z == Catch::Approx (-25.1327402f));
 }
 
+TEST_CASE ("Property animations follow authored Bezier handles") {
+    // Cyberpunk: Edgerunner-Lucy (workshop 3521337568) eases its opening
+    // camera zoom from 3 to 1 over three seconds with 0.833-second handles.
+    const auto data = JSON::parse (
+	R"({
+	    "value": 3,
+	    "animation": {
+		"c0": [
+		    {"frame": 0, "value": 3,
+		     "front": {"enabled": true, "x": 0.83333331, "y": 0}},
+		    {"frame": 36, "value": 1,
+		     "back": {"enabled": true, "x": -0.83333331, "y": 0}}
+		],
+		"options": {"fps": 12, "length": 60, "mode": "single"}
+	    }
+	})"
+    );
+
+    const auto setting = UserSettingParser::parse (data, {});
+    REQUIRE (setting->animation != nullptr);
+    CHECK (setting->evaluateFloat (0.0f) == Catch::Approx (3.0f));
+    CHECK (setting->evaluateFloat (0.75f) > 2.5f);
+    CHECK (setting->evaluateFloat (1.5f) == Catch::Approx (2.0f));
+    CHECK (setting->evaluateFloat (2.25f) < 1.5f);
+    CHECK (setting->evaluateFloat (3.0f) == Catch::Approx (1.0f));
+    CHECK (setting->evaluateFloat (10.0f) == Catch::Approx (1.0f));
+
+    const auto originData = JSON::parse (
+	R"({
+	    "value": "-244.73788 1468.74146 500",
+	    "animation": {
+		"c0": [{"frame":0,"value":159.19997},{"frame":36,"value":244.73788}],
+		"c1": [{"frame":0,"value":1.59997},{"frame":36,"value":-1468.74146}],
+		"c2": [{"frame":0,"value":0},{"frame":36,"value":0}],
+		"options": {"fps":12,"length":60,"mode":"single"},
+		"relative": true
+	    }
+	})"
+    );
+    const auto origin = UserSettingParser::parse (originData, {});
+    CHECK (origin->evaluateVec3 (0.0f).x == Catch::Approx (-85.53791f));
+    CHECK (origin->evaluateVec3 (0.0f).y == Catch::Approx (1470.34143f));
+    CHECK (origin->evaluateVec3 (3.0f).x == Catch::Approx (0.0f).margin (0.0001f));
+    CHECK (origin->evaluateVec3 (3.0f).y == Catch::Approx (0.0f).margin (0.0001f));
+}
+
 TEST_CASE ("Scripted values retain their last finite result") {
     DynamicValue intensity (2.1f);
     intensity.update (std::numeric_limits<float>::quiet_NaN (), DynamicValue::UpdateSource::Script);
