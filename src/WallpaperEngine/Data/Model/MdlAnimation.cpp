@@ -45,16 +45,6 @@ MdlBoneFrame blendPose (const MdlBoneFrame& from, const MdlBoneFrame& to, const 
     return result;
 }
 
-glm::mat4 blendMatrix (const glm::mat4& from, const glm::mat4& to, const float weight) {
-    if (weight <= 0.0f) {
-	return from;
-    }
-    if (weight >= 1.0f) {
-	return to;
-    }
-    return poseMatrix (blendPose (matrixPose (from), matrixPose (to), weight));
-}
-
 /** Playhead position in frames, wrapped according to the clip's play mode. */
 float sampleFrame (const MdlActiveAnimation& layer) {
     const auto& animation = *layer.animation;
@@ -121,23 +111,10 @@ MdlPose MdlAnimationEvaluator::evaluate (
     pose.skinBones.resize (animationData.bones.size ());
 
     for (size_t bone = 0; bone < animationData.bones.size (); bone++) {
-	glm::mat4 local = animationData.bones[bone].bindLocal;
-	size_t firstComposedLayer = 0;
+	const MdlBoneFrame bind = matrixPose (animationData.bones[bone].bindLocal);
+	MdlBoneFrame local = bind;
 
-	if (!activeAnimations.empty () && !activeAnimations.front ().additive) {
-	    const auto& baseLayer = activeAnimations.front ();
-	    if (baseLayer.animation != nullptr && bone < baseLayer.animation->boneFrames.size ()) {
-		const auto& baseFrames = baseLayer.animation->boneFrames[bone];
-		if (!baseFrames.empty ()) {
-		    const glm::mat4 reference = poseMatrix (baseFrames.front ());
-		    const glm::mat4 sampled = poseMatrix (sampleBone (baseLayer, bone));
-		    local = blendMatrix (reference, sampled, baseLayer.weight);
-		}
-	    }
-	    firstComposedLayer = 1;
-	}
-
-	for (size_t layerIndex = firstComposedLayer; layerIndex < activeAnimations.size (); layerIndex++) {
+	for (size_t layerIndex = 0; layerIndex < activeAnimations.size (); layerIndex++) {
 	    const auto& layer = activeAnimations[layerIndex];
 	    if (layer.animation == nullptr || bone >= layer.animation->boneFrames.size ()) {
 		continue;
@@ -147,23 +124,28 @@ MdlPose MdlAnimationEvaluator::evaluate (
 		continue;
 	    }
 
-	    const glm::mat4 sampled = poseMatrix (sampleBone (layer, bone));
+	    const MdlBoneFrame sampled = sampleBone (layer, bone);
+	    const float weight = std::clamp (layer.weight, 0.0f, 1.0f);
 	    if (layer.additive) {
-		// Additive MDL tracks are authored relative to the skeleton bind pose,
-		// not relative to their first sample. One-shot entrance clips commonly
-		// start away from the model and finish exactly at bind; using frame zero
-		// as the reference makes those clips start at bind and leave a permanent
-		// inverse overshoot after they finish.
-		const glm::mat4& reference = animationData.bones[bone].bindLocal;
-		const glm::mat4 delta = glm::inverse (reference) * sampled;
-		local *= blendMatrix (glm::mat4 (1.0f), delta, layer.weight);
+		// The native evaluator keeps translation, rotation, and scale as separate
+		// arrays. Additive layers subtract the skeleton bind pose component-wise,
+		// then accumulate the weighted delta into the current pose. Multiplying
+		// local matrices instead makes a preceding layer's scale/rotation distort
+		// later translation deltas (notably Gojo, workshop 3100265648).
+		local.translation += (sampled.translation - bind.translation) * weight;
+		const glm::quat delta = glm::normalize (glm::inverse (bind.rotation) * sampled.rotation);
+		local.rotation = glm::normalize (
+		    local.rotation * glm::slerp (glm::quat (1.0f, 0.0f, 0.0f, 0.0f), delta, weight)
+		);
+		local.scale += (sampled.scale - bind.scale) * weight;
 	    } else {
-		local = blendMatrix (local, sampled, layer.weight);
+		local = blendPose (local, sampled, weight);
 	    }
 	}
 
 	const auto parent = animationData.bones[bone].parent;
-	pose.worldBones[bone] = parent >= 0 ? pose.worldBones[parent] * local : local;
+	const glm::mat4 localMatrix = poseMatrix (local);
+	pose.worldBones[bone] = parent >= 0 ? pose.worldBones[parent] * localMatrix : localMatrix;
 	pose.skinBones[bone] = pose.worldBones[bone] * animationData.bones[bone].inverseBindWorld;
     }
 
