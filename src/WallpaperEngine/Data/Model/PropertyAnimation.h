@@ -7,14 +7,18 @@
 #include <glm/glm.hpp>
 
 namespace WallpaperEngine::Data::Model {
-/**
- * A single keyframe of a property animation. Tangent handles (front/back) exist in the
- * editor data but interpolation falls back to linear when they're disabled, which is
- * the common case for workshop scenes.
- */
+struct PropertyKeyframeHandle {
+    bool enabled { false };
+    /** Handle offset in seconds/value units, matching the editor's curve format. */
+    glm::vec2 offset { 0.0f };
+};
+
+/** A single keyframe and its incoming/outgoing Bezier handles. */
 struct PropertyKeyframe {
     float frame;
     float value;
+    PropertyKeyframeHandle incoming = {};
+    PropertyKeyframeHandle outgoing = {};
 };
 
 /**
@@ -35,8 +39,9 @@ struct PropertyAnimation {
     bool relative;
 
     /**
-     * Samples one channel at the given time (in seconds), interpolating linearly
-     * between keyframes. Returns fallback when the channel has no keyframes.
+     * Samples one channel at the given time (in seconds), using the authored
+     * time/value Bezier when both segment handles are enabled and linear
+     * interpolation otherwise. Returns fallback when the channel has no keyframes.
      */
     [[nodiscard]] float evaluateChannel (int channel, float time, float fallback) const;
 
