@@ -56,8 +56,8 @@ SceneUniquePtr WallpaperParser::parseScene (const JSON& file, Project& project) 
     glm::vec3 up = camera.require<glm::vec3> ("up", "Camera must have an up position");
     std::vector<CameraPathSource> cameraPaths;
     std::vector<int> cameraObjectIds;
+    std::vector<SceneData::Camera::ObjectProjection> cameraObjectProjections;
     std::map<std::string, std::vector<CameraPath>> parsedPathFiles;
-    auto cameraObject = std::optional<JSON> {};
     const auto loadCameraPathFile = [&project, &parsedPathFiles] (const std::string& path) -> const std::vector<CameraPath>& {
 	const auto existing = parsedPathFiles.find (path);
 	if (existing != parsedPathFiles.end ()) {
@@ -92,9 +92,11 @@ SceneUniquePtr WallpaperParser::parseScene (const JSON& file, Project& project) 
 	}
 	if (const auto id = cur.optional<int> ("id"); id.has_value ()) {
 	    cameraObjectIds.push_back (*id);
-	}
-	if (!cameraObject.has_value ()) {
-	    cameraObject = cur;
+	    cameraObjectProjections.push_back (SceneData::Camera::ObjectProjection {
+		.id = *id,
+		.fov = cur.find ("fov") != cur.end () ? cur.user ("fov", properties, 50.0f) : nullptr,
+		.zoom = cur.find ("zoom") != cur.end () ? cur.user ("zoom", properties, 1.0f) : nullptr,
+	    });
 	}
 	if (const auto path = cur.optional<std::string> ("path"); path.has_value ()) {
 	    const auto& paths = loadCameraPathFile (*path);
@@ -126,17 +128,9 @@ SceneUniquePtr WallpaperParser::parseScene (const JSON& file, Project& project) 
 	    eye = origin;
 	    center = origin + glm::vec3 (rotation * glm::vec4 (0.0f, 0.0f, -1.0f, 0.0f));
 	    up = glm::vec3 (rotation * glm::vec4 (0.0f, 1.0f, 0.0f, 0.0f));
-	    cameraObject = cur;
-
 	    break;
 	}
     }
-
-    // the camera object's own fov/zoom win over the general section when authored
-    const JSON& fovSource
-	= cameraObject.has_value () && cameraObject->find ("fov") != cameraObject->end () ? *cameraObject : projectionSource;
-    const JSON& zoomSource
-	= cameraObject.has_value () && cameraObject->find ("zoom") != cameraObject->end () ? *cameraObject : projectionSource;
 
     auto result = std::make_unique <Scene> (
         WallpaperData {
@@ -173,6 +167,7 @@ SceneUniquePtr WallpaperParser::parseScene (const JSON& file, Project& project) 
 		.preview = general.optional ("camerapreview", false),
 		.paths = std::move (cameraPaths),
 		.objectIds = std::move (cameraObjectIds),
+		.objectProjections = std::move (cameraObjectProjections),
                 .bloom = {
                     .enabled = general.user ("bloom", properties, false),
                     .strength = general.user ("bloomstrength", properties, 0.0f),
@@ -203,8 +198,8 @@ SceneUniquePtr WallpaperParser::parseScene (const JSON& file, Project& project) 
                     .isPerspective = isPerspective,
                     .nearz = projectionSource.user ("nearz", properties, 0.0f),
                     .farz = projectionSource.user ("farz", properties, 1000.0f),
-                    .fov = fovSource.user ("fov", properties, 50.0f),
-                    .zoom = zoomSource.user ("zoom", properties, 1.0f)
+		    .fov = projectionSource.user ("fov", properties, 50.0f),
+		    .zoom = projectionSource.user ("zoom", properties, 1.0f)
                 }
             },
             .objects = parseObjects (objects, project),
