@@ -719,8 +719,9 @@ void CImage::selectPuppetAnimations (const float sceneTime) {
     };
 
     // Legacy scenes sometimes omit animationlayers entirely and rely on the first
-    // embedded animation. Authored layers remain in the list at zero weight so
-    // their frame-zero assembled pose can still serve as the visual baseline.
+    // embedded animation. Authored zero-weight layers remain in the list to keep
+    // native layer ordering and playback state stable; the evaluator owns the
+    // model's shared reference pose independently of the active layer order.
     if (this->getImage ().animationLayers.empty ()) {
 	this->m_puppetActiveLayers.push_back (
 	    {
