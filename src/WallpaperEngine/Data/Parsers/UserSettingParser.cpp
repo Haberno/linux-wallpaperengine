@@ -5,10 +5,24 @@
 #include "WallpaperEngine/Data/Model/PropertyAnimation.h"
 #include "WallpaperEngine/Data/Model/UserSetting.h"
 
+#include <algorithm>
+
 using namespace WallpaperEngine::Data::Parsers;
 using namespace WallpaperEngine::Data::Builders;
 
 namespace {
+PropertyKeyframeHandle parseAnimationHandle (const json& keyframe, const std::string& name) {
+    const auto handle = keyframe.optional (name);
+    if (!handle.has_value () || !handle->is_object ()) {
+	return {};
+    }
+
+    return PropertyKeyframeHandle {
+	.enabled = handle->optional ("enabled", false),
+	.offset = glm::vec2 (handle->optional ("x", 0.0f), handle->optional ("y", 0.0f)),
+    };
+}
+
 PropertyAnimationUniquePtr parseAnimation (const json& data) {
     const auto animationIt = data.optional ("animation");
 
@@ -40,12 +54,15 @@ PropertyAnimationUniquePtr parseAnimation (const json& data) {
 
         auto& keyframes = animation->channels [channel];
 
-        for (const auto& keyframeData : channelData) {
-            keyframes.push_back (PropertyKeyframe {
-                .frame = keyframeData.optional ("frame", 0.0f),
-                .value = keyframeData.optional ("value", 0.0f),
-            });
-        }
+	for (const auto& keyframeData : channelData) {
+	    keyframes.push_back (PropertyKeyframe {
+		.frame = keyframeData.optional ("frame", 0.0f),
+		.value = keyframeData.optional ("value", 0.0f),
+		.incoming = parseAnimationHandle (keyframeData, "back"),
+		.outgoing = parseAnimationHandle (keyframeData, "front"),
+	    });
+	}
+	std::ranges::sort (keyframes, {}, &PropertyKeyframe::frame);
     }
 
     return animation;

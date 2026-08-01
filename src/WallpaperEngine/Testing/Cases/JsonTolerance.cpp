@@ -1,10 +1,12 @@
 #include <catch2/catch_test_macros.hpp>
+#include <catch2/catch_approx.hpp>
 
 #include "WallpaperEngine/Data/JSON.h"
 #include "WallpaperEngine/Data/Model/Project.h"
 #include "WallpaperEngine/Data/Model/Wallpaper.h"
 #include "WallpaperEngine/Data/Parsers/MaterialParser.h"
 #include "WallpaperEngine/Data/Parsers/ObjectParser.h"
+#include "WallpaperEngine/Data/Parsers/WallpaperParser.h"
 #include "WallpaperEngine/FileSystem/Container.h"
 
 using WallpaperEngine::Data::JSON::JSON;
@@ -12,6 +14,7 @@ using WallpaperEngine::Data::JSON::parseCompatible;
 using namespace WallpaperEngine::Data::Model;
 using WallpaperEngine::Data::Parsers::MaterialParser;
 using WallpaperEngine::Data::Parsers::ObjectParser;
+using WallpaperEngine::Data::Parsers::WallpaperParser;
 using WallpaperEngine::FileSystem::Container;
 
 TEST_CASE ("optional tolerates authored type drift") {
@@ -38,6 +41,37 @@ TEST_CASE ("dependencies tolerate the structured authoring form") {
 
     const auto object = ObjectParser::parse (data, project);
     REQUIRE (object->dependencies == std::vector {7, 104});
+}
+
+TEST_CASE ("orthographic camera layers provide animated projection settings") {
+    auto filesystem = std::make_unique<Container> ();
+    filesystem->getVFS ().add (
+	"scene.json",
+	R"({
+	    "camera": {"center":"0 0 -1", "eye":"0 0 0", "up":"0 1 0"},
+	    "general": {"orthogonalprojection":{"width":3840,"height":2160}},
+	    "objects": [{
+		"id":1640, "name":"opening camera", "camera":"default",
+		"origin":{"value":"0 0 500"},
+		"zoom":{"value":3,"animation":{
+		    "c0":[{"frame":0,"value":3},{"frame":36,"value":1}],
+		    "options":{"fps":12,"length":60,"mode":"single"}
+		}}
+	    }]
+	})"
+    );
+
+    Project project {};
+    project.type = Project::Type_Scene;
+    project.assetLocator = std::make_unique<WallpaperEngine::Assets::AssetLocator> (std::move (filesystem));
+
+    const auto wallpaper = WallpaperParser::parse (JSON ("scene.json"), project);
+    REQUIRE (wallpaper->is<Scene> ());
+    const auto* scene = wallpaper->as<Scene> ();
+    REQUIRE (scene->camera.objectIds == std::vector { 1640 });
+    REQUIRE (scene->camera.projection.zoom->animation != nullptr);
+    CHECK (scene->camera.projection.zoom->evaluateFloat (0.0f) == Catch::Approx (3.0f));
+    CHECK (scene->camera.projection.zoom->evaluateFloat (3.0f) == Catch::Approx (1.0f));
 }
 
 TEST_CASE ("missing image effects are skipped without discarding neighboring effects") {
