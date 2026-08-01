@@ -1280,6 +1280,16 @@ const CObject* CScene::getObject (int id) const {
     return object == this->m_objects.end () ? nullptr : object->second;
 }
 
+bool CScene::hasAuthoredChildren (const SceneData& scene, const int parentId) {
+    return std::ranges::any_of (scene.objects, [parentId] (const auto& object) {
+	return object != nullptr && object->parent.has_value () && *object->parent == parentId;
+    });
+}
+
+bool CScene::hasAuthoredChildren (const int parentId) const {
+    return hasAuthoredChildren (this->getScene (), parentId);
+}
+
 std::shared_ptr<const CFBO> CScene::getActiveRenderTarget () const {
     return this->m_compositionRenderTarget != nullptr ? this->m_compositionRenderTarget : this->getFBO ();
 }

@@ -1,3 +1,11 @@
+#include "WallpaperEngine/Render/Wallpapers/CScene.h"
+
+// CEF exposes its own CHECK macro through CScene's renderer includes. Catch must
+// own the test assertion macro in this translation unit.
+#ifdef CHECK
+#undef CHECK
+#endif
+
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/catch_approx.hpp>
 
@@ -16,6 +24,7 @@ using WallpaperEngine::Data::Parsers::MaterialParser;
 using WallpaperEngine::Data::Parsers::ObjectParser;
 using WallpaperEngine::Data::Parsers::WallpaperParser;
 using WallpaperEngine::FileSystem::Container;
+using WallpaperEngine::Render::Wallpapers::CScene;
 
 TEST_CASE ("optional tolerates authored type drift") {
     // workshop 3758354038 authors text "padding" as a vector string where older scenes
@@ -145,6 +154,24 @@ TEST_CASE ("image composition layers retain copybackground") {
     REQUIRE (copied->as<Image> ()->copyBackground);
     REQUIRE (omitted->is<Image> ());
     REQUIRE_FALSE (omitted->as<Image> ()->copyBackground);
+}
+
+TEST_CASE ("composition scope distinguishes child groups from full-frame stack effects") {
+    Project project {};
+    SceneData scene {};
+    scene.objects.emplace_back (
+	ObjectParser::parse (JSON::parse (R"({"id":1,"name":"group","solid":true})"), project)
+    );
+    scene.objects.emplace_back (ObjectParser::parse (
+	JSON::parse (R"({"id":2,"name":"child","parent":1,"solid":true})"), project
+    ));
+    scene.objects.emplace_back (
+	ObjectParser::parse (JSON::parse (R"({"id":3,"name":"flat","solid":true})"), project)
+    );
+
+    CHECK (CScene::hasAuthoredChildren (scene, 1));
+    CHECK_FALSE (CScene::hasAuthoredChildren (scene, 2));
+    CHECK_FALSE (CScene::hasAuthoredChildren (scene, 3));
 }
 
 TEST_CASE ("alpha-to-coverage material blending is preserved") {
