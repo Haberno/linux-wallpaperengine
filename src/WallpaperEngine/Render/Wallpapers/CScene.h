@@ -110,6 +110,11 @@ public:
     [[nodiscard]] const std::vector<CObject*>& getObjectsByRenderOrder () const;
     [[nodiscard]] const CObject* getObject (int id) const;
 
+    /** Composition layers with explicit children isolate that subtree. Childless
+     * layers instead operate on the already-rendered full-frame stack. */
+    [[nodiscard]] static bool hasAuthoredChildren (const SceneData& scene, int parentId);
+    [[nodiscard]] bool hasAuthoredChildren (int parentId) const;
+
     /** Destination selected while a native composition layer renders its child subtree. */
     [[nodiscard]] std::shared_ptr<const CFBO> getActiveRenderTarget () const;
     /** Redirect an ordinary scene destination into the active composition target. */
