@@ -14,8 +14,8 @@ Camera::Camera (Wallpapers::CScene& scene, const SceneData::Camera& camera) :
 	.center = camera.configuration.center,
 	.eye = camera.configuration.eye,
 	.up = camera.configuration.up,
-	.fov = camera.projection.fov->value->getFloat (),
-	.zoom = camera.projection.zoom->value->getFloat (),
+	.fov = camera.projection.fov->evaluateFloat (0.0f),
+	.zoom = camera.projection.zoom->evaluateFloat (0.0f),
     };
     this->m_transform = this->m_defaultTransform;
     this->m_lookat = glm::lookAt (this->getEye (), this->getCenter (), this->getUp ());
@@ -82,13 +82,15 @@ CameraTransform Camera::objectTransform (const glm::mat4& world, const float fov
 
 void Camera::setTransform (const CameraTransform& transform) {
     this->m_transform = transform;
+    this->m_hasRuntimeTransform = true;
     this->updateMatrices ();
 }
 
 void Camera::resetTransform () {
     // Keep live user-property changes to the resting projection values.
-    this->m_defaultTransform.fov = this->m_camera.projection.fov->value->getFloat ();
-    this->m_defaultTransform.zoom = this->m_camera.projection.zoom->value->getFloat ();
+    const float sceneTime = this->m_scene.getTime ();
+    this->m_defaultTransform.fov = this->m_camera.projection.fov->evaluateFloat (sceneTime);
+    this->m_defaultTransform.zoom = this->m_camera.projection.zoom->evaluateFloat (sceneTime);
     this->m_transform = this->m_defaultTransform;
     this->updateMatrices ();
 }
@@ -169,7 +171,11 @@ void Camera::updateMatrices () {
 	const float halfWidth = this->m_width / (2.0f * zoom);
 	const float halfHeight = this->m_height / (2.0f * zoom);
 	this->m_projection = glm::ortho<float> (-halfWidth, halfWidth, -halfHeight, halfHeight, -depth, depth);
-	this->m_projection = glm::translate (this->m_projection, this->getEye ());
+	if (!this->m_hasRuntimeTransform) {
+	    // The top-level 2D camera is only the editor viewport. Cancel its
+	    // lookAt translation as before; authored camera layers and paths are real.
+	    this->m_projection = glm::translate (this->m_projection, this->getEye ());
+	}
 	return;
     }
 
