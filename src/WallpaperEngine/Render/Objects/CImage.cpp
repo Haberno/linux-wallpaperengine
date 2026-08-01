@@ -202,7 +202,11 @@ CImage::CImage (Wallpapers::CScene& scene, const Image& image) :
     glm::vec2 size = this->getSize ();
     glm::vec3 scale = transform.scale;
 
-    if (this->isCompositionLayer ()) {
+    // Native composition layers have two authored forms. A layer with children
+    // owns an isolated subtree surface; a childless layer is a full-frame stack
+    // effect and must keep sampling the shared _rt_FullFrameBuffer. Unconditionally
+    // shadowing that target leaves childless water/ripple layers with an empty input.
+    if (this->isCompositionLayer () && scene.hasAuthoredChildren (image.id)) {
 	const glm::vec2 compositionSize = {
 	    static_cast<float> (scene.getWidth ()), static_cast<float> (scene.getHeight ())
 	};
