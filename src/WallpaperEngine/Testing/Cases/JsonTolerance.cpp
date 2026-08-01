@@ -43,7 +43,7 @@ TEST_CASE ("dependencies tolerate the structured authoring form") {
     REQUIRE (object->dependencies == std::vector {7, 104});
 }
 
-TEST_CASE ("orthographic camera layers provide animated projection settings") {
+TEST_CASE ("orthographic camera layers retain their own animated projection settings") {
     auto filesystem = std::make_unique<Container> ();
     filesystem->getVFS ().add (
 	"scene.json",
@@ -52,11 +52,15 @@ TEST_CASE ("orthographic camera layers provide animated projection settings") {
 	    "general": {"orthogonalprojection":{"width":3840,"height":2160}},
 	    "objects": [{
 		"id":1640, "name":"opening camera", "camera":"default",
+		"visible":{"value":true},
 		"origin":{"value":"0 0 500"},
 		"zoom":{"value":3,"animation":{
 		    "c0":[{"frame":0,"value":3},{"frame":36,"value":1}],
 		    "options":{"fps":12,"length":60,"mode":"single"}
 		}}
+	    }, {
+		"id":309, "name":"disabled panorama camera", "camera":"default",
+		"visible":{"value":false}, "zoom":0.75
 	    }]
 	})"
     );
@@ -68,10 +72,15 @@ TEST_CASE ("orthographic camera layers provide animated projection settings") {
     const auto wallpaper = WallpaperParser::parse (JSON ("scene.json"), project);
     REQUIRE (wallpaper->is<Scene> ());
     const auto* scene = wallpaper->as<Scene> ();
-    REQUIRE (scene->camera.objectIds == std::vector { 1640 });
-    REQUIRE (scene->camera.projection.zoom->animation != nullptr);
-    CHECK (scene->camera.projection.zoom->evaluateFloat (0.0f) == Catch::Approx (3.0f));
-    CHECK (scene->camera.projection.zoom->evaluateFloat (3.0f) == Catch::Approx (1.0f));
+    REQUIRE (scene->camera.objectIds == std::vector { 1640, 309 });
+    REQUIRE (scene->camera.projection.zoom->animation == nullptr);
+    CHECK (scene->camera.projection.zoom->evaluateFloat (0.0f) == Catch::Approx (1.0f));
+    REQUIRE (scene->camera.objectProjections.size () == 2);
+    REQUIRE (scene->camera.objectProjections[0].zoom->animation != nullptr);
+    CHECK (scene->camera.objectProjections[0].zoom->evaluateFloat (0.0f) == Catch::Approx (3.0f));
+    CHECK (scene->camera.objectProjections[0].zoom->evaluateFloat (3.0f) == Catch::Approx (1.0f));
+    REQUIRE (scene->camera.objectProjections[1].zoom->animation == nullptr);
+    CHECK (scene->camera.objectProjections[1].zoom->evaluateFloat (0.0f) == Catch::Approx (0.75f));
 }
 
 TEST_CASE ("missing image effects are skipped without discarding neighboring effects") {
