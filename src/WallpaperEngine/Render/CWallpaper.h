@@ -193,6 +193,8 @@ private:
     GLint g_TransitionProgress = GL_NONE;
     GLint g_TransitionCenter = GL_NONE;
     GLint g_SceneFadeAlpha = GL_NONE;
+    GLint g_Contrast = GL_NONE;
+    GLint g_Saturation = GL_NONE;
     GLint a_Position = GL_NONE;
     GLint a_TexCoord = GL_NONE;
     /** The framebuffer to draw the background to */
@@ -211,6 +213,9 @@ private:
     AudioContext& m_audioContext;
     /** Current Wallpaper state */
     WallpaperState m_state;
+    /** Neutral-at-1.0 final-output color controls shared by scene/video/web wallpapers. */
+    float m_contrast = 1.0f;
+    float m_saturation = 1.0f;
     /** Span info for multi-monitor spanning (optional) */
     std::optional<SpanInfo> m_spanInfo = std::nullopt;
     /** Frame counter to avoid redundant renderFrame calls when shared across viewports */

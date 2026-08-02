@@ -115,6 +115,9 @@ public:
 	    int maximumFPS;
 	    /** Scene render-target scale (1.0 = native, >1.0 = supersampling) */
 	    float renderScale;
+	    /** Final-output color grading (1.0 = neutral) */
+	    float contrast;
+	    float saturation;
 	    /** Indicates if pausing should happen when something goes fullscreen */
 	    bool pauseOnFullscreen;
 	    /**
@@ -208,6 +211,8 @@ public:
             .mode = NORMAL_WINDOW,
             .maximumFPS = 30,
 	    .renderScale = 1.0f,
+	    .contrast = 1.0f,
+	    .saturation = 1.0f,
             .pauseOnFullscreen = true,
             .pauseOnFullscreenOnlyWhenActive = false,
             .fullscreenPauseIgnoreAppIds = {},

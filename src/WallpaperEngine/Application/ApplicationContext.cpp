@@ -505,6 +505,18 @@ void ApplicationContext::loadSettingsFromArgv () {
 	.default_value (1.0f)
 	.store_into (this->settings.render.renderScale);
 
+    performanceGroup.add_argument ("--contrast")
+	.help ("Final-output contrast multiplier (1.0 = neutral). Clamped to 0.0-4.0.")
+	.scan<'g', float> ()
+	.default_value (1.0f)
+	.store_into (this->settings.render.contrast);
+
+    performanceGroup.add_argument ("--saturation")
+	.help ("Final-output saturation multiplier (1.0 = neutral, 0.0 = grayscale). Clamped to 0.0-4.0.")
+	.scan<'g', float> ()
+	.default_value (1.0f)
+	.store_into (this->settings.render.saturation);
+
     performanceGroup.add_argument ("--no-fullscreen-pause")
 	.help ("Prevents the background pausing when an app is fullscreen")
 	.flag ()
