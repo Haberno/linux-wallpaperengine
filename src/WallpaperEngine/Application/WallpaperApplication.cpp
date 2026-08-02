@@ -36,6 +36,7 @@
 #include <cerrno>
 #include <chrono>
 #include <climits>
+#include <cmath>
 #include <condition_variable>
 #include <deque>
 #if defined(__GLIBC__)
@@ -1275,8 +1276,12 @@ void WallpaperApplication::takeScreenshot (const std::filesystem::path& filename
 	glFinish ();
 
 	// make room for storing the pixel of this viewport
-	const int readWidth = wallpaper->getWidth ();
-	const int readHeight = wallpaper->getHeight ();
+	// The scene target can be supersampled. Video/web targets resize their GL
+	// allocation independently, so derive the capture size from the wallpaper's
+	// live dimensions and the scene-only render scale.
+	const float renderScale = wallpaper->getRenderScale ();
+	const int readWidth = static_cast<int> (std::lround (wallpaper->getWidth () * renderScale));
+	const int readHeight = static_cast<int> (std::lround (wallpaper->getHeight () * renderScale));
 	const auto bufferSize = readWidth * readHeight * 3;
 	auto* buffer = new uint8_t[bufferSize];
 

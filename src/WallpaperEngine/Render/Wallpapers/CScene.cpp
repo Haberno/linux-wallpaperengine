@@ -33,6 +33,12 @@ CScene::CScene (
     const Wallpaper& wallpaper, RenderContext& context, AudioContext& audioContext,
     const WallpaperState::TextureUVsScaling& scalingMode, const uint32_t& clampMode
 ) : CWallpaper (wallpaper, context, audioContext, scalingMode, clampMode) {
+    // Wallpaper Engine exposes MSAA separately from its post-processing quality.
+    // Until the multisampled resolve path is implemented, scale the complete scene
+    // effect tree and downsample in CWallpaper's final composite. This provides
+    // deterministic edge antialiasing without changing authored camera coordinates.
+    this->setRenderScale (context.getApp ().getContext ().settings.render.renderScale);
+
     // caller should check this, if not a std::bad_cast is good to throw
     auto scene = wallpaper.as<Scene> ();
 

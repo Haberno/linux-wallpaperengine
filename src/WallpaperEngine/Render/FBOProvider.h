@@ -2,6 +2,8 @@
 
 #include <glm/vec2.hpp>
 
+#include <string_view>
+
 #include "CFBO.h"
 #include "WallpaperEngine/Data/Model/Effect.h"
 
@@ -21,8 +23,17 @@ public:
     std::shared_ptr<CFBO> alias (const std::string& newName, std::shared_ptr<CFBO> original);
     [[nodiscard]] std::shared_ptr<CFBO> find (const std::string& name) const;
 
+    /** Set the scene supersampling factor inherited by child effect providers. */
+    void setRenderScale (float scale);
+    [[nodiscard]] float getRenderScale () const;
+
+    /** Pure sizing helpers kept public so quality scaling can be regression-tested without GL. */
+    [[nodiscard]] static bool isFixedSizeTarget (std::string_view name);
+    [[nodiscard]] static glm::uvec2 calculateTargetSize (glm::vec2 size, float renderScale, bool scalable = true);
+
 private:
     const FBOProvider* m_parent;
+    float m_renderScale = 1.0f;
     std::map<std::string, std::shared_ptr<CFBO>> m_fbos = {};
 };
 }
