@@ -7,6 +7,8 @@
 #include "WallpaperEngine/Data/Model/Project.h"
 #include "WallpaperEngine/Data/Model/Wallpaper.h"
 
+#include <algorithm>
+
 using namespace WallpaperEngine::Render;
 
 CWallpaper::CWallpaper (
@@ -14,7 +16,9 @@ CWallpaper::CWallpaper (
     const WallpaperState::TextureUVsScaling& scalingMode, const uint32_t& clampMode
 ) :
     ContextAware (context), FBOProvider (nullptr), m_wallpaperData (wallpaperData), m_audioContext (audioContext),
-    m_state (scalingMode, clampMode) {
+    m_state (scalingMode, clampMode),
+    m_contrast (std::clamp (context.getApp ().getContext ().settings.render.contrast, 0.0f, 4.0f)),
+    m_saturation (std::clamp (context.getApp ().getContext ().settings.render.saturation, 0.0f, 4.0f)) {
     // NOTE: m_vaoBuffer is created lazily in render(): VAOs are not shared between GL
     // contexts, so it cannot be created here when building on the async switch worker
 
@@ -119,6 +123,8 @@ void CWallpaper::setupShaders () {
 		    "uniform float g_TransitionProgress;\n"
 		    "uniform vec2 g_TransitionCenter;\n"
 		    "uniform float g_SceneFadeAlpha;\n"
+		    "uniform float g_Contrast;\n"
+		    "uniform float g_Saturation;\n"
 		    "in vec2 v_TexCoord;\n"
 		    "in vec2 v_ScreenPos;\n"
 		    "out vec4 out_FragColor;\n"
@@ -229,6 +235,12 @@ void CWallpaper::setupShaders () {
 		    // can replace this once Linux-side desktop scheme integration exists.
 		    "vec3 fadeColor = vec3 (0.2205, 0.0945, 0.07875);\n"
 		    "sceneColor = mix (sceneColor, fadeColor, g_SceneFadeAlpha);\n"
+		    // Perform output grading in the universal scene/video/web composite.
+		    // Rec.709 luminance keeps saturation=0 perceptually useful; both defaults
+		    // are exact no-ops, so existing output remains unchanged.
+		    "float luminance = dot (sceneColor, vec3 (0.2126, 0.7152, 0.0722));\n"
+		    "sceneColor = mix (vec3 (luminance), sceneColor, g_Saturation);\n"
+		    "sceneColor = (sceneColor - vec3 (0.5)) * g_Contrast + vec3 (0.5);\n"
 		    "out_FragColor = vec4 (sceneColor, transitionAlpha ());\n"
 		    "}";
 
@@ -296,6 +308,8 @@ void CWallpaper::setupShaders () {
     this->g_TransitionProgress = glGetUniformLocation (this->m_shader, "g_TransitionProgress");
     this->g_TransitionCenter = glGetUniformLocation (this->m_shader, "g_TransitionCenter");
     this->g_SceneFadeAlpha = glGetUniformLocation (this->m_shader, "g_SceneFadeAlpha");
+    this->g_Contrast = glGetUniformLocation (this->m_shader, "g_Contrast");
+    this->g_Saturation = glGetUniformLocation (this->m_shader, "g_Saturation");
     this->a_Position = glGetAttribLocation (this->m_shader, "a_Position");
     this->a_TexCoord = glGetAttribLocation (this->m_shader, "a_TexCoord");
 }
@@ -450,6 +464,8 @@ void CWallpaper::render (
     glUniform1f (this->g_TransitionProgress, this->m_transitionProgress);
     glUniform2f (this->g_TransitionCenter, this->m_transitionCenter.x, this->m_transitionCenter.y);
     glUniform1f (this->g_SceneFadeAlpha, this->getSceneFadeAlpha ());
+    glUniform1f (this->g_Contrast, this->m_contrast);
+    glUniform1f (this->g_Saturation, this->m_saturation);
     // write the framebuffer as is to the screen
     glBindBuffer (GL_ARRAY_BUFFER, this->m_texCoordBuffer);
     glDrawArrays (GL_TRIANGLES, 0, 6);
