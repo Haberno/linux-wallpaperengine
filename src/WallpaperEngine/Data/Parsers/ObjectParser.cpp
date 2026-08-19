@@ -21,6 +21,9 @@ using namespace WallpaperEngine::Data::Parsers;
 using namespace WallpaperEngine::Data::Model;
 
 ObjectUniquePtr ObjectParser::parse (const JSON& it, const Project& project) {
+    // scenes emit every layer-type key on every object and set the unused ones to JSON
+    // null, so presence alone does not identify the type; image/sound/model/light are
+    // already type-checked below, particle/text/shape must reject nulls the same way
     const auto imageIt = it.find ("image");
     const auto soundIt = it.find ("sound");
     const auto particleIt = it.find ("particle");
@@ -86,15 +89,15 @@ ObjectUniquePtr ObjectParser::parse (const JSON& it, const Project& project) {
 	return parseImage (it, project, std::move (basedata), *imageIt);
     } else if (soundIt != it.end () && soundIt->is_array ()) {
 	return parseSound (it, std::move (basedata));
-    } else if (particleIt != it.end ()) {
+    } else if (particleIt != it.end () && !particleIt->is_null ()) {
 	return parseParticle (it, project, std::move (basedata));
-    } else if (textIt != it.end ()) {
+    } else if (textIt != it.end () && !textIt->is_null ()) {
 	return parseText (it, project, std::move (basedata));
     } else if (modelIt != it.end () && modelIt->is_string ()) {
 	return parseModel3D (it, project, std::move (basedata), *modelIt);
     } else if (lightIt != it.end () && lightIt->is_string ()) {
 	return parseLight (it, project, std::move (basedata), *lightIt);
-    } else if (shapeIt != it.end ()) {
+    } else if (shapeIt != it.end () && !shapeIt->is_null ()) {
 	sLog.error ("VolumeLight objects are not supported yet");
     } else if (cameraIt != it.end ()) {
 	// already handled by WallpaperParser, nothing to render for it
