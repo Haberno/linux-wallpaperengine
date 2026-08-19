@@ -54,6 +54,8 @@
 	  "#define int3 ivec3\n"                                                                                       \
 	  "#define int4 ivec4\n"                                                                                       \
 	  "#define saturate(x) (clamp(x, 0.0, 1.0))\n"                                                                 \
+	  "#define DECLARE_SAMPLER2D_PARAMETER(name) in sampler2D name\n"                                              \
+	  "#define MAKE_SAMPLER2D_ARGUMENT(name) name\n"                                                               \
 	  "#define texSample2D texture\n"                                                                              \
 	  "#define texSample2DLod textureLod\n"                                                                        \
 	  "#define sampler2DComparison sampler2DShadow\n"                                                              \
