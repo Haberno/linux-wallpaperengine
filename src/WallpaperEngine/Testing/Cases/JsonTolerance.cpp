@@ -52,6 +52,21 @@ TEST_CASE ("dependencies tolerate the structured authoring form") {
     REQUIRE (object->dependencies == std::vector {7, 104});
 }
 
+TEST_CASE ("layer type keys authored as null do not claim the object") {
+    // workshop 765030095 writes every layer-type key on its text layers and nulls the
+    // unused ones. "particle": null routed the clock into parseParticle, which produced a
+    // Particle with no material, and CParticle dereferenced it on construction
+    const auto data = JSON::parse (
+	R"({"id": 185, "name": "Clock", "image": null, "model": null, "particle": null,
+	    "text": "12:00"})"
+    );
+    const Project project {};
+
+    const auto object = ObjectParser::parse (data, project);
+    REQUIRE (object != nullptr);
+    REQUIRE (object->is<Text> ());
+}
+
 TEST_CASE ("orthographic camera layers retain their own animated projection settings") {
     auto filesystem = std::make_unique<Container> ();
     filesystem->getVFS ().add (
