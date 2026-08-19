@@ -55,6 +55,12 @@ SceneUniquePtr WallpaperParser::parseScene (const JSON& file, Project& project) 
     glm::vec3 center = camera.require<glm::vec3> ("center", "Camera must have a center position");
     glm::vec3 up = camera.require<glm::vec3> ("up", "Camera must have an up position");
     std::vector<CameraPathSource> cameraPaths;
+    // Debug aid (WPE_CAMERA_QUEUE=sequence|random): forces every camera path queue
+    // so a shot order can be compared against the reference without reshuffling.
+    static const char* queueOverride = std::getenv ("WPE_CAMERA_QUEUE");
+    const auto queueMode = [] (std::string authored) {
+	return queueOverride != nullptr ? std::string (queueOverride) : std::move (authored);
+    };
     std::vector<int> cameraObjectIds;
     std::vector<SceneData::Camera::ObjectProjection> cameraObjectProjections;
     std::map<std::string, std::vector<CameraPath>> parsedPathFiles;
@@ -80,7 +86,9 @@ SceneUniquePtr WallpaperParser::parseScene (const JSON& file, Project& project) 
          )) {
 	const auto& paths = loadCameraPathFile (path);
 	if (!paths.empty ()) {
-	    cameraPaths.push_back (CameraPathSource { .objectId = std::nullopt, .queueMode = "sequence", .paths = paths });
+	    cameraPaths.push_back (
+		CameraPathSource { .objectId = std::nullopt, .queueMode = queueMode ("sequence"), .paths = paths }
+	    );
 	}
     }
     // Camera paths exist in two scene formats: older/global scenes list path files
@@ -103,7 +111,7 @@ SceneUniquePtr WallpaperParser::parseScene (const JSON& file, Project& project) 
 	    if (!paths.empty ()) {
 		cameraPaths.push_back (CameraPathSource {
 		    .objectId = cur.optional<int> ("id"),
-		    .queueMode = cur.optional<std::string> ("queuemode", "sequence"),
+		    .queueMode = queueMode (cur.optional<std::string> ("queuemode", "sequence")),
 		    .paths = paths,
 		});
 	    }

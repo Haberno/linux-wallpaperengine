@@ -88,6 +88,15 @@ public:
 	std::optional<size_t> current, size_t count, const std::string& queueMode, uint32_t randomValue
     );
 
+    /** Playhead of the shot currently on screen. `state` carries the runtime
+     * CameraPathFlags bits (reversed/finished) the authored flags do not. */
+    struct CameraPathPlayback {
+	float elapsed = 0.0f;
+	uint32_t state = 0;
+    };
+    [[nodiscard]] static CameraPathPlayback
+    advanceCameraPath (const CameraPath& path, CameraPathPlayback current, float deltaTime);
+
     struct TransparentSortKey {
 	bool sortable = false;
 	RenderSortClass renderClass = RenderSortClass::Opaque;
@@ -257,6 +266,8 @@ private:
     const CameraPathSource* m_activeCameraPathSource = nullptr;
     std::optional<size_t> m_activeCameraPathIndex = std::nullopt;
     float m_cameraPathElapsed = 0.0f;
+    /** Runtime playback bits for the active shot (reversed/finished). */
+    uint32_t m_cameraPathState = 0;
     std::optional<CameraTransform> m_scriptCameraTransform = std::nullopt;
     std::mt19937 m_cameraPathRandom { std::random_device {} () };
     std::shared_ptr<const CFBO> _rt_4FrameBuffer = nullptr;
