@@ -9,12 +9,14 @@ using namespace WallpaperEngine::Data::Parsers;
 namespace {
 CameraPathHandle parseHandle (const JSON& keyframe, const std::string& name) {
     const auto handle = keyframe.optional (name);
-    if (!handle.has_value () || !handle->is_object ()) {
+    if (!handle.has_value () || !handle->is_object () || !handle->optional ("enabled", false)) {
 	return {};
     }
 
+    // The offsets are only read for an enabled handle; a disabled one keeps a
+    // zero offset, which collapses its control point onto the keyframe.
     return CameraPathHandle {
-	.enabled = handle->optional ("enabled", false),
+	.enabled = true,
 	.offset = glm::vec2 (handle->optional ("x", 0.0f), handle->optional ("y", 0.0f)),
     };
 }
@@ -26,21 +28,59 @@ CameraPathChannel parseChannel (const JSON& data, const float fps) {
     }
 
     const float safeFps = fps > 0.0f ? fps : 1.0f;
+    // The reference loader never sorts: it keeps only keyframes whose frame
+    // advances, so out-of-order or duplicated entries are dropped outright.
+    int lastFrame = -1;
     for (const auto& keyframe : data) {
 	if (!keyframe.is_object ()) {
 	    continue;
 	}
+	const int frame = keyframe.optional ("frame", 0);
+	if (frame <= lastFrame) {
+	    continue;
+	}
+	lastFrame = frame;
+
+	const bool step = keyframe.optional ("step", false);
 	result.keyframes.push_back (
 	    CameraPathKeyframe {
-		.time = keyframe.optional ("frame", 0.0f) / safeFps,
+		.frame = frame,
+		.time = static_cast<float> (frame) / safeFps,
 		.value = keyframe.optional ("value", 0.0f),
-		.incoming = parseHandle (keyframe, "back"),
-		.outgoing = parseHandle (keyframe, "front"),
+		.step = step,
+		// a step keyframe never reads its handles
+		.incoming = step ? CameraPathHandle {} : parseHandle (keyframe, "back"),
+		.outgoing = step ? CameraPathHandle {} : parseHandle (keyframe, "front"),
 	    }
 	);
     }
-    std::ranges::sort (result.keyframes, {}, &CameraPathKeyframe::time);
     return result;
+}
+
+/** wraploop closes a channel on itself: everything past the authored length is
+ * dropped and the final keyframe restates the first value with a mirrored
+ * incoming handle, so the seam is continuous instead of a cut. */
+void closeWrapLoop (CameraPathChannel& channel, const int lengthFrames) {
+    while (channel.keyframes.size () > 1 && channel.keyframes.back ().frame > lengthFrames) {
+	channel.keyframes.pop_back ();
+    }
+    if (channel.keyframes.size () < 2) {
+	return;
+    }
+
+    const CameraPathKeyframe first = channel.keyframes.front ();
+    if (channel.keyframes.back ().frame != lengthFrames) {
+	channel.keyframes.push_back (CameraPathKeyframe { .frame = lengthFrames });
+    }
+
+    CameraPathKeyframe& closing = channel.keyframes.back ();
+    closing.value = first.value;
+    closing.step = false;
+    if (first.outgoing.enabled) {
+	closing.incoming = CameraPathHandle { .enabled = true, .offset = -first.outgoing.offset };
+    } else {
+	closing.incoming.enabled = false;
+    }
 }
 
 void parseVectorChannels (const JSON& data, const float fps, std::array<CameraPathChannel, 3>& output) {
@@ -55,37 +95,12 @@ void parseVectorChannels (const JSON& data, const float fps, std::array<CameraPa
     }
 }
 
-float lastTime (const CameraPathChannel& channel) {
-    return channel.keyframes.empty () ? 0.0f : channel.keyframes.back ().time;
-}
-
-float findDuration (const CameraPath& path) {
-    float duration = path.duration;
-    for (int channel = 0; channel < 3; channel++) {
-	duration = std::max (duration, lastTime (path.center[channel]));
-	duration = std::max (duration, lastTime (path.eye[channel]));
-	duration = std::max (duration, lastTime (path.up[channel]));
-    }
-    duration = std::max (duration, lastTime (path.fov));
-    duration = std::max (duration, lastTime (path.zoom));
-    return duration;
-}
-
-void setLegacyInterpolation (CameraPath& path) {
-    for (int channel = 0; channel < 3; channel++) {
-	path.center[channel].interpolation = CameraPathInterpolation::LegacyHermite;
-	path.eye[channel].interpolation = CameraPathInterpolation::LegacyHermite;
-	path.up[channel].interpolation = CameraPathInterpolation::LegacyHermite;
-    }
-    path.zoom.interpolation = CameraPathInterpolation::LegacyHermite;
-}
-
 CameraPath parseLegacyPath (const JSON& data) {
     CameraPath result {
 	.name = data.optional<std::string> ("name", ""),
 	.duration = data.optional ("duration", 0.0f),
+	.legacy = true,
     };
-    setLegacyInterpolation (result);
 
     const auto transforms = data.optional ("transforms");
     if (!transforms.has_value () || !transforms->is_array ()) {
@@ -125,14 +140,44 @@ CameraPath parseLegacyPath (const JSON& data) {
     return result;
 }
 
+uint32_t parsePlaybackFlags (const JSON& options) {
+    uint32_t flags = 0;
+    if (const auto mode = options.optional<std::string> ("mode", ""); mode == "mirror") {
+	flags |= CameraPathMirror;
+    } else if (mode == "single") {
+	flags |= CameraPathSingle;
+    }
+    if (options.optional ("random", false)) {
+	flags |= CameraPathRandom;
+    }
+    if (options.optional ("startpaused", false)) {
+	flags |= CameraPathStartPaused;
+    }
+    if (options.optional ("wraploop", false)) {
+	flags |= CameraPathWrapLoop;
+    }
+    return flags;
+}
+
 CameraPath parseCurvePath (const JSON& data) {
     const auto options = data.optional ("options");
     const float fps = options.has_value () ? options->optional ("fps", 30.0f) : 30.0f;
-    const float length = options.has_value () ? options->optional ("length", 0.0f) : 0.0f;
+    const int length = options.has_value () ? options->optional ("length", 0) : 0;
     CameraPath result {
 	.name = data.optional<std::string> ("name", ""),
-	.duration = fps > 0.0f ? length / fps : 0.0f,
     };
+
+    // The reference runtime rejects a path outright when its rate or its
+    // authored length cannot produce a positive duration.
+    if (fps <= 0.0f || length <= 0) {
+	return result;
+    }
+    result.duration = static_cast<float> (length) / fps;
+    result.secondsPerFrame = 1.0f / fps;
+    result.lengthFrames = length;
+    if (options.has_value ()) {
+	result.flags = parsePlaybackFlags (*options);
+    }
 
     if (const auto center = data.optional ("center"); center.has_value ()) {
 	parseVectorChannels (*center, fps, result.center);
@@ -150,10 +195,19 @@ CameraPath parseCurvePath (const JSON& data) {
 	result.zoom = parseChannel (*zoom, fps);
     }
 
-    result.duration = findDuration (result);
+    if ((result.flags & CameraPathWrapLoop) != 0) {
+	for (int channel = 0; channel < 3; channel++) {
+	    closeWrapLoop (result.center[channel], length);
+	    closeWrapLoop (result.eye[channel], length);
+	    closeWrapLoop (result.up[channel], length);
+	}
+	closeWrapLoop (result.fov, length);
+	closeWrapLoop (result.zoom, length);
+    }
+
     return result;
 }
-}
+} // namespace
 
 std::vector<CameraPath> CameraPathParser::parse (const WallpaperEngine::Data::JSON::JSON& data) {
     std::vector<CameraPath> result;
