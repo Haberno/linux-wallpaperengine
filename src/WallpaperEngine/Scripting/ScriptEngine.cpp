@@ -9,6 +9,9 @@
 #include "ScriptableObject.h"
 #include "WallpaperEngine/Audio/AudioContext.h"
 #include "WallpaperEngine/Audio/Drivers/Recorders/PlaybackRecorder.h"
+// Property is only forward-declared through Types.h; dispatchAllUserProperties needs the full
+// definition to see that it derives from DynamicValue.
+#include "WallpaperEngine/Data/Model/Property.h"
 #include "WallpaperEngine/Data/Utils/ScopeGuard.h"
 #include "WallpaperEngine/Logging/Log.h"
 #include "WallpaperEngine/Render/CObject.h"
@@ -499,14 +502,15 @@ ScriptLayerHandle ScriptEngine::createLayerScript (
 	<< "    get dt()          { var c = globalThis.__sceneCtx; return c ? c.dt   : 0; },\n"
 	<< "    get fps()         { var c = globalThis.__sceneCtx; return c ? c.fps  : 60; },\n"
 	<< "  };\n"
-	// Minimal WE `engine` shim. Real Wallpaper Engine exposes a broad API
-	// (media events, audio buffer, user input); we provide just enough for
-	// the common built-in text scripts to run without ReferenceError.
-	// `frametime` is the per-frame delta in seconds (what InsertFPS reads).
-	<< "  var engine = {\n"
-	<< "    get frametime() { var c = globalThis.__sceneCtx; return c ? c.dt : 0; },\n"
-	<< "    get time()      { var c = globalThis.__sceneCtx; return c ? c.time : 0; },\n"
-	<< "  };\n"
+	// Layer scripts get the real `engine` object, with only the per-frame clock layered on
+	// top. A self-contained shim here used to shadow the global one, so anything a layer
+	// script reached for beyond these two getters - registerAsset above all, which scripts
+	// call at module scope to declare their fonts - threw "not a function" and took the whole
+	// layer down with it. `frametime` is the per-frame delta in seconds (what InsertFPS reads).
+	<< "  var engine = Object.create(globalThis.engine || Object.prototype, {\n"
+	<< "    frametime: { get: function() { var c = globalThis.__sceneCtx; return c ? c.dt : 0; } },\n"
+	<< "    time:      { get: function() { var c = globalThis.__sceneCtx; return c ? c.time : 0; } },\n"
+	<< "  });\n"
 	<< "  function createScriptProperties() {\n"
 	<< "    var builder = {\n"
 	<< "      addSlider:   function(o){ if (!(o.name in __props)) __props[o.name] = o.value; return builder; },\n"
@@ -876,19 +880,18 @@ void ScriptEngine::initializeQueuedScripts () {
 	this->callLifecycleHook (key, module, "init");
     }
 
+    // Wallpaper Engine hands the scripts their user properties once, after every init() and before
+    // any first update(). Scripts gate their behaviour on that call rather than on defaults, so
+    // skipping it strands them in their inert branch - Passing Breeze 2244339517 only starts
+    // orbiting its camera because applyUserProperties sets isCircular.
+    this->dispatchAllUserProperties ();
+
     for (const auto& [key, module] : started) {
 	this->callLifecycleHook (*key, *module, "update");
     }
 }
 
-void ScriptEngine::dispatchUserProperty (const std::string& key, DynamicValue& value) {
-    if (this->m_context == nullptr) {
-	return;
-    }
-
-    JSValue changed = JS_NewObject (this->m_context);
-    JS_SetPropertyStr (this->m_context, changed, key.c_str (), this->dynamicToJs (value));
-
+void ScriptEngine::applyUserProperties (JSValue changed) {
     // property-script wrappers capture their own thisLayer in the eval closure, so no
     // per-module global rebinding is needed here (unlike beingsuz's original)
     for (auto& module : this->m_scriptModules | std::views::values) {
@@ -902,8 +905,35 @@ void ScriptEngine::dispatchUserProperty (const std::string& key, DynamicValue& v
 
 	JS_FreeValue (this->m_context, result);
     }
+}
 
+void ScriptEngine::dispatchUserProperty (const std::string& key, DynamicValue& value) {
+    if (this->m_context == nullptr) {
+	return;
+    }
+
+    JSValue changed = JS_NewObject (this->m_context);
+    JS_SetPropertyStr (this->m_context, changed, key.c_str (), this->dynamicToJs (value));
+    this->applyUserProperties (changed);
     JS_FreeValue (this->m_context, changed);
+}
+
+void ScriptEngine::dispatchAllUserProperties () {
+    if (this->m_context == nullptr) {
+	return;
+    }
+
+    // Scene::project is a reference member, so the properties stay mutable through the const
+    // getter - dynamicToJs needs a non-const DynamicValue&.
+    auto& properties = this->m_scene.getScene ().project.properties;
+    JSValue all = JS_NewObject (this->m_context);
+    for (auto& [key, value] : properties) {
+	if (value != nullptr) {
+	    JS_SetPropertyStr (this->m_context, all, key.c_str (), this->dynamicToJs (*value));
+	}
+    }
+    this->applyUserProperties (all);
+    JS_FreeValue (this->m_context, all);
 }
 
 std::string ScriptEngine::getRunningModuleWorkshopId () const {

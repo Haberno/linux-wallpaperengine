@@ -77,6 +77,11 @@ public:
     // Fire the scripts' applyUserProperties({key: value}) handler after a live property change, so
     // script-driven wallpapers react to settings without a reload. No-op for scripts without it.
     void dispatchUserProperty (const std::string& key, DynamicValue& value);
+    // Hand every script the project's current user properties in one object. Wallpaper Engine does
+    // this once at startup, and scripts routinely gate their whole behaviour on it, so skipping it
+    // leaves them running their inert default branch forever.
+    void dispatchAllUserProperties ();
+    void applyUserProperties (JSValue changed);
     JSValue dynamicToJs (DynamicValue& value) const;
 
     /**
