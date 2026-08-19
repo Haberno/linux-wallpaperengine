@@ -1,6 +1,7 @@
 #pragma once
 
 #include <array>
+#include <cstdint>
 #include <optional>
 #include <string>
 #include <vector>
@@ -9,21 +10,35 @@
 #include <glm/vec3.hpp>
 
 namespace WallpaperEngine::Data::Model {
-enum class CameraPathInterpolation {
-    AuthoredCurve,
-    LegacyHermite,
+/** Playback flags recovered from the reference runtime's path options. The bit
+ * values are the reference's own so the same tests apply unchanged. */
+enum CameraPathFlags : uint32_t {
+    CameraPathMirror = 0x1,
+    CameraPathSingle = 0x2,
+    CameraPathRandom = 0x4,
+    CameraPathWrapLoop = 0x10,
+    CameraPathStartPaused = 0x20000000,
+    /** Runtime state, not authored: a single-shot path reached its end. */
+    CameraPathFinished = 0x40000000,
+    /** Runtime state, not authored: a mirrored path is playing backwards. */
+    CameraPathReversed = 0x80000000,
 };
 
-/** Tangent handle stored by Wallpaper Engine's animation-curve editor. The
- * offset is measured from its keyframe in seconds/value units. */
+/** Tangent handle stored by Wallpaper Engine's animation-curve editor. The x
+ * offset is normalized against the segment; y is an absolute value offset. The
+ * offset stays zero unless the handle is enabled, matching the reference
+ * loader, because the evaluator reads the offsets and never the flag. */
 struct CameraPathHandle {
     bool enabled = false;
     glm::vec2 offset = glm::vec2 (0.0f);
 };
 
 struct CameraPathKeyframe {
+    int frame = 0;
     float time = 0.0f;
     float value = 0.0f;
+    /** Constant interpolation: the segment ending here holds the previous value. */
+    bool step = false;
     CameraPathHandle incoming = {};
     CameraPathHandle outgoing = {};
 };
@@ -31,9 +46,12 @@ struct CameraPathKeyframe {
 /** One scalar animation channel, used for vector components as well as FOV/zoom. */
 struct CameraPathChannel {
     std::vector<CameraPathKeyframe> keyframes = {};
-    CameraPathInterpolation interpolation = CameraPathInterpolation::AuthoredCurve;
 
-    [[nodiscard]] float evaluate (float time, float fallback) const;
+    /** Legacy timestamped transforms, interpolated in seconds. */
+    [[nodiscard]] float evaluateLegacy (float time, float fallback) const;
+    /** Curve channels, baked for one whole frame - the granularity the
+     * reference runtime samples at before blending two adjacent frames. */
+    [[nodiscard]] float evaluateFrame (int frame, float fallback) const;
 };
 
 struct CameraTransform {
@@ -44,11 +62,15 @@ struct CameraTransform {
     float zoom = 1.0f;
 };
 
-/** A single camera shot. Modern scenes store curve channels; legacy scenes
- * are converted to the same representation from timestamped transforms. */
+/** A single camera shot. Modern scenes store curve channels sampled per frame;
+ * legacy scenes keep their timestamped transforms and Hermite interpolation. */
 struct CameraPath {
     std::string name;
     float duration = 0.0f;
+    float secondsPerFrame = 1.0f / 30.0f;
+    int lengthFrames = 0;
+    uint32_t flags = 0;
+    bool legacy = false;
     std::array<CameraPathChannel, 3> center = {};
     std::array<CameraPathChannel, 3> eye = {};
     std::array<CameraPathChannel, 3> up = {};
