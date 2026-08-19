@@ -842,6 +842,28 @@ void CScene::registerFogScripts () {
 
     queueLayer ("fogdistance", this->getScene ().fog.distance);
     queueLayer ("fogheight", this->getScene ().fog.height);
+
+    // Any general property can carry a script, and scenes use that as a place to
+    // park scene-wide logic regardless of what the property itself does - Passing
+    // Breeze 2244339517 drives its whole orbiting camera from general.bloom.
+    // Queueing only the fog block left those scripts never running.
+    const auto& scene = this->getScene ();
+    queue ("ambientcolor", scene.colors.ambient);
+    queue ("skylightcolor", scene.colors.skylight);
+    queue ("clearcolor", scene.colors.clear);
+    queue ("camerafade", scene.camera.fade);
+    queue ("bloom", scene.camera.bloom.enabled);
+    queue ("bloomstrength", scene.camera.bloom.strength);
+    queue ("bloomthreshold", scene.camera.bloom.threshold);
+    queue ("bloomtint", scene.camera.bloom.tint);
+    queue ("cameraparallax", scene.camera.parallax.enabled);
+    queue ("cameraparallaxamount", scene.camera.parallax.amount);
+    queue ("cameraparallaxdelay", scene.camera.parallax.delay);
+    queue ("cameraparallaxmouseinfluence", scene.camera.parallax.mouseInfluence);
+    queue ("camerashake", scene.camera.shake.enabled);
+    queue ("camerashakeamplitude", scene.camera.shake.amplitude);
+    queue ("camerashakeroughness", scene.camera.shake.roughness);
+    queue ("camerashakespeed", scene.camera.shake.speed);
 }
 
 void CScene::updateFogState () {
