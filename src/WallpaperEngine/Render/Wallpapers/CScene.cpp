@@ -523,6 +523,13 @@ Render::CObject* CScene::dispatchObjectType (const Object& object) {
 	    return nullptr;
 	}
 
+	// the parser leaves the material null when the particle or its material file could
+	// not be loaded (it logs why); CParticle dereferences it unconditionally
+	if (particleData.material == nullptr || particleData.material->material == nullptr) {
+	    sLog.error ("Ignoring particle system without a material: ", particleData.name);
+	    return nullptr;
+	}
+
 	renderObject = new Objects::CParticle (*this, particleData);
     } else {
 	// containers/groups: no rendering of their own, but their transform properties can be
