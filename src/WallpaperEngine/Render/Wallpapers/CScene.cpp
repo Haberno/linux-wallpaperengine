@@ -580,6 +580,12 @@ ScriptEngine& CScene::getScriptEngine () const { return *this->m_scriptEngine; }
 Camera& CScene::getCamera () const { return *this->m_camera; }
 
 void CScene::setScriptCameraTransform (const CameraTransform& transform) {
+    static const bool traceScripts = std::getenv ("WPE_SCRIPT_TRACE") != nullptr;
+    if (traceScripts) {
+	sLog.out (
+	    "setScriptCameraTransform eye=", transform.eye.x, ",", transform.eye.y, ",", transform.eye.z
+	);
+    }
     this->m_scriptCameraTransform = transform;
 }
 
@@ -636,18 +642,25 @@ void CScene::renderFrame (const glm::ivec4& viewport) {
     // non-empty path still owns the final transform, but uses this pose as its
     // live fallback for any channels it does not animate.
     this->updateCameraObject ();
-    if (this->m_activeCameraPathSource != nullptr && this->m_activeCameraPathIndex.has_value ()) {
+    const bool pathOwnsCamera
+	= this->m_activeCameraPathSource != nullptr && this->m_activeCameraPathIndex.has_value ();
+    if (pathOwnsCamera) {
 	const CameraPath& path = this->m_activeCameraPathSource->paths[*this->m_activeCameraPathIndex];
 	this->m_camera->setTransform (
 	    path.evaluate (this->m_cameraPathElapsed, this->m_camera->getDefaultTransform ())
 	);
     }
     // A script that called setCameraTransforms took the camera on purpose (mouse-drag orbit
-    // controllers do this every frame); it wins over the layer rig and the path above. The pose is
-    // deliberately sticky rather than per-tick: the rig sits somewhere entirely different from where
-    // a controller puts the camera, so falling back to it on any frame the script does not produce a
-    // usable pose would snap the view across the scene and back.
-    if (this->m_scriptCameraTransform.has_value ()) {
+    // controllers do this every frame); it wins over the layer rig. The pose is deliberately sticky
+    // rather than per-tick: the rig sits somewhere entirely different from where a controller puts
+    // the camera, so falling back to it on any frame the script does not produce a usable pose would
+    // snap the view across the scene and back.
+    //
+    // Camera paths outrank it, though. Scenes ship the stock camera-controller script whether or not
+    // they use it, and its own header says so: "This won't have any effect if camera paths are used
+    // in the scene." Letting the script win instead pins the camera wherever the controller starts
+    // and every authored shot is discarded.
+    if (this->m_scriptCameraTransform.has_value () && !pathOwnsCamera) {
 	this->m_camera->setTransform (*this->m_scriptCameraTransform);
     }
 
@@ -1026,12 +1039,61 @@ void CScene::updateCameraObject () {
     this->m_camera->setDefaultTransform (transform, !pathActive && !scriptOwnsCamera);
 }
 
+// Playback modes, straight off the reference runtime's advance step. A path
+// only ever hands the queue on when it is a single-shot one: looping and
+// mirrored paths keep the same shot forever.
+CScene::CameraPathPlayback
+CScene::advanceCameraPath (const CameraPath& path, const CameraPathPlayback current, const float deltaTime) {
+    const uint32_t flags = path.flags | current.state;
+    // startpaused parks a shot on its first frame; nothing resumes it yet.
+    if ((flags & (CameraPathStartPaused | CameraPathFinished)) != 0) {
+	return current;
+    }
+    if ((flags & CameraPathSingle) != 0 && path.duration <= current.elapsed) {
+	return current;
+    }
+    if (path.duration <= 0.0f) {
+	return current;
+    }
+
+    const float elapsed = current.elapsed + ((flags & CameraPathReversed) != 0 ? -deltaTime : deltaTime);
+
+    if ((flags & CameraPathSingle) != 0) {
+	if (elapsed < path.duration) {
+	    return { elapsed, current.state };
+	}
+	// Only a single-shot path ever reports back; loops and mirrors keep going.
+	return { path.duration, current.state | CameraPathFinished };
+    }
+
+    if ((flags & CameraPathMirror) == 0) {
+	float wrapped = elapsed < 0.0f ? std::fmod (elapsed + path.duration, path.duration) : elapsed;
+	if (wrapped >= path.duration) {
+	    wrapped = std::fmod (wrapped, path.duration);
+	}
+	return { wrapped, current.state };
+    }
+
+    if ((flags & CameraPathReversed) == 0) {
+	if (elapsed < path.duration) {
+	    return { elapsed, current.state };
+	}
+	return { path.duration - std::fmod (elapsed, path.duration), current.state | CameraPathReversed };
+    }
+
+    if (elapsed > 0.0f) {
+	return { elapsed, current.state };
+    }
+    return { std::fabs (std::fmod (elapsed, path.duration)), current.state & ~CameraPathReversed };
+}
+
 void CScene::updateCameraPath (const float deltaTime) {
     const CameraPathSource* source = this->findActiveCameraPathSource ();
     if (source != this->m_activeCameraPathSource) {
 	this->m_activeCameraPathSource = source;
 	this->m_activeCameraPathIndex = std::nullopt;
 	this->m_cameraPathElapsed = 0.0f;
+	this->m_cameraPathState = 0;
 	if (source == nullptr || source->paths.empty ()) {
 	    this->m_camera->resetTransform ();
 	    return;
@@ -1045,22 +1107,35 @@ void CScene::updateCameraPath (const float deltaTime) {
 	return;
     }
 
-    this->m_cameraPathElapsed += deltaTime;
-    // A stalled frame can cross multiple very short shots. Bound the loop by
-    // the queue length plus one so malformed assets can never spin forever.
-    for (size_t step = 0; step <= source->paths.size (); step++) {
-	const CameraPath& current = source->paths[*this->m_activeCameraPathIndex];
-	if (current.duration <= 0.0f || this->m_cameraPathElapsed < current.duration) {
-	    break;
-	}
-	this->m_cameraPathElapsed -= current.duration;
+    const CameraPathPlayback playback = advanceCameraPath (
+	source->paths[*this->m_activeCameraPathIndex], { this->m_cameraPathElapsed, this->m_cameraPathState },
+	deltaTime
+    );
+    this->m_cameraPathElapsed = playback.elapsed;
+    this->m_cameraPathState = playback.state;
+    if ((this->m_cameraPathState & CameraPathFinished) != 0) {
+	this->m_cameraPathState = 0;
+	this->m_cameraPathElapsed = 0.0f;
 	this->m_activeCameraPathIndex = chooseCameraPathIndex (
 	    this->m_activeCameraPathIndex, source->paths.size (), source->queueMode, this->m_cameraPathRandom ()
 	);
     }
 
     const CameraPath& path = source->paths[*this->m_activeCameraPathIndex];
-    this->m_camera->setTransform (path.evaluate (this->m_cameraPathElapsed, this->m_camera->getDefaultTransform ()));
+    const CameraTransform transform = path.evaluate (this->m_cameraPathElapsed, this->m_camera->getDefaultTransform ());
+
+    // Opt-in trace (WPE_CAMERA_TRACE=1) for comparing shot pacing against the
+    // reference: authored handles must show up here as a non-constant rate.
+    static const bool trace = std::getenv ("WPE_CAMERA_TRACE") != nullptr;
+    if (trace) {
+	sLog.out (
+	    "camera path '", path.name, "' t=", this->m_cameraPathElapsed, "/", path.duration,
+	    " flags=", path.flags | this->m_cameraPathState, " eye=", transform.eye.x, ",", transform.eye.y, ",",
+	    transform.eye.z, " fov=", transform.fov
+	);
+    }
+
+    this->m_camera->setTransform (transform);
 }
 
 void CScene::updateMouse (const glm::ivec4& viewport) {
