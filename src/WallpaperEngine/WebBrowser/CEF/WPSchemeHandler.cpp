@@ -30,7 +30,12 @@ bool WPSchemeHandler::Open (CefRefPtr<CefRequest> request, bool& handle_request,
     const std::string host = CefString (&parts.host);
     const std::string path = CefString (&parts.path);
 
-    const std::string file = path.substr (1);
+    // chromium canonicalizes the url, so spaces and non-ascii in filenames arrive percent-encoded;
+    // the asset loader wants the real name back
+    const std::string file = CefURIDecode (
+	path.substr (1), true,
+	static_cast<cef_uri_unescape_rule_t> (UU_SPACES | UU_URL_SPECIAL_CHARS_EXCEPT_PATH_SEPARATORS)
+    );
 
     try {
 	// try to read the file on the current container, if the file doesn't exists
