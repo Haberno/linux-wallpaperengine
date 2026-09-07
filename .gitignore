@@ -3,6 +3,8 @@ cmake-build-*
 .cache/
 build/
 build-asan/
+build-new/
+build-release/
 .vscode/
 .zed/
 third_party/
