@@ -1,6 +1,8 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include "WallpaperEngine/FileSystem/Adapters/Package.h"
+#include "WallpaperEngine/Assets/AssetLoadException.h"
+#include "WallpaperEngine/Assets/AssetLocator.h"
 
 using namespace WallpaperEngine::Data::Assets;
 using WallpaperEngine::FileSystem::Adapters::PackageAdapter;
@@ -30,4 +32,22 @@ TEST_CASE ("package lookups ignore case") {
 
     REQUIRE_FALSE (adapter.exists ("sounds/missing.mp3"));
     REQUIRE_FALSE (adapter.exists ("rayman.json"));
+}
+
+TEST_CASE ("short workshop shader paths fail normally and valid overrides still resolve", "[assets]") {
+    auto files = std::make_unique<WallpaperEngine::FileSystem::Container> ();
+    auto& vfs = files->getVFS ();
+    vfs.add ("shaders/generic.frag", "ordinary shader");
+    vfs.add ("shaders/workshop/123/effect/example.frag", "authored shader");
+    vfs.add ("zcompat/scene/shaders/123/example.frag", "compatibility shader");
+    vfs.add ("shaders/workshop/456/effect/example.frag", "fallback shader");
+    const WallpaperEngine::Assets::AssetLocator locator (std::move (files));
+
+    for (const auto* path : { "", "workshop", "workshop/123", "workshop/123/", "workshop/123/missing.frag" }) {
+	INFO (path);
+	REQUIRE_THROWS_AS (locator.fragmentShader (path), WallpaperEngine::Assets::AssetLoadException);
+    }
+    CHECK (locator.fragmentShader ("generic.frag") == "ordinary shader");
+    CHECK (locator.fragmentShader ("workshop/123/effect/example.frag") == "compatibility shader");
+    CHECK (locator.fragmentShader ("workshop/456/effect/example.frag") == "fallback shader");
 }

@@ -12,11 +12,12 @@ std::string AssetLocator::shader (const std::filesystem::path& filename) const {
     try {
 	std::filesystem::path shader = filename;
 
-	// detect workshop shaders and check if there's a
-	if (auto it = shader.begin (); *it++ == "workshop") {
+	// Workshop compatibility paths include an id, an asset directory, and a file.
+	// Short or empty paths still go through the normal missing-asset error path.
+	if (auto it = shader.begin (); it != shader.end () && *it++ == "workshop" && it != shader.end ()) {
 	    const std::filesystem::path workshopId = *it++;
 
-	    if (++it != shader.end ()) {
+	    if (it != shader.end () && ++it != shader.end ()) {
 		const std::filesystem::path& shaderfile = *it;
 
 		try {
