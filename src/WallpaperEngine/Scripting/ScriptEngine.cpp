@@ -738,6 +738,13 @@ void ScriptEngine::queueScript (const std::string& key, DynamicValue& currentVal
 	    // var-ref graph can be invalidated by those generated setup closures during QuickJS GC.
 	    << "  'use strict';\n"
 	    << "  var thisLayer = globalThis.__propScriptLayer;\n"
+	    // Wallpaper Engine exposes the owning layer under both names: `thisLayer` in the
+	    // snippets, `thisObject` in the stock scene scripts (dino_run calls
+	    // thisObject.getMaterial(0); the attachment-angle snippet assigns thisObject['angle']).
+	    // Neither the shipped lib.sceneScript.d.ts nor wallpaper64.exe declares it, so it is
+	    // an alias rather than a distinct API. Only applyUserProperties bodies referenced it in
+	    // the corpus, which is why it stayed invisible until that hook began firing at startup.
+	    << "  var thisObject = thisLayer;\n"
 	    // WE's scriptProperties builder doubles as the values object (scripts read
 	    // scriptProperties.<name> without calling finish()), so the shim collects slider
 	    // defaults straight onto the object it returns, seeded values winning
