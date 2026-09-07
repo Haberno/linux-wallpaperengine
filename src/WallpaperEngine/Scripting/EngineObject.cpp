@@ -4,6 +4,7 @@
 #include "WallpaperEngine/Audio/Drivers/Recorders/PlaybackRecorder.h"
 #include "WallpaperEngine/Data/Model/Project.h"
 #include "WallpaperEngine/Data/Model/Property.h"
+#include "WallpaperEngine/Data/Utils/ScopeGuard.h"
 #include "WallpaperEngine/Logging/Log.h"
 #include "WallpaperEngine/Render/Wallpapers/CScene.h"
 
@@ -190,14 +191,25 @@ JSValue engine_register_audio_buffers (JSContext* ctx, JSValueConst this_val, in
 
     // Live Float32Array views match the native DLL's three independent buffers. The
     // recorder outlives the script engine, so their backing memory remains valid.
-    const auto makeView = [ctx, resolution] (float* data) {
+    //
+    // Built through the global Float32Array constructor rather than JS_NewTypedArray: that
+    // helper passes JS_UNDEFINED as new_target and hands back a zero-length view for an
+    // ArrayBuffer argument, which turns every `audioBuffer.average.reduce(...)` in a scene
+    // script into "TypeError: empty array" and kills the script that owns the layer.
+    JSValue globalObj = JS_GetGlobalObject (ctx);
+    JSValue float32Array = JS_GetPropertyStr (ctx, globalObj, "Float32Array");
+    JS_FreeValue (ctx, globalObj);
+
+    const auto makeView = [ctx, resolution, float32Array] (float* data) {
 	JSValue buffer = JS_NewArrayBuffer (
 	    ctx, reinterpret_cast<uint8_t*> (data), resolution * sizeof (float), nullptr, nullptr, false
 	);
-	JSValue view = JS_NewTypedArray (ctx, 1, &buffer, JS_TYPED_ARRAY_FLOAT32);
+	JSValue view = JS_CallConstructor (ctx, float32Array, 1, &buffer);
 	JS_FreeValue (ctx, buffer);
 	return view;
     };
+
+    const ScopeGuard constructorGuard ([ctx, float32Array] { JS_FreeValue (ctx, float32Array); });
 
     JSValue leftView = makeView (left);
     if (JS_IsException (leftView)) {
