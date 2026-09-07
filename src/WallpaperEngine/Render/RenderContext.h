@@ -69,6 +69,9 @@ namespace Render {
 	[[nodiscard]] std::shared_ptr<const TextureProvider> resolveTexture (const std::string& name) const;
 	[[nodiscard]] std::shared_ptr<const TextureProvider>
 	resolveTexture (const std::string& name, const Assets::AssetLocator& assetLocator) const;
+	[[nodiscard]] std::shared_ptr<const TextureProvider> resolveTexture (
+	    const std::string& name, const Assets::AssetLocator& assetLocator, const Data::Model::Properties& properties
+	) const;
 	/**
 	 * Registers a ready texture under the given name so resolveTexture returns it instead
 	 * of loading the file synchronously. Used by asynchronous background switches to
