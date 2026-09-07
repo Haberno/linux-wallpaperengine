@@ -752,36 +752,41 @@ void CPass::setupShaders () {
     // RG88 normal as RGBA forces one axis to 1 and produces extreme lighting.
     // The high texture flag nibble is the matching packed-component occupancy
     // mask consumed by sampler metadata's `components` array.
-    const auto registerTextureMetadata = [this] (
-	const int index, const std::shared_ptr<const TextureProvider>& texture
-    ) {
-	if (texture == nullptr) {
-	    return;
-	}
+    const auto registerTextureMetadata
+	= [this] (const int index, const std::shared_ptr<const TextureProvider>& texture, const bool overwrite = true) {
+	      if (texture == nullptr) {
+		  return;
+	      }
 
-	const std::string prefix = "TEX" + std::to_string (index);
-	this->m_combos.insert_or_assign (prefix + "FORMAT", static_cast<int> (texture->getFormat ()));
-	this->m_combos.insert_or_assign (
-	    prefix + "COMPONENTS", static_cast<int> ((texture->getFlags () & TextureFlags_ComponentMask) >> 20)
-	);
-    };
+	      const std::string prefix = "TEX" + std::to_string (index);
 
-    const auto registerAuthoredTextures = [this, &registerTextureMetadata] (const TextureMap& textures) {
-	for (const auto& [index, name] : textures) {
-	    if (name.starts_with ("_rt_") || name.starts_with ("_alias_")) {
-		continue;
-	    }
+	      // A slot the pass authors wins over the shader's own default: that is the texture
+	      // setupTextureUniforms ends up binding, so its format is the one the shader must see.
+	      if (!overwrite && this->m_combos.contains (prefix + "FORMAT")) {
+		  return;
+	      }
 
-	    try {
-		registerTextureMetadata (
-		    index, this->m_renderable.getScene ().resolveTexture (name)
-		);
-	    } catch (const std::runtime_error&) {
-		// setupTextureUniforms reports unresolved authored textures later;
-		// metadata discovery should not turn that recoverable path into a fatal one.
-	    }
-	}
-    };
+	      this->m_combos.insert_or_assign (prefix + "FORMAT", static_cast<int> (texture->getFormat ()));
+	      this->m_combos.insert_or_assign (
+		  prefix + "COMPONENTS", static_cast<int> ((texture->getFlags () & TextureFlags_ComponentMask) >> 20)
+	      );
+	  };
+
+    const auto registerAuthoredTextures
+	= [this, &registerTextureMetadata] (const TextureMap& textures, const bool overwrite = true) {
+	      for (const auto& [index, name] : textures) {
+		  if (name.starts_with ("_rt_") || name.starts_with ("_alias_")) {
+		      continue;
+		  }
+
+		  try {
+		      registerTextureMetadata (index, this->m_renderable.getScene ().resolveTexture (name), overwrite);
+		  } catch (const std::runtime_error&) {
+		      // setupTextureUniforms reports unresolved authored textures later;
+		      // metadata discovery should not turn that recoverable path into a fatal one.
+		  }
+	      }
+	  };
 
     registerTextureMetadata (0, texture0);
     registerAuthoredTextures (this->m_pass.textures);
@@ -809,6 +814,14 @@ void CPass::setupShaders () {
 	this->m_renderable.getAssetLocator (), shaderName, this->m_combos, this->m_override.combos, passTextures,
 	overrideTextures, this->m_override.constants
     );
+
+    // Samplers the shader declares itself (the "formatcombo":true defaults, like generic4's
+    // toon shading gradient) are only discovered while the units preprocess, which happens in
+    // the constructor above. ShaderUnit keeps m_combos by reference and only emits the #define
+    // block on compile (), so registering them here still reaches the generated source. Without
+    // this an R8 gradient reads through the RGBA path and every lit pixel comes out red.
+    registerAuthoredTextures (this->m_shader->getVertex ().getTextures (), false);
+    registerAuthoredTextures (this->m_shader->getFragment ().getTextures (), false);
 
     const auto [vertex, fragment]
 	= Shaders::GLSLContext::get ().toGlsl (this->m_shader->vertex (), this->m_shader->fragment ());
