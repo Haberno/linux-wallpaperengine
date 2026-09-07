@@ -7,7 +7,7 @@ using namespace WallpaperEngine::FileSystem;
 using namespace WallpaperEngine::Data::Model;
 class AssetLocator {
 public:
-    explicit AssetLocator (ContainerUniquePtr filesystem);
+    explicit AssetLocator (ContainerUniquePtr filesystem, std::vector<std::filesystem::path> textureFallbackRoots = {});
 
     std::string vertexShader (const std::filesystem::path& filename) const;
     std::string fragmentShader (const std::filesystem::path& filename) const;
@@ -27,6 +27,8 @@ private:
     std::string shader (const std::filesystem::path& filename) const;
 
     ContainerUniquePtr m_filesystem;
+    /** Texture-only lookup roots; never expose preview scene/project/material JSON. */
+    std::vector<std::filesystem::path> m_textureFallbackRoots;
 };
 
 using AssetLocatorUniquePtr = std::unique_ptr<AssetLocator>;

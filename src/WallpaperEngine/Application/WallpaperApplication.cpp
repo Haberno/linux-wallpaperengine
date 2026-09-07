@@ -175,6 +175,7 @@ AssetLocatorUniquePtr WallpaperApplication::setupAssetLocator (const std::string
     // The directory name does not match the material name (watercaustics ->
     // caustics.json), so they cannot be resolved on demand from the path.
     std::error_code effectsError;
+    std::vector<std::filesystem::path> textureFallbackRoots;
     for (const auto& effect : std::filesystem::directory_iterator (
 	     this->m_context.settings.general.assets / "effects", effectsError
 	 )) {
@@ -184,6 +185,9 @@ AssetLocatorUniquePtr WallpaperApplication::setupAssetLocator (const std::string
 
 	try {
 	    container->mount (effect.path (), "/");
+	    textureFallbackRoots.emplace_back (
+		std::filesystem::path ("effects") / effect.path ().filename () / "preview" / "materials"
+	    );
 	} catch (std::runtime_error&) { }
     }
 
@@ -265,7 +269,8 @@ AssetLocatorUniquePtr WallpaperApplication::setupAssetLocator (const std::string
 	"}"
     );
 
-    return std::make_unique<AssetLocator> (std::move (container));
+    std::ranges::sort (textureFallbackRoots);
+    return std::make_unique<AssetLocator> (std::move (container), std::move (textureFallbackRoots));
 }
 
 void WallpaperApplication::loadBackgrounds () {
