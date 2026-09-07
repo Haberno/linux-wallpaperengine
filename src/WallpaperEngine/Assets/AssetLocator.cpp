@@ -4,7 +4,8 @@
 
 using namespace WallpaperEngine::Assets;
 
-AssetLocator::AssetLocator (ContainerUniquePtr filesystem) : m_filesystem (std::move (filesystem)) { }
+AssetLocator::AssetLocator (ContainerUniquePtr filesystem, std::vector<std::filesystem::path> textureFallbackRoots) :
+    m_filesystem (std::move (filesystem)), m_textureFallbackRoots (std::move (textureFallbackRoots)) { }
 
 const std::string& AssetLocator::identity () const { return this->m_filesystem->fingerprint (); }
 
@@ -78,6 +79,16 @@ ReadStreamSharedPtr AssetLocator::texture (const std::filesystem::path& filename
     try {
 	return this->m_filesystem->read (final);
     } catch (std::filesystem::filesystem_error& base) {
+	// These are explicit stock texture roots. Only .tex requests may reach them;
+	// a preview's scene.json, project.json and materials remain invisible.
+	const auto relative = std::filesystem::path (filename.string () + ".tex").lexically_normal ();
+	if (!relative.is_absolute () && !relative.empty () && *relative.begin () != "..") {
+	    for (const auto& root : this->m_textureFallbackRoots) {
+		try {
+		    return this->m_filesystem->read (root / relative);
+		} catch (const std::filesystem::filesystem_error&) { }
+	    }
+	}
 	throw AssetLoadException (base);
     }
 }
