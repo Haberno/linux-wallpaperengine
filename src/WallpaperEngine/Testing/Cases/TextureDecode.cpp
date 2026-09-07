@@ -312,6 +312,62 @@ TEST_CASE ("texture variants follow combo and boolean properties independently",
     CHECK_FALSE (TextureParser::matchesCondition ("missing", properties));
 }
 
+TEST_CASE ("source textures need metadata and compiled previews stay texture-only", "[texture][assets]") {
+    using WallpaperEngine::Assets::AssetLocator;
+    using WallpaperEngine::FileSystem::Container;
+    auto files = std::make_unique<Container> ();
+    auto& vfs = files->getVFS ();
+    vfs.add ("materials/effects/source.png", encodePng (8, 1));
+    vfs.add ("materials/effects/source.tex-json", R"({"format":"rgba8888","nomip":true})");
+    const AssetLocator locator (std::move (files));
+    const auto texture = TextureParser::load (locator, "effects/source");
+    REQUIRE (texture->images.at (0).size () == 1);
+    CHECK (texture->width == 8);
+    CHECK (texture->format == TextureFormat_ARGB8888);
+    CHECK (texture->images.at (0).front ()->uncompressedData[0] == 31);
+
+    auto previews = std::make_unique<Container> ();
+    previews->getVFS ().add ("effects/example/preview/materials/effects/only.tex", "compiled");
+    previews->getVFS ().add ("effects/example/preview/scene.json", "preview scene");
+    previews->getVFS ().add ("effects/example/preview/materials/collision.json", "preview material");
+    const AssetLocator fallback (std::move (previews), { "effects/example/preview/materials" });
+    const auto stream = fallback.texture ("effects/only");
+    CHECK (std::string (std::istreambuf_iterator<char> (*stream), {}) == "compiled");
+    CHECK_THROWS (fallback.readString ("scene.json"));
+    CHECK_THROWS (fallback.readString ("materials/collision.json"));
+    CHECK_THROWS (fallback.texture ("../scene.json"));
+}
+
+TEST_CASE ("source texture imports preserve channels, sampling flags and compiled precedence", "[texture][assets]") {
+    using WallpaperEngine::Assets::AssetLocator;
+    using WallpaperEngine::FileSystem::Container;
+    for (const auto& [format, components] : std::map<std::string, size_t> {{"rgba8888", 4}, {"rg88n", 2}, {"r8", 1}}) {
+	INFO (format);
+	auto files = std::make_unique<Container> ();
+	files->getVFS ().add ("materials/source.png", encodePng (8, 1));
+	files->getVFS ().add ("materials/source.tex-json", WallpaperEngine::Data::JSON::JSON {
+	    {"format", format}, {"nomip", false}, {"clampuvs", true}, {"nointerpolation", true}
+	});
+	const AssetLocator locator (std::move (files));
+	const auto texture = TextureParser::load (locator, "source");
+	REQUIRE (texture->images.at (0).size () == 4);
+	CHECK (texture->images.at (0).back ()->width == 1);
+	CHECK (texture->images.at (0).back ()->uncompressedSize == static_cast<int> (components));
+	CHECK ((texture->flags & TextureFlags_ClampUVs) != 0);
+	CHECK ((texture->flags & TextureFlags_NoInterpolation) != 0);
+	CHECK (texture->images.at (0).front ()->uncompressedData[components] == 59);
+    }
+    auto missing = std::make_unique<Container> ();
+    missing->getVFS ().add ("materials/source.png", encodePng (8, 1));
+    CHECK_THROWS (TextureParser::load (AssetLocator (std::move (missing)), "source"));
+
+    auto corrupt = std::make_unique<Container> ();
+    corrupt->getVFS ().add ("materials/source.tex", "broken compiled texture");
+    corrupt->getVFS ().add ("materials/source.png", encodePng (8, 1));
+    corrupt->getVFS ().add ("materials/source.tex-json", R"({"format":"rgba8888","nomip":true})");
+    CHECK_THROWS (TextureParser::load (AssetLocator (std::move (corrupt)), "source"));
+}
+
 TEST_CASE ("installed TEXB4 corpus decodes every authored conditional mip chain", "[.][texture-corpus]") {
     const char* root = std::getenv ("LWE_TEXTURE_CORPUS");
     REQUIRE (root != nullptr);
