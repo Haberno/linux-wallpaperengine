@@ -16,6 +16,8 @@
 
 Bring **Wallpaper Engine**-style live wallpapers to Linux! This project allows you to run animated wallpapers from Steam’s Wallpaper Engine right on your desktop.
 
+For this fork's completed work and remaining tasks, see the [project checklist](docs/Organized%20all.md) and [documentation index](docs/README.md).
+
 > ⚠️ This is an educational project that evolved into a functional OpenGL-based wallpaper engine for Linux. Expect some limitations and quirks!
 
 ---
