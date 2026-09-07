@@ -21,3 +21,26 @@ Related but not env-gated: the `--render-debug` CLI modes (`pass-log`,
 
 Wallpaper-specific crash, switch and memory findings from the July 2026 corpus
 run are recorded in [WALLPAPER_FINDINGS.md](WALLPAPER_FINDINGS.md).
+
+## Fast corpus validation
+
+Run every installed scene, web and video wallpaper with:
+
+```bash
+tools/validate-corpus.py --jobs 2 --shader-jobs 6 --duration 2 \
+  --out validation-output/fast
+```
+
+`--jobs` bounds concurrent renderer processes; choose it for available RAM and
+VRAM. Shader workers are shared across the run, and identical source/stage pairs
+are compiled once while retaining per-wallpaper failure attribution. The render
+duration starts after the scene opens its private control socket; loading gets a
+separate `--startup-timeout` (90 seconds by default). Every item must render frames
+and exit cleanly. The report is updated after each completed item and includes
+completion, elapsed time and shader-cache counts. No `--ids` or `--projection`
+filter means the entire corpus; non-wallpaper asset packs are recorded as SKIP.
+
+This is a startup/render/shader smoke test. It does not establish long-term
+stability, visual parity, or audio playback (`--silent` skips sound loading).
+Run the validator's regression tests with
+`python3 -m unittest discover -s tools/tests -v`.
