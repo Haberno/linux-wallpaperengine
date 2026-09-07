@@ -774,9 +774,7 @@ void CPass::setupShaders () {
 
 	    try {
 		registerTextureMetadata (
-		    index, this->getContext ().resolveTexture (
-			       name, this->m_renderable.getScene ().getAssetLocator ()
-			   )
+		    index, this->m_renderable.getScene ().resolveTexture (name)
 		);
 	    } catch (const std::runtime_error&) {
 		// setupTextureUniforms reports unresolved authored textures later;
@@ -889,7 +887,7 @@ void CPass::setupTextureUniforms () {
 	try {
 	    auto texture = textureName.find ("_rt_") == 0 || textureName.find ("_alias_") == 0
 		? this->resolveFBO (textureName)
-		: this->getContext ().resolveTexture (textureName, this->m_renderable.getScene ().getAssetLocator ());
+		: this->m_renderable.getScene ().resolveTexture (textureName);
 
 	    // create chain entry
 	    this->m_textures[index] = std::make_shared<TextureChainEntry> (TextureChainEntry {
@@ -905,7 +903,7 @@ void CPass::setupTextureUniforms () {
 	try {
 	    auto texture = textureName.find ("_rt_") == 0 || textureName.find ("_alias_") == 0
 		? this->resolveFBO (textureName)
-		: this->getContext ().resolveTexture (textureName, this->m_renderable.getScene ().getAssetLocator ());
+		: this->m_renderable.getScene ().resolveTexture (textureName);
 
 	    const auto it = this->m_textures.find (index);
 	    const auto chain = std::make_shared<TextureChainEntry> (TextureChainEntry {
@@ -923,7 +921,7 @@ void CPass::setupTextureUniforms () {
 	try {
 	    auto texture = textureName.find ("_rt_") == 0 || textureName.find ("_alias_") == 0
 		? this->resolveFBO (textureName)
-		: this->getContext ().resolveTexture (textureName, this->m_renderable.getScene ().getAssetLocator ());
+		: this->m_renderable.getScene ().resolveTexture (textureName);
 
 	    const auto it = this->m_textures.find (index);
 	    const auto chain = std::make_shared<TextureChainEntry> (TextureChainEntry {
@@ -941,7 +939,7 @@ void CPass::setupTextureUniforms () {
 	try {
 	    auto texture = textureName.find ("_rt_") == 0 || textureName.find ("_alias_") == 0
 		? this->resolveFBO (textureName)
-		: this->getContext ().resolveTexture (textureName, this->m_renderable.getScene ().getAssetLocator ());
+		: this->m_renderable.getScene ().resolveTexture (textureName);
 
 	    const auto it = this->m_textures.find (index);
 	    const auto chain = std::make_shared<TextureChainEntry> (TextureChainEntry {
@@ -960,7 +958,7 @@ void CPass::setupTextureUniforms () {
 	try {
 	    auto texture = textureName.find ("_rt_") == 0 || textureName.find ("_alias_") == 0
 		? this->resolveFBO (textureName)
-		: this->getContext ().resolveTexture (textureName, this->m_renderable.getScene ().getAssetLocator ());
+		: this->m_renderable.getScene ().resolveTexture (textureName);
 
 	    const auto it = this->m_textures.find (index);
 	    const auto chain = std::make_shared<TextureChainEntry> (TextureChainEntry {
@@ -978,7 +976,7 @@ void CPass::setupTextureUniforms () {
 	try {
 	    auto texture = textureName.find ("_rt_") == 0 || textureName.find ("_alias_") == 0
 		? this->resolveFBO (textureName)
-		: this->getContext ().resolveTexture (textureName, this->m_renderable.getScene ().getAssetLocator ());
+		: this->m_renderable.getScene ().resolveTexture (textureName);
 
 	    const auto it = this->m_textures.find (index);
 	    const auto chain = std::make_shared<TextureChainEntry> (TextureChainEntry {
