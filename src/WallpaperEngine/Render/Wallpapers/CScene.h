@@ -47,6 +47,8 @@ public:
     void setScriptCameraTransform (const CameraTransform& transform);
 
     [[nodiscard]] const Scene& getScene () const;
+    /** Authored textures resolve against this scene's assets and user properties. */
+    [[nodiscard]] std::shared_ptr<const TextureProvider> resolveTexture (const std::string& name) const;
 
     [[nodiscard]] int getWidth () const override;
     [[nodiscard]] int getHeight () const override;

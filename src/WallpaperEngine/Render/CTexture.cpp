@@ -1,4 +1,5 @@
 #include "CTexture.h"
+#include "WallpaperEngine/Debug/RenderHealth.h"
 #include "WallpaperEngine/Logging/Log.h"
 
 #include <algorithm>
@@ -12,8 +13,14 @@
 
 using namespace WallpaperEngine::Render;
 
-CTexture::CTexture (RenderContext& context, TextureUniquePtr header) :
-    Helpers::ContextAware (context), m_header (std::move (header)) {
+CTexture::CTexture (
+    RenderContext& context, TextureUniquePtr header, Data::Parsers::TextureParser::VariantSelector selector
+) : Helpers::ContextAware (context), m_header (std::move (header)), m_variantSelector (std::move (selector)) {
+    if (this->m_variantSelector && this->m_header->variantSource) {
+	this->m_variantSelection
+	    = Data::Parsers::TextureParser::selectedVariants (*this->m_header, this->m_variantSelector);
+	this->m_header = Data::Parsers::TextureParser::selectVariants (*this->m_header, this->m_variantSelector);
+    }
     // ensure the header is parsed
     this->setupResolution ();
     const GLint internalFormat = this->setupInternalFormat ();
@@ -342,7 +349,7 @@ float CTexture::getSpritesheetDuration () const { return this->getHeader ().spri
 size_t CTexture::getRetainedCpuBytes () const {
     // image textures free their CPU-side buffers after the GL upload in the constructor,
     // but the video path keeps the whole file pinned so mpv can stream from memory
-    size_t bytes = 0;
+    size_t bytes = this->m_header->variantSource ? this->m_header->variantSource->size () : 0;
 
     for (const auto& [index, mipmaps] : this->m_header->images) {
 	for (const auto& mipmap : mipmaps) {
@@ -368,8 +375,33 @@ void CTexture::decrementUsageCount () const {
 }
 
 void CTexture::update () const {
+    // Providers are exposed as const to render passes; mutation stays on the GL
+    // thread, just as it does for the video player below.
+    if (this->m_variantSelector) {
+	const_cast<CTexture*> (this)->refreshVariant ();
+    }
     if (this->m_player) {
 	this->m_player->render ();
+    }
+}
+
+void CTexture::refreshVariant () {
+    const auto selection = Data::Parsers::TextureParser::selectedVariants (*this->m_header, this->m_variantSelector);
+    if (selection == this->m_variantSelection) {
+	return;
+    }
+    this->m_variantSelection = selection;
+    try {
+	auto parsed = Data::Parsers::TextureParser::selectVariants (*this->m_header, this->m_variantSelector);
+	CTexture replacement (this->getContext (), std::move (parsed));
+	std::swap (this->m_header, replacement.m_header);
+	std::swap (this->m_textureID, replacement.m_textureID);
+	std::swap (this->m_resolution, replacement.m_resolution);
+	std::swap (this->m_approximateGpuBytes, replacement.m_approximateGpuBytes);
+	Debug::RenderHealth::record ("texture.variant_update", std::to_string (selection.size ()));
+    } catch (const std::exception& error) {
+	// Preserve the last complete texture and retry when the property changes again.
+	sLog.error ("Cannot select texture variant: ", error.what ());
     }
 }
 

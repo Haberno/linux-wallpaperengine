@@ -3,6 +3,7 @@
 #include "Helpers/ContextAware.h"
 #include "TextureProvider.h"
 #include "WallpaperEngine/Data/Assets/Texture.h"
+#include "WallpaperEngine/Data/Parsers/TextureParser.h"
 #include "WallpaperEngine/VideoPlayback/MPV/GLPlayer.h"
 
 #include <GL/glew.h>
@@ -23,7 +24,9 @@ using namespace WallpaperEngine::VideoPlayback::MPV;
  */
 class CTexture final : public TextureProvider, public Helpers::ContextAware {
 public:
-    explicit CTexture (RenderContext& context, TextureUniquePtr header);
+    explicit CTexture (
+	RenderContext& context, TextureUniquePtr header, Data::Parsers::TextureParser::VariantSelector selector = {}
+    );
     ~CTexture () override;
 
     /**
@@ -71,12 +74,13 @@ public:
      */
     void update () const override;
     bool isReady () const override;
+    /** Parsed metadata, including a packed source when the texture has variants. */
+    [[nodiscard]] const Texture& getHeader () const;
 
 private:
     /**
      * @return The texture header
      */
-    [[nodiscard]] const Texture& getHeader () const;
 
     /**
      * Calculate's texture's resolution vec4
@@ -101,5 +105,8 @@ private:
     size_t m_approximateGpuBytes = 0;
     /** The video player in use */
     GLPlayerUniquePtr m_player;
+    Data::Parsers::TextureParser::VariantSelector m_variantSelector;
+    std::vector<uint32_t> m_variantSelection;
+    void refreshVariant ();
 };
 } // namespace WallpaperEngine::Assets

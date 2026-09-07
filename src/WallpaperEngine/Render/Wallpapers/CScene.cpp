@@ -1519,3 +1519,7 @@ void CScene::moveLayerToScriptableIndex (CObject* layer, int index) {
     }
     order.insert (insertPos, layer);
 }
+
+std::shared_ptr<const TextureProvider> CScene::resolveTexture (const std::string& name) const {
+    return this->getContext ().resolveTexture (name, this->getAssetLocator (), this->getScene ().project.properties);
+}

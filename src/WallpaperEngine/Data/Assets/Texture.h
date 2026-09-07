@@ -7,6 +7,7 @@
 #include <vector>
 
 #include "Types.h"
+#include "WallpaperEngine/Data/JSON.h"
 
 namespace WallpaperEngine::Data::Assets {
 enum ContainerVersion {
@@ -158,6 +159,13 @@ struct Frame {
     float height2 = 0.0f;
 };
 
+struct TextureVariant {
+    uint32_t group = 0;
+    uint32_t id = 0;
+    uint32_t flags = 0;
+    WallpaperEngine::Data::JSON::JSON condition;
+};
+
 struct Texture {
     /** The version of the texture container */
     ContainerVersion containerVersion = ContainerVersion_UNKNOWN;
@@ -187,6 +195,10 @@ struct Texture {
     uint32_t imageCount = 0;
     /** List of mipmaps */
     std::map<uint32_t, MipmapList> images {};
+    /** TEXB0004 conditions, in authored priority order. */
+    std::vector<TextureVariant> variants;
+    /** Original packed bytes, retained only for textures that can change variants. */
+    std::shared_ptr<const std::string> variantSource;
     /** List of animation frames */
     std::vector<FrameSharedPtr> frames {};
 

@@ -1,6 +1,11 @@
+#include "WallpaperEngine/Data/Model/Property.h"
+#include "WallpaperEngine/Data/Utils/ScopeGuard.h"
 #include <atomic>
 #include <cmath>
 #include <cstring>
+#include <limits>
+#include <set>
+#include <sstream>
 #include <thread>
 
 #include <lz4.h>
@@ -18,6 +23,21 @@ void WallpaperEngine::Data::Assets::freeDecodedPixels (void* pixels) {
 }
 
 namespace {
+size_t remainingBytes (const BinaryReader& file) {
+    auto& input = file.base ();
+    const auto position = input.tellg ();
+    input.seekg (0, std::ios::end);
+    const auto end = input.tellg ();
+    input.seekg (static_cast<std::streamoff> (position), std::ios::beg);
+    return static_cast<size_t> (end - position);
+}
+
+void checkPayloadSize (const BinaryReader& file, int stored, int unpacked) {
+    if (stored <= 0 || unpacked <= 0 || unpacked > (1 << 30) || static_cast<size_t> (stored) > remainingBytes (file)) {
+	throw std::runtime_error ("Invalid or truncated texture payload");
+    }
+}
+
 void decodeMipmap (Mipmap& mipmap) {
     int width = 0, height = 0, fileChannels = 0;
     stbi_uc* pixels = stbi_load_from_memory (
@@ -92,17 +112,32 @@ void TextureParser::decodeMipmaps (const std::vector<Texture*>& textures) {
     worker ();
 }
 
-TextureUniquePtr TextureParser::parse (const BinaryReader& file) {
+TextureUniquePtr TextureParser::parse (const BinaryReader& file) { return parse (file, VariantSelector {}); }
+
+TextureUniquePtr TextureParser::parse (const BinaryReader& file, const VariantSelector& selector) {
+    // BinaryReader is also used by older parsers. Require complete reads here so a
+    // truncated patch cannot turn an unchecked integer/string read into an allocation.
+    auto& input = file.base ();
+    const auto exceptions = input.exceptions ();
+    input.exceptions (std::ios::failbit | std::ios::badbit);
+    const ScopeGuard restoreExceptions ([&] { input.exceptions (exceptions); });
     auto result = std::make_unique<Texture> ();
 
     parseTextureHeader (*result, file);
     parseContainer (*result, file);
+    const auto selected = selectedVariants (*result, selector);
+    if (result->imageCount == 0 || result->imageCount > 16384) {
+	throw std::runtime_error ("Invalid texture image count");
+    }
 
     // a rejected mipmap leaves the read position mid-payload, so nothing after it can be trusted
     bool truncated = false;
 
     for (uint32_t image = 0; image < result->imageCount && !truncated; image++) {
 	const uint32_t mipmapCount = file.nextUInt32 ();
+	if (mipmapCount == 0 || mipmapCount > 32) {
+	    throw std::runtime_error ("Invalid texture mip count");
+	}
 	MipmapList mipmaps;
 
 	for (uint32_t mipmap = 0; mipmap < mipmapCount; mipmap++) {
@@ -113,6 +148,9 @@ TextureUniquePtr TextureParser::parse (const BinaryReader& file) {
 		break;
 	    }
 
+	    if (!result->variants.empty ()) {
+		parseVariantPatches (*parsed, *result, file, selected);
+	    }
 	    mipmaps.emplace_back (std::move (parsed));
 	}
 
@@ -136,21 +174,6 @@ MipmapSharedPtr TextureParser::parseMipmap (const BinaryReader& file, const Text
     auto result = std::make_shared<Mipmap> ();
     const bool isVideo = (header.flags & TextureFlags_Video) != 0;
 
-    // Still-image TEXB0004 mipmaps prefix the ordinary dimensions with editor metadata.
-    // Video TEXB0004 mipmaps do not: their width starts immediately after the mip count,
-    // followed by height/compression/sizes and the embedded MP4 bytes.
-    if (header.containerVersion == ContainerVersion_TEXB0004 && !isVideo) {
-	// some integers that we can ignore as they only seem to affect
-	// the editor
-	std::ignore = file.nextUInt32 ();
-	std::ignore = file.nextUInt32 ();
-	// this format includes some json in the header that we might need
-	// to parse at some point...
-	result->json = file.nextNullTerminatedString ();
-	// last ignorable integer
-	std::ignore = file.nextUInt32 ();
-    }
-
     result->width = file.nextUInt32 ();
     result->height = file.nextUInt32 ();
 
@@ -172,6 +195,7 @@ MipmapSharedPtr TextureParser::parseMipmap (const BinaryReader& file, const Text
 
 	result->uncompressedSize = result->compressedSize;
 	result->compression = 0;
+	checkPayloadSize (file, result->compressedSize, result->uncompressedSize);
 	result->uncompressedData = std::make_unique<char[]> (result->uncompressedSize);
 	file.next (result->uncompressedData.get (), result->uncompressedSize);
 	return result;
@@ -183,19 +207,12 @@ MipmapSharedPtr TextureParser::parseMipmap (const BinaryReader& file, const Text
 	result->uncompressedSize = result->compressedSize;
     }
 
-    // TEXB0004 containers with a variant table (conditionalImages > 1) interleave the alternate
-    // images' payloads between the base image's mipmap levels, so the read position after mip0 is
-    // variant data, not the next header. that layout is not decoded yet, and the garbage header
-    // used to reach LZ4 and abort the whole wallpaper. report the level as unusable instead; the
-    // caller keeps the levels parsed so far and CTexture sizes GL_TEXTURE_MAX_LEVEL off that count,
-    // so the texture stays mipmap-complete
-    // ponytail: costs the smaller mipmaps on those textures, drop it once the variant header is
-    // reverse-engineered (2924081598, 3766299002)
     if (result->width == 0 || result->height == 0 || result->compression > 1 || result->compressedSize <= 0
 	|| result->uncompressedSize <= 0) {
 	return nullptr;
     }
 
+    checkPayloadSize (file, result->compressedSize, result->uncompressedSize);
     result->uncompressedData = std::unique_ptr<char[]> (new char[result->uncompressedSize]);
 
     if (result->compression == 1) {
@@ -208,7 +225,7 @@ MipmapSharedPtr TextureParser::parseMipmap (const BinaryReader& file, const Text
 	    result->uncompressedSize
 	);
 
-	if (bytes < 0) {
+	if (bytes != result->uncompressedSize) {
 	    sLog.exception ("Cannot decompress texture data, LZ4_decompress_safe returned an error");
 	}
 
@@ -355,18 +372,18 @@ void TextureParser::parseContainer (Texture& header, const BinaryReader& file) {
 	    header.freeImageFormat = FIF_MP4;
 	}
 
-	// default to TEXB0003 format here
-	if (header.freeImageFormat != FIF_MP4) {
-	    header.containerVersion = ContainerVersion_TEXB0003;
-
-	    // the variant table sits between the container header and the base image, which uses
-	    // the plain TEXB0003 mipmap layout. Skip it so the base image parses; that is the
-	    // variant the property falls back to and the only one the engine can pick today.
+	if (!(header.flags & TextureFlags_Video)) {
+	    if (conditionalImages > 16384) {
+		throw std::runtime_error ("Invalid texture variant count");
+	    }
 	    for (uint32_t variant = 0; variant < conditionalImages; variant++) {
-		std::ignore = file.nextUInt32 ();
-		std::ignore = file.nextUInt32 ();
-		std::ignore = file.nextUInt32 ();
-		std::ignore = file.nextNullTerminatedString ();
+		TextureVariant entry;
+		entry.group = file.nextUInt32 ();
+		entry.id = file.nextUInt32 ();
+		entry.flags = file.nextUInt32 ();
+		const auto metadata = JSON::parse (file.nextNullTerminatedString ());
+		entry.condition = metadata.value ("condition", JSON ());
+		header.variants.emplace_back (std::move (entry));
 	    }
 	}
     } else if (strncmp (magic, "TEXB0003", 9) == 0) {
@@ -548,4 +565,199 @@ void TextureParser::parseSpritesheetMetadata (
     } catch (const std::exception&) {
 	// .tex-json file is optional, only used for spritesheet data
     }
+}
+
+bool TextureParser::matchesCondition (const JSON& condition, const Properties& properties) {
+    const std::string name = condition.is_string () ? condition.get<std::string> ()
+	: condition.is_object ()                    ? condition.value ("name", std::string {})
+						    : std::string {};
+    const auto property = properties.find (name);
+    if (property == properties.end ()) {
+	return false;
+    }
+    if (condition.is_string ()) {
+	return property->second->getBool ();
+    }
+    const auto expected = condition.find ("condition");
+    return expected != condition.end () && expected->is_string ()
+	&& property->second->toString () == expected->get<std::string> ();
+}
+
+std::vector<uint32_t> TextureParser::selectedVariants (const Texture& texture, const VariantSelector& selector) {
+    std::set<uint32_t> groups;
+    std::vector<uint32_t> selected;
+    if (selector) {
+	for (const auto& variant : texture.variants) {
+	    // Native TEXB4 selects the first matching condition in each group.
+	    if (!groups.contains (variant.group) && selector (variant.condition)) {
+		groups.insert (variant.group);
+		selected.push_back (variant.id);
+	    }
+	}
+    }
+    return selected;
+}
+
+void TextureParser::parseVariantPatches (
+    Mipmap& mipmap, const Texture& header, const BinaryReader& file, const std::vector<uint32_t>& selected
+) {
+    // TEXB4: base mip payload, group count, then a patch count per group.
+    // Each patch has version/id/x/y/width/height/FIF/byte count, followed by bytes.
+    // LZ4 compression is inherited from the base mip, not encoded in the patch.
+    const auto groups = file.nextUInt32 ();
+    if (groups > 16384) {
+	throw std::runtime_error ("Invalid texture patch group count");
+    }
+    for (uint32_t group = 0; group < groups; ++group) {
+	const auto count = file.nextUInt32 ();
+	if (count > remainingBytes (file) / 32) {
+	    throw std::runtime_error ("Truncated texture patch table");
+	}
+	for (uint32_t index = 0; index < count; ++index) {
+	    std::ignore = file.nextUInt32 (); // record version (1 in authored assets)
+	    const auto id = file.nextUInt32 ();
+	    const auto x = file.nextUInt32 ();
+	    const auto y = file.nextUInt32 ();
+	    const auto width = file.nextUInt32 ();
+	    const auto height = file.nextUInt32 ();
+	    std::ignore = file.nextUInt32 (); // patch FIF; stbi identifies image bytes itself
+	    const auto size = file.nextInt ();
+	    if (size < 0 || static_cast<size_t> (size) > remainingBytes (file)) {
+		throw std::runtime_error ("Truncated texture variant payload");
+	    }
+	    if (std::ranges::find (selected, id) == selected.end () || size == 0) {
+		file.base ().seekg (size, std::ios::cur);
+		continue;
+	    }
+	    const auto variant = std::ranges::find (header.variants, id, &TextureVariant::id);
+	    if (variant == header.variants.end ()) {
+		throw std::runtime_error ("Unknown texture variant id");
+	    }
+	    if (width == 0 || height == 0 || x > mipmap.width || width > mipmap.width - x || y > mipmap.height
+		|| height > mipmap.height - y) {
+		throw std::runtime_error ("Texture variant patch lies outside the mipmap");
+	    }
+	    std::string payload (size, '\0');
+	    file.next (payload.data (), payload.size ());
+	    if (variant->flags & 2) {
+		// A replacement payload discards the base and earlier patches.
+		mipmap.decodedData.reset ();
+		mipmap.uncompressedSize = size;
+		mipmap.uncompressedData = std::make_unique<char[]> (size);
+		std::memcpy (mipmap.uncompressedData.get (), payload.data (), size);
+		continue;
+	    }
+
+	    const bool imageFormat = header.freeImageFormat != FIF_UNKNOWN;
+	    const bool blocks = !imageFormat
+		&& (header.format == TextureFormat_DXT1 || header.format == TextureFormat_DXT3
+		    || header.format == TextureFormat_DXT5 || header.format == TextureFormat_BC7)
+		&& static_cast<size_t> (mipmap.uncompressedSize)
+		    != static_cast<size_t> (mipmap.width) * mipmap.height * 4;
+	    const size_t unit = blocks                ? (header.format == TextureFormat_DXT1 ? 8 : 16)
+		: imageFormat                         ? 4
+		: header.format == TextureFormat_R8   ? 1
+		: header.format == TextureFormat_RG88 ? 2
+						      : 4;
+	    const size_t columns = blocks ? (width + 3) / 4 : width;
+	    const size_t rows = blocks ? (height + 3) / 4 : height;
+	    const size_t stride = (blocks ? (mipmap.width + 3) / 4 : mipmap.width) * unit;
+	    const size_t patchSize = columns * rows * unit;
+	    if (patchSize > (1 << 30) || (blocks && (x % 4 != 0 || y % 4 != 0))) {
+		throw std::runtime_error ("Invalid texture variant block layout");
+	    }
+	    std::vector<char> unpacked;
+	    DecodedPixelsPtr decoded;
+	    const char* source = payload.data ();
+	    size_t sourceSize = payload.size ();
+	    if (mipmap.compression == 1) {
+		unpacked.resize (patchSize);
+		const int bytes
+		    = LZ4_decompress_safe (payload.data (), unpacked.data (), size, static_cast<int> (patchSize));
+		if (bytes != static_cast<int> (patchSize)) {
+		    throw std::runtime_error ("Cannot decompress texture variant data");
+		}
+		source = unpacked.data ();
+		sourceSize = unpacked.size ();
+	    } else if (imageFormat) {
+		int decodedWidth = 0, decodedHeight = 0, channels = 0;
+		decoded.reset (stbi_load_from_memory (
+		    reinterpret_cast<const unsigned char*> (source), size, &decodedWidth, &decodedHeight, &channels, 4
+		));
+		if (!decoded || decodedWidth != static_cast<int> (width)
+		    || decodedHeight != static_cast<int> (height)) {
+		    throw std::runtime_error ("Invalid texture variant image");
+		}
+		source = reinterpret_cast<const char*> (decoded.get ());
+		sourceSize = patchSize;
+	    }
+	    char* target = mipmap.uncompressedData.get ();
+	    size_t targetSize = mipmap.uncompressedSize;
+	    if (imageFormat) {
+		if (!mipmap.decodedData) {
+		    decodeMipmap (mipmap);
+		}
+		if (!mipmap.decodedData || mipmap.decodedWidth != static_cast<int> (mipmap.width)
+		    || mipmap.decodedHeight != static_cast<int> (mipmap.height)) {
+		    throw std::runtime_error ("Invalid base image for texture variant");
+		}
+		target = reinterpret_cast<char*> (mipmap.decodedData.get ());
+		targetSize = static_cast<size_t> (mipmap.width) * mipmap.height * 4;
+	    }
+	    const size_t offset = (blocks ? y / 4 : y) * stride + (blocks ? x / 4 : x) * unit;
+	    if (sourceSize != patchSize || offset + (rows - 1) * stride + columns * unit > targetSize) {
+		throw std::runtime_error ("Texture variant payload size does not match its rectangle");
+	    }
+	    for (size_t row = 0; row < rows; ++row) {
+		auto* destination = reinterpret_cast<unsigned char*> (target + offset + row * stride);
+		const auto* pixels = reinterpret_cast<const unsigned char*> (source + row * columns * unit);
+		if (variant->flags & 1) {
+		    if (unit != 4 || blocks) {
+			throw std::runtime_error ("Texture variant blending requires RGBA pixels");
+		    }
+		    for (size_t pixel = 0; pixel < columns; ++pixel) {
+			const int alpha = pixels[pixel * 4 + 3];
+			for (size_t channel = 0; channel < 3; ++channel) {
+			    const size_t at = pixel * 4 + channel;
+			    destination[at] = destination[at] + ((pixels[at] - destination[at]) * alpha >> 8);
+			}
+			destination[pixel * 4 + 3] = std::max (destination[pixel * 4 + 3], pixels[pixel * 4 + 3]);
+		    }
+		} else {
+		    std::memcpy (destination, pixels, columns * unit);
+		}
+	    }
+	}
+    }
+}
+
+TextureUniquePtr TextureParser::selectVariants (const Texture& texture, const VariantSelector& selector) {
+    if (!texture.variantSource) {
+	throw std::runtime_error ("Texture has no retained variant source");
+    }
+    const auto input = std::make_shared<std::istringstream> (*texture.variantSource, std::ios::binary);
+    auto result = parse (BinaryReader (input), selector);
+    result->variantSource = texture.variantSource;
+    result->spritesheetCols = texture.spritesheetCols;
+    result->spritesheetRows = texture.spritesheetRows;
+    result->spritesheetFrames = texture.spritesheetFrames;
+    result->spritesheetDuration = texture.spritesheetDuration;
+    decodeMipmaps (*result);
+    return result;
+}
+
+TextureUniquePtr
+TextureParser::load (const WallpaperEngine::Assets::AssetLocator& locator, const std::string& filename) {
+    const auto metadataLoader = [&locator] (const std::string& name) {
+	return locator.readString (std::filesystem::path ("materials") / name);
+    };
+    const auto compiled = locator.texture (filename);
+    auto result = parse (BinaryReader (compiled), filename, metadataLoader);
+    if (!result->variants.empty ()) {
+	compiled->seekg (0, std::ios::beg);
+	result->variantSource = std::make_shared<const std::string> (
+	    std::istreambuf_iterator<char> (*compiled), std::istreambuf_iterator<char> ()
+	);
+    }
+    return result;
 }

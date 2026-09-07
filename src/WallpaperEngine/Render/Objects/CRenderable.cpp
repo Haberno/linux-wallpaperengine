@@ -26,7 +26,7 @@ void CRenderable::detectTexture () {
 	    // instead of feeding the completed scene back through their effects.
 	    this->m_texture = this->find (textureName);
 	} else {
-	    this->m_texture = this->getContext ().resolveTexture (textureName, this->getScene ().getAssetLocator ());
+	    this->m_texture = this->getScene ().resolveTexture (textureName);
 	}
     }
 }

@@ -92,17 +92,7 @@ std::shared_ptr<const TextureProvider> TextureCache::resolve (const std::string&
     // search for the texture in all the different containers just in case
     for (const auto& project : this->getContext ().getApp ().getBackgrounds () | std::views::values) {
 	try {
-	    const auto contents = project->assetLocator->texture (filename);
-	    auto stream = BinaryReader (contents);
-
-	    // Create metadata loader lambda that captures the assetLocator
-	    // so we need to construct the full path here
-	    auto metadataLoader = [&project] (const std::string& metaFilename) -> std::string {
-		std::filesystem::path fullPath = std::filesystem::path ("materials") / metaFilename;
-		return project->assetLocator->readString (fullPath);
-	    };
-
-	    auto parsedTexture = TextureParser::parse (stream, filename, metadataLoader);
+	    auto parsedTexture = TextureParser::load (*project->assetLocator, filename);
 	    auto texture = std::make_shared<CTexture> (this->getContext (), std::move (parsedTexture));
 
 #if !NDEBUG
@@ -142,13 +132,7 @@ TextureCache::resolve (const std::string& filename, const AssetLocator& assetLoc
     // thread; anything landing here is a texture the batch prefetch failed to cover
     Debug::RenderHealth::record ("texture.sync_load", filename);
 
-    const auto contents = assetLocator.texture (filename);
-    auto stream = BinaryReader (contents);
-    auto metadataLoader = [&assetLocator] (const std::string& metaFilename) -> std::string {
-	return assetLocator.readString (std::filesystem::path ("materials") / metaFilename);
-    };
-
-    auto parsedTexture = TextureParser::parse (stream, filename, metadataLoader);
+    auto parsedTexture = TextureParser::load (assetLocator, filename);
     auto texture = std::make_shared<CTexture> (this->getContext (), std::move (parsedTexture));
 
 #if !NDEBUG
@@ -266,4 +250,32 @@ void TextureCache::trim () {
 	this->m_cacheBytes -= it->second.approximateBytes;
 	this->m_textureCache.erase (it);
     }
+}
+
+std::shared_ptr<const TextureProvider> TextureCache::resolve (
+    const std::string& filename, const AssetLocator& assetLocator, const Data::Model::Properties& properties
+) {
+    const auto base = this->resolve (filename, assetLocator);
+    const auto texture = std::dynamic_pointer_cast<const CTexture> (base);
+    if (!texture || !texture->getHeader ().variantSource) {
+	return base;
+    }
+    // Property objects are shared by one Project, not by its mount fingerprint.
+    // Holding these shared_ptrs also prevents an address from being reused while
+    // its bound texture is cached. Normal textures retain cross-project reuse.
+    std::string key = scopedKey (filename, assetLocator) + '\x1f' + "properties";
+    for (const auto& [name, property] : properties) {
+	key += ':' + std::to_string (reinterpret_cast<uintptr_t> (property.get ()));
+    }
+    if (const auto found = this->m_textureCache.find (key); found != this->m_textureCache.end ()) {
+	found->second.lastUsed = ++this->m_useCounter;
+	return found->second.texture;
+    }
+    const auto selector = [properties] (const Data::JSON::JSON& condition) {
+	return TextureParser::matchesCondition (condition, properties);
+    };
+    auto parsed = TextureParser::selectVariants (texture->getHeader (), {});
+    auto bound = std::make_shared<CTexture> (this->getContext (), std::move (parsed), selector);
+    this->store (key, bound);
+    return bound;
 }

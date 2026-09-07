@@ -137,6 +137,12 @@ RenderContext::resolveTexture (const std::string& name, const Assets::AssetLocat
     return this->m_textureCache->resolve (name, assetLocator);
 }
 
+std::shared_ptr<const TextureProvider> RenderContext::resolveTexture (
+    const std::string& name, const Assets::AssetLocator& assetLocator, const Data::Model::Properties& properties
+) const {
+    return this->m_textureCache->resolve (name, assetLocator, properties);
+}
+
 void RenderContext::storeTexture (const std::string& name, std::shared_ptr<const TextureProvider> texture) const {
     this->m_textureCache->store (name, std::move (texture));
 }

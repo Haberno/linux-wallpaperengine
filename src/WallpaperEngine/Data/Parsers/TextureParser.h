@@ -5,6 +5,7 @@
 #include <functional>
 #include <iostream>
 
+#include "WallpaperEngine/Assets/AssetLocator.h"
 #include "WallpaperEngine/Data/JSON.h"
 #include "WallpaperEngine/Data/Model/Types.h"
 #include "WallpaperEngine/Data/Utils/BinaryReader.h"
@@ -17,7 +18,13 @@ using namespace WallpaperEngine::Data::Model;
 
 class TextureParser {
 public:
+    using VariantSelector = std::function<bool (const JSON&)>;
     static TextureUniquePtr parse (const BinaryReader& file);
+    static TextureUniquePtr parse (const BinaryReader& file, const VariantSelector& selector);
+    static TextureUniquePtr load (const WallpaperEngine::Assets::AssetLocator& locator, const std::string& filename);
+    static TextureUniquePtr selectVariants (const Texture& texture, const VariantSelector& selector);
+    static std::vector<uint32_t> selectedVariants (const Texture& texture, const VariantSelector& selector);
+    static bool matchesCondition (const JSON& condition, const Properties& properties);
     static TextureUniquePtr parse (
 	const BinaryReader& file, const std::string& filename,
 	std::function<std::string (const std::string&)> metadataLoader
@@ -41,6 +48,9 @@ public:
 private:
     static void parseTextureHeader (Texture& header, const BinaryReader& file);
     static void parseContainer (Texture& header, const BinaryReader& file);
+    static void parseVariantPatches (
+	Mipmap& mipmap, const Texture& header, const BinaryReader& file, const std::vector<uint32_t>& selected
+    );
     static void parseAnimations (Texture& header, const BinaryReader& file);
     static void parseSpritesheetMetadata (
 	Texture& header, const std::string& filename, std::function<std::string (const std::string&)> metadataLoader

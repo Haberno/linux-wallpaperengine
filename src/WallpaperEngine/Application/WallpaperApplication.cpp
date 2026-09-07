@@ -790,14 +790,9 @@ parseProjectTextures (const Project& project) {
 
     for (const auto& name : collectProjectTextures (project)) {
 	try {
-	    const auto contents = project.assetLocator->texture (name);
-	    auto stream = WallpaperEngine::Data::Utils::BinaryReader (contents);
-	    auto metadataLoader = [&project] (const std::string& metaFilename) -> std::string {
-		const auto fullPath = std::filesystem::path ("materials") / metaFilename;
-		return project.assetLocator->readString (fullPath);
-	    };
-
-	    textures.emplace_back (name, WallpaperEngine::Data::Parsers::TextureParser::parse (stream, name, metadataLoader));
+	    textures.emplace_back (
+		name, WallpaperEngine::Data::Parsers::TextureParser::load (*project.assetLocator, name)
+	    );
 	} catch (const std::exception&) {
 	    // ignored, the render thread falls back to loading it synchronously
 	}

@@ -43,6 +43,9 @@ public:
     /** Resolve an asset only within one wallpaper's mounted files and cache namespace. */
     std::shared_ptr<const TextureProvider>
     resolve (const std::string& filename, const Assets::AssetLocator& assetLocator);
+    std::shared_ptr<const TextureProvider> resolve (
+	const std::string& filename, const Assets::AssetLocator& assetLocator, const Data::Model::Properties& properties
+    );
 
     /**
      * Registers a texture in the cache
