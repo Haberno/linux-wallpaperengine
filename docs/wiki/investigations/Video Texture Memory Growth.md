@@ -223,10 +223,15 @@ Checked and clean, so do not re-investigate:
 **Blocked on:** libwayland-client has no debug symbols installed, so the top
 frame resolves only to an address. Installing symbols would name the function.
 
-**Latent bug found while chasing this, not the cause:**
-`WaylandOutputViewport::swapOutput` overwrites `frameCallback` with a fresh
-`wl_surface_frame` proxy without destroying a still-pending one. The steady-state
-callback loop is 1:1 so it does not currently fire, but there is no guard.
+**Latent callback bug fixed (2026-09-08):**
+`WaylandOutputViewport::swapOutput` now retains a pending `frameCallback` and
+requests another only after completion clears the pointer. An early redraw
+therefore cannot overwrite the handle or queue duplicate render callbacks.
+The ordinary callback loop is already 1:1, so this guard does not resolve the
+measured NVIDIA leak above. An isolated Wayland smoke check rendered 152 frames
+at about 30 FPS, survived two output sleep/wake cycles, and exited normally.
+That check validates rendering continuity; it does not reproduce the latent
+early-redraw condition.
 
 ## Engine-side fixes committed during this investigation
 

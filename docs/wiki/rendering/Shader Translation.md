@@ -79,6 +79,42 @@ Two ordering rules, both learned from real breakage (2026-07-31):
 `ShaderIncludes.cpp` preserves line breaks in the late header body so
 `WPE_DUMP_SHADERS` output still lines up with reported error line numbers.
 
+### Include and combo input validation
+
+As of 2026-09-08, include scanning recognizes actual directives outside line
+and block comments, including `# include`. Quoted filenames must open and close
+on the same line and be nonempty; malformed root or nested directives produce
+`Malformed #include` with the shader name and line. Expansion preserves trailing
+comments, including block comments that continue on later lines. Existing
+permissive handling of unavailable stock headers remains unchanged.
+
+Combo metadata with a missing, non-string, empty, or invalid identifier is
+ignored with a diagnostic. Invalid names from material overrides and linked
+units also cannot emit malformed `#define` lines. An otherwise valid combo with
+no default still receives 0. Solid-color sampler defaults and the first-`#if`
+include-placement question remain open.
+
+Verification: 953 assertions across 118 C++ cases pass, including synthetic
+malformed-input cases and successful compilation through glslang/SPIR-V.
+A short three-wallpaper sweep took 18 seconds; all three rendered 45 frames and
+exited normally. Error counters and shader failure lists matched the previous
+full corpus exactly. The validator still reports WARN for Soulless and Mario,
+and FAIL for Moon Lady's eight existing standalone shader failures; these are
+not newly cleared visual-parity bugs.
+
+Manual regression checks (exact installed titles):
+
+| Workshop ID | Wallpaper | Check |
+|---|---|---|
+| 2639381674 | Soulless 4k {Artwork by Ilona Mencner} | Text and effects remain visible; switching away and back keeps animating. |
+| 2924081598 | Super Mario Voxel | The 3D scene, textures, and lighting stay visible without new white/black surfaces. |
+| 3107568889 | Moon Lady 4K [OC] [space sci-fi] [AI] | Existing cloud/fluid effects still animate; fullscreen or monitor sleep/wake resumes rendering. |
+
+These wallpapers exercise ordinary rendering after the fixes. Malformed-input
+failures are reproduced by synthetic tests, not by claiming these wallpapers
+contain malformed includes or empty combo metadata. Temporary reports are in
+`/tmp/lwe-checklist-20260908/`.
+
 ## Float arguments passed to int parameters
 
 HLSL implicitly truncates float expressions passed to int-typed function
