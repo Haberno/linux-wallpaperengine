@@ -374,8 +374,9 @@ Items retained from the old standalone port-review note:
 
 ## P6 — Notable inherited in-code TODOs (scan 2026-07-08)
 
-41. ShaderUnit: malformed `#include` handling (143,182), empty combos (551),
-    solid-color texture creation (660), first-`#if`-block question (302).
+41. ShaderUnit: malformed/commented include handling and empty/invalid combo
+    names are fixed with regression coverage (2026-09-08). Solid-color texture
+    creation and the first-`#if` include-placement question remain open.
 42. FBOProvider: derive FBO format from the material string (12) — handle this
     as part of the real HDR/render-target format pipeline, not the reverted
     global RGBA16F experiment.

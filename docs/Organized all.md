@@ -380,9 +380,9 @@ Sources: [Audio Capture Silence Investigation](wiki/investigations/Audio%20Captu
   Current installed versions and mappings were not inspected in this review.
 - [ ] **Deferred/upstream — track NVIDIA's residual event-queue leak.** Diagnosis
   is complete; a deployed driver fix has not been established here.
-- [ ] **Open — guard a still-pending frame callback before replacing it in
-  `WaylandOutputViewport::swapOutput`.** The investigation identified this
-  separately from the measured leak.
+- [x] Preserve a pending Wayland frame callback during an early redraw instead
+  of overwriting its handle. A headless smoke test rendered 152 frames and
+  survived two output sleep/wake cycles; this is separate from the NVIDIA leak.
 - [ ] **Open — recover or independently validate exact 64→32/16 spectrum
   reduction.** Current peak-preserving pooling is inferred.
 - [ ] **Open — implement `--audio-device` capture-source override.**
@@ -595,8 +595,13 @@ instruction to edit the renderer during documentation work.
 - [ ] **Deferred — fold single-implementation audio interfaces if still worthwhile.**
 - [ ] **Deferred — gate CEF behind `WITH_WEB`**, with packaging/build coverage.
 - [ ] **Deferred — replace trivial literal regex scans only where worthwhile.**
-- [ ] **Open — handle malformed shader includes, empty combos, solid-color
-  texture parameters, and the first-`#if` selection question.** TODOs remain.
+- [x] Validate shader include filenames within their own line; ignore commented
+  includes and support whitespace after `#`. Cover root/nested malformed lines,
+  EOF headers, comments, and successful GLSL translation (2026-09-08).
+- [x] Ignore empty/malformed combo names and prevent invalid macro definitions
+  from metadata, material overrides, and linked units. Keep absent defaults at 0.
+- [ ] **Open — implement solid-color texture parameters and resolve the
+  first-`#if` include-placement question.** These remain separate shader TODOs.
 - [ ] **Open — derive framebuffer formats from authored material settings** as
   part of the proper HDR pipeline.
 - [ ] **Audit — resolve ObjectParser constant shader references, grouping, and
