@@ -17,6 +17,9 @@ extern "C" {
 #undef static
 
 #include <algorithm>
+#include <cerrno>
+#include <cmath>
+#include <poll.h>
 #include <string.h>
 #include <unistd.h>
 
@@ -512,16 +515,49 @@ void WaylandOpenGLDriver::dispatchEventQueue () {
 	}
     }
 
-    // TODO: FRAMETIME CONTROL SHOULD GO BACK TO THE CWALLPAPAERAPPLICATION ONCE ACTUAL PARTICLES ARE IMPLEMENTED
-    // TODO: AS THOSE, MORE THAN LIKELY, WILL REQUIRE OF A DIFFERENT PROCESSING RATE
-
-    // TODO: WRITE A NON-BLOCKING VERSION OF THIS ONCE PARTICLE SIMULATION STARTS WORKING
-    // TODO: OTHERWISE wl_display_dispatch WILL BLOCK IF NO SURFACES ARE BEING DRAWN
     static float startTime, endTime, minimumTime = 1.0f / this->m_context.settings.render.maximumFPS;
-    // get the start time of the frame
     startTime = this->getRenderTime ();
 
-    if (wl_display_dispatch (m_waylandContext.display) == -1) {
+    // A hidden or powered-off output may stop sending frame callbacks indefinitely.
+    // Keep the application loop ticking so IPC and prepared switches still run.
+    // Follow Wayland's prepare/read/cancel protocol: dispatch pending callbacks
+    // before preparing a read, and never leave a prepared read outstanding.
+    auto* display = m_waylandContext.display;
+    while (wl_display_prepare_read (display) != 0) {
+	if (wl_display_dispatch_pending (display) < 0) {
+	    m_requestedExit = true;
+	    return;
+	}
+    }
+
+    const int flushed = wl_display_flush (display);
+    if (flushed < 0 && errno != EAGAIN) {
+	wl_display_cancel_read (display);
+	m_requestedExit = true;
+	return;
+    }
+    pollfd events { wl_display_get_fd (display), static_cast<short> (POLLIN | (flushed < 0 ? POLLOUT : 0)), 0 };
+    const int timeout = std::max (0, static_cast<int> (std::ceil (
+	(minimumTime - (this->getRenderTime () - startTime)) * 1000.0f
+    )));
+    const int ready = poll (&events, 1, timeout);
+    const int pollError = errno;
+    if (ready > 0 && (events.revents & POLLIN)) {
+	if (wl_display_read_events (display) < 0) {
+	    m_requestedExit = true;
+	}
+    } else {
+	wl_display_cancel_read (display);
+    }
+    if ((ready < 0 && pollError != EINTR) || (events.revents & (POLLERR | POLLHUP | POLLNVAL))) {
+	m_requestedExit = true;
+    }
+    if (events.revents & POLLOUT) {
+	if (wl_display_flush (display) < 0 && errno != EAGAIN) {
+	    m_requestedExit = true;
+	}
+    }
+    if (!m_requestedExit && wl_display_dispatch_pending (display) < 0) {
 	m_requestedExit = true;
     }
 

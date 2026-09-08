@@ -56,7 +56,7 @@
 #include <stb_image_write.h>
 #include <thread>
 
-#define FULLSCREEN_CHECK_WAIT_TIME 250
+#define FULLSCREEN_CHECK_WAIT_TIME 10000
 
 float g_Time;
 float g_TimeLast;
@@ -694,7 +694,7 @@ void WallpaperApplication::processControlSocket () {
 	    reply = "ok " + Render::CFBO::getLiveDebugSummary () + "\n";
 	}
 
-	if (write (client, reply.c_str (), reply.size ()) < 0) {
+	if (send (client, reply.c_str (), reply.size (), MSG_NOSIGNAL | MSG_DONTWAIT) < 0) {
 	    sLog.error ("Cannot write control socket reply: ", strerror (errno));
 	}
 
@@ -1060,6 +1060,11 @@ bool WallpaperApplication::applyPreparedSwitch (PreparedSwitch& job) {
 		this->m_browserContext.get (), scaling, clamp
 	    );
 	    buildMs = std::chrono::steady_clock::now () - buildStart;
+
+	    // A replacement built while fullscreen-paused must inherit the pause state.
+	    if (this->m_isPaused) {
+		renderWallpaper->setPause (true);
+	    }
 
 	    // The replacement is valid. Transfer ownership atomically with the render swap;
 	    // the outgoing CWallpaper references the previous Project through the transition.
@@ -1607,6 +1612,11 @@ void WallpaperApplication::setup () {
 }
 
 void WallpaperApplication::render () {
+    // IPC must remain serviceable while fullscreen-paused or waiting for an output
+    // to resume frame callbacks. A queued switch is application work, not a frame.
+    this->processControlSocket ();
+    this->processPreparedSwitches ();
+
     static time_t seconds;
     static struct tm* timeinfo;
 
@@ -1707,11 +1717,7 @@ void WallpaperApplication::render () {
 	}
     }
 
-    this->processControlSocket ();
     this->updatePlaylists ();
-    // apply any switch the loader thread finished preparing; runs on the render
-    // thread as it uploads textures and rebuilds the wallpaper's GL state
-    this->processPreparedSwitches ();
 
     if (!this->m_context.settings.screenshot.take || this->m_screenShotTaken == true) {
 	return;

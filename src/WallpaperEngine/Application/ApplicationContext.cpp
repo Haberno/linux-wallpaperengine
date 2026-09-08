@@ -517,7 +517,7 @@ void ApplicationContext::loadSettingsFromArgv () {
 	.default_value (1.0f)
 	.store_into (this->settings.render.saturation);
 
-    performanceGroup.add_argument ("--no-fullscreen-pause")
+    performanceGroup.add_argument ("--no-fullscreen-pause", "--no-full-screen-pause")
 	.help ("Prevents the background pausing when an app is fullscreen")
 	.flag ()
 	.action ([this] (const std::string& value) -> void { this->settings.render.pauseOnFullscreen = false; });
