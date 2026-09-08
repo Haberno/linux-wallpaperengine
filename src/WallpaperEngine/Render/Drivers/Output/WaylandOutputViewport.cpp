@@ -264,8 +264,13 @@ void WaylandOutputViewport::swapOutput () {
     this->callbackInitialized = true;
 
     this->makeCurrent ();
-    frameCallback = wl_surface_frame (surface);
-    wl_callback_add_listener (frameCallback, &frameListener, this);
+    // A redraw can arrive before the compositor completes the previous frame.
+    // Keep that callback: overwriting it loses the handle and queues duplicate
+    // render callbacks. surfaceFrameCallback clears it when the frame is ready.
+    if (frameCallback == nullptr) {
+	frameCallback = wl_surface_frame (surface);
+	wl_callback_add_listener (frameCallback, &frameListener, this);
+    }
     eglSwapBuffers (m_driver->getEGLContext ()->display, this->eglSurface);
     wl_surface_set_buffer_scale (surface, scale);
     wl_surface_damage_buffer (surface, 0, 0, INT32_MAX, INT32_MAX);
