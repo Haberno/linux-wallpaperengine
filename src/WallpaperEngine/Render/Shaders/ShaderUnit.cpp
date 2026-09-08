@@ -75,8 +75,6 @@
     "#define attribute in\n"                                                                                           \
     "#define varying out\n"
 
-#define DEFINE_COMBO(name, value) "#define " + name + " " + std::to_string (value) + "\n";
-
 using namespace WallpaperEngine::Render;
 using namespace WallpaperEngine::Data::Builders;
 using namespace WallpaperEngine::Render::Shaders;
@@ -207,6 +205,20 @@ struct IncludeDirective {
     size_t end;
     std::string filename;
 };
+
+bool validComboName (std::string_view name) {
+    const auto letter = [] (char c) { return (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || c == '_'; };
+    return !name.empty () && letter (name.front ())
+	&& std::ranges::all_of (name, [&] (char c) { return letter (c) || (c >= '0' && c <= '9'); });
+}
+
+std::string comboDefinition (const std::string& name, int value) {
+    // Material overrides and linked units can also provide empty/invalid names.
+    if (!validComboName (name)) {
+	return {};
+    }
+    return "#define " + name + " " + std::to_string (value) + "\n";
+}
 
 std::optional<IncludeDirective> nextInclude (const std::string& source, const std::string& file) {
     bool blockComment = false;
@@ -1585,7 +1597,12 @@ void ShaderUnit::parseComboConfiguration (const std::string& content, const int 
 	sLog.error ("Cannot parse combo metadata in shader ", this->m_file, ": ", e.what ());
 	return;
     }
-    const auto combo = data.require<std::string> ("combo", "cannot parse combo information");
+    const auto comboEntry = data.find ("combo");
+    if (comboEntry == data.end () || !comboEntry->is_string () || !validComboName (comboEntry->get<std::string> ())) {
+	sLog.error ("Ignoring invalid combo name in shader ", this->m_file, ": ", content);
+	return;
+    }
+    const auto combo = comboEntry->get<std::string> ();
     // ignore type as it seems to be used only on the editor
     // const auto type = data.find ("type");
     const auto defvalue = data.find ("default");
@@ -1617,7 +1634,7 @@ void ShaderUnit::parseComboConfiguration (const std::string& content, const int 
     if (entry == this->m_combos.end () && entryOverride == this->m_overrideCombos.end ()) {
 	// if no combo is defined just load the default settings
 	if (defvalue == data.end ()) {
-	    // TODO: PROPERLY SUPPORT EMPTY COMBOS
+	    // A combo without an authored default uses the caller's disabled value.
 	    this->m_discoveredCombos.emplace (combo, defaultValue);
 	} else if (defvalue->is_number_float ()) {
 	    sLog.exception ("float combos are not supported in shader ", this->m_file, ". ", combo);
@@ -1939,7 +1956,7 @@ const std::string& ShaderUnit::compile () {
 	    std::ranges::transform (name, std::back_inserter (uppercase), ::toupper);
 
 	    if (!addedCombos.contains (uppercase)) {
-		this->m_final += DEFINE_COMBO (uppercase, value);
+		this->m_final += comboDefinition (uppercase, value);
 		addedCombos.emplace (uppercase, true);
 	    }
 	}
@@ -1950,7 +1967,7 @@ const std::string& ShaderUnit::compile () {
 	std::ranges::transform (name, std::back_inserter (uppercase), ::toupper);
 
 	if (!addedCombos.contains (uppercase)) {
-	    this->m_final += DEFINE_COMBO (uppercase, value);
+	    this->m_final += comboDefinition (uppercase, value);
 	    addedCombos.emplace (uppercase, true);
 	}
     }
@@ -1961,7 +1978,7 @@ const std::string& ShaderUnit::compile () {
 	std::ranges::transform (name, std::back_inserter (uppercase), ::toupper);
 
 	if (!addedCombos.contains (uppercase)) {
-	    this->m_final += DEFINE_COMBO (uppercase, value);
+	    this->m_final += comboDefinition (uppercase, value);
 	    addedCombos.emplace (uppercase, true);
 	}
     }
@@ -1971,7 +1988,7 @@ const std::string& ShaderUnit::compile () {
 	std::ranges::transform (name, std::back_inserter (uppercase), ::toupper);
 
 	if (!addedCombos.contains (uppercase)) {
-	    this->m_final += DEFINE_COMBO (uppercase, value);
+	    this->m_final += comboDefinition (uppercase, value);
 	    addedCombos.emplace (uppercase, true);
 	}
     }
@@ -1982,7 +1999,7 @@ const std::string& ShaderUnit::compile () {
 	    std::ranges::transform (name, std::back_inserter (uppercase), ::toupper);
 
 	    if (!addedCombos.contains (uppercase)) {
-		this->m_final += DEFINE_COMBO (uppercase, value);
+		this->m_final += comboDefinition (uppercase, value);
 		addedCombos.emplace (uppercase, true);
 	    }
 	}
@@ -1992,7 +2009,7 @@ const std::string& ShaderUnit::compile () {
 	    std::ranges::transform (name, std::back_inserter (uppercase), ::toupper);
 
 	    if (!addedCombos.contains (uppercase)) {
-		this->m_final += DEFINE_COMBO (uppercase, value);
+		this->m_final += comboDefinition (uppercase, value);
 		addedCombos.emplace (uppercase, true);
 	    }
 	}

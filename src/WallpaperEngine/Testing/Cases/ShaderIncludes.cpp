@@ -89,6 +89,35 @@ TEST_CASE ("commented includes are ignored and spaced includes are expanded", "[
     CHECK_FALSE (translated.second.empty ());
 }
 
+TEST_CASE ("invalid combo names do not corrupt shader definitions", "[shader][combo][regression]") {
+    for (const std::string metadata : { "{}", "{\"combo\":null}", "{\"combo\":false}", "{\"combo\":\"\"}",
+					"{\"combo\":\"1INVALID\"}", "{\"combo\":\"HAS SPACE\"}" }) {
+	CAPTURE (metadata);
+	const auto fragment = compileFragment (
+	    "",
+	    "// [COMBO] " + metadata
+		+ "\n// [COMBO] {\"combo\":\"VALID_DEFAULT\"}\n"
+		  "void main() { gl_FragColor = vec4(float(VALID_DEFAULT)); }\n"
+	);
+	CHECK (fragment.find ("#define VALID_DEFAULT 0") != std::string::npos);
+	const auto translated
+	    = GLSLContext::get ().toGlsl ("#version 330\nvoid main() { gl_Position = vec4(0.0); }\n", fragment);
+	CHECK_FALSE (translated.first.empty ());
+	CHECK_FALSE (translated.second.empty ());
+    }
+    const auto [vertex, fragment] = compileLinked (
+	"void main() { gl_Position = vec4(float(VALID)); }\n", "void main() { gl_FragColor = vec4(float(VALID)); }\n",
+	{ { "", 1 }, { "HAS SPACE", 1 }, { "1INVALID", 1 }, { "VALID", 1 } }
+    );
+    CHECK (vertex.find ("#define VALID 1") != std::string::npos);
+    CHECK (fragment.find ("#define VALID 1") != std::string::npos);
+    CHECK (fragment.find ("#define  1") == std::string::npos);
+    CHECK (fragment.find ("#define HAS SPACE") == std::string::npos);
+    const auto translated = GLSLContext::get ().toGlsl (vertex, fragment);
+    CHECK_FALSE (translated.first.empty ());
+    CHECK_FALSE (translated.second.empty ());
+}
+
 TEST_CASE (
     "include macros reach authored helpers without moving header functions before uniforms", "[shader][include]"
 ) {
