@@ -18,8 +18,8 @@ Two different paths cost time, and they fail differently:
   thread is a visible stall.
 
 Both are instrumented by `WPE_HEALTH_REPORT` (ledger:
-`src/WallpaperEngine/Debug/README.md`, usage in [[Debugging Workflow]]). Nothing
-here is inferred from code reading; every number below came from that report.
+`src/WallpaperEngine/Debug/README.md`, usage in [[Debugging Workflow]]). Phase timings below come from that report; socket reply timings use a client
+monotonic clock.
 
 ## Pipeline
 
@@ -42,11 +42,75 @@ scheduled ~5 s later.
 **Measurement caveat.** Only `WaylandOpenGLDriver` implements
 `makeBuildContextCurrent`; the base returns false (`VideoDriver.h:81`). So in
 `--window` (GLFW) mode *all* GL upload happens on the render thread and the
-loader thread reports `upload ~0 ms`. Every number on this page was taken in a
+loader thread reports `upload ~0 ms`. The July measurements below were taken in a
 640×360 GLFW window, which means the render-thread stall figures are an
 **upper bound** — on the live Wayland desktop that upload is off-thread. The
 GLFW window-mode screen key is `"default"` (`GLFWWindowOutput.cpp:31`), needed
 for socket commands.
+
+## Desktop switch regression (2026-09-07)
+
+- [x] Bind native engine getters to their owning instance. During live
+  verification, switching to 2639381674 — **Soulless 4k {Artwork by Ilona
+  Mencner}** captured SIGSEGV in `engine_get_user_properties`: the receiver's
+  native opaque pointer was null. Layer scripts use `Object.create(engine)`,
+  so inherited getters receive a JavaScript wrapper without that pointer.
+  `userProperties`, `canvasSize`, and `screenResolution` now capture the
+  engine instance ID instead. A minimal scripted-text fixture reproduces
+  SIGSEGV in the old build and passes through two replacements with the fix.
+- [x] Make the local desktop launcher prefer optimized, CEF-complete, loadable
+  builds. Its newest-file selection had picked `build/` with `-O0`; the same
+  source built in `build-release/` uses optimization. Explicit
+  `LWE_ENGINE_BINARY` overrides still work, including Debug builds.
+- [x] Keep submitted IPC switches pending when the reply times out. Previously
+  a 30-second timeout, retry, and cold-start fallback could SIGKILL a live
+  engine and discard its caches. The launcher now waits up to five seconds for
+  acknowledgment and preserves the process when a submitted request has a
+  delayed reply. This does not claim that an unacknowledged switch succeeded.
+- [x] Process IPC and prepared replacements while fullscreen-paused; newly
+  built wallpapers inherit the paused state. Bound Wayland event waits so
+  missing output callbacks cannot indefinitely block the application loop.
+- [x] Accept Waypaper's `--no-full-screen-pause` spelling as an alias for
+  `--no-fullscreen-pause`; the previous engine ignored the former.
+
+Matching sequential Wayland runs used an isolated 1920×1080 headless output
+(compositor scale 2), engine render scale 1, 30 FPS, muted audio, and the
+`inksplash` transition. Each process started on the same small texture fixture,
+then switched to these two wallpapers in order. The ordinary desktop engine
+was still running in both runs. Times exclude the transition animation after
+scene replacement. These are single-run comparisons, not latency percentiles;
+GPU/disk caches can influence absolute timing.
+
+| Wallpaper | Debug request → replacement | Release request → replacement | Debug / Release render-thread stall |
+|---|---:|---:|---:|
+| 3094637759 — Shin Godzilla [Audio Responsive + Puppet Warp] | 1915 ms | 319 ms | 1745 / 180 ms |
+| 3107568889 — Moon Lady 4K [OC] [space sci-fi] [AI] | 8206 ms | 1513 ms | 6726 / 845 ms |
+
+Both runs completed two switches and exited normally. They reported the same
+pre-existing shader/object diagnostics and seven synchronous texture loads;
+this comparison measures switching, not visual parity. The optimized build's
+worst recorded frame was 883 ms versus 6787 ms for Debug.
+
+A mapped fullscreen test window reproduced the old IPC failure: `memstats`
+timed out after three seconds and the reply arrived only after unpausing.
+With the fix it answered in 1 ms while paused, acknowledged a switch in 10 ms,
+and applied the replacement in 81 ms while still paused. A powered-off
+headless-output check also answered in 1 ms with the fix; that check did not
+reproduce a baseline failure. No hours-long idle soak is implied by these tests.
+
+Validation: 914 assertions in 115 C++ cases; nine launcher regression tests
+cover build selection/overrides/fallbacks, delayed replies without retry or
+process replacement, and the separately committed global-flag deduplication.
+The scripted-text integration regression also passes, including both live
+replacements and normal shutdown; run it with `LWE_TEST_BINARY` set using
+`python3 -m unittest discover -s tools/tests -p test_engine_getters.py`.
+Live deployment preserved the saved monitor assignments and engine render
+scale 2. A normal launcher switch to **Soulless 4k** returned in 45 ms, kept
+PID 1118343, and answered a subsequent socket probe in 3 ms. The 45 ms is an
+acknowledgment, not the complete rendering latency.
+
+Raw reports and probe scripts for this run are under
+`/tmp/lwe-switch-20260907/` (temporary local artifacts).
 
 ## Measured cold start (2026-07-26)
 
