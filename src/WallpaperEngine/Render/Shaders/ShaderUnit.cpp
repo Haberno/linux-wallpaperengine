@@ -3,15 +3,17 @@
 #include "WallpaperEngine/Debug/DebugHelpers.h"
 #include "WallpaperEngine/Logging/Log.h"
 #include <array>
-#include <cstdint>
 #include <cctype>
+#include <cstdint>
 #include <exception>
 #include <map>
 #include <mutex>
+#include <optional>
 #include <regex>
 #include <set>
 #include <sstream>
 #include <stack>
+#include <stdexcept>
 #include <string>
 #include <string_view>
 #include <unordered_map>
@@ -72,6 +74,7 @@
 #define VERTEX_SHADER_DEFINES                                                                                          \
     "#define attribute in\n"                                                                                           \
     "#define varying out\n"
+
 #define DEFINE_COMBO(name, value) "#define " + name + " " + std::to_string (value) + "\n";
 
 using namespace WallpaperEngine::Render;
@@ -199,6 +202,61 @@ std::string_view preprocessorDirective (std::string_view line) {
     return line.substr (start, cursor - start);
 }
 
+struct IncludeDirective {
+    size_t start;
+    size_t end;
+    std::string filename;
+};
+
+std::optional<IncludeDirective> nextInclude (const std::string& source, const std::string& file) {
+    bool blockComment = false;
+    size_t lineNumber = 1;
+    for (size_t start = 0; start < source.size (); lineNumber++) {
+	const size_t newline = source.find ('\n', start);
+	const size_t end = newline == std::string::npos ? source.size () : newline;
+	std::string line = source.substr (start, end - start);
+	bool quoted = false;
+	// Mask comments without changing positions, including block comments that
+	// span lines. Quotes in real include paths must remain available below.
+	for (size_t i = 0; i < line.size (); i++) {
+	    if (blockComment) {
+		if (line[i] == '*' && i + 1 < line.size () && line[i + 1] == '/') {
+		    line[i++] = ' ';
+		    blockComment = false;
+		}
+		line[i] = ' ';
+	    } else if (quoted && line[i] == '\\' && i + 1 < line.size ()) {
+		i++;
+	    } else if (line[i] == '"') {
+		quoted = !quoted;
+	    } else if (!quoted && line[i] == '/' && i + 1 < line.size ()) {
+		if (line[i + 1] == '/') {
+		    line.replace (i, line.size () - i, line.size () - i, ' ');
+		    break;
+		}
+		if (line[i + 1] == '*') {
+		    line[i++] = ' ';
+		    line[i] = ' ';
+		    blockComment = true;
+		}
+	    }
+	}
+	if (preprocessorDirective (line) == "include") {
+	    const size_t hash = line.find ('#');
+	    const size_t keyword = line.find_first_not_of (" \t\r", hash + 1);
+	    const size_t open = line.find_first_not_of (" \t\r", keyword + 7);
+	    const size_t close = open == std::string::npos ? std::string::npos : line.find ('"', open + 1);
+	    if (open == std::string::npos || line[open] != '"' || close == std::string::npos || close == open + 1
+		|| line.find_first_not_of (" \t\r", close + 1) != std::string::npos) {
+		throw std::runtime_error ("Malformed #include in " + file + " at line " + std::to_string (lineNumber));
+	    }
+	    return IncludeDirective { start + hash, start + close + 1, line.substr (open + 1, close - open - 1) };
+	}
+	start = end == source.size () ? end : end + 1;
+    }
+    return std::nullopt;
+}
+
 bool continuesOnNextLine (std::string_view line) {
     while (!line.empty () && std::isspace (static_cast<unsigned char> (line.back ()))) {
 	line.remove_suffix (1);
@@ -324,20 +382,16 @@ void ShaderUnit::preprocessIncludes () {
     size_t start = 0, end = 0;
     size_t firstUnconditionalInclude = std::string::npos;
     // prepare the include content
-    while ((start = this->m_preprocessed.find ("#include", end)) != std::string::npos) {
+    while (const auto include = nextInclude (this->m_preprocessed, this->m_file)) {
+	start = include->start;
 	const bool conditionalInclude = preprocessorConditionalDepthBefore (this->m_preprocessed, start) > 0;
 	if (!conditionalInclude && firstUnconditionalInclude == std::string::npos) {
 	    firstUnconditionalInclude = start;
 	}
 
-	// TODO: CHECK FOR ERRORS HERE, MALFORMED INCLUDES WILL NOT BE PROPERLY HANDLED
-	const size_t quoteStart = this->m_preprocessed.find_first_of ('"', start) + 1;
-	const size_t quoteEnd = this->m_preprocessed.find_first_of ('"', quoteStart);
-	const std::string filename = this->m_preprocessed.substr (quoteStart, quoteEnd - quoteStart);
+	const std::string& filename = include->filename;
 
-	// some includes might not be present
-	// and that should not be treated as an error mainly because these could come from
-	// commented out content
+	// Preserve the fallback for unavailable headers, including optional stock content.
 	std::string content;
 
 	try {
@@ -360,29 +414,20 @@ void ShaderUnit::preprocessIncludes () {
 	    content += '\n';
 	}
 
-	// replace the first two letters with a comment so the filelength doesn't change
-	this->m_preprocessed = this->m_preprocessed.replace (start, 2, "//");
+	// Keep offsets and trailing comments intact; a block comment can continue
+	// onto the next line and must not turn into live source after expansion.
+	this->m_preprocessed.replace (start, include->end - start, include->end - start, ' ');
 
 	this->m_includes += content;
 
-	// go to the end of the line
-	end = start;
     }
 
-    // ensure the included files do not include other files
-    end = 0;
+    // Expand nested includes in-place.
+    while (const auto include = nextInclude (this->m_includes, this->m_file + " included headers")) {
+	start = include->start;
+	const std::string& filename = include->filename;
 
-    // then apply includes in-place
-    while ((start = this->m_includes.find ("#include", end)) != std::string::npos) {
-	const size_t lineEnd = this->m_includes.find_first_of ('\n', start);
-	// TODO: CHECK FOR ERRORS HERE, MALFORMED INCLUDES WILL NOT BE PROPERLY HANDLED
-	const size_t quoteStart = this->m_includes.find_first_of ('"', start) + 1;
-	const size_t quoteEnd = this->m_includes.find_first_of ('"', quoteStart);
-	const std::string filename = this->m_includes.substr (quoteStart, quoteEnd - quoteStart);
-
-	// some includes might not be present
-	// and that should not be treated as an error mainly because these could come from
-	// commented out content
+	// Preserve the fallback for unavailable headers, including optional stock content.
 	std::string content;
 
 	try {
@@ -400,10 +445,8 @@ void ShaderUnit::preprocessIncludes () {
 	}
 
 	// file contents ready, replace things
-	this->m_includes = this->m_includes.replace (start, lineEnd - start, content);
+	this->m_includes.replace (start, include->end - start, content);
 
-	// go back to the beginning of the line to properly continue detecting things
-	end = start;
     }
 
     // Also expose macros at the authored include location. Keep the original definitions
