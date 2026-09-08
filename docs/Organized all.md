@@ -401,6 +401,14 @@ Sources: [README](../README.md), [Current Status](wiki/status/Current%20Status.m
 - [x] Provide wallpaper properties via listing/CLI overrides and live socket
   `prop`; support socket switching, transitions, `memstats`, and `fbostats`.
 - [x] Make wallpaper replacement transactional and unwind partial scene builds safely.
+- [x] Bind native engine getters to their owning instance so inherited layer
+  script objects cannot crash on `engine.userProperties`, `canvasSize`, or
+  `screenResolution` (Soulless switch core and replacement regression verified).
+- [x] Service switch IPC while fullscreen-paused and bound Wayland event waits;
+  preserve a running desktop engine when a submitted switch reply is delayed.
+- [x] Prefer optimized builds for normal desktop launches; verify the Debug
+  slowdown and its correction with matching Wayland switch measurements
+  ([[Load Performance]]).
 - [x] Restore Wayland background cursor tracking (`4e32d4f3`).
 - [x] Provide fullscreen-pause controls, active-window filtering, application
   exclusions, and mouse/parallax disable switches.
@@ -410,7 +418,7 @@ Sources: [README](../README.md), [Current Status](wiki/status/Current%20Status.m
 - [x] Decode percent-encoded asset URLs for spaces and non-ASCII filenames (`610720af`).
 - [x] Derive web wallpaper theme/accent color from album art; expose CEF backend knobs.
 - [x] Report unrecognized CLI arguments instead of silently discarding them.
-  The correct option is `--no-fullscreen-pause`.
+  Accept both `--no-fullscreen-pause` and Waypaper's `--no-full-screen-pause` alias.
 - [ ] **Open — add control-socket screenshots and live render-scale/audio-device updates.**
 - [ ] **Audit — reconcile the upstream Web/CEF batch and property/audio listener
   injection with the current implementation.** Web wallpapers already run;
@@ -467,8 +475,10 @@ Sources: [Load Performance](wiki/rendering/Load%20Performance.md),
   and the unexplained worst frame outside measured switch phases.
 - [ ] **Open — profile representative steady-state CPU/GPU frame cost.**
   The specific Radiant dual-monitor measurement is not a general renderer profile.
-- [ ] **Verify — remeasure cold starts and switches on Wayland**, separating
-  shared-context uploads from the previous GLFW-window baselines.
+- [x] Remeasure two desktop wallpaper switches on Wayland with shared-context
+  uploads (2026-09-07; [[Load Performance]]).
+- [ ] **Verify — expand Wayland cold-start and switch measurements** beyond the
+  two-wallpaper regression check, including heavy 3D and web transitions.
 - [ ] **Open — make texture budgeting appropriate to available memory and
   large/overlapping scenes**, beyond the current fixed 1536 MiB limit.
 - [ ] **Audit — compare cold-build optimization port `739e9c6` with current
