@@ -1,4 +1,5 @@
 #include <catch2/catch_test_macros.hpp>
+#include <catch2/matchers/catch_matchers_string.hpp>
 
 #include "WallpaperEngine/Assets/AssetLocator.h"
 #include "WallpaperEngine/Render/Shaders/GLSLContext.h"
@@ -53,6 +54,40 @@ compileLinked (const std::string& vertexSource, const std::string& fragmentSourc
     return { vertex.compile (), fragment.compile () };
 }
 } // namespace
+
+TEST_CASE ("malformed includes fail at their own line", "[shader][include][regression]") {
+    for (const std::string directive : { "#include", "#include test_ordering.h", "#include \"\"",
+					 "#include \"test_ordering.h", "#include \"test_ordering.h\" junk" }) {
+	CAPTURE (directive);
+	CHECK_THROWS_WITH (
+	    compileFragment (
+		"#define INCLUDED_SCALE 2.0\n", directive + "\n#include \"test_ordering.h\"\nvoid main() {}\n"
+	    ),
+	    Catch::Matchers::ContainsSubstring ("Malformed #include")
+	);
+	CHECK_THROWS_WITH (
+	    compileFragment (directive, "#include \"test_ordering.h\"\nvoid main() {}\n"),
+	    Catch::Matchers::ContainsSubstring ("Malformed #include")
+	);
+    }
+}
+
+TEST_CASE ("commented includes are ignored and spaced includes are expanded", "[shader][include][regression]") {
+    const auto fragment = compileFragment (
+	"#define LIVE_INCLUDE 2.0\n# include \"test_nested.h\"",
+	"// #include \"missing.h\"\n/*\n#include \"missing.h\"\n*/\n"
+	"# include \"test_ordering.h\" /* a comment continues\n#include \"missing.h\"\n*/\n"
+	"void main() { gl_FragColor = vec4(LIVE_INCLUDE * NESTED_INCLUDE); }\n",
+	"#define NESTED_INCLUDE 3.0\n"
+    );
+    CHECK (fragment.find ("#define LIVE_INCLUDE 2.0") != std::string::npos);
+    CHECK (fragment.find ("#define NESTED_INCLUDE 3.0") != std::string::npos);
+    CHECK (fragment.find ("tried including file missing.h") == std::string::npos);
+    const auto translated
+	= GLSLContext::get ().toGlsl ("#version 330\nvoid main() { gl_Position = vec4(0.0); }\n", fragment);
+    CHECK_FALSE (translated.first.empty ());
+    CHECK_FALSE (translated.second.empty ());
+}
 
 TEST_CASE (
     "include macros reach authored helpers without moving header functions before uniforms", "[shader][include]"
