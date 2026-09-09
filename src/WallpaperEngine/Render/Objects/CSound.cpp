@@ -1,4 +1,5 @@
 #include <SDL.h>
+#include <cmath>
 
 #include "CSound.h"
 
@@ -8,6 +9,7 @@ using namespace WallpaperEngine::Render::Objects;
 
 CSound::CSound (Wallpapers::CScene& scene, const Sound& sound) :
     CObject (scene, sound), ScriptableObject (scene, sound), m_sound (sound) {
+    this->registerProperty ("volume", *this->m_sound.volume->value);
     const auto& audioSettings = this->getContext ().getApp ().getContext ().settings.audio;
     if (audioSettings.enabled && audioSettings.volume > 0) {
 	// A zero-volume wallpaper can still use live audio-input processing, but its authored
@@ -43,6 +45,7 @@ void CSound::load () {
 	auto stream = new Audio::AudioStream (
 	    this->getScene ().getAudioContext (), this->getAssetLocator ().read (cur), repeat
 	);
+	stream->setGain (this->getGain ());
 
 	// add the stream to the context so it can be played
 	this->m_audioStreams.insert_or_assign (this->getScene ().getAudioContext ().addStream (stream), stream);
@@ -69,8 +72,13 @@ void CSound::render () {
 
     auto& audioContext = this->getScene ().getAudioContext ();
     const bool active = audioContext.isActiveSoundPlayer (this->m_wallpaperKey, this->m_soundKey, this);
+    const float gain = this->getGain ();
+    for (const auto& [id, stream] : this->m_audioStreams) {
+	stream->setGain (gain);
+	stream->setPaused (!this->m_playing);
+    }
 
-    if (active && this->m_playing && this->m_audioStreams.empty ()) {
+    if (active && this->m_playing && gain > 0.0f && this->m_audioStreams.empty ()) {
 	// became the audible soundtrack (startup, rotation, or the previous owner went away):
 	// streams start from the top of the track
 	this->load ();
@@ -106,4 +114,11 @@ void CSound::pause () {
 void CSound::stop () {
     this->m_playing = false;
     this->unload ();
+}
+
+float CSound::getGain () const {
+    const float volume = this->m_sound.volume->evaluateFloat (this->getScene ().getTime ());
+    // Native sound gain (FUN_1401f4c20) squares the authored layer volume.
+    const float gain = volume * volume;
+    return std::isfinite (gain) ? gain : 0.0f;
 }
