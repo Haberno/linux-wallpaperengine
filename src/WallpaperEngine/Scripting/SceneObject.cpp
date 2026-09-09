@@ -216,7 +216,7 @@ JSValue scene_get_camera_transforms (JSContext* ctx, JSValueConst this_val, int 
     JS_SetPropertyStr (ctx, result, "eye", make_script_vec3 (ctx, engine, camera.getEye ()));
     JS_SetPropertyStr (ctx, result, "center", make_script_vec3 (ctx, engine, camera.getCenter ()));
     JS_SetPropertyStr (ctx, result, "up", make_script_vec3 (ctx, engine, camera.getUp ()));
-    JS_SetPropertyStr (ctx, result, "fov", JS_NewFloat64 (ctx, camera.getFov ()));
+    JS_SetPropertyStr (ctx, result, "zoom", JS_NewFloat64 (ctx, camera.getZoom ()));
     return result;
 }
 
@@ -245,7 +245,7 @@ static bool read_script_vec3 (JSContext* ctx, JSValueConst value, glm::vec3& res
     return valid;
 }
 
-// thisScene.setCameraTransforms({eye, center, up, fov}) -> hands the camera to the script for
+// thisScene.setCameraTransforms({eye, center, up, zoom}) -> hands the camera to the script for
 // this frame. This is how stock 3D scenes implement mouse-drag orbiting: a controller layer
 // reads input.cursorScreenPosition/cursorLeftDown, integrates it, and pushes the result here.
 // Fields are optional; anything omitted keeps the value getCameraTransforms would have returned.
@@ -268,20 +268,23 @@ JSValue scene_set_camera_transforms (JSContext* ctx, JSValueConst this_val, int 
 
     const auto readInto = [ctx, &argv] (const char* name, glm::vec3& target) {
 	JSValue value = JS_GetPropertyStr (ctx, argv[0], name);
-	read_script_vec3 (ctx, value, target);
+	glm::vec3 candidate;
+	if (read_script_vec3 (ctx, value, candidate)) {
+	    target = candidate;
+	}
 	JS_FreeValue (ctx, value);
     };
     readInto ("eye", transform.eye);
     readInto ("center", transform.center);
     readInto ("up", transform.up);
 
-    JSValue fov = JS_GetPropertyStr (ctx, argv[0], "fov");
-    if (JS_IsNumber (fov)) {
+    JSValue zoom = JS_GetPropertyStr (ctx, argv[0], "zoom");
+    if (JS_IsNumber (zoom)) {
 	double value = 0.0;
-	JS_ToFloat64 (ctx, &value, fov);
-	transform.fov = static_cast<float> (value);
+	JS_ToFloat64 (ctx, &value, zoom);
+	transform.zoom = static_cast<float> (value);
     }
-    JS_FreeValue (ctx, fov);
+    JS_FreeValue (ctx, zoom);
 
     // Drop a pose that is not finite instead of latching it. Controllers integrate from whatever
     // getCameraTransforms() hands back, so a single inf/NaN frame — these scripts divide by a vector
@@ -292,7 +295,7 @@ JSValue scene_set_camera_transforms (JSContext* ctx, JSValueConst this_val, int 
     };
 
     if (!finite (transform.eye) || !finite (transform.center) || !finite (transform.up)
-	|| !std::isfinite (transform.fov)) {
+	|| !std::isfinite (transform.zoom)) {
 	return JS_UNDEFINED;
     }
 
