@@ -1,4 +1,5 @@
 #include "ScriptEngine.h"
+#include "LocalStorage.h"
 
 #include "Adapters/ScriptableObjectAdapter.h"
 #include "Modules/ColorModule.h"
@@ -288,7 +289,7 @@ static void jsToDynamicValue (JSContext* ctx, JSValue val, DynamicValue& source)
     }
 }
 
-ScriptEngine::ScriptEngine (Wallpapers::CScene& scene, Media::MediaSource& mediaSource) :
+ScriptEngine::ScriptEngine (Wallpapers::CScene& scene, Media::MediaSource& mediaSource, const std::string& screenName) :
     m_scene (scene), m_mediaSource (mediaSource) {
     this->m_unregisterMediaUpdateCallback
 	= mediaSource.addMetadataListener ([this] (const Media::MediaSource::MediaInfo& info) {
@@ -342,6 +343,17 @@ ScriptEngine::ScriptEngine (Wallpapers::CScene& scene, Media::MediaSource& media
     this->m_modules.emplace (wevector->getName (), std::move (wevector));
 
     JS_SetModuleLoaderFunc (this->m_runtime, nullptr, scriptengine_module_loader, this);
+    // Use the physical project path, not the mount fingerprint (which includes
+    // unrelated stock assets and can change when the application is updated).
+    std::string storageProject = scene.getAssetLocator ().identity ();
+    try {
+        storageProject = std::filesystem::weakly_canonical (
+            scene.getAssetLocator ().physicalPath ("project.json")
+        ).string ();
+    } catch (const std::filesystem::filesystem_error&) {
+        // Virtual/package-only projects have no physical project.json path.
+    }
+    installLocalStorage (this->m_context, this->m_globalThis, storageProject, screenName);
     // setup scene objects and other things
     this->installBuiltins ();
     // add engine to the global

@@ -572,6 +572,8 @@ set(COMMON_SOURCES
     src/WallpaperEngine/Scripting/InputObject.cpp
     src/WallpaperEngine/Scripting/SceneObject.h
     src/WallpaperEngine/Scripting/SceneObject.cpp
+    src/WallpaperEngine/Scripting/LocalStorage.h
+    src/WallpaperEngine/Scripting/LocalStorage.cpp
     src/WallpaperEngine/Scripting/ScriptEngine.h
     src/WallpaperEngine/Scripting/ScriptPropertiesObject.h
     src/WallpaperEngine/Scripting/ScriptPropertiesObject.cpp
@@ -599,6 +601,7 @@ if(BUILD_TESTING)
         src/WallpaperEngine/Testing/Cases/CameraPath.cpp
         src/WallpaperEngine/Testing/Cases/LightState.cpp
         src/WallpaperEngine/Testing/Cases/PropertyParser.cpp
+        src/WallpaperEngine/Testing/Cases/LocalStorage.cpp
         src/WallpaperEngine/Testing/Cases/Utf8Text.cpp
         src/WallpaperEngine/Testing/Cases/JsonTolerance.cpp
         src/WallpaperEngine/Testing/Cases/TextureUpload.cpp

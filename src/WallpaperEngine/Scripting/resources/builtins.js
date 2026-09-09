@@ -9,7 +9,7 @@ globalThis.MediaPlaybackEvent = globalThis.MediaPlaybackEvent || {
 // SceneScript API parity layer (pure JS, runs once at script-engine startup).
 // Vec2/Vec3/Vec4 are C++-backed; here we only ADD the methods the engine does
 // not already provide, computing strictly from .x/.y/.z/.w components.
-// Mat3/Mat4 and the upgraded localStorage are implemented entirely in JS.
+// Mat3/Mat4 are implemented in JS; localStorage uses a persistent native bridge.
 // ===========================================================================
 (function () {
   'use strict';
@@ -826,39 +826,56 @@ globalThis.MediaPlaybackEvent = globalThis.MediaPlaybackEvent || {
   globalThis.Mat3 = globalThis.Mat3 || Mat3;
 
   // ===========================================================================
-  // localStorage - in-memory, namespaced by location. Matches ILocalStorage.
+  // localStorage - JSON values, scoped to this project and the active output.
   // ===========================================================================
   var LOCATION_GLOBAL = 'global';
   var LOCATION_SCREEN = 'screen';
+  var storage = globalThis.__sceneLocalStorage;
+  delete globalThis.__sceneLocalStorage;
+
+  function storageKey(key) {
+    if (typeof key !== 'string') throw new TypeError('localStorage key must be a string');
+    return key;
+  }
+
+  function storageValue(key, value) {
+    // Native Vec classes have enumerable component fields. Our C++ vectors use
+    // exotic accessors, so expose the same JSON shape, including nested vectors.
+    // Native storage uses JSON::Stringify/Parse: reads return plain objects.
+    if (typeof Vec4 !== 'undefined' && value instanceof Vec4) {
+      return {x: value.x, y: value.y, z: value.z, w: value.w};
+    }
+    if (typeof Vec3 !== 'undefined' && value instanceof Vec3) {
+      return {x: value.x, y: value.y, z: value.z};
+    }
+    if (typeof Vec2 !== 'undefined' && value instanceof Vec2) {
+      return {x: value.x, y: value.y};
+    }
+    return value;
+  }
 
   var localStorageImpl = {
     LOCATION_GLOBAL: LOCATION_GLOBAL,
     LOCATION_SCREEN: LOCATION_SCREEN,
-    __data: Object.create(null),
-    __bucket: function (location) {
-      var loc = (location === undefined || location === null) ? LOCATION_GLOBAL : String(location);
-      if (!Object.prototype.hasOwnProperty.call(this.__data, loc)) {
-        this.__data[loc] = Object.create(null);
-      }
-      return this.__data[loc];
-    },
     set: function (key, value, location) {
-      this.__bucket(location)[String(key)] = String(value);
+      key = storageKey(key);
+      if (value === undefined) {
+        storage.delete(location === LOCATION_GLOBAL, key);
+        return;
+      }
+      var serialized = JSON.stringify(value, storageValue);
+      if (serialized === undefined) throw new TypeError('localStorage value is not JSON serializable');
+      storage.set(location === LOCATION_GLOBAL, key, serialized);
     },
     get: function (key, location) {
-      var bucket = this.__bucket(location);
-      key = String(key);
-      return Object.prototype.hasOwnProperty.call(bucket, key) ? bucket[key] : null;
+      var serialized = storage.get(location === LOCATION_GLOBAL, storageKey(key));
+      return serialized === undefined ? undefined : JSON.parse(serialized);
     },
     delete: function (key, location) {
-      delete this.__bucket(location)[String(key)];
+      return storage.delete(location === LOCATION_GLOBAL, storageKey(key));
     },
     clear: function (location) {
-      if (location === undefined || location === null) {
-        this.__data = Object.create(null);
-      } else {
-        this.__data[String(location)] = Object.create(null);
-      }
+      storage.clear(location === LOCATION_GLOBAL);
     }
   };
   // Backward-compat alias.

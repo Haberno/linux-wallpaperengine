@@ -31,7 +31,7 @@ using namespace WallpaperEngine::Render::Wallpapers;
 
 CScene::CScene (
     const Wallpaper& wallpaper, RenderContext& context, AudioContext& audioContext,
-    const WallpaperState::TextureUVsScaling& scalingMode, const uint32_t& clampMode
+    const WallpaperState::TextureUVsScaling& scalingMode, const uint32_t& clampMode, const std::string& screenName
 ) : CWallpaper (wallpaper, context, audioContext, scalingMode, clampMode) {
     // Wallpaper Engine exposes MSAA separately from its post-processing quality.
     // Until the multisampled resolve path is implemented, scale the complete scene
@@ -49,7 +49,7 @@ CScene::CScene (
     WallpaperEngine::Data::Utils::ScopeGuard constructionGuard ([this] { this->destroyObjects (); });
 
     // setup scripting engine
-    this->m_scriptEngine = std::make_unique<Scripting::ScriptEngine> (*this, context.getMediaSource ());
+    this->m_scriptEngine = std::make_unique<Scripting::ScriptEngine> (*this, context.getMediaSource (), screenName);
     // setup the scene camera
     this->m_camera = std::make_unique<Camera> (*this, scene->camera);
     this->registerFogScripts ();

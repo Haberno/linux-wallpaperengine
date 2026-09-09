@@ -63,7 +63,7 @@ public:
     };
 
     ~ScriptEngine ();
-    ScriptEngine (Render::Wallpapers::CScene& scene, Media::MediaSource& mediaSource);
+    ScriptEngine (Render::Wallpapers::CScene& scene, Media::MediaSource& mediaSource, const std::string& screenName = "default");
     ScriptEngine (const ScriptEngine&) = delete;
     ScriptEngine& operator= (const ScriptEngine&) = delete;
 

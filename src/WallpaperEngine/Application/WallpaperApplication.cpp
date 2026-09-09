@@ -1063,7 +1063,7 @@ bool WallpaperApplication::applyPreparedSwitch (PreparedSwitch& job) {
 	    const auto buildStart = std::chrono::steady_clock::now ();
 	    auto renderWallpaper = WallpaperEngine::Render::CWallpaper::fromWallpaper (
 		*nextProject.wallpaper, *this->m_renderContext, *this->m_audioContext,
-		this->m_browserContext.get (), scaling, clamp
+		this->m_browserContext.get (), scaling, clamp, job.screen
 	    );
 	    buildMs = std::chrono::steady_clock::now () - buildStart;
 
@@ -1501,7 +1501,7 @@ void WallpaperApplication::prepareOutputs () {
 	m_renderContext->setWallpaper (
 	    background,
 	    WallpaperEngine::Render::CWallpaper::fromWallpaper (
-		*info->wallpaper, *m_renderContext, *m_audioContext, m_browserContext.get (), scaling, clamp
+		*info->wallpaper, *m_renderContext, *m_audioContext, m_browserContext.get (), scaling, clamp, background
 	    )
 	);
     }
@@ -1560,7 +1560,7 @@ void WallpaperApplication::prepareOutputs () {
 	// Create one shared wallpaper with the span group's scaling mode
 	auto sharedWallpaper = WallpaperEngine::Render::CWallpaper::fromWallpaper (
 	    *bgIt->second->wallpaper, *m_renderContext, *m_audioContext, m_browserContext.get (), spanGroup.scaling,
-	    spanGroup.clamp
+	    spanGroup.clamp, groupKey
 	);
 
 	// Convert to shared_ptr so it can be registered for multiple viewports
