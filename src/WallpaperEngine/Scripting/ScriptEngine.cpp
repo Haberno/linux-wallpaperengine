@@ -292,7 +292,6 @@ ScriptEngine::ScriptEngine (Wallpapers::CScene& scene, Media::MediaSource& media
 
     this->m_unregisterAlbumArtUpdateCallback
 	= mediaSource.addAlbumArtListener ([this] (const Media::MediaSource::MediaInfo& info) {
-	      // TODO: SEPARATE THESE INTO THEIR OWN UPDATES SO JS ONLY RECEIVES THE MEANINGFUL UPDATES
 	      this->notifyMediaUpdate (info);
 	  });
 
@@ -1161,10 +1160,28 @@ void ScriptEngine::notifyMediaUpdate (const Media::MediaSource::MediaInfo& media
 	    }
 	    JS_FreeValue (ctx, result);
 	};
-	dispatch ("mediaPropertiesChanged", propertiesArgs);
-	dispatch ("mediaPlaybackChanged", playbackArgs);
-	dispatch ("mediaTimelineChanged", mediaTimelineArgs);
-	dispatch ("mediaThumbnailChanged", mediaThumbnailArgs);
+	// Newly initialized modules intentionally receive the complete current state.
+	// Later position polls must not restart cover transitions or playback handlers.
+	const auto& last = module.lastMedia;
+	const bool initial = target != nullptr || !last.has_value ();
+	const bool propertiesChanged = initial || media.title != last->title
+	    || media.artist != last->artist || media.album != last->album;
+	const bool playbackChanged = initial || media.playbackState != last->playbackState;
+	const bool timelineChanged = initial || media.position != last->position || media.duration != last->duration;
+	const bool thumbnailChanged = initial || media.url != last->url;
+	module.lastMedia = media;
+	if (propertiesChanged) {
+	    dispatch ("mediaPropertiesChanged", propertiesArgs);
+	}
+	if (playbackChanged) {
+	    dispatch ("mediaPlaybackChanged", playbackArgs);
+	}
+	if (timelineChanged) {
+	    dispatch ("mediaTimelineChanged", mediaTimelineArgs);
+	}
+	if (thumbnailChanged) {
+	    dispatch ("mediaThumbnailChanged", mediaThumbnailArgs);
+	}
     }
 
     // free all created objects as we don't keep a ref to them anymore
