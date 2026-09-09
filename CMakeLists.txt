@@ -381,6 +381,8 @@ set(COMMON_SOURCES
 
     src/WallpaperEngine/Render/Shaders/Shader.h
     src/WallpaperEngine/Render/Shaders/Shader.cpp
+    src/WallpaperEngine/Render/Shaders/ShaderProgramCache.cpp
+    src/WallpaperEngine/Render/Shaders/ShaderProgramCache.h
     src/WallpaperEngine/Render/Shaders/ShaderUnit.cpp
     src/WallpaperEngine/Render/Shaders/ShaderUnit.h
     src/WallpaperEngine/Render/Shaders/GLSLContext.cpp
@@ -610,6 +612,7 @@ if(BUILD_TESTING)
         src/WallpaperEngine/Testing/Cases/AudioSpectrum.cpp
         src/WallpaperEngine/Testing/Cases/AudioStreamLoop.cpp
         src/WallpaperEngine/Testing/Cases/ShaderIncludes.cpp
+        src/WallpaperEngine/Testing/Cases/ShaderProgramCache.cpp
         src/WallpaperEngine/Testing/Cases/PackageLookup.cpp)
 endif()
 
