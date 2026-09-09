@@ -17,6 +17,7 @@
 
 #include <array>
 #include <chrono>
+#include <cmath>
 #include <cstring>
 #include <memory>
 #include <thread>
@@ -57,7 +58,7 @@ void writeU32 (std::vector<char>& output, const size_t offset, const uint32_t va
     output[offset + 3] = static_cast<char> ((value >> 24) & 0xff);
 }
 
-std::shared_ptr<MemoryStream> shortPcmWave () {
+std::shared_ptr<MemoryStream> shortPcmWave (const uint16_t sample = 0) {
     constexpr uint32_t sampleRate = 8000;
     constexpr uint32_t sampleCount = 800;
     constexpr uint16_t channelCount = 1;
@@ -77,6 +78,9 @@ std::shared_ptr<MemoryStream> shortPcmWave () {
     writeU16 (wave, 34, bitsPerSample);
     std::memcpy (wave.data () + 36, "data", 4);
     writeU32 (wave, 40, dataSize);
+    for (uint32_t index = 0; index < sampleCount; index++) {
+	writeU16 (wave, 44 + index * sizeof (uint16_t), sample);
+    }
 
     auto buffer = std::make_unique<char[]> (wave.size ());
     std::memcpy (buffer.get (), wave.data (), wave.size ());
@@ -248,4 +252,63 @@ TEST_CASE ("sound layers retain initial silence with an audible default", "[audi
     data["startsilent"] = true;
     const auto authored = ObjectParser::parse (data, project);
     REQUIRE (authored->as<Sound> ()->startSilent);
+}
+
+TEST_CASE ("single audio completion waits for decoded and resampled output tails", "[audio]") {
+    const char* oldDriver = SDL_getenv ("SDL_AUDIODRIVER");
+    const std::string savedDriver = oldDriver != nullptr ? oldDriver : "";
+    SDL_setenv ("SDL_AUDIODRIVER", "dummy", 1);
+    WallpaperEngine::Data::Utils::ScopeGuard restoreDriver ([&] {
+	if (oldDriver != nullptr) {
+	    SDL_setenv ("SDL_AUDIODRIVER", savedDriver.c_str (), 1);
+	} else {
+	    unsetenv ("SDL_AUDIODRIVER");
+	}
+    });
+    char executable[] = "tests";
+    char* argv[] = { executable };
+    ApplicationContext applicationContext (1, argv);
+    applicationContext.state.general.keepRunning = true;
+    applicationContext.state.audio.volume = SDL_MIX_MAXVOLUME;
+    FullScreenDetector fullscreenDetector (applicationContext);
+    AudioPlayingDetector audioDetector (applicationContext, fullscreenDetector);
+    PlaybackRecorder recorder;
+    WallpaperEngine::Audio::Drivers::SDLAudioDriver driver (applicationContext, audioDetector, recorder);
+    AudioContext audioContext (driver);
+    AudioStream stream (audioContext, shortPcmWave (4096), false);
+    stream.setPaused (true);
+    const int id = driver.addStream (&stream);
+    WallpaperEngine::Data::Utils::ScopeGuard removeStream ([&] { driver.removeStream (id); });
+    const auto deadline = std::chrono::steady_clock::now () + std::chrono::seconds (2);
+    while (stream.getCompletionCount () == 0 && std::chrono::steady_clock::now () < deadline) {
+	std::this_thread::yield ();
+    }
+    REQUIRE (stream.getCompletionCount () == 1);
+    REQUIRE (stream.getPlaybackCompletionCount () == 0);
+    REQUIRE (stream.getDuration () == Catch::Approx (0.1));
+    SDL_LockMutex (driver.getStreamMutex ());
+    WallpaperEngine::Data::Utils::ScopeGuard unlock ([&] { SDL_UnlockMutex (driver.getStreamMutex ()); });
+    stream.setPaused (false);
+    double sum = 0.0;
+    size_t samples = 0;
+    // Odd callback sizes force the last decoded buffer to span callbacks after
+    // the packet queue has emptied. 8 kHz input also requires a resampler tail.
+    std::array<float, 34> output {};
+    while (stream.getPlaybackCompletionCount () == 0 && samples < 12000) {
+	driver.getSpec ().callback (&driver, reinterpret_cast<Uint8*> (output.data ()), sizeof (output));
+	for (const float value : output) {
+	    sum += value;
+	}
+	samples += output.size ();
+	if (samples < 9600) {
+	    REQUIRE (stream.getPlaybackCompletionCount () == 0);
+	}
+    }
+    REQUIRE (stream.getPlaybackCompletionCount () == 1);
+    // Mono-to-stereo conversion uses the default -3 dB matrix per output channel.
+    REQUIRE (sum == Catch::Approx (9600.0 * 0.125 / std::sqrt (2.0)).margin (0.1));
+    driver.getSpec ().callback (&driver, reinterpret_cast<Uint8*> (output.data ()), sizeof (output));
+    REQUIRE (stream.getPlaybackCompletionCount () == 1);
+    REQUIRE (output == std::array<float, 34> {});
+    stream.setPaused (true);
 }
