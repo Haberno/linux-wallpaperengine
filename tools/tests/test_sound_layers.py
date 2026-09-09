@@ -6,6 +6,7 @@ Requires a graphics session and dbus-daemon. Produces no audio output.
 Set LWE_TEST_ARTIFACT_DIR to retain diagnostic logs for before/after comparisons.
 """
 import json
+import io
 import os
 from pathlib import Path
 import signal
@@ -13,6 +14,7 @@ import subprocess
 import tempfile
 import time
 import unittest
+import wave
 
 
 @unittest.skipUnless(os.environ.get('LWE_TEST_BINARY'), 'Set LWE_TEST_BINARY for scene integration tests')
@@ -78,9 +80,134 @@ export function init(value) {
         ]
         self.run_scene('startsilent', sounds, script, 'SOUND_STARTSILENT_OK')
 
-    def run_scene(self, label, sounds, script, marker):
+    def test_single_sound_completes_and_replays_after_pause(self):
+        script = '''
+let phase = 0, since = 0, frames = 0;
+export function update(value) {
+    if (++frames < 6) return value;
+    const sound = thisScene.getLayer('Single Sound');
+    const now = engine.runtime;
+    if (phase === 0) { sound.play(); since = now; phase = 1; }
+    else if (phase === 1 && now - since > 0.08) {
+        if (!sound.isPlaying()) throw new Error('Single sound completed before its audio tail');
+        sound.pause(); since = now; phase = 2;
+    } else if (phase === 2 && now - since > 0.3) {
+        if (sound.isPlaying()) throw new Error('Paused sound resumed on its own');
+        sound.play(); phase = 3;
+    } else if (phase === 3 && !sound.isPlaying()) {
+        sound.play();
+        if (!sound.isPlaying()) throw new Error('Completed single sound cannot replay');
+        phase = 4;
+    } else if (phase === 4 && !sound.isPlaying()) {
+        sound.stop(); since = now; phase = 5;
+    } else if (phase === 5 && now - since > 0.2) {
+        if (sound.isPlaying()) throw new Error('Stopped sound restarted');
+        console.log('SOUND_SINGLE_OK completion/pause/resume/replay/stop=ok'); phase = 6;
+    }
+    return value;
+}
+'''
+        sounds = [{'id': 1, 'name': 'Single Sound', 'sound': ['sounds/one.wav'],
+                   'playbackmode': 'single', 'startsilent': True}]
+        log = self.run_scene('single', sounds, script, 'SOUND_SINGLE_OK',
+                             audio=True, assets={'sounds/one.wav': self.pcm_wave(.3)})
+        self.assertEqual(log.count('Sound layer 1 start file='), 2, log)
+        self.assertEqual(log.count('Sound layer 1 completed pass='), 2, log)
+
+    def test_random_sound_waits_and_preserves_paused_interval(self):
+        script = '''
+let phase = 0, since = 0;
+export function update(value) {
+    const sound = thisScene.getLayer('Random Sound');
+    const now = engine.runtime;
+    if (phase === 0 && !sound.isPlaying()) {
+        sound.pause(); since = now; phase = 1;
+    } else if (phase === 1 && now - since > 0.3) {
+        if (sound.isPlaying()) throw new Error('Paused random interval restarted');
+        sound.play(); since = now; phase = 2;
+    } else if (phase === 2 && sound.isPlaying()) {
+        if (now - since < 0.2) throw new Error('Random delay elapsed while paused');
+        phase = 3;
+    } else if (phase === 3 && !sound.isPlaying()) {
+        sound.stop(); since = now; phase = 4;
+    } else if (phase === 4 && now - since > 0.6) {
+        if (sound.isPlaying()) throw new Error('Stopped random interval restarted');
+        console.log('SOUND_RANDOM_OK duration+delay/pause/resume/stop=ok'); phase = 5;
+    }
+    return value;
+}
+'''
+        sounds = [{'id': 1, 'name': 'Random Sound', 'sound': ['sounds/one.wav'],
+                   'playbackmode': 'random', 'mintime': .35, 'maxtime': .35}]
+        log = self.run_scene('random', sounds, script, 'SOUND_RANDOM_OK',
+                             audio=True, assets={'sounds/one.wav': self.pcm_wave(.2)})
+        self.assertEqual(log.count('Sound layer 1 start file='), 2, log)
+        self.assertIn('mode=random next=0.55', log)
+
+    def test_loop_selects_one_alternative_per_pass_and_defaults_to_loop(self):
+        script = '''
+let since = null;
+export function update(value) {
+    if (since === null) since = engine.runtime;
+    if (!thisScene.getLayer('Loop Sound').isPlaying()) throw new Error('Default loop stopped');
+    if (engine.runtime - since > 1.1) console.log('SOUND_ALTERNATIVES_OK');
+    return value;
+}
+'''
+        sounds = [{'id': 1, 'name': 'Loop Sound', 'sound': ['sounds/one.wav', 'sounds/two.wav']}]
+        log = self.run_scene('alternatives', sounds, script, 'SOUND_ALTERNATIVES_OK', audio=True,
+                             assets={'sounds/one.wav': self.pcm_wave(.25),
+                                     'sounds/two.wav': self.pcm_wave(.25)})
+        events = [line for line in log.splitlines() if 'Sound layer 1 ' in line]
+        starts = [line for line in events if ' start file=' in line]
+        self.assertGreaterEqual(len(starts), 3, log)
+        self.assertLessEqual(len(starts), 7, log)
+        # Every new selected file follows the previous file's complete output.
+        for index, line in enumerate(events):
+            self.assertIn(' start file=' if index % 2 == 0 else ' completed pass=', line)
+        self.assertTrue(all('mode=loop' in line for line in starts), log)
+
+    def test_zero_layer_gain_finishes_audio_but_freezes_random_interval(self):
+        script = '''
+let phase = 0, since = 0, frames = 0;
+export function update(value) {
+    if (++frames < 6) return value;
+    const sound = thisScene.getLayer('Random Sound');
+    const now = engine.runtime;
+    if (phase === 0) { sound.play(); since = now; phase = 1; }
+    else if (phase === 1 && now - since > 0.1) {
+        sound.volume = 0; since = now; phase = 2;
+    } else if (phase === 2 && now - since > 0.5) {
+        if (sound.isPlaying()) throw new Error('Zero layer gain paused the existing sound');
+        sound.volume = 1; since = now; phase = 3;
+    } else if (phase === 3 && sound.isPlaying()) {
+        if (now - since < 0.25) throw new Error('Zero gain did not freeze the random interval');
+        sound.stop();
+        console.log('SOUND_ZERO_GAIN_OK existing_audio=finished random_interval=frozen'); phase = 4;
+    }
+    return value;
+}
+'''
+        sounds = [{'id': 1, 'name': 'Random Sound', 'sound': ['sounds/one.wav'], 'startsilent': True,
+                   'playbackmode': 'random', 'mintime': .35, 'maxtime': .35}]
+        self.run_scene('zero-gain', sounds, script, 'SOUND_ZERO_GAIN_OK',
+                       audio=True, assets={'sounds/one.wav': self.pcm_wave(.2)})
+
+    @staticmethod
+    def pcm_wave(duration):
+        result = io.BytesIO()
+        with wave.open(result, 'wb') as output:
+            output.setparams((1, 2, 8000, 0, 'NONE', 'not compressed'))
+            output.writeframes(b'\0\0' * round(8000 * duration))
+        return result.getvalue()
+
+    def run_scene(self, label, sounds, script, marker, *, audio=False, assets=None):
         with tempfile.TemporaryDirectory(prefix='lwe-sound-layers-') as directory:
             root = Path(directory)
+            for filename, data in (assets or {}).items():
+                target = root / filename
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_bytes(data)
             (root / 'project.json').write_text(json.dumps({
                 'type': 'scene', 'file': 'scene.json', 'title': 'Sound layer regression',
                 'general': {'properties': {'soundvolume': {'type': 'slider', 'value': 0.6}}}}))
@@ -112,10 +239,14 @@ export function init(value) {
             self.assertTrue(address.startswith('unix:'), address)
             env = dict(os.environ, WPE_CONTROL_SOCKET=str(root / 'control.sock'), WPE_LOG_FILE='off',
                        WPE_HEALTH_REPORT=str(root / 'health.json'), DBUS_SESSION_BUS_ADDRESS=address)
+            audio_args = ['--silent']
+            if audio:
+                env.update(SDL_AUDIODRIVER='dummy', WPE_SOUND_TRACE='1')
+                audio_args = ['--volume', '128', '--noautomute', '--no-audio-processing']
             with path.open('w') as log:
                 process = subprocess.Popen([
                     str(Path(os.environ['LWE_TEST_BINARY']).resolve()),
-                    '--window', '0x0x320x180', '--silent', '--fps', '30', '--no-full-screen-pause', str(root)],
+                    '--window', '0x0x320x180', *audio_args, '--fps', '30', '--no-full-screen-pause', str(root)],
                     env=env, stdout=log, stderr=subprocess.STDOUT, start_new_session=True)
                 try:
                     deadline = time.monotonic() + 12
@@ -139,3 +270,4 @@ export function init(value) {
                         (output / f'sound-{label}.log').write_text(path.read_text())
             self.assertEqual(process.returncode, 0, path.read_text()[-6000:])
             self.assertNotIn('ScriptEngine [', path.read_text())
+            return path.read_text()

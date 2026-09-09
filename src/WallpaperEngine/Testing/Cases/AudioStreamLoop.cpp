@@ -254,6 +254,23 @@ TEST_CASE ("sound layers retain initial silence with an audible default", "[audi
     REQUIRE (authored->as<Sound> ()->startSilent);
 }
 
+TEST_CASE ("sound random intervals retain native defaults and authored values", "[audio][parser]") {
+    using WallpaperEngine::Data::JSON::JSON;
+    using WallpaperEngine::Data::Model::Project;
+    using WallpaperEngine::Data::Model::Sound;
+    using WallpaperEngine::Data::Parsers::ObjectParser;
+    const Project project {};
+    auto data = JSON::parse (R"({"id":1,"name":"sound","sound":[]})");
+    const auto defaults = ObjectParser::parse (data, project);
+    REQUIRE (defaults->as<Sound> ()->minTime->evaluateFloat (0.0f) == 1.0f);
+    REQUIRE (defaults->as<Sound> ()->maxTime->evaluateFloat (0.0f) == 5.0f);
+    data["mintime"] = 0.25;
+    data["maxtime"] = 0.75;
+    const auto authored = ObjectParser::parse (data, project);
+    REQUIRE (authored->as<Sound> ()->minTime->evaluateFloat (0.0f) == 0.25f);
+    REQUIRE (authored->as<Sound> ()->maxTime->evaluateFloat (0.0f) == 0.75f);
+}
+
 TEST_CASE ("single audio completion waits for decoded and resampled output tails", "[audio]") {
     const char* oldDriver = SDL_getenv ("SDL_AUDIODRIVER");
     const std::string savedDriver = oldDriver != nullptr ? oldDriver : "";
