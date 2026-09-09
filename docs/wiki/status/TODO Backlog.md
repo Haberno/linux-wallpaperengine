@@ -143,6 +143,12 @@ only the open work is listed here. The switch regression itself (texture-cache
 budget sized below one 4K wallpaper) is **fixed** in `eaa72fc` — do not reopen
 it, and do not "improve" it by pinning staged textures.
 
+- [x] **Reduce repeated first-draw shader compilation** — compatible material
+  passes share live programs with matching uniform write layouts. Pokemon -
+  Deep Sea Dive (3562141459) improved from 19.240 s to 7.425 s with the NVIDIA
+  disk cache disabled; warm loads improved from 3.635 s to 3.425 s. No new disk
+  cache; live programs are released with their materials. See [[Load Performance]].
+
 - **Cache shader translation to disk** — 239 ms average per wallpaper
   (median 229, worst 925): ~175 ms compatibility regex passes, ~52 ms
   glslang→SPIR-V→spirv-cross. Redone from scratch every run. A

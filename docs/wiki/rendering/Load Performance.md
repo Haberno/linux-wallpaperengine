@@ -118,6 +118,65 @@ and shadows; Rayman's character animation and river materials; and Saturn's
 ring transparency. Measurements and raw health reports were retained under
 `/tmp/lwe-3d-load-20260908/` during verification.
 
+## First-draw program sharing (2026-09-09)
+
+- [x] Avoid compiling a separate first-draw executable for every identical
+  material pass. A cold NVIDIA profile attributed 74% of sampled CPU time to
+  `libnvidia-gpucomp`; hundreds of draws individually spent about 23 ms in the
+  driver. Binary-cache hits alone did not avoid that work. Compatible passes
+  now share a live program and upload their own complete registered uniform
+  layout before drawing. Different uniform layouts, including array lengths,
+  remain separate; see [[Shader Translation]] for ownership and fallback rules.
+- [x] Keep the binary/source payload budget at 64 MiB in RAM. Live programs
+  are owned by materials and released when their last user disappears. Each
+  pass retains its private program for registration and fallback. There is no
+  new disk cache or retained set of GPU programs after a wallpaper is released.
+
+The baseline is `3de07454`, including the previous loading optimizations and
+identical pre-existing unfinished edits. Release executable/library pairs were
+compared serially on the same temporary Wayland headless output used above,
+1920×1080 at compositor scale 2, engine render scale 1, 30 FPS, muted. The real
+desktop engine remained running. These are local single-run measurements,
+not latency percentiles; phase timings vary with desktop and system activity.
+
+| Pokemon - Deep Sea Dive (3562141459), process start to first frame | Before | After |
+|---|---:|---:|
+| NVIDIA disk cache disabled for each test process | 19.240 s | 7.425 s |
+| Warm driver disk cache, fresh engine processes | 3.635 s | 3.425 s |
+
+The independent managed-implementation cold run was 7.916 s; earlier baseline
+profiles were 17.954–18.546 s. In the paired cold run scene construction was
+4.386/4.639 s, so the large gain comes after construction. Project parsing was
+1.161/0.628 s in that pair, an unrelated source of timing variation. Neither
+shader quality nor texture resolution was reduced. The new path created 64
+live material programs and served 535 additional material passes from them;
+the existing binary cache still recorded 92 source misses and 764 hits.
+Warm post-load rendering averaged 29.56 FPS in both runs under the 30 FPS cap;
+this is a short capped smoke check, not an uncapped GPU throughput benchmark.
+
+Warm fixture→Pokemon switching took 2.617/2.566 s from request to scene
+replacement; render-thread apply stalls were 1.811/1.783 s. These exclude the
+first draw and transition after replacement and show little improvement with
+already-warm shaders. Worst frames in those runs were 1.972/1.863 s.
+
+Validation: 953 assertions in 118 default C++ cases and 69 assertions in three
+hidden GL cases passed. A five-wallpaper corpus sample completed in 16 s;
+Shin Godzilla (3094637759) and Saturn (3589454154) passed, Pokemon and Rayman -
+River Ride (3562150203) retained existing script warnings, and Moon Lady
+(3107568889) retained the same eight of 506 standalone shader failures. All
+five rendered and exited normally. Raw timings and reports were retained under
+`/tmp/lwe-shader-load-20260908/` during verification. This is a targeted rerun;
+the previously completed full installed corpus was not repeated for this patch.
+A fixture→Pokemon→fixture→Pokemon round trip also completed all three switches
+and exited normally. On switching away, referenced textures returned to three
+and live FBOs to ten; GL tests directly verified shared program deletion.
+
+Retrieving the program binary after its first draw did **not** reduce the cold
+load (18.543 s), nor did removing the disabled original-source trailer from
+translated GLSL (18.533 s). Those experiments were discarded. NVIDIA's parallel
+compiler hint was already at its implementation maximum; merely enabling that
+extension was not an additional optimization.
+
 ## Desktop switch regression (2026-09-07)
 
 - [x] Bind native engine getters to their owning instance. During live
