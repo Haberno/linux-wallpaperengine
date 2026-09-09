@@ -806,6 +806,13 @@ int scriptableobject_property_set (
 
 	if (JS_IsBool (val)) {
 	    property.update (JS_ToBool (ctx, val) != 0, DynamicValue::UpdateSource::User);
+	} else if (JS_IsString (val)) {
+	    const char* text = JS_ToCString (ctx, val);
+	    if (text == nullptr) {
+		return -1;
+	    }
+	    property.update (std::string (text), DynamicValue::UpdateSource::Script);
+	    JS_FreeCString (ctx, text);
 	} else if (JS_IsNumber (val)) {
 	    double number = 0.0;
 	    JS_ToFloat64 (ctx, &number, val);
