@@ -1107,8 +1107,9 @@ void ScriptEngine::notifyMediaUpdate (const Media::MediaSource::MediaInfo& media
 
     JSValue mediaTimelineEvent = JS_NewObject (ctx);
 
-    JS_SetPropertyStr (ctx, mediaTimelineEvent, "position", JS_NewFloat64 (ctx, media.position));
-    JS_SetPropertyStr (ctx, mediaTimelineEvent, "duration", JS_NewFloat64 (ctx, media.duration));
+    // MPRIS stores microseconds; SceneScript exposes timeline values in seconds.
+    JS_SetPropertyStr (ctx, mediaTimelineEvent, "position", JS_NewFloat64 (ctx, media.position / 1000000.0));
+    JS_SetPropertyStr (ctx, mediaTimelineEvent, "duration", JS_NewFloat64 (ctx, media.duration / 1000000.0));
 
     JSValue mediaThumbnailEvent = JS_NewObject (ctx);
 
