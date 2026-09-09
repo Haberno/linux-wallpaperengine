@@ -25,6 +25,7 @@ void audio_callback (void* userdata, uint8_t* streamData, int length) {
     for (const auto& buffer : driver->getStreams () | std::views::values) {
 	uint8_t* streamDataPointer = streamData;
 	int streamLength = length;
+	bool completedEmptyPass = false;
 	const float gain = buffer->stream->getGain ()
 	    * static_cast<float> (driver->getApplicationContext ().state.audio.volume) / SDL_MIX_MAXVOLUME;
 
@@ -37,7 +38,6 @@ void audio_callback (void* userdata, uint8_t* streamData, int length) {
 	// check if queue is empty and signal the read thread
 	if (buffer->stream->isQueueEmpty ()) {
 	    SDL_CondSignal (buffer->stream->getWaitCondition ());
-	    continue;
 	}
 
 	while (streamLength > 0 && driver->getApplicationContext ().state.general.keepRunning) {
@@ -45,13 +45,22 @@ void audio_callback (void* userdata, uint8_t* streamData, int length) {
 		// get more data to fill the buffer
 		int audio_size = buffer->stream->decodeFrame (buffer->audio_buf, sizeof (buffer->audio_buf));
 
-		if (audio_size <= 0) {
-		    // fallback for errors, silence
-		    buffer->audio_buf_size = 1024;
-		    memset (buffer->audio_buf, 0, buffer->audio_buf_size);
-		} else {
-		    buffer->audio_buf_size = audio_size;
+		if (audio_size == AVERROR_EOF) {
+		    buffer->stream->notifyPlaybackCompletion ();
+		    if (buffer->stream->isRepeat () && !completedEmptyPass) {
+			completedEmptyPass = true;
+			continue;
+		    }
 		}
+		if (audio_size <= 0) {
+		    // The output was cleared up front. Preserve an empty buffer so the
+		    // next callback can retry without inventing a block of silent audio.
+		    buffer->audio_buf_size = 0;
+		    buffer->audio_buf_index = 0;
+		    break;
+		}
+		buffer->audio_buf_size = audio_size;
+		completedEmptyPass = false;
 
 		buffer->audio_buf_index = 0;
 	    }
