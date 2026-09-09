@@ -193,10 +193,16 @@ TextUniquePtr ObjectParser::parseText (const JSON& it, const Project& project, O
 ObjectUniquePtr
 ObjectParser::parseModel3D (const JSON& it, const Project& project, ObjectData base, const std::string& model) {
     try {
-	auto mesh = MdlParser::load (project, model);
+	// Geometry and animation live in the same MDL. Read it once in bulk;
+	// the two load() helpers each reopened it and copied it byte by byte.
+	const auto data = [&] {
+	    const auto contents = project.assetLocator->readString (model);
+	    return std::vector<char> (contents.begin (), contents.end ());
+	} ();
+	auto mesh = MdlParser::parse (data, model);
 	MdlAnimationData animationData;
 	try {
-	    animationData = MdlAnimationParser::load (project, model);
+	    animationData = MdlAnimationParser::parse (data, model);
 	} catch (const std::exception& e) {
 	    sLog.error ("Cannot load model animation data ", model, ": ", e.what ());
 	}
