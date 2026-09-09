@@ -241,6 +241,7 @@ private:
     // Stable storage is required because effect-pass uniforms keep pointers to
     // getAlpha()/getUserAlpha() for the lifetime of the image.
     float m_resolvedAlpha = 1.0f;
+    mutable glm::vec4 m_resolvedColor4 { 1.0f };
 
     std::vector<Effects::CPass*> m_passes = {};
     std::vector<MaterialPassUniquePtr> m_virtualPassess = {};
