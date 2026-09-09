@@ -86,6 +86,9 @@ public:
     /** Pause consumption without losing buffered audio or resetting the playhead. */
     void setPaused (bool paused) { this->m_paused = paused; }
     [[nodiscard]] bool isPaused () const { return this->m_paused; }
+    /** Linear per-layer gain; other stream users retain unity gain. */
+    void setGain (float gain) { this->m_gain.store (gain, std::memory_order_relaxed); }
+    [[nodiscard]] float getGain () const { return this->m_gain.load (std::memory_order_relaxed); }
     /**
      * @param newRepeat true = repeat, false = no repeat
      */
@@ -184,6 +187,7 @@ private:
     /** If this stream was properly initialized or not */
     std::atomic<bool> m_initialized = false;
     std::atomic<bool> m_paused = false;
+    std::atomic<float> m_gain = 1.0f;
     /** Repeat enabled? */
     std::atomic<bool> m_repeat = false;
     /** Full playback passes so far; written by the read thread, read by the render thread */

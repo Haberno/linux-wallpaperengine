@@ -148,6 +148,8 @@ public:
 };
 
 struct SoundData {
+    /** Authored volume, including user properties, scripts and keyframes. */
+    UserSettingUniquePtr volume;
     /** Playback mode, loop, */
     // TODO: WRITE AN ENUM FOR THIS
     std::optional<std::string> playbackmode;

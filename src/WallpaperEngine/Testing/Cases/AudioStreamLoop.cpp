@@ -1,3 +1,4 @@
+#include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
 
 #include "WallpaperEngine/Application/ApplicationContext.h"
@@ -7,6 +8,9 @@
 #include "WallpaperEngine/Audio/Drivers/Detectors/AudioPlayingDetector.h"
 #include "WallpaperEngine/Audio/Drivers/Recorders/PlaybackRecorder.h"
 #include "WallpaperEngine/Audio/Drivers/SDLAudioDriver.h"
+#include "WallpaperEngine/Data/Model/Project.h"
+#include "WallpaperEngine/Data/Model/Wallpaper.h"
+#include "WallpaperEngine/Data/Parsers/ObjectParser.h"
 #include "WallpaperEngine/Data/Utils/MemoryStream.h"
 #include "WallpaperEngine/Data/Utils/ScopeGuard.h"
 #include "WallpaperEngine/Render/Drivers/Detectors/FullScreenDetector.h"
@@ -165,5 +169,69 @@ TEST_CASE ("paused sound streams preserve buffered samples until resumed", "[aud
     driver.getSpec ().callback (&driver, reinterpret_cast<Uint8*> (output.data ()), sizeof (output));
     REQUIRE (output == std::array<float, 2> { 0.25f, 0.5f });
     REQUIRE (buffer->audio_buf_index == 3 * sizeof (float));
+    stream.setPaused (true);
+}
+
+TEST_CASE ("sound volume retains authored dynamic values and unity default", "[audio][parser]") {
+    using WallpaperEngine::Data::JSON::JSON;
+    using WallpaperEngine::Data::Model::Project;
+    using WallpaperEngine::Data::Model::Sound;
+    using WallpaperEngine::Data::Parsers::ObjectParser;
+    const Project project {};
+    auto data = JSON::parse (R"({"id":1,"name":"sound","sound":[]})");
+    const auto defaults = ObjectParser::parse (data, project);
+    REQUIRE (defaults->as<Sound> ()->volume->evaluateFloat (0.0f) == 1.0f);
+    data["volume"] = JSON::parse (R"({"value":0.5,"script":"export function update(value) { return value; }"})");
+    const auto authored = ObjectParser::parse (data, project);
+    REQUIRE (authored->as<Sound> ()->volume->evaluateFloat (0.0f) == 0.5f);
+    REQUIRE (authored->as<Sound> ()->volume->value->getScriptSource ().has_value ());
+}
+
+TEST_CASE ("sound mixing preserves fractional gain and global volume", "[audio]") {
+    const char* oldDriver = SDL_getenv ("SDL_AUDIODRIVER");
+    const std::string savedDriver = oldDriver != nullptr ? oldDriver : "";
+    SDL_setenv ("SDL_AUDIODRIVER", "dummy", 1);
+    WallpaperEngine::Data::Utils::ScopeGuard restoreDriver ([&] {
+	if (oldDriver != nullptr) {
+	    SDL_setenv ("SDL_AUDIODRIVER", savedDriver.c_str (), 1);
+	} else {
+	    unsetenv ("SDL_AUDIODRIVER");
+	}
+    });
+    char executable[] = "tests";
+    char* argv[] = { executable };
+    ApplicationContext applicationContext (1, argv);
+    applicationContext.state.general.keepRunning = true;
+    applicationContext.state.audio.volume = SDL_MIX_MAXVOLUME / 2;
+    FullScreenDetector fullscreenDetector (applicationContext);
+    AudioPlayingDetector audioDetector (applicationContext, fullscreenDetector);
+    PlaybackRecorder recorder;
+    WallpaperEngine::Audio::Drivers::SDLAudioDriver driver (applicationContext, audioDetector, recorder);
+    REQUIRE (driver.getSpec ().format == AUDIO_F32SYS);
+    AudioContext audioContext (driver);
+    AudioStream stream (audioContext, shortPcmWave (), true);
+    stream.setPaused (true);
+    const int id = driver.addStream (&stream);
+    WallpaperEngine::Data::Utils::ScopeGuard removeStream ([&] { driver.removeStream (id); });
+    const auto deadline = std::chrono::steady_clock::now () + std::chrono::seconds (2);
+    while (stream.isQueueEmpty () && std::chrono::steady_clock::now () < deadline) {
+	std::this_thread::yield ();
+    }
+    REQUIRE_FALSE (stream.isQueueEmpty ());
+    SDL_LockMutex (driver.getStreamMutex ());
+    WallpaperEngine::Data::Utils::ScopeGuard unlock ([&] { SDL_UnlockMutex (driver.getStreamMutex ()); });
+    auto* buffer = driver.getStreams ().at (id);
+    const std::array<float, 2> samples { 0.25f, -0.5f };
+    for (const float gain : { 1.0f, 0.25f, 0.0001f, 0.0f }) {
+	stream.setGain (gain);
+	stream.setPaused (false);
+	std::memcpy (buffer->audio_buf, samples.data (), sizeof (samples));
+	buffer->audio_buf_size = sizeof (samples);
+	buffer->audio_buf_index = 0;
+	std::array<float, 2> output {};
+	driver.getSpec ().callback (&driver, reinterpret_cast<Uint8*> (output.data ()), sizeof (output));
+	REQUIRE (output[0] == Catch::Approx (samples[0] * gain * 0.5f).margin (1e-8));
+	REQUIRE (output[1] == Catch::Approx (samples[1] * gain * 0.5f).margin (1e-8));
+    }
     stream.setPaused (true);
 }

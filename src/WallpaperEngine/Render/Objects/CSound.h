@@ -28,6 +28,7 @@ public:
 protected:
     void load ();
     void unload ();
+    [[nodiscard]] float getGain () const;
 
 private:
     std::map<int, Audio::AudioStream*> m_audioStreams = {};
