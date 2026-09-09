@@ -150,6 +150,7 @@ SoundUniquePtr ObjectParser::parseSound (const JSON& it, const Project& project,
 	std::move (base),
 	SoundData {
 	    .volume = it.user ("volume", project.properties, 1.0f),
+	    .startSilent = it.optional ("startsilent", false),
 	    .playbackmode = it.optional<std::string> ("playbackmode"),
 	    .sounds = sounds,
 	}

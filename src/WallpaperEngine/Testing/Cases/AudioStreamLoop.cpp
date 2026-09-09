@@ -235,3 +235,17 @@ TEST_CASE ("sound mixing preserves fractional gain and global volume", "[audio]"
     }
     stream.setPaused (true);
 }
+
+TEST_CASE ("sound layers retain initial silence with an audible default", "[audio][parser]") {
+    using WallpaperEngine::Data::JSON::JSON;
+    using WallpaperEngine::Data::Model::Project;
+    using WallpaperEngine::Data::Model::Sound;
+    using WallpaperEngine::Data::Parsers::ObjectParser;
+    const Project project {};
+    auto data = JSON::parse (R"({"id":1,"name":"sound","sound":[]})");
+    const auto defaults = ObjectParser::parse (data, project);
+    REQUIRE_FALSE (defaults->as<Sound> ()->startSilent);
+    data["startsilent"] = true;
+    const auto authored = ObjectParser::parse (data, project);
+    REQUIRE (authored->as<Sound> ()->startSilent);
+}
