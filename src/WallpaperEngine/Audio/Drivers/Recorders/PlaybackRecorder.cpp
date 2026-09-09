@@ -21,6 +21,7 @@ float PlaybackRecorder::elapsedUpdateSeconds () {
 
 void PlaybackRecorder::setRawSpectrum (const float* left, const float* right, const float deltaSeconds) {
     constexpr float kEnvelopeFloor = 0.001f;
+    constexpr float kRelativePeakFloor = 0.333f;
     constexpr float kEnvelopeRisePerSecond = 1.0f;
     constexpr float kEnvelopeFallPerSecond = 0.5f;
     constexpr float kIntermediateRate = 20.0f;
@@ -36,10 +37,27 @@ void PlaybackRecorder::setRawSpectrum (const float* left, const float* right, co
     float* const output[2] = { this->audio64Left, this->audio64Right };
     const float* const input[2] = { this->rawAudio64Left, this->rawAudio64Right };
 
+    // ponytail: Native scene processing (FUN_140110630, wallpaper64.exe) floors all
+    // sixteen group targets at 0.333 of the loudest band across both channels.
+    // Without this shared reference, quiet groups amplify FFT leakage/noise
+    // independently until a single tone appears throughout the spectrum.
+    const float globalPeak = std::max (
+	*std::max_element (this->rawAudio64Left, this->rawAudio64Left + 64),
+	*std::max_element (this->rawAudio64Right, this->rawAudio64Right + 64)
+    );
+    const float targetFloor = globalPeak * kRelativePeakFloor;
+    // The native processor resets its gain after silence before following a
+    // newly audible signal, rather than dividing it by a near-zero envelope.
+    if (this->m_peakEnvelope[0][0] <= kEpsilon && globalPeak >= kEpsilon) {
+	for (auto& channel : this->m_peakEnvelope) {
+	    std::fill_n (channel, 8, 1.0f);
+	}
+    }
+
     for (int channel = 0; channel < 2; channel++) {
 	for (int block = 0; block < 8; block++) {
 	    const int firstBand = block * 8;
-	    float target = input[channel][firstBand];
+	    float target = std::max (input[channel][firstBand], targetFloor);
 	    for (int offset = 1; offset < 8; offset++) {
 		target = std::max (target, input[channel][firstBand + offset]);
 	    }

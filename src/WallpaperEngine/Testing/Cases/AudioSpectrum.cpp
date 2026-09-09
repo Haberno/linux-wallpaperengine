@@ -79,3 +79,83 @@ TEST_CASE ("scene spectra use native time-based normalization and peak reduction
     REQUIRE (recorder.audio16Right[1] == Catch::Approx (1.0f));
     REQUIRE (recorder.audio16Average[0] == Catch::Approx (0.5f));
 }
+
+TEST_CASE ("scene normalization keeps quiet frequency groups relative to the stereo peak") {
+    PlaybackRecorder recorder;
+    std::array<float, 64> left {};
+    std::array<float, 64> right {};
+    left[37] = 3.0f;
+    left[7] = 0.0004f;
+    right[5] = 0.3f;
+    right[55] = 0.0006f;
+
+    // Let the envelopes settle: independently normalizing quiet groups used to
+    // turn this tiny leakage into bars at 40% and 60% height.
+    for (int frame = 0; frame < 1200; frame++) {
+	recorder.setRawSpectrum (left.data (), right.data (), 1.0f / 60.0f);
+    }
+
+    REQUIRE (recorder.audio64Left[37] == Catch::Approx (1.0f));
+    REQUIRE (recorder.audio64Left[7] < 0.001f);
+    REQUIRE (recorder.audio64Right[55] < 0.001f);
+    // The native floor is shared across channels: the weaker tone retains its level.
+    REQUIRE (recorder.audio64Right[5] == Catch::Approx (0.3f / (3.0f * 0.333f)));
+    REQUIRE (recorder.rawAudio64Left[7] == left[7]);
+    REQUIRE (recorder.rawAudio64Right[55] == right[55]);
+    REQUIRE (recorder.audio32Left[3] < 0.001f);
+    REQUIRE (recorder.audio16Right[13] < 0.001f);
+}
+
+TEST_CASE ("a sustained 2000 Hz tone does not raise distant scene spectrum bars") {
+    for (const uint32_t sampleRate : { 44100u, 48000u }) {
+	for (const double amplitude : { 0.1, 0.9 }) {
+	    CAPTURE (sampleRate, amplitude);
+	    WallpaperEngineSpectrumAnalyzer analyzer (sampleRate);
+	    PlaybackRecorder recorder;
+	    std::vector<float> samples (analyzer.frameCount ());
+	    std::array<float, 64> left {};
+	    std::array<float, 64> right {};
+
+	    // 44.1 kHz deliberately places the tone between FFT bins. A quiet,
+	    // bin-aligned tone alone hid the normalization bug in earlier tests.
+	    for (std::size_t block = 0; block < 300; block++) {
+		for (std::size_t frame = 0; frame < samples.size (); frame++) {
+		    const double time = static_cast<double> (block * samples.size () + frame) / sampleRate;
+		    samples[frame] = static_cast<float> (amplitude * std::sin (2.0 * std::numbers::pi * 2000.0 * time));
+		}
+		analyzer.processInterleaved (samples.data (), samples.size (), 1, left.data (), right.data ());
+		recorder.setRawSpectrum (
+		    left.data (), right.data (), static_cast<float> (samples.size ()) / sampleRate
+		);
+	    }
+
+	    const auto peak = std::distance (
+		recorder.audio64Left, std::max_element (recorder.audio64Left, recorder.audio64Left + 64)
+	    );
+	    const auto expectedBin = static_cast<std::size_t> (std::lround (2000.0 * samples.size () / sampleRate));
+	    REQUIRE (peak == analyzer.bandForBin (expectedBin));
+	    REQUIRE (recorder.audio64Left[peak] > 0.8f);
+	    float distantPeak = 0.0f;
+	    for (int band = 0; band < 64; band++) {
+		if (std::abs (band - peak) > 1) {
+		    distantPeak = std::max (distantPeak, recorder.audio64Left[band]);
+		}
+	    }
+	    REQUIRE (distantPeak < 0.05f);
+	}
+    }
+}
+
+TEST_CASE ("scene normalization restarts its envelope when audio returns after silence") {
+    PlaybackRecorder recorder;
+    std::array<float, 64> left {};
+    std::array<float, 64> right {};
+    for (int frame = 0; frame < 600; frame++) {
+	recorder.setRawSpectrum (left.data (), right.data (), 1.0f / 60.0f);
+    }
+    left[37] = 0.1f;
+    recorder.setRawSpectrum (left.data (), right.data (), 1.0f / 60.0f);
+    REQUIRE (recorder.audio64Left[37] > 0.03f);
+    REQUIRE (recorder.audio64Left[37] < 0.05f);
+    REQUIRE (recorder.audio64Right[37] == 0.0f);
+}
