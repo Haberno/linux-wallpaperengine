@@ -120,99 +120,66 @@ DBusMediaSource::~DBusMediaSource () {
 }
 
 void DBusMediaSource::parseMetadata (DBusMessageIter& variant) {
+    if (dbus_message_iter_get_arg_type (&variant) != DBUS_TYPE_ARRAY) {
+	return;
+    }
+    // MPRIS Metadata is a complete dictionary, including when delivered inside
+    // PropertiesChanged. Omitted fields belong to the new track and must clear.
+    auto updated = this->m_mediaInfo;
+    updated.title.clear ();
+    updated.artist.clear ();
+    updated.album.clear ();
+    updated.url.reset ();
+    updated.duration = 0.0;
+
     DBusMessageIter dict;
     dbus_message_iter_recurse (&variant, &dict);
-
-    bool metadataUpdate = false;
-    bool albumUpdate = false;
-
     while (dbus_message_iter_get_arg_type (&dict) == DBUS_TYPE_DICT_ENTRY) {
 	DBusMessageIter entry;
 	dbus_message_iter_recurse (&dict, &entry);
-
 	const char* key = nullptr;
 	dbus_message_iter_get_basic (&entry, &key);
-
-	std::string keyStr = key ?: "";
-
-	DBusMessageIter value;
-	dbus_message_iter_next (&entry);
-	dbus_message_iter_recurse (&entry, &value);
-
-	if (keyStr == "xesam:title") {
-	    const char* title = nullptr;
-	    dbus_message_iter_get_basic (&value, &title);
-
-	    std::string titleStr = title ?: "";
-
-	    if (this->m_mediaInfo.title != titleStr) {
-		this->m_mediaInfo.title = titleStr;
-		metadataUpdate = true;
-	    }
-	} else if (keyStr == "xesam:artist") {
-	    DBusMessageIter arr;
-
-	    dbus_message_iter_recurse (&value, &arr);
-
-	    if (dbus_message_iter_get_arg_type (&arr) == DBUS_TYPE_STRING) {
-		const char* artist = nullptr;
-		dbus_message_iter_get_basic (&arr, &artist);
-
-		std::string artistStr = artist ?: "";
-
-		if (this->m_mediaInfo.artist != artistStr) {
-		    this->m_mediaInfo.artist = artistStr;
-		    metadataUpdate = true;
-		}
-	    }
-	} else if (keyStr == "xesam:album") {
-	    const char* album = nullptr;
-	    dbus_message_iter_get_basic (&value, &album);
-
-	    std::string albumStr = album ?: "";
-
-	    if (this->m_mediaInfo.album != albumStr) {
-		this->m_mediaInfo.album = albumStr;
-		albumUpdate = true;
-	    }
-	} else if (keyStr == "mpris:artUrl") {
-	    const char* artUrl = nullptr;
-	    dbus_message_iter_get_basic (&value, &artUrl);
-
-	    std::string artUrlStr = artUrl ?: "";
-
-	    if (artUrlStr.empty () && this->m_mediaInfo.url.has_value ()) {
-		this->m_mediaInfo.url.reset ();
-		albumUpdate = true;
-	    } else if (this->m_mediaInfo.url.has_value () && artUrlStr != *this->m_mediaInfo.url) {
-		this->m_mediaInfo.url = artUrlStr;
-		albumUpdate = true;
-	    } else if (!this->m_mediaInfo.url.has_value ()) {
-		this->m_mediaInfo.url = artUrlStr;
-		albumUpdate = true;
-	    }
-	} else if (keyStr == "mpris:length") {
-	    int64_t length = 0;
-	    dbus_message_iter_get_basic (&value, &length);
-
-	    if (this->m_mediaInfo.duration != length) {
-		this->m_mediaInfo.duration = length;
-		metadataUpdate = true;
-	    }
+	if (!dbus_message_iter_next (&entry) || dbus_message_iter_get_arg_type (&entry) != DBUS_TYPE_VARIANT) {
+	    dbus_message_iter_next (&dict);
+	    continue;
 	}
-
+	DBusMessageIter value;
+	dbus_message_iter_recurse (&entry, &value);
+	const std::string_view keyStr = key;
+	const int type = dbus_message_iter_get_arg_type (&value);
+	if (type == DBUS_TYPE_STRING) {
+	    const char* text = nullptr;
+	    dbus_message_iter_get_basic (&value, &text);
+	    if (keyStr == "xesam:title") {
+		updated.title = text;
+	    } else if (keyStr == "xesam:album") {
+		updated.album = text;
+	    } else if (keyStr == "mpris:artUrl" && *text != '\0') {
+		updated.url = text;
+	    }
+	} else if (keyStr == "xesam:artist" && type == DBUS_TYPE_ARRAY) {
+	    DBusMessageIter artists;
+	    dbus_message_iter_recurse (&value, &artists);
+	    if (dbus_message_iter_get_arg_type (&artists) == DBUS_TYPE_STRING) {
+		const char* artist = nullptr;
+		dbus_message_iter_get_basic (&artists, &artist);
+		updated.artist = artist;
+	    }
+	} else if (keyStr == "mpris:length" && type == DBUS_TYPE_INT64) {
+	    dbus_int64_t duration = 0;
+	    dbus_message_iter_get_basic (&value, &duration);
+	    updated.duration = duration;
+	}
 	dbus_message_iter_next (&dict);
     }
 
-    sLog.debug (
-	"Player metadata received: title=", this->m_mediaInfo.title, ",artist=", this->m_mediaInfo.artist,
-	",album=", this->m_mediaInfo.album, ",url=", this->m_mediaInfo.url.has_value () ? *this->m_mediaInfo.url : ""
-    );
-
+    const bool metadataUpdate = updated.title != this->m_mediaInfo.title || updated.artist != this->m_mediaInfo.artist
+	|| updated.album != this->m_mediaInfo.album || updated.duration != this->m_mediaInfo.duration;
+    const bool albumUpdate = updated.url != this->m_mediaInfo.url;
+    this->m_mediaInfo = std::move (updated);
     if (metadataUpdate) {
 	this->fireMetadataListeners ();
     }
-
     if (albumUpdate) {
 	this->fireAlbumArtListeners ();
     }
