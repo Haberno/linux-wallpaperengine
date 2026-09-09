@@ -150,11 +150,12 @@ it, and do not "improve" it by pinning staged textures.
   compatibility, and GLSL translation memos already exist in memory (source
   checked 2026-09-06); this supersedes the micro-optimization in item 34.
   → [[Shader Translation]].
-- **Close the `collectProjectTextures` gaps** — ~9 render-thread
-  `texture.sync_load` hits were measured per switch. Source review 2026-09-06
-  confirms no `Model` (3D) branch: it walks `Image`, `Particle`, and `Text`.
-  It now collects puppet clipping masks too. Trace the remaining stock/shader-
-  generated references rather than assuming every `masks/*` path is missed.
+- **Close the remaining shader/effect-generated texture prefetch gaps** —
+  3D model materials are covered as of 2026-09-08, alongside image, particle,
+  text and puppet clipping masks. Pokemon - Deep Sea Dive (3562141459) now has
+  2 synchronous loads instead of 129. Trace shader-declared defaults and other
+  generated references; see [[Load Performance]] for the GPU program cache
+  that also removes repeated material/shadow shader compilation.
 - **Saturn 3589454154 spends ~2.4 s parsing `project.json`** on the loader
   thread — request-to-visible 2.5 s vs ~0.9 s for comparable wallpapers. Off
   the render thread, so it delays without stuttering; find out what is
@@ -164,10 +165,10 @@ it, and do not "improve" it by pinning staged textures.
   phases blocks the render thread.
 - **Steady-state frame cost has never been measured** — all work so far is load
   cost only.
-- **Re-measure on Wayland.** Every figure was taken in a GLFW `--window`, where
-  `makeBuildContextCurrent` is unavailable (`VideoDriver.h:81`) so GL upload also
-  lands on the render thread. The stall numbers are an upper bound; the desktop
-  path should be better and has not been quantified.
+- **Measure web transitions on Wayland.** Scene cold-start/switch measurements
+  now include heavy 3D (2026-09-08) and the September 7 two-wallpaper regression
+  sample; see [[Load Performance]]. Earlier GLFW `--window` figures lacked
+  shared-context texture uploads and should not stand in for desktop timings.
 - **The 1536 MiB texture budget is a fixed constant**, not derived from
   available VRAM/RAM. A three-way overlap or an 8K wallpaper thrashes again.
 

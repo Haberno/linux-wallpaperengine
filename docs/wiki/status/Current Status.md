@@ -195,10 +195,12 @@ the render thread for up to 2.3 s; that was the texture cache budget being
 smaller than one 4K wallpaper, so each switch evicted its own freshly staged
 textures and the scene build re-decoded them inline. Fixed in eaa72fc (budget
 sized for two wallpapers), stall now 0.35–0.79 s. Remaining open work — shader
-translation has no disk cache, `collectProjectTextures` misses four asset
-classes, Saturn's 2.4 s `project.json` parse, one unexplained ~1 s frame, and
+translation has no disk cache, shader-generated texture defaults still miss
+prefetch, Saturn's 2.4 s `project.json` parse, one unexplained ~1 s frame, and
 steady-state cost never measured — is listed in [[TODO Backlog]]; full numbers
-and method in [[Load Performance]].
+and method in [[Load Performance]]. On 2026-09-08, model-material prefetch and
+an in-memory linked GPU program binary cache were added for 3D scenes;
+[[Load Performance]] records the new Pokemon/Rayman measurements.
 
 ## Web wallpapers (CEF)
 

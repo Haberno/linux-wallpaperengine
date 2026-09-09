@@ -48,6 +48,76 @@ loader thread reports `upload ~0 ms`. The July measurements below were taken in 
 GLFW window-mode screen key is `"default"` (`GLFWWindowOutput.cpp:31`), needed
 for socket commands.
 
+## 3D model loading (2026-09-08)
+
+- [x] Batch-prefetch all `Model3D` submesh material textures. Pokemon - Deep Sea
+  Dive (3562141459) preloads 144 textures instead of 17, reducing render-thread
+  cache misses from 129 to 2. Final texture count/bytes match the baseline.
+- [x] Read each MDL once in bulk, then parse geometry and animation from the
+  same bytes. The former pair of `load()` calls reopened and copied the whole
+  file twice using byte iterators. Pokemon's project phase fell from about
+  1.10 s to 0.66 s, with no persistent model cache.
+- [x] Reuse linked GPU program binaries across material and model-shadow passes.
+  Pokemon reuses 764 programs and compiles 92 from source. Complete vertex and
+  fragment source keys preserve lighting/bone-count/texture-format variants;
+  each pass still has an independent program and uniform state. The cache is
+  bounded to 64 MiB of binary/source payload in RAM per render context, uses
+  least-recently-used eviction, and writes no files. Unsupported or rejected
+  binaries fall back to normal compilation. See [[Shader Translation]].
+
+The original Release executable **and its shared library** were preserved
+before edits (base `7d8d11c8`, with the same existing unfinished edits in both
+builds). Tests ran serially on a temporary Wayland headless output, 1920×1080
+at compositor scale 2, engine render scale 1, 30 FPS, muted. Physical desktop
+wallpapers and their render settings were preserved. Wall-clock results are
+machine/driver/cache dependent; these are measured checks, not guarantees.
+
+| Pokemon - Deep Sea Dive, process start to first frame | Before | After |
+|---|---:|---:|
+| Driver disk cache disabled for both test processes | 38.286 s | 18.749 s |
+| Fully warmed driver cache, fresh engine processes | 3.498 s | 2.996 s |
+
+The uncached comparison uses NVIDIA's documented `__GL_SHADER_DISK_CACHE=0`
+only in the test process environment; it neither deletes nor reconfigures the
+user's existing cache. The initial unprofiled baseline was 20.377 s and the
+first cached implementation was 5.416 s, but later runs warmed NVIDIA's own
+cache. Do **not** attribute that whole difference to this patch. In the
+controlled uncached optimized run, scene construction took 4.450 s but first
+frame took 18.749 s: the driver deferred additional compilation until drawing.
+A ready control socket alone would incorrectly report roughly 5.7 s.
+
+A warm Wayland switch from the small `variants` fixture to Pokemon improved
+from **3.779 s to 2.318 s** (`switch.apply` request to replacement installation),
+with render-thread stall falling from **2.556 s to 1.504 s**. This phase ends
+when the new scene is installed; it does not include the fade completing.
+
+A small 2D control, Shin Godzilla [Audio Responsive + Puppet Warp]
+(3094637759), stayed around 0.65 s after driver warmup. The largest gains are
+in scenes that repeatedly use the same materials and shadow shaders.
+
+Verification: 953 assertions in the 118 default C++ cases, plus 27 assertions
+in two opt-in OpenGL cases. The latter verifies a real binary-cache hit,
+independent uniforms, source changes in either stage, too-small cache budgets,
+and recovery after vertex/fragment compilation and program-link errors.
+
+A focused corpus sample completed in **27.9 s**, two seconds of post-load
+rendering per item, one renderer and six shader-validation workers:
+
+| Workshop ID | Exact title | Result |
+|---|---|---|
+| 3562141459 | Pokemon - Deep Sea Dive | 29 frames, exit 0, no shader failures; existing script warnings |
+| 3562150203 | Rayman - River Ride | 29 frames, exit 0, no shader failures; existing script warnings |
+| 3589454154 | 土星 &#124; Saturn - Sykm | 30 frames, exit 0, no shader failures |
+| 3094637759 | Shin Godzilla [Audio Responsive + Puppet Warp] | 30 frames, exit 0, no shader failures |
+| 3107568889 | Moon Lady 4K [OC] [space sci-fi] [AI] | 30 frames, exit 0; same 8 standalone shader failures and one logged exception as the September 7 full corpus |
+
+All five shader-failure file sets match the full-corpus baseline. This is a
+startup/render regression sample, not another complete corpus run or a visual
+parity claim. For appearance, check Pokemon's fish animation, terrain, lighting
+and shadows; Rayman's character animation and river materials; and Saturn's
+ring transparency. Measurements and raw health reports were retained under
+`/tmp/lwe-3d-load-20260908/` during verification.
+
 ## Desktop switch regression (2026-09-07)
 
 - [x] Bind native engine getters to their owning instance. During live
@@ -177,12 +247,12 @@ a three-way overlap or an 8K wallpaper would thrash again.
   passes, ~52 ms in glslang→SPIR-V→spirv-cross (`GLSLContext::toGlsl`). Per-pass
   preprocessing averages only 1.4 ms but reaches 424 ms on the 2555-pass
   wallpaper. Process restarts lose the in-memory caches. → [[Shader Translation]].
-- **`collectProjectTextures` misses whole asset classes**, leaving ~9
-  render-thread `texture.sync_load` hits per switch in the recorded run.
-  Source checked 2026-09-06: there is still no `Model` (3D) branch; it walks
-  `Image`, `Particle`, and `Text`, including puppet clipping-mask assets.
-  Reidentify missed stock/shader-generated references instead of treating
-  all `masks/*` paths as absent from prefetch.
+- **Shader/effect-generated textures can still miss prefetch.** The 3D model
+  material gap is fixed (2026-09-08): `collectProjectTextures` walks `Model3D`
+  submesh materials as well as `Image`, `Particle`, and `Text`, including
+  puppet clipping-mask assets. Pokemon - Deep Sea Dive drops from 129 sync
+  loads to 2 (`gradient/gradient_toon_smooth` and `util/black`). The remaining
+  shader defaults are discovered during shader preprocessing, after prefetch.
 - **Saturn 3589454154 spends ~2.4 s parsing `project.json`** on the loader
   thread (request-to-visible 2.5 s vs ~0.9 s for comparable wallpapers). It is
   off the render thread, so it delays the switch without stuttering.

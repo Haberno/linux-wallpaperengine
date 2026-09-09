@@ -158,6 +158,22 @@ in memory, so repeated switches can reuse those results. The outstanding
 work is a content-addressed disk cache; fixed regex patterns are already
 `static`. → [[Load Performance]].
 
+### Linked GPU programs
+
+`RenderContext` also owns a 64 MiB `ShaderProgramCache` (2026-09-08). It
+keys complete translated vertex/fragment sources, including all combos and
+generated lighting/skinning code, and stores driver program binaries in RAM.
+Material passes and model shadow passes each get a fresh GL program loaded
+from that binary, so uniforms and per-material settings remain independent.
+Entries are evicted by least recent use; unsupported formats and rejected
+binaries fall back to normal compilation. No GPU objects or files are retained
+by this cache. It complements the source/translation caches above and speeds
+up repeated model submeshes and instances; timings are in [[Load Performance]].
+
+The hidden GL regression suite (`build/output/tests '[gl]'`) needs a desktop
+session. It checks independent uniforms, keys that include both shader stages,
+a cache budget too small for a binary, and recovery after compile/link errors.
+
 ## Debugging: dumping composed sources
 
 Set `WPE_DUMP_SHADERS=<dir>` to write every fully composed unit (post-header,
