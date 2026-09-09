@@ -7,6 +7,7 @@
 #include <vector>
 
 #include "TextureCache.h"
+#include "Shaders/ShaderProgramCache.h"
 #include "WallpaperEngine/Application/WallpaperApplication.h"
 #include "WallpaperEngine/Input/InputContext.h"
 #include "WallpaperEngine/Input/MouseInput.h"
@@ -89,6 +90,7 @@ namespace Render {
 	[[nodiscard]] const std::map<std::string, std::shared_ptr<CWallpaper>>& getWallpapers () const;
 	[[nodiscard]] TextureCacheStats getTextureCacheStats () const;
 	[[nodiscard]] Media::MediaSource& getMediaSource () const;
+	[[nodiscard]] Shaders::ShaderProgramCache& getShaderProgramCache () { return m_shaderProgramCache; }
 
     private:
 	/** Crossfade between the previous and the current wallpaper of a screen */
@@ -117,6 +119,7 @@ namespace Render {
 	Media::MediaSource& m_mediaSource;
 	/** Texture cache for the render */
 	std::unique_ptr<TextureCache> m_textureCache = nullptr;
+	Shaders::ShaderProgramCache m_shaderProgramCache;
 	/** First-requested output size, see getStableOutputSize */
 	mutable std::optional<glm::ivec2> m_stableOutputSize = std::nullopt;
     };
