@@ -372,6 +372,16 @@ CScene::CScene (
 	{ sceneWidth / 8, sceneHeight / 8 }
     );
 
+    this->updateBloomState ();
+
+    constructionGuard.cancel ();
+}
+
+CScene::~CScene () { this->destroyObjects (); }
+
+void CScene::initializeBloom () {
+    const uint32_t sceneWidth = this->getWidth ();
+    const uint32_t sceneHeight = this->getHeight ();
     //
     // Had to get a little creative with the effects to achieve the same bloom effect without any custom code
     // this custom image loads some effect files from the virtual container to achieve the same bloom effect
@@ -410,18 +420,46 @@ CScene::CScene (
 		      { "passes", JSON::array ({ bloomConstants, bloomConstants, bloomConstants }) } } }
 	      ) } };
 
-    // create image for bloom passes
-    if (scene->camera.bloom.enabled->value->getBool ()) {
-	this->m_bloomObjectData = ObjectParser::parse (bloom, scene->project);
-	this->m_bloomObject = this->createObject (*this->m_bloomObjectData);
-
+    this->m_bloomObjectData = ObjectParser::parse (bloom, this->getScene ().project);
+    this->m_bloomObject = this->createObject (*this->m_bloomObjectData);
+    if (this->m_bloomObject != nullptr) {
 	this->m_objectsByRenderOrder.push_back (this->m_bloomObject);
     }
-
-    constructionGuard.cancel ();
 }
 
-CScene::~CScene () { this->destroyObjects (); }
+void CScene::updateBloomState () {
+    const auto& bloom = this->getScene ().camera.bloom;
+    if (!bloom.enabled->value->getBool ()) {
+	return;
+    }
+
+    // A disabled wallpaper should not compile bloom shaders until it needs them.
+    // Keep a successfully created chain ready for subsequent disable/enable cycles.
+    if (!this->m_bloomSetupAttempted) {
+	this->m_bloomSetupAttempted = true;
+	try {
+	    this->initializeBloom ();
+	} catch (const std::exception& error) {
+	    sLog.error ("Failed to initialize scene bloom: ", error.what ());
+	}
+    }
+    if (this->m_bloomObject == nullptr) {
+	return;
+    }
+
+    const float sceneTime = this->getTime ();
+    const float strength = bloom.strength->evaluateFloat (sceneTime);
+    const float threshold = bloom.threshold->evaluateFloat (sceneTime);
+    const glm::vec3 tint = bloom.tint->evaluateVec3 (sceneTime);
+    // CPass retains pointers into these constants. Update their values in place
+    // so scripts, user properties, and keyframes reach the uniforms every frame.
+    const auto* image = this->m_bloomObjectData->as<Image> ();
+    for (const auto& pass : image->effects.front ()->passOverrides) {
+	pass->constants.at ("bloomstrength")->value->update (strength, DynamicValue::Initialization);
+	pass->constants.at ("bloomthreshold")->value->update (threshold, DynamicValue::Initialization);
+	pass->constants.at ("bloomtint")->value->update (tint, DynamicValue::Initialization);
+    }
+}
 
 void CScene::destroyObjects () noexcept {
     // bloom object is in the objects list, so no need to explicitly delete it
@@ -644,6 +682,7 @@ void CScene::renderFrame (const glm::ivec4& viewport) {
 
     // run a tick in the javascript logic
     this->getScriptEngine ().tick ();
+    this->updateBloomState ();
 
     // Apply camera-rig movement from this tick to the frame being rendered. A
     // non-empty path still owns the final transform, but uses this pose as its
@@ -716,7 +755,10 @@ void CScene::renderFrame (const glm::ivec4& viewport) {
 
     const std::vector<CObject*> renderOrder = this->buildFrameRenderOrder ();
     const auto& debug = this->getContext ().getApp ().getContext ().settings.render.debug;
-    const auto enabledByDebug = [&debug] (const CObject* object) {
+    const auto enabledByDebug = [this, &debug] (const CObject* object) {
+	if (object == this->m_bloomObject && !this->getScene ().camera.bloom.enabled->value->getBool ()) {
+	    return false;
+	}
 	if (debug.objectFilter.has_value () && object->getId () != debug.objectFilter.value ()) {
 	    return false;
 	}
