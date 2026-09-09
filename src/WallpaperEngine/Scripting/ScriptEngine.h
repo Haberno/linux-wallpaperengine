@@ -183,7 +183,7 @@ private:
 
     void installBuiltins ();
 
-    void notifyMediaUpdate (const Media::MediaSource::MediaInfo& media);
+    void notifyMediaUpdate (const Media::MediaSource::MediaInfo& media, LoadedModule* target = nullptr);
 
     // Installs globalThis.__layers and related helpers. Called lazily.
     void ensureLayerRegistry ();

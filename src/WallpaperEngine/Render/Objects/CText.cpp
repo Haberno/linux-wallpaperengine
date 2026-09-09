@@ -25,15 +25,11 @@
 #include "WallpaperEngine/Render/Objects/CRenderable.h"
 #include "WallpaperEngine/Render/Objects/Effects/CPass.h"
 #include "WallpaperEngine/Render/Wallpapers/CScene.h"
-#include "WallpaperEngine/Scripting/ScriptEngine.h"
 
 using namespace WallpaperEngine::Render::Objects;
 
 namespace {
-// TODO: Phase 2 – load font from wallpaper's materials/fonts/ using AssetLocator
-// Phase 1 uses a system font instead of the font shipped by the wallpaper.
-// Wallpaper Engine bundles .ttf files in `materials/fonts/`; wiring those in
-// is deferred to Phase 2 along with dynamic/scripted text.
+// Fall back to a system font if the authored embedded font cannot be loaded.
 const std::vector<std::string> kFontCandidates = {
     "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
     "/usr/share/fonts/TTF/DejaVuSans.ttf",
@@ -339,10 +335,6 @@ CText::CText (Wallpapers::CScene& scene, const Text& text) :
 }
 
 CText::~CText () {
-    if (m_layerHandle != Scripting::kInvalidLayerHandle) {
-	this->getScene ().getScriptEngine ().destroyLayer (m_layerHandle);
-	m_layerHandle = Scripting::kInvalidLayerHandle;
-    }
     destroyEffectChain ();
     if (m_vbo != 0) {
 	glDeleteBuffers (1, &m_vbo);
@@ -365,13 +357,7 @@ CText::~CText () {
 }
 
 void CText::setup () {
-    const bool scripted = m_text.text->value->getScriptSource ().has_value ();
     const auto& text = m_text.text->value->getString ();
-
-    // Nothing to render and no script to produce text later → bail.
-    if (text.empty () && !scripted) {
-	return;
-    }
 
     if (!initFreeType ()) {
 	return;
@@ -385,13 +371,8 @@ void CText::setup () {
     FT_Set_Pixel_Sizes (m_ftFace, 0, static_cast<FT_UInt> (m_lastPixelSize));
 
     buildShader ();
-    // Scripted text may have an empty placeholder; use a single space so the
-    // glyph texture has non-zero dimensions until the script produces a value.
+    // Initially empty text can be written later by any layer's script.
     rebuildTextureFrom (text.empty () ? std::string (" ") : text);
-
-    if (scripted) {
-	initScriptLayer ();
-    }
 
     if (!m_text.effects.empty ()) {
 	try {
@@ -771,22 +752,6 @@ TextLayoutLimits CText::currentLayoutLimits () const {
     };
 }
 
-void CText::initScriptLayer () {
-    const auto& script = m_text.text->value->getScriptSource ();
-
-    if (!script.has_value ()) {
-	return;
-    }
-
-    m_layerHandle = this->getScene ().getScriptEngine ().createLayerScript (
-	*script, m_text.text->value->getProperties (), m_text.text->value->getString ()
-    );
-
-    if (m_layerHandle == Scripting::kInvalidLayerHandle) {
-	sLog.error ("CText: createLayerScript failed for '", m_text.name, "'");
-    }
-}
-
 void CText::rebuildTextureFrom (const std::string& text) {
     // Wallpaper Engine lays out a glyph mesh, then aligns that mesh around the layer
     // origin from its actual bounds and the font's ascender/descender. The serialized
@@ -1073,16 +1038,10 @@ void CText::render () {
     std::string str = "Text " + this->getObject ().name + " (" + std::to_string (this->getObject ().id) + ")";
     glPushDebugGroup (GL_DEBUG_SOURCE_APPLICATION, 0, -1, str.c_str ());
 #endif /* DEBUG */
-    std::string renderedText = m_lastRenderedText;
-    if (m_layerHandle != Scripting::kInvalidLayerHandle) {
-	auto& se = this->getScene ().getScriptEngine ();
-	se.tickLayer (
-	    m_layerHandle, static_cast<double> (getScene ().getTime ()),
-	    static_cast<double> (getScene ().getDeltaTime ()), static_cast<double> (getScene ().getFps ())
-	);
-	const std::string current = se.layerText (m_layerHandle);
-	renderedText = current.empty () ? std::string (" ") : current;
-    }
+    // Property scripts run once in the scene's normal lifecycle, including media
+    // events and writes to thisLayer.text from other properties/layers.
+    const auto& current = m_text.text->value->getString ();
+    const std::string renderedText = current.empty () ? std::string (" ") : current;
 
     bool rebuiltGlyphs = false;
     const unsigned int pixelSize = computeEffectivePixelSize ();
