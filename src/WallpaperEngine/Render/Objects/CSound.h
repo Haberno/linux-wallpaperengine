@@ -2,6 +2,7 @@
 
 #include "WallpaperEngine/Audio/AudioStream.h"
 #include "WallpaperEngine/Render/CObject.h"
+#include "WallpaperEngine/Scripting/ScriptableObject.h"
 
 using namespace WallpaperEngine;
 
@@ -12,12 +13,17 @@ class CScene;
 namespace WallpaperEngine::Render::Objects {
 using namespace WallpaperEngine::Data::Model;
 
-class CSound final : public CObject {
+class CSound final : virtual public CObject, public Scripting::ScriptableObject {
 public:
     CSound (Wallpapers::CScene& scene, const Sound& sound);
     ~CSound () override;
 
     void render () override;
+    void play ();
+    void pause ();
+    void stop ();
+    /** Authored playback state, independent of output volume and duplicate-screen ownership. */
+    [[nodiscard]] bool isPlaying () const { return m_playing; }
 
 protected:
     void load ();
@@ -32,5 +38,6 @@ private:
     std::string m_soundKey;
     /** registered with the AudioContext soundtrack coordinator */
     bool m_registered = false;
+    bool m_playing = true;
 };
 } // namespace WallpaperEngine::Render::Objects

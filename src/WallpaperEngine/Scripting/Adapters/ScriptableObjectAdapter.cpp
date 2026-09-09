@@ -15,6 +15,7 @@
 #include "WallpaperEngine/Data/Model/DynamicValue.h"
 #include "WallpaperEngine/Data/Utils/ScopeGuard.h"
 #include "WallpaperEngine/Render/Objects/CImage.h"
+#include "WallpaperEngine/Render/Objects/CSound.h"
 #include "WallpaperEngine/Scripting/ScriptEngine.h"
 #include "WallpaperEngine/Scripting/ScriptableObject.h"
 
@@ -651,6 +652,26 @@ static JSValue scriptable_get_animation (JSContext* ctx, JSValueConst this_val, 
 
 static JSValue
 scriptable_object_animation_command (JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv, int magic) {
+    auto* container = scriptable_container (this_val);
+    if (auto* sound = container != nullptr
+	    ? dynamic_cast<WallpaperEngine::Render::Objects::CSound*> (&container->object)
+	    : nullptr) {
+	switch (magic) {
+	    case AnimationCommand_Play:
+		sound->play ();
+		return JS_UNDEFINED;
+	    case AnimationCommand_Pause:
+		sound->pause ();
+		return JS_UNDEFINED;
+	    case AnimationCommand_Stop:
+		sound->stop ();
+		return JS_UNDEFINED;
+	    case AnimationCommand_IsPlaying:
+		return JS_NewBool (ctx, sound->isPlaying ());
+	    default:
+		return JS_UNDEFINED;
+	}
+    }
     auto* image = scriptable_image (this_val);
     if (image == nullptr) {
 	return magic == AnimationCommand_IsPlaying ? JS_FALSE : JS_UNDEFINED;

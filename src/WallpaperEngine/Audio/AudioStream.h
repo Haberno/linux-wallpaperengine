@@ -83,6 +83,9 @@ public:
      * @return If the audio stream can be played or not
      */
     [[nodiscard]] bool isInitialized () const;
+    /** Pause consumption without losing buffered audio or resetting the playhead. */
+    void setPaused (bool paused) { this->m_paused = paused; }
+    [[nodiscard]] bool isPaused () const { return this->m_paused; }
     /**
      * @param newRepeat true = repeat, false = no repeat
      */
@@ -180,6 +183,7 @@ private:
     AudioContext& m_audioContext;
     /** If this stream was properly initialized or not */
     std::atomic<bool> m_initialized = false;
+    std::atomic<bool> m_paused = false;
     /** Repeat enabled? */
     std::atomic<bool> m_repeat = false;
     /** Full playback passes so far; written by the read thread, read by the render thread */
