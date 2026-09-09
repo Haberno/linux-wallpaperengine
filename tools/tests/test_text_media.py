@@ -28,10 +28,11 @@ class Player(dbus.service.Object):
     @dbus.service.method('org.freedesktop.DBus.Properties', in_signature='ss', out_signature='v')
     def Get(self, iface, prop):
         if prop == 'PlaybackStatus': return self.state
-        if prop == 'Position': return dbus.Int64(0)
+        if prop == 'Position': return dbus.Int64(30000000)
         if prop == 'Metadata': return dbus.Dictionary({
             'xesam:title': self.title,
             'xesam:artist': dbus.Array(['Code therapy w / R...'], signature='s'),
+            'mpris:length': dbus.Int64(180000000),
         }, signature='sv')
         raise dbus.exceptions.DBusException('Unknown property')
     @dbus.service.signal('org.freedesktop.DBus.Properties', signature='sa{sv}as')
@@ -60,6 +61,12 @@ export function init() {
 export function mediaPropertiesChanged(event) {
     title = event.title;
     console.log('TEXT_MEDIA_TITLE ' + title);
+}
+export function mediaTimelineChanged(event) {
+    // Metadata can arrive before the first position poll at startup.
+    if ((event.position !== 0 && event.position !== 30) || event.duration !== 180)
+        throw new Error('Timeline must use seconds: ' + JSON.stringify(event));
+    if (event.position === 30) console.log('TEXT_MEDIA_TIMELINE_OK');
 }
 export function update(value) { return title; }
 '''
@@ -162,9 +169,10 @@ export function update(value) { return artist; }
                                 time.sleep(.05)
                             self.assertTrue(frame.exists(), log_path.read_text()[-4000:])
                             if scripted:
-                                # An unchanged player has position zero and sends no signals
+                                # An unchanged player has a fixed position and sends no signals
                                 # during startup: only cached-event delivery can populate this.
                                 self.assertIn('TEXT_MEDIA_TITLE ' + title, log_path.read_text())
+                                self.assertIn('TEXT_MEDIA_TIMELINE_OK', log_path.read_text())
                                 self.assertIn('TEXT_SOUND_CONTROLS_OK', log_path.read_text())
                                 # Also exercise later events on the same live script instances.
                                 player.stdin.write(json.dumps([state, 'Changed Track']) + '\n')
