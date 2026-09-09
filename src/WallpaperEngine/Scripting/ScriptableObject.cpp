@@ -17,11 +17,31 @@ ScriptableObject::~ScriptableObject () {
 }
 
 ScriptableObject::ScriptableObject (Wallpapers::CScene& scene, const Object& object) : CObject (scene, object) {
-    // register common dynamic values
+    // A queued module keeps a reference to its initial DynamicValue. Select the
+    // concrete renderer's fields before queueing: Image/Particle/Text parse their
+    // own transform settings separately from the generic group fallbacks.
+    const auto* scale = object.groupScale.get ();
+    const auto* angles = object.groupAngles.get ();
+    const auto* visible = object.groupVisible.get ();
+    if (object.is<Image> ()) {
+	const auto* image = object.as<Image> ();
+	scale = image->scale.get ();
+	angles = image->angles.get ();
+	visible = image->visible.get ();
+    } else if (object.is<Particle> ()) {
+	const auto* particle = object.as<Particle> ();
+	scale = particle->scale.get ();
+	angles = particle->angles.get ();
+	visible = particle->visible.get ();
+    } else if (object.is<Text> ()) {
+	const auto* text = object.as<Text> ();
+	scale = text->scale.get ();
+	visible = text->visible.get ();
+    }
     this->registerProperty ("origin", *object.origin->value);
-    this->registerProperty ("scale", *object.groupScale->value);
-    this->registerProperty ("angles", *object.groupAngles->value);
-    this->registerProperty ("visible", *object.groupVisible->value);
+    this->registerProperty ("scale", *scale->value);
+    this->registerProperty ("angles", *angles->value);
+    this->registerProperty ("visible", *visible->value);
 
     for (const auto& projection : scene.getScene ().camera.objectProjections) {
 	if (projection.id != object.id) {
@@ -52,19 +72,16 @@ const std::map<std::string, ScriptableObject::PropertyEntry>& ScriptableObject::
 }
 
 void ScriptableObject::registerProperty (const std::string& name, DynamicValue& value) {
-    // Last registration wins. The base ScriptableObject registers the group/object fallbacks
-    // (groupScale/groupAngles/groupVisible) first; a derived CImage/CText then re-registers the
-    // same names with its ImageData/TextData values — and those are what the renderer actually
-    // reads (localTransform uses image.scale/angles, render gates on image.visible). With a
-    // first-wins emplace the script would drive the group values while the image rendered from the
-    // unset image values, so thisLayer.scale/visible silently did nothing on image layers.
+    // Derived renderers repeat some common registrations and add their own
+    // properties. Both this map and the queued script must refer to the final
+    // values consumed by the renderer.
     const std::string key = name + "_" + std::to_string (this->getId ());
     // PropertyEntry holds a reference member (not assignable), so drop any prior registration and
     // re-emplace to let the derived value win.
     this->m_properties.erase (name);
     const auto [it, inserted] = this->m_properties.emplace (name, PropertyEntry { .key = key, .value = value });
 
-    // queueScript is keyed and self-guards against duplicate keys, so re-registering the same name
-    // re-points the property without spawning a second script module.
+    // Re-registering the same value is safe: the keyed module is initialized only
+    // once. The constructor must select the final value before its first queue.
     this->getScene ().getScriptEngine ().queueScript (it->second.key, it->second.value, *this);
 }
