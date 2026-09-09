@@ -1893,7 +1893,17 @@ const float& CImage::getAlpha () const { return this->m_resolvedAlpha; }
 
 const glm::vec3& CImage::getColor () const { return this->m_image.color->value->getVec3 (); }
 
-const glm::vec4& CImage::getColor4 () const { return this->m_image.color->value->getVec4 (); }
+const glm::vec4& CImage::getColor4 () const {
+    const auto& color = *this->m_image.color->value;
+    this->m_resolvedColor4 = color.getVec4 ();
+    // SceneScript image colors are RGB. General vector conversion fills a
+    // missing fourth component with zero, but that must not hide the image.
+    // Explicit RGBA colors retain their alpha; layer opacity is applied by CPass.
+    if (color.getType () == DynamicValue::UnderlyingType::Vec3) {
+	this->m_resolvedColor4.a = 1.0f;
+    }
+    return this->m_resolvedColor4;
+}
 
 const glm::vec3& CImage::getCompositeColor () const { return this->m_image.color->value->getVec3 (); }
 
