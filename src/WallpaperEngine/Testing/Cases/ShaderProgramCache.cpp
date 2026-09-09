@@ -105,3 +105,101 @@ TEST_CASE ("Shader cache falls back to source when binaries do not fit and recov
     glDeleteProgram (recovered);
     CHECK (glGetError () == GL_NO_ERROR);
 }
+
+TEST_CASE ("Live shader sharing isolates write layouts and releases programs with their materials", "[.][gl]") {
+    GLContext context;
+    ShaderProgramCache cache;
+    const std::string screenVertex = "#version 330 core\nvoid main() {\n"
+				     "vec2 p = vec2((gl_VertexID << 1) & 2, gl_VertexID & 2);\n"
+				     "gl_Position = vec4(p * 2.0 - 1.0, 0, 1); }\n";
+    const std::string colorsFragment = "#version 330 core\nuniform vec4 colors[2];\n"
+				       "out vec4 color;\nvoid main() { color = colors[0] + colors[1]; }\n";
+    std::shared_ptr<ShaderProgramCache::SharingGroup> firstGroup, secondGroup;
+    const GLuint first = cache.createProgram (screenVertex, colorsFragment, &firstGroup);
+    const GLuint second = cache.createProgram (screenVertex, colorsFragment, &secondGroup);
+    if (!firstGroup || !secondGroup) {
+	glDeleteProgram (first);
+	glDeleteProgram (second);
+	SKIP ("Driver does not provide retrievable program binaries");
+    }
+    REQUIRE (firstGroup == secondGroup);
+    const GLint colors = glGetUniformLocation (first, "colors");
+    REQUIRE (colors >= 0);
+    REQUIRE (glGetUniformLocation (second, "colors") == colors);
+    const std::string fullLayout = "colors:" + std::to_string (colors) + ":vec4:2";
+    auto red = ShaderProgramCache::shareProgram (first, firstGroup, fullLayout);
+    auto green = ShaderProgramCache::shareProgram (second, secondGroup, fullLayout);
+    REQUIRE (red);
+    REQUIRE (green);
+    CHECK (red->id == green->id);
+    CHECK (red->id != first);
+    CHECK (red->id != second);
+    auto partial
+	= ShaderProgramCache::shareProgram (second, secondGroup, "colors:" + std::to_string (colors) + ":vec4:1");
+    REQUIRE (partial);
+    CHECK (partial->id != red->id);
+
+    GLuint vao = 0, framebuffer = 0, texture = 0;
+    glGenVertexArrays (1, &vao);
+    glBindVertexArray (vao);
+    glGenFramebuffers (1, &framebuffer);
+    glBindFramebuffer (GL_FRAMEBUFFER, framebuffer);
+    glGenTextures (1, &texture);
+    glBindTexture (GL_TEXTURE_2D, texture);
+    glTexImage2D (GL_TEXTURE_2D, 0, GL_RGBA8, 1, 1, 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
+    glFramebufferTexture2D (GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, texture, 0);
+    REQUIRE (glCheckFramebufferStatus (GL_FRAMEBUFFER) == GL_FRAMEBUFFER_COMPLETE);
+    glViewport (0, 0, 1, 1);
+    const float redValues[] = { 0.5f, 0, 0, 0.5f, 0.5f, 0, 0, 0.5f };
+    const float greenValues[] = { 0, 0.5f, 0, 0.5f, 0, 0.5f, 0, 0.5f };
+    const float blueValues[] = { 0, 0, 1, 1 };
+    auto draw = [&] (GLuint program, const float* values, int count, int channel) {
+	glUseProgram (program);
+	glUniform4fv (colors, count, values);
+	glDrawArrays (GL_TRIANGLES, 0, 3);
+	unsigned char pixel[4] = {};
+	glReadPixels (0, 0, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, pixel);
+	for (int i = 0; i < 4; ++i) {
+	    CHECK (pixel[i] == (i == channel || i == 3 ? 255 : 0));
+	}
+    };
+    draw (red->id, redValues, 2, 0);
+    draw (green->id, greenValues, 2, 1);
+    draw (partial->id, blueValues, 1, 2); // Its unwritten array tail must stay zero.
+    draw (red->id, redValues, 2, 0);
+    float privateValues[4] = { -1, -1, -1, -1 };
+    glGetUniformfv (first, colors, privateValues);
+    for (const float value : privateValues) {
+	CHECK (value == 0);
+    }
+
+    // Neither the cache nor the sharing group pins a GL object after its users
+    // leave. The group's stale weak entry must also be safe to reuse.
+    glUseProgram (0);
+    const GLuint sharedID = red->id;
+    red.reset ();
+    CHECK (glIsProgram (sharedID) == GL_TRUE);
+    green.reset ();
+    CHECK (glIsProgram (sharedID) == GL_FALSE);
+    auto replacement = ShaderProgramCache::shareProgram (first, firstGroup, fullLayout);
+    REQUIRE (replacement);
+    checkLinked (replacement->id);
+    replacement.reset ();
+    partial.reset ();
+    glDeleteProgram (first);
+    glDeleteProgram (second);
+    glBindFramebuffer (GL_FRAMEBUFFER, 0);
+    glDeleteFramebuffers (1, &framebuffer);
+    glDeleteTextures (1, &texture);
+    glBindVertexArray (0);
+    glDeleteVertexArrays (1, &vao);
+
+    ShaderProgramCache disabled (1);
+    std::shared_ptr<ShaderProgramCache::SharingGroup> noGroup;
+    const GLuint privateOnly = disabled.createProgram (screenVertex, colorsFragment, &noGroup);
+    CHECK_FALSE (noGroup);
+    CHECK_FALSE (ShaderProgramCache::shareProgram (privateOnly, noGroup, fullLayout));
+    checkLinked (privateOnly);
+    glDeleteProgram (privateOnly);
+    CHECK (glGetError () == GL_NO_ERROR);
+}
