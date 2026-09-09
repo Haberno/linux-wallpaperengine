@@ -61,6 +61,9 @@ int audio_read_thread (void* arg) {
 
 	if (ret < 0) {
 	    sLog.error ("Cannot read audio packet: ", av_err2str (ret));
+	    // A corrupt/truncated tail still ends this pass. Drain its valid prefix
+	    // so the layer can complete instead of waiting forever for more packets.
+	    stream->queueDecoderFlush ();
 	    break;
 	}
 
@@ -496,6 +499,20 @@ void AudioStream::setRepeat (const bool newRepeat) { this->m_repeat = newRepeat;
 
 bool AudioStream::isRepeat () const { return this->m_repeat; }
 
+double AudioStream::getDuration () const {
+    if (this->m_formatContext == nullptr) {
+	return 0.0;
+    }
+    if (this->m_audioStream != NO_AUDIO_STREAM) {
+	const auto* stream = this->m_formatContext->streams[this->m_audioStream];
+	if (stream->duration != AV_NOPTS_VALUE && stream->duration > 0) {
+	    return stream->duration * av_q2d (stream->time_base);
+	}
+    }
+    return this->m_formatContext->duration > 0 ? static_cast<double> (this->m_formatContext->duration) / AV_TIME_BASE
+					       : 0.0;
+}
+
 ReadStreamSharedPtr& AudioStream::getBuffer () { return this->m_buffer; }
 
 SDL_cond* AudioStream::getWaitCondition () const { return this->m_queue->wait; }
@@ -616,10 +633,24 @@ int AudioStream::resampleAudio (uint8_t* out_buf, const int out_size) {
     return copied_size;
 }
 
+int AudioStream::drainResampler (uint8_t* out_buf, const int out_size) {
+    const int bytesPerFrame
+	= av_get_bytes_per_sample (this->m_audioContext.getFormat ()) * this->m_audioContext.getChannels ();
+    if (bytesPerFrame <= 0 || out_size < bytesPerFrame) {
+	return 0;
+    }
+    uint8_t* output[] = { out_buf };
+    const int samples = swr_convert (this->m_swrctx, output, out_size / bytesPerFrame, nullptr, 0);
+    return samples > 0 ? samples * bytesPerFrame : 0;
+}
+
 int AudioStream::decodeFrame (uint8_t* audioBuffer, const int bufferSize) {
     // FFmpeg's send/receive state belongs exclusively to the SDL callback. The
     // reader thread only demuxes packets and queues loop-boundary reset markers.
     while (this->m_audioContext.getApplicationContext ().state.general.keepRunning && this->isInitialized ()) {
+	if (this->m_decoderFinished) {
+	    return 0;
+	}
 	int ret = avcodec_receive_frame (this->getContext (), this->m_decodeFrame);
 	if (ret == 0) {
 	    return this->resampleAudio (audioBuffer, bufferSize);
@@ -627,6 +658,23 @@ int AudioStream::decodeFrame (uint8_t* audioBuffer, const int bufferSize) {
 	if (ret != AVERROR (EAGAIN) && ret != AVERROR_EOF) {
 	    sLog.error ("Cannot receive decoded audio frame: ", av_err2str (ret));
 	    return -1;
+	}
+	if (ret == AVERROR_EOF && this->m_draining) {
+	    const int tail = this->drainResampler (audioBuffer, bufferSize);
+	    if (tail > 0) {
+		return tail;
+	    }
+	    this->m_draining = false;
+	    if (this->isRepeat ()) {
+		avcodec_flush_buffers (this->getContext ());
+		swr_close (this->m_swrctx);
+		swr_init (this->m_swrctx);
+	    } else {
+		this->m_decoderFinished = true;
+	    }
+	    // The callback reaches this only after consuming the previous decoded
+	    // buffer. Publish playback completion there, not at demuxer read-ahead EOF.
+	    return AVERROR_EOF;
 	}
 
 	// A packet is retained only when avcodec_send_packet() previously asked us
@@ -651,10 +699,14 @@ int AudioStream::decodeFrame (uint8_t* audioBuffer, const int bufferSize) {
 	}
 
 	if (this->m_decoderFlushPending) {
-	    // This marker is ordered after the old pass's packets. Reaching it here
-	    // means receive_frame() has already drained all decoder output available
-	    // from those packets, and no other thread can be inside the codec.
-	    avcodec_flush_buffers (this->getContext ());
+	    // Sending a null packet releases delayed codec frames. The resampler
+	    // has its own delayed samples, drained above before the pass completes.
+	    ret = avcodec_send_packet (this->getContext (), nullptr);
+	    if (ret < 0 && ret != AVERROR_EOF) {
+		sLog.error ("Cannot drain audio decoder: ", av_err2str (ret));
+		return -1;
+	    }
+	    this->m_draining = true;
 	    continue;
 	}
     }

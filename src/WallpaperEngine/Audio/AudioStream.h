@@ -48,7 +48,7 @@ public:
     void queuePacket (AVPacket* pkt);
 
     /**
-     * Queues an ordered decoder reset after every packet from the completed pass.
+     * Queues an ordered drain/reset after every packet from the completed pass.
      * The file-reader thread must not call avcodec_flush_buffers() directly because
      * the SDL callback owns and operates the decoder context.
      */
@@ -106,6 +106,11 @@ public:
      * @return How many full passes the stream has played so far
      */
     [[nodiscard]] uint32_t getCompletionCount () const { return this->m_completions; }
+    /** Completed passes consumed by the output callback, including codec/resampler tails. */
+    void notifyPlaybackCompletion () { this->m_playbackCompletions++; }
+    [[nodiscard]] uint32_t getPlaybackCompletionCount () const { return this->m_playbackCompletions; }
+    /** Duration of the selected file in seconds, without opening other alternatives. */
+    [[nodiscard]] double getDuration () const;
     /**
      * Stops decoding and playback of the stream
      */
@@ -150,7 +155,7 @@ public:
      * @param audioBuffer
      * @param bufferSize
      *
-     * @return The amount of bytes available or < 0 for error
+     * @return Bytes available, 0 if temporarily empty, or AVERROR_EOF once per fully drained pass.
      */
     int decodeFrame (uint8_t* audioBuffer, int bufferSize);
 
@@ -169,6 +174,7 @@ private:
      * @return
      */
     int resampleAudio (uint8_t* out_buf, const int out_size);
+    int drainResampler (uint8_t* out_buf, int out_size);
     /**
      * Queues a packet into the play queue
      *
@@ -193,6 +199,7 @@ private:
     std::atomic<bool> m_repeat = false;
     /** Full playback passes so far; written by the read thread, read by the render thread */
     std::atomic<uint32_t> m_completions = 0;
+    std::atomic<uint32_t> m_playbackCompletions = 0;
     /** The codec context that contains the original audio format information */
     AVCodecContext* m_context = nullptr;
     /** The format context that controls how data is read off the file */
@@ -214,6 +221,8 @@ private:
     AVFrame* m_decodeFrame = nullptr;
     /** The last dequeued entry is an ordered loop-boundary decoder reset */
     bool m_decoderFlushPending = false;
+    bool m_draining = false;
+    bool m_decoderFinished = false;
 
     /**
      * Packet queue information
