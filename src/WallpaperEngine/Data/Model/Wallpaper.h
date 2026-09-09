@@ -44,6 +44,8 @@ struct SceneData {
     bool transparentSorting;
     /** Preserve an explicitly authored layer order instead of automatic depth sorting. */
     bool customSortOrder;
+    /** Clear the scene color each frame; disabling this preserves previous color, never depth. */
+    UserSettingUniquePtr clearEnabled;
     struct {
 	UserSettingUniquePtr ambient;
 	UserSettingUniquePtr skylight;
