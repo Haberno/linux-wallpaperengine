@@ -222,6 +222,36 @@ TEST_CASE ("Wallpaper Engine camera parallax delay response") {
     CHECK (CScene::calculateParallaxSmoothingAlpha (3.0f, 1.0f / 60.0f) == 0.0f);
 }
 
+TEST_CASE ("Off-center parallax layers use their root origin relative to the canvas cursor") {
+    using WallpaperEngine::Render::CObject;
+    // 3100265648's left background has only 14.89 authored pixels of left
+    // overscan. A cursor-only translation added 52.8 px and exposed gray;
+    // the native root-origin term produces 5.06 px and preserves coverage.
+    const glm::vec2 canvas (1920.0f, 1080.0f);
+    const glm::vec2 backgroundOrigin (525.98431f, 541.46173f);
+    const glm::vec2 offset
+	= CObject::calculateParallaxOffset (backgroundOrigin, glm::vec2 (1.0f), canvas, { -0.5f, 0.0f }, 0.11f);
+    CHECK (offset.x == Catch::Approx (5.058274f));
+    CHECK (offset.y == Catch::Approx (-0.160791f));
+    CHECK (backgroundOrigin.x - 1010.0f * 1.07103f * 0.5f + offset.x < 0.0f);
+
+    const glm::vec2 centered
+	= CObject::calculateParallaxOffset (canvas * 0.5f, { 0.5f, 0.5f }, canvas, { -0.5f, 0.5f }, 0.1f);
+    CHECK (centered.x == Catch::Approx (24.0f));
+    CHECK (centered.y == Catch::Approx (13.5f));
+    CHECK (
+	CObject::calculateParallaxOffset (backgroundOrigin, glm::vec2 (0), canvas, { -0.5f, 0.5f }, 0.11f)
+	== glm::vec2 (0)
+    );
+    CHECK (
+	CObject::calculateParallaxOffset (backgroundOrigin, glm::vec2 (1), canvas, { -0.5f, 0.5f }, 0.0f)
+	== glm::vec2 (0)
+    );
+    // Signed per-axis depths remain supported; origin and cursor share canvas units.
+    const glm::vec2 opposite = CObject::calculateParallaxOffset ({ 480, 810 }, { -1, 2 }, canvas, { 0, 0 }, 0.1f);
+    CHECK (opposite == glm::vec2 (48, -54));
+}
+
 TEST_CASE ("Scene timing includes global frames skipped by an asynchronous output") {
     // The first render has no scene-local history, so it uses the application frame delta.
     CHECK (CScene::calculateSceneDeltaTime (2.0f, 1.0f / 165.0f, std::nullopt) == Catch::Approx (1.0f / 165.0f));

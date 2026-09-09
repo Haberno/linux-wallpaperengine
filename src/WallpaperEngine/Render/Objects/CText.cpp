@@ -1056,24 +1056,7 @@ void CText::render () {
     // so the glyph texture stays upright. Verified against MyGO 3558034522: the clock stack
     // sits at 0.93 of the canvas height (near the top) and its Date/Clock children hang at
     // negative offsets (below the container): day line, then date, then time.
-    glm::vec3 parallaxShift = { 0.0f, 0.0f, 0.0f };
-
-    // camera parallax translation in the mapped screen space, same signs as CImage's
-    // updateScreenSpacePosition; locktransforms is only an editor-UI lock
-    if (getScene ().getScene ().camera.parallax.enabled->value->getBool ()
-	&& !getScene ().getContext ().getApp ().getContext ().settings.mouse.disableparallax) {
-	const float amount = getScene ().getScene ().camera.parallax.amount->value->getFloat ();
-	const glm::vec2 depth = this->resolveParallaxDepth ();
-	const glm::vec2* displacement = getScene ().getParallaxDisplacement ();
-	// per-axis reference: y uses height so vertical travel isn't over-scaled, see CImage
-	const float referenceX
-	    = static_cast<float> (getScene ().getWidth ()) * Wallpapers::CScene::PARALLAX_TRANSLATION_SPAN;
-	const float referenceY
-	    = static_cast<float> (getScene ().getHeight ()) * Wallpapers::CScene::PARALLAX_TRANSLATION_SPAN;
-
-	parallaxShift.x = -depth.x * amount * displacement->x * referenceX;
-	parallaxShift.y = depth.y * amount * displacement->y * referenceY;
-    }
+    const glm::vec3 parallaxShift (this->resolveParallaxOffset (), 0.0f);
 
     const glm::mat4 model = glm::translate (glm::mat4 (1.0f), parallaxShift)
 	* glm::scale (glm::mat4 (1.0f), glm::vec3 (1.0f, -1.0f, 1.0f))

@@ -30,9 +30,13 @@ public:
     /** Resolve between the stable SceneScript attachment index and authored name. */
     [[nodiscard]] virtual std::optional<size_t> getAttachmentIndex (const std::string& name) const;
     [[nodiscard]] virtual std::optional<std::string> getAttachmentName (size_t index) const;
-    /** Effective parallax depth: the root-most layer controls its entire subtree; an
-     *  unauthored root defaults to 1 (Wallpaper Engine's Layer constructor default). */
-    [[nodiscard]] glm::vec2 resolveParallaxDepth () const;
+    /** Camera-parallax translation in the renderer's Y-flipped 2D space. The
+     * root-most layer supplies both origin and depth for its entire subtree. */
+    [[nodiscard]] glm::vec2 resolveParallaxOffset () const;
+    [[nodiscard]] static glm::vec2 calculateParallaxOffset (
+	const glm::vec2& rootOrigin, const glm::vec2& depth, const glm::vec2& canvasSize, const glm::vec2& displacement,
+	float amount
+    );
 
     /** true when no ancestor in the parent chain is hidden — a hidden container hides its
      *  whole subtree in Wallpaper Engine, and children often carry no visible of their own */
