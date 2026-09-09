@@ -103,6 +103,31 @@ export function init(value) {
             'subtract_control': ('[new Vec3(5,6,7).subtract(new Vec3(1,2,3)).x,new Vec3(5,6,7).subtract(new Vec3(1,2,3)).y,new Vec3(5,6,7).subtract(new Vec3(1,2,3)).z]', [4, 4, 4]),
         })
 
+    def test_matrix_construction_and_translation(self):
+        identity3 = [1, 0, 0, 0, 1, 0, 0, 0, 1]
+        identity4 = [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1]
+        translated3 = [1, 0, 0, 0, 1, 0, 2, 3, 1]
+        translated4 = [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 2, 3, 4, 1]
+        self.check_expressions({
+            'mat3_copy': ('new Mat3(Mat3.fromTranslation(new Vec2(2,3))).m', translated3),
+            'mat4_copy': ('new Mat4(Mat4.fromTranslation(new Vec3(2,3,4))).m', translated4),
+            'mat3_copy_independent': ('(()=>{const a=Mat3.fromTranslation(new Vec2(2,3));const b=new Mat3(a);a.m[6]=99;return b.m;})()', translated3),
+            'mat4_copy_independent': ('(()=>{const a=Mat4.fromTranslation(new Vec3(2,3,4));const b=new Mat4(a);a.m[12]=99;return b.m;})()', translated4),
+            'mat3_string': ('new Mat3("1 0 0 0 1 0 2 3 1").m', translated3),
+            'mat4_string': ('new Mat4("1 0 0 0 0 1 0 0 0 0 1 0 2 3 4 1").m', translated4),
+            'mat3_short_string': ('new Mat3("1 2 3").m', identity3),
+            'mat4_short_string': ('new Mat4("1 2 3").m', identity4),
+            'mat3_array': ('new Mat3([1,0,0,0,1,0,2,3,1]).m', translated3),
+            'mat4_array': ('new Mat4([1,0,0,0,0,1,0,0,0,0,1,0,2,3,4,1]).m', translated4),
+            'mat3_setter_identity': ('(()=>{const a=new Mat3();return a.translation(new Vec2(2,3))===a;})()', True),
+            'mat4_setter_identity': ('(()=>{const a=new Mat4();return a.translation(new Vec3(2,3,4))===a;})()', True),
+            'mat3_translation_chain': ('new Mat3().translation(new Vec2(2,3)).multiply(Mat3.identity()).m', translated3),
+            'mat4_translation_chain': ('new Mat4().translation(new Vec3(2,3,4)).multiply(Mat4.identity()).m', translated4),
+            'mat4_vec2_translation': ('Mat4.fromTranslation(new Vec3(9)).translation(new Vec2(2,3)).translation().z', 0),
+            'mat3_plain_object_is_getter': ('(()=>{const a=Mat3.fromTranslation(new Vec2(2,3));const v=a.translation({x:9,y:8});return[v.x,v.y];})()', [2, 3]),
+            'mat4_plain_object_is_getter': ('(()=>{const a=Mat4.fromTranslation(new Vec3(2,3,4));const v=a.translation({x:9,y:8,z:7});return[v.x,v.y,v.z];})()', [2, 3, 4]),
+        })
+
 
 if __name__ == '__main__':
     unittest.main()
