@@ -125,7 +125,6 @@ TextureUniquePtr TextureParser::parse (const BinaryReader& file, const VariantSe
     auto result = std::make_unique<Texture> ();
 
     parseTextureHeader (*result, file);
-    parseContainer (*result, file);
     const auto selected = selectedVariants (*result, selector);
     if (result->imageCount == 0 || result->imageCount > 16384) {
 	throw std::runtime_error ("Invalid texture image count");
@@ -330,14 +329,17 @@ void TextureParser::parseTextureHeader (Texture& header, const BinaryReader& fil
 
     file.next (magic, 9);
 
-    if (strncmp (magic, "TEXV0005", 9) != 0) {
+    const bool legacy = strncmp (magic, "TEXV0004", 9) == 0;
+    if (!legacy && strncmp (magic, "TEXV0005", 9) != 0) {
 	sLog.exception ("unexpected texture container type: ", std::string_view (magic, 9));
     }
 
-    file.next (magic, 9);
+    if (!legacy) {
+	file.next (magic, 9);
 
-    if (strncmp (magic, "TEXI0001", 9) != 0) {
-	sLog.exception ("unexpected texture sub-container type: ", std::string_view (magic, 9));
+	if (strncmp (magic, "TEXI0001", 9) != 0) {
+	    sLog.exception ("unexpected texture sub-container type: ", std::string_view (magic, 9));
+	}
     }
 
     header.format = parseTextureFormat (file.nextUInt32 ());
@@ -347,8 +349,17 @@ void TextureParser::parseTextureHeader (Texture& header, const BinaryReader& fil
     header.width = file.nextUInt32 ();
     header.height = file.nextUInt32 ();
 
+    if (legacy) {
+	// TEXV0004 has no TEXI/TEXB sections or image count. One image's mip
+	// count follows these six fields, using the same raw records as TEXB0001.
+	header.containerVersion = ContainerVersion_TEXB0001;
+	header.imageCount = 1;
+	return;
+    }
+
     // ignore some more bytes
     std::ignore = file.nextUInt32 ();
+    parseContainer (header, file);
 }
 
 void TextureParser::parseContainer (Texture& header, const BinaryReader& file) {
