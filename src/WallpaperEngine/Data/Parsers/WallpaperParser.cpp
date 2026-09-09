@@ -43,6 +43,10 @@ SceneUniquePtr WallpaperParser::parseScene (const JSON& file, Project& project) 
     const auto& properties = project.properties;
     // 3D scenes author the projection values in "general", 2D scenes in "camera"
     const auto& projectionSource = isPerspective ? general : camera;
+    // Runtime zoom is also authored in general by 2D scenes. Reading only the
+    // editor camera silently drops their overscan and exposes clear color when
+    // parallax moves a canvas-sized background. Keep the legacy camera fallback.
+    const auto& zoomSource = general.find ("zoom") != general.end () ? general : projectionSource;
 
     // TODO: FIND IF THESE DEFAULTS ARE SENSIBLE OR NOT AND PERFORM PROPER VALIDATION WHEN CAMERA PREVIEW AND CAMERA
     // PARALLAX ARE PRESENT
@@ -207,7 +211,7 @@ SceneUniquePtr WallpaperParser::parseScene (const JSON& file, Project& project) 
                     .nearz = projectionSource.user ("nearz", properties, 0.0f),
                     .farz = projectionSource.user ("farz", properties, 1000.0f),
 		    .fov = projectionSource.user ("fov", properties, 50.0f),
-		    .zoom = projectionSource.user ("zoom", properties, 1.0f)
+		    .zoom = zoomSource.user ("zoom", properties, 1.0f)
                 }
             },
             .objects = parseObjects (objects, project),
