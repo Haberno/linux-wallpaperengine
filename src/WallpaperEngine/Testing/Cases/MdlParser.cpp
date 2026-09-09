@@ -4,9 +4,13 @@
 #include <string>
 #include <vector>
 
-#include <catch2/catch_test_macros.hpp>
-
 #include "WallpaperEngine/Data/Parsers/MdlParser.h"
+#include "WallpaperEngine/Data/Parsers/ObjectParser.h"
+#include "WallpaperEngine/Data/Model/Project.h"
+#include "WallpaperEngine/Data/Model/Wallpaper.h"
+#include "WallpaperEngine/FileSystem/Container.h"
+
+#include <catch2/catch_test_macros.hpp>
 
 using WallpaperEngine::Data::Model::MdlMesh;
 using WallpaperEngine::Data::Parsers::MdlParser;
@@ -368,4 +372,34 @@ TEST_CASE ("MDLV submeshes carry as many material paths as the header announces"
     CHECK (mesh.submeshes[0].materialPath == "materials/test0.json");
     CHECK (mesh.strideBytes == 48);
     CHECK (mesh.submeshes[0].indices == std::vector<uint32_t> { 0, 1, 2 });
+}
+
+TEST_CASE ("Model objects preserve authored shadow participation") {
+    using namespace WallpaperEngine::Data::Model;
+    using WallpaperEngine::Data::JSON::JSON;
+    auto filesystem = std::make_unique<WallpaperEngine::FileSystem::Container> ();
+    const auto bytes = makeModel (0);
+    filesystem->getVFS ().add ("models/sky.mdl", std::string (bytes.begin (), bytes.end ()));
+    filesystem->getVFS ().add ("materials/test0.json", R"({"passes":[]})");
+    Project project {};
+    project.assetLocator = std::make_unique<WallpaperEngine::Assets::AssetLocator> (std::move (filesystem));
+
+    const auto parse = [&] (const std::string& field) {
+	return WallpaperEngine::Data::Parsers::ObjectParser::parse (
+	    JSON::parse (R"({"id":281,"name":"sky","model":"models/sky.mdl")" + field + "}"), project
+	);
+    };
+    const auto defaultCaster = parse ("");
+    REQUIRE (defaultCaster->is<Model3D> ());
+    CHECK (defaultCaster->as<Model3D> ()->castShadow->value->getBool ());
+
+    const auto excludedSky = parse (R"(,"castshadow":false)");
+    REQUIRE (excludedSky->is<Model3D> ());
+    CHECK_FALSE (excludedSky->as<Model3D> ()->castShadow->value->getBool ());
+
+    const auto scripted = parse (R"(,"castshadow":{"value":false,"script":"export function update(){return true;}"})");
+    REQUIRE (scripted->is<Model3D> ());
+    CHECK_FALSE (scripted->as<Model3D> ()->castShadow->value->getBool ());
+    scripted->as<Model3D> ()->castShadow->value->update (true, DynamicValue::UpdateSource::Script);
+    CHECK (scripted->as<Model3D> ()->castShadow->value->getBool ());
 }
