@@ -770,6 +770,12 @@ std::set<std::string> collectProjectTextures (const Project& project) {
 	    }
 
 	    collectImageEffectTextures (image->effects, result);
+	} else if (object->is<Model3D> ()) {
+	    for (const auto& material : object->as<Model3D> ()->materials) {
+		if (material != nullptr) {
+		    collectMaterialTextures (*material, result);
+		}
+	    }
 	} else if (object->is<Particle> ()) {
 	    const auto* particle = object->as<Particle> ();
 
