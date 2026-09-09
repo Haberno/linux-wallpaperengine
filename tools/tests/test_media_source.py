@@ -171,6 +171,20 @@ class MediaSource(unittest.TestCase):
         self.player('lwe_test_late', 'Playing')
         self.wait_for(lambda row: row['title'] == 'lwe_test_late' and row['state'] == 1)
 
+    def test_metadata_dictionary_replaces_missing_and_empty_fields(self):
+        player = self.player('lwe_test_track', 'Playing')
+        self.start_probe()
+        self.wait_for(lambda row: row['artist'] == 'Original Artist' and row['duration'] == 180000000)
+        self.command(player, 'Playing', {'xesam:title': 'Title Only'})
+        row = self.wait_for(lambda row: row['title'] == 'Title Only')
+        self.assertEqual((row['artist'], row['album'], row['art'], row['duration']), ('', '', '', 0))
+        self.command(player, 'Playing', {'xesam:title': 'Empty Fields', 'xesam:artist': [], 'mpris:artUrl': ''})
+        row = self.wait_for(lambda row: row['title'] == 'Empty Fields')
+        self.assertEqual((row['artist'], row['art']), ('', ''))
+        self.command(player, 'Playing', {})
+        row = self.wait_for(lambda row: row['title'] == '')
+        self.assertEqual((row['artist'], row['album'], row['art'], row['duration']), ('', '', '', 0))
+
     @staticmethod
     def stop(process):
         if process.poll() is None:
