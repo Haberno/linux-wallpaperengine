@@ -22,6 +22,19 @@ ScriptableObject::ScriptableObject (Wallpapers::CScene& scene, const Object& obj
     this->registerProperty ("scale", *object.groupScale->value);
     this->registerProperty ("angles", *object.groupAngles->value);
     this->registerProperty ("visible", *object.groupVisible->value);
+
+    for (const auto& projection : scene.getScene ().camera.objectProjections) {
+	if (projection.id != object.id) {
+	    continue;
+	}
+	if (projection.fov != nullptr) {
+	    this->registerProperty ("fov", *projection.fov->value);
+	}
+	if (projection.zoom != nullptr) {
+	    this->registerProperty ("zoom", *projection.zoom->value);
+	}
+	break;
+    }
 }
 
 DynamicValue& ScriptableObject::getProperty (const std::string& name) {
