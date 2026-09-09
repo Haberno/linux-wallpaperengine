@@ -236,7 +236,8 @@ static void jsToDynamicValue (JSContext* ctx, JSValue val, DynamicValue& source)
 
     if (tag == JS_TAG_STRING) {
 	const char* str = JS_ToCString (ctx, val);
-	source.update (str == nullptr ? "" : str, DynamicValue::UpdateSource::Script);
+	// A const char* would select update(bool), silently discarding the text.
+	source.update (std::string (str == nullptr ? "" : str), DynamicValue::UpdateSource::Script);
 	JS_FreeCString (ctx, str);
 	return;
     }
