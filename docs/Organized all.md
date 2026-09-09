@@ -467,18 +467,28 @@ Sources: [Load Performance](wiki/rendering/Load%20Performance.md),
   setup, and reusable local Ghidra workflows.
 - [ ] **Open — add a persistent content-addressed shader translation cache.**
   Reuse the existing in-memory caches rather than planning them from scratch.
-- [ ] **Open — extend texture prefetch to 3D model materials and missed shader/
-  effect-generated references.** `collectProjectTextures` walks image, particle,
-  and text objects and already includes puppet clipping masks. The old blanket
-  claim that it never sees masks is too broad.
+- [x] Extend texture prefetch to every 3D model submesh material, including
+  authored pass/user texture references (2026-09-08). Pokemon - Deep Sea Dive
+  (3562141459) falls from 129 synchronous texture loads to 2.
+- [x] Read each 3D model once in bulk for both geometry and animation
+  (2026-09-08), eliminating duplicate byte-by-byte file copies.
+- [x] Reuse linked GPU shader binaries for material and model-shadow passes
+  (2026-09-08). The 64 MiB cache keys both complete sources, evicts least-recently
+  used entries, and creates independent program/uniform state for every pass;
+  unsupported/rejected binaries fall back to source compilation.
+- [ ] **Open — prefetch remaining shader/effect-generated texture references.**
+  Image, particle, text, 3D model materials and puppet clipping masks are covered;
+  shader-declared defaults can still load during the scene build.
 - [ ] **Open — diagnose Saturn's long project parse** (historically ~2.4 s),
   and the unexplained worst frame outside measured switch phases.
 - [ ] **Open — profile representative steady-state CPU/GPU frame cost.**
   The specific Radiant dual-monitor measurement is not a general renderer profile.
 - [x] Remeasure two desktop wallpaper switches on Wayland with shared-context
   uploads (2026-09-07; [[Load Performance]]).
-- [ ] **Verify — expand Wayland cold-start and switch measurements** beyond the
-  two-wallpaper regression check, including heavy 3D and web transitions.
+- [x] Expand Wayland cold-start and switch measurements to heavy 3D scenes
+  (2026-09-08); see [[Load Performance]] for cache-controlled Pokemon timings
+  and the five-wallpaper, 28-second regression sample.
+- [ ] **Verify — measure web wallpaper transitions** on Wayland.
 - [ ] **Open — make texture budgeting appropriate to available memory and
   large/overlapping scenes**, beyond the current fixed 1536 MiB limit.
 - [ ] **Audit — compare cold-build optimization port `739e9c6` with current
