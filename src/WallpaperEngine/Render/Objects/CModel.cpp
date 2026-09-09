@@ -16,26 +16,6 @@ using namespace WallpaperEngine;
 using namespace WallpaperEngine::Render::Objects;
 
 namespace {
-GLuint compileShadowStage (const std::string& source, const GLenum type) {
-    const GLuint shader = glCreateShader (type);
-    const char* sourcePointer = source.c_str ();
-    glShaderSource (shader, 1, &sourcePointer, nullptr);
-    glCompileShader (shader);
-
-    GLint compiled = GL_FALSE;
-    glGetShaderiv (shader, GL_COMPILE_STATUS, &compiled);
-    if (compiled == GL_FALSE) {
-	GLint length = 0;
-	glGetShaderiv (shader, GL_INFO_LOG_LENGTH, &length);
-	std::string log (std::max (length, 1), '\0');
-	glGetShaderInfoLog (shader, length, nullptr, log.data ());
-	glDeleteShader (shader);
-	sLog.exception ("Cannot compile model shadow shader: ", log);
-    }
-
-    return shader;
-}
-
 int passRenderPriority (const BlendingMode mode) {
     switch (mode) {
 	case BlendingMode_Translucent:
@@ -228,24 +208,9 @@ void CModel::setupShadowProgram () {
 	      "}\n";
 
     static const std::string fragment = "#version 330 core\nvoid main() {}\n";
-    const GLuint vertexShader = compileShadowStage (vertex.str (), GL_VERTEX_SHADER);
-    const GLuint fragmentShader = compileShadowStage (fragment, GL_FRAGMENT_SHADER);
-    this->m_shadowProgram = glCreateProgram ();
-    glAttachShader (this->m_shadowProgram, vertexShader);
-    glAttachShader (this->m_shadowProgram, fragmentShader);
-    glLinkProgram (this->m_shadowProgram);
-    glDeleteShader (vertexShader);
-    glDeleteShader (fragmentShader);
-
-    GLint linked = GL_FALSE;
-    glGetProgramiv (this->m_shadowProgram, GL_LINK_STATUS, &linked);
-    if (linked == GL_FALSE) {
-	GLint length = 0;
-	glGetProgramiv (this->m_shadowProgram, GL_INFO_LOG_LENGTH, &length);
-	std::string log (std::max (length, 1), '\0');
-	glGetProgramInfoLog (this->m_shadowProgram, length, nullptr, log.data ());
-	sLog.exception ("Cannot link model shadow shader: ", log);
-    }
+    this->m_shadowProgram = this->getScene ().getContext ().getShaderProgramCache ().createProgram (
+	vertex.str (), fragment
+    );
 
     this->m_shadowLightViewProjection = glGetUniformLocation (this->m_shadowProgram, "u_LightViewProjection");
     this->m_shadowModel = glGetUniformLocation (this->m_shadowProgram, "u_Model");

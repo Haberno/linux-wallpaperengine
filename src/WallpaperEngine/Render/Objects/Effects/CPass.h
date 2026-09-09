@@ -149,7 +149,6 @@ private:
 	glm::vec4 rotation = { 0.0f, 0.0f, 0.0f, 0.0f };
     };
 
-    static GLuint compileShader (const char* shader, GLuint type);
     void setupShaders ();
     void setupShaderVariables ();
     void setupUniforms ();

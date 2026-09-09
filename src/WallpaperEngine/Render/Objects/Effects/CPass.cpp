@@ -629,44 +629,6 @@ void CPass::setGeometryCallback (
     this->m_cleanupAttribsCallback = std::move (cleanupAttribs);
 }
 
-GLuint CPass::compileShader (const char* shader, GLuint type) {
-    // reserve shaders in OpenGL
-    const GLuint shaderID = glCreateShader (type);
-
-    glShaderSource (shaderID, 1, &shader, nullptr);
-    glCompileShader (shaderID);
-
-    GLint result = GL_FALSE;
-    int infoLogLength = 0;
-
-    // ensure the vertex shader was correctly compiled
-    glGetShaderiv (shaderID, GL_COMPILE_STATUS, &result);
-    glGetShaderiv (shaderID, GL_INFO_LOG_LENGTH, &infoLogLength);
-
-    if (infoLogLength > 0) {
-	const auto logBuffer = new char[infoLogLength + 1];
-	// ensure logBuffer ends with a \0
-	memset (logBuffer, 0, infoLogLength + 1);
-	// get information about the error
-	glGetShaderInfoLog (shaderID, infoLogLength, nullptr, logBuffer);
-	// throw an exception about the issue
-	std::stringstream buffer;
-	buffer << logBuffer << std::endl << "Compiled source code:" << std::endl << shader;
-	// free the buffer
-	delete[] logBuffer;
-
-	if (result == GL_FALSE) {
-	    // shader compilation failed completely, throw an exception
-	    sLog.exception (buffer.str ());
-	} else {
-	    // some warning was emitted, log the error and keep chuging along
-	    sLog.error (buffer.str ());
-	}
-    }
-
-    return shaderID;
-}
-
 void CPass::setupShaders () {
     // ensure the constants are defined
     const auto texture0 = this->m_renderable.getTexture ();
@@ -826,53 +788,12 @@ void CPass::setupShaders () {
     const auto [vertex, fragment]
 	= Shaders::GLSLContext::get ().toGlsl (this->m_shader->vertex (), this->m_shader->fragment ());
 
-    // compile the shaders
-    const GLuint vertexShaderID = compileShader (vertex.c_str (), GL_VERTEX_SHADER);
-    const GLuint fragmentShaderID = compileShader (fragment.c_str (), GL_FRAGMENT_SHADER);
-    // create the final program
-    this->m_programID = glCreateProgram ();
-    // link the shaders together
-    glAttachShader (this->m_programID, vertexShaderID);
-    glAttachShader (this->m_programID, fragmentShaderID);
-    glLinkProgram (this->m_programID);
-    // check that the shader was properly linked
-    GLint result = GL_FALSE;
-    int infoLogLength = 0;
-
-    glGetProgramiv (this->m_programID, GL_LINK_STATUS, &result);
-    glGetProgramiv (this->m_programID, GL_INFO_LOG_LENGTH, &infoLogLength);
-
-    if (infoLogLength > 0) {
-	const auto logBuffer = new char[infoLogLength + 1];
-	// ensure logBuffer ends with a \0
-	memset (logBuffer, 0, infoLogLength + 1);
-	// get information about the error
-	glGetProgramInfoLog (this->m_programID, infoLogLength, nullptr, logBuffer);
-	// throw an exception about the issue
-	const std::string message = logBuffer;
-	// free the buffer
-	delete[] logBuffer;
-	if (result == GL_FALSE) {
-	    // shader compilation failed completely, throw an exception
-	    sLog.exception (message);
-	} else {
-	    // some warning was emitted, log the error and keep chuging along
-	    sLog.error (message);
-	}
-    }
-
+    this->m_programID = this->m_renderable.getScene ().getContext ().getShaderProgramCache ().createProgram (
+	vertex, fragment
+    );
 #if !NDEBUG
     glObjectLabel (GL_PROGRAM, this->m_programID, -1, shaderName.c_str ());
-    glObjectLabel (GL_SHADER, vertexShaderID, -1, (shaderName + ".vert").c_str ());
-    glObjectLabel (GL_SHADER, fragmentShaderID, -1, (shaderName + ".frag").c_str ());
-#endif /* DEBUG */
-
-    // after being liked shaders can be dettached and deleted
-    glDetachShader (this->m_programID, vertexShaderID);
-    glDetachShader (this->m_programID, fragmentShaderID);
-
-    glDeleteShader (vertexShaderID);
-    glDeleteShader (fragmentShaderID);
+#endif
 
     // first setup the default values, these will be overwritten by future values
     this->setupShaderVariables ();
