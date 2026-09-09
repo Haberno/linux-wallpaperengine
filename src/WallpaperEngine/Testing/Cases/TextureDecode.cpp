@@ -74,6 +74,88 @@ std::unique_ptr<Texture> makePngTexture (const int mipmapCount, const int seed) 
 }
 } // namespace
 
+TEST_CASE ("legacy TEXV0004 preserves texture metadata and every mip payload", "[texture][legacy]") {
+    using namespace WallpaperEngine::Data::Assets;
+    for (const auto format : { TextureFormat_DXT5, TextureFormat_ARGB8888 }) {
+	CAPTURE (format);
+	std::string legacy ("TEXV0004", 9);
+	const uint32_t flags = TextureFlags_ClampUVs | TextureFlags_NoInterpolation;
+	for (const uint32_t value : { static_cast<uint32_t> (format), flags, 8u, 8u, 6u, 5u }) {
+	    appendValue (legacy, value);
+	}
+	appendValue (legacy, 3u); // One implicit image, followed directly by its mip count.
+	std::vector<std::string> payloads;
+	for (const uint32_t size : { 8u, 4u, 2u }) {
+	    const uint32_t bytes = format == TextureFormat_DXT5 ? ((size + 3) / 4) * ((size + 3) / 4) * 16
+							      : size * size * 4;
+	    payloads.emplace_back (bytes, static_cast<char> (size));
+	    for (const uint32_t value : { size, size, bytes }) {
+		appendValue (legacy, value);
+	    }
+	    legacy += payloads.back ();
+	}
+	// The equivalent version-5 file adds section headers, an extra info field,
+	// and an image count. The shared mip records must decode identically.
+	std::string modern ("TEXV0005", 9);
+	modern.append ("TEXI0001", 9);
+	modern.append (legacy, 9, 24);
+	appendValue (modern, 0u);
+	modern.append ("TEXB0001", 9);
+	appendValue (modern, 1u);
+	modern.append (legacy, 33, std::string::npos);
+	for (const auto& bytes : { legacy, modern }) {
+	    const auto stream = std::make_shared<std::istringstream> (bytes, std::ios::binary);
+	    const auto texture = TextureParser::parse (BinaryReader (stream));
+	    CHECK (texture->format == format);
+	    CHECK (texture->flags == flags);
+	    CHECK (texture->textureWidth == 8);
+	    CHECK (texture->textureHeight == 8);
+	    CHECK (texture->width == 6);
+	    CHECK (texture->height == 5);
+	    CHECK (texture->freeImageFormat == FIF_UNKNOWN);
+	    CHECK (texture->imageCount == 1);
+	    REQUIRE (texture->images.size () == 1);
+	    const auto& mips = texture->images.at (0);
+	    REQUIRE (mips.size () == payloads.size ());
+	    for (size_t level = 0; level < mips.size (); ++level) {
+		CHECK (mips[level]->width == (8u >> level));
+		CHECK (mips[level]->height == (8u >> level));
+		CHECK (mips[level]->compression == 0);
+		CHECK (mips[level]->uncompressedSize == static_cast<int> (payloads[level].size ()));
+		REQUIRE (mips[level]->uncompressedData != nullptr);
+		CHECK (std::string (mips[level]->uncompressedData.get (), mips[level]->uncompressedSize) == payloads[level]);
+	    }
+	    CHECK (stream->tellg () == static_cast<std::streamoff> (bytes.size ()));
+	}
+    }
+}
+
+TEST_CASE ("legacy texture parsing rejects incomplete headers and payloads", "[texture][legacy]") {
+    std::string bytes ("TEXV0004", 9);
+    for (const uint32_t value : { static_cast<uint32_t> (TextureFormat_ARGB8888), 0u, 1u, 1u, 1u, 1u,
+				 1u, 1u, 1u, 4u }) {
+	appendValue (bytes, value);
+    }
+    bytes += "rgba";
+    for (size_t length = 0; length < bytes.size (); ++length) {
+	CAPTURE (length);
+	const auto stream = std::make_shared<std::istringstream> (bytes.substr (0, length), std::ios::binary);
+	CHECK_THROWS (TextureParser::parse (BinaryReader (stream)));
+    }
+    for (const uint32_t count : { 0u, 33u }) {
+	auto invalid = bytes;
+	std::memcpy (invalid.data () + 33, &count, sizeof (count));
+	const auto stream = std::make_shared<std::istringstream> (invalid, std::ios::binary);
+	CHECK_THROWS (TextureParser::parse (BinaryReader (stream)));
+    }
+    for (const char version : { '3', '6' }) {
+	auto unsupported = bytes;
+	unsupported[7] = version;
+	const auto stream = std::make_shared<std::istringstream> (unsupported, std::ios::binary);
+	CHECK_THROWS (TextureParser::parse (BinaryReader (stream)));
+    }
+}
+
 TEST_CASE ("TEXB0004 video mipmaps preserve their embedded MP4 payload", "[texture][video]") {
     constexpr uint32_t width = 2324;
     constexpr uint32_t height = 2474;
