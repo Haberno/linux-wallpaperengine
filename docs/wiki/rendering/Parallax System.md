@@ -17,9 +17,9 @@ When individual camera fields are omitted, Wallpaper Engine defaults amount to
 
 ## Depth resolution (hierarchical)
 
-`CObject::resolveParallaxDepth()` — shared by CImage, CParticle, CText —
-walks to the **root-most layer** and uses that layer's depth for the complete
-subtree. Child-authored depths do not override it. The official Layer
+`CObject::resolveParallaxOffset()` — shared by CImage, CParticle, CText —
+walks to the **root-most layer** and uses that layer's origin and depth for the
+complete subtree. Child-authored depths do not override it. The official Layer
 constructor defaults the depth to **1.0**; authors pin a subtree with an
 explicit root depth of `0` (MyGO character, 3367988661 clock/date container).
 Unauthored root layers therefore drift at depth 1 (Gojo backgrounds and
@@ -41,8 +41,9 @@ smoothed = mix(smoothed, target, alpha)
 Each renderer then applies:
 
 ```
-offset.x = -depth.x * amount * displacement.x * (sceneWidth * 0.5)
-offset.y =  depth.y * amount * displacement.y * (sceneHeight * 0.5)
+cursor = canvasSize * (0.5 + displacement * 0.5)
+offset.x =  (rootOrigin.x - cursor.x) * depth.x * amount
+offset.y = -(rootOrigin.y - cursor.y) * depth.y * amount
 ```
 
 `PARALLAX_TRANSLATION_SPAN = 0.5` converts this fork's centered `[-1,1]`
@@ -55,6 +56,45 @@ smoothed mouse position remapped to `[0,1]`:
 `g_ParallaxPosition = 0.5 + displacement * 0.5`. Camera `amount` does not
 scale this shader input.
 
+The root-origin term matters even at a centered cursor: off-center layers move
+relative to the canvas center. Using only mouse displacement drops that term
+and exposes the left edge of Gojo's two-part background. Both halves must use
+the same root origin, including its live animated/scripted position. Depth zero
+still pins the entire subtree. The final Y sign converts authored canvas space
+to this renderer's mirrored 2D geometry.
+
+### Exposed canvas edges (2026-09-09)
+
+- [x] Read `general.zoom` for orthographic scenes, with the legacy camera-block
+  fallback when absent. Stratospheric Twilight [4K] (3768356757) authors 1.03;
+  Dark Leaf | northway. (3755078205) authors 1.05. Falling back to 1.0 removed
+  their overscan and exposed the authored gray clear color near corners.
+- [x] Include the root-origin term in image, particle, and text parallax. Gojo
+  (3100265648) authors zoom 1.0 and relies on the native offset of its off-center
+  root. At the left cursor extreme, the correct horizontal translation is
+  5.06 canvas pixels; the former cursor-only formula applied 52.8 pixels.
+- [x] Verify all four corners and both horizontal extremes on each wallpaper:
+  18 fixed-cursor engine captures, with no exposed clear color on their outer
+  edges. Regression tests pass: 966 assertions in 120 default cases and 69
+  assertions in three optional OpenGL cases.
+- [x] Run the fast six-wallpaper regression corpus with two workers and a
+  two-second render duration: 14 seconds, zero failures, six warning results.
+  Coverage includes these three wallpapers, Sea (2665939987), Floating Cat.
+  (3367988661), and Pokemon - Deep Sea Dive (3562141459). This is a targeted
+  smoke test; warning results are not clean passes or full visual verification.
+- [ ] Confirm the corrected live appearance with the user. Fixed-cursor engine
+  screenshots reproduce all three original borders and remove them with these
+  changes; they do not establish complete Windows visual parity.
+
+Reference: installed `wallpaper64.exe`, SHA-256
+`40e2ce021e9352324fadb3b8f72b8ba2a7ee95b71cc571d5b9f84be75cd993b0`.
+Property registration in `FUN_1401e0530` identifies root origin at `+0x128`
+and parallax depth at `+0x170`; scene registration in `FUN_140199780` identifies
+amount at `+0x334`. `FUN_14018aac0` follows parents at `+0x180`, then translates
+by `(root.origin - scene.cursor) * amount * root.depth`. The influenced,
+smoothed cursor is stored at scene `+0x340/+0x344`. This corrects the earlier
+incomplete reading that retained only the centered mouse term.
+
 See [[Wallpaper Case Studies]] for the evidence trail.
 
 ## Divergence from upstream (Almamu/linux-wallpaperengine)
@@ -66,7 +106,7 @@ were subsequently recovered from `wallpaper64.exe` (2026-06-29 build).
    `x = (depth.x + amount) * displacement.x * sceneWidth` — every layer
    drifts by at least `amount` even at `depth=0`, so a layer can never be
    truly pinned unless `amount` is also 0. This fork:
-   `x = -depth.x * amount * displacement.x * (sceneWidth * 0.5)` — `depth=0`
+   `x = (rootOrigin.x - cursor.x) * depth.x * amount` — `depth=0`
    zeroes motion regardless of `amount`. The case-study wallpapers (One Piece
    3135984503, 2665939987) author `depth=0` as a hard pin, so the
    multiplicative model matches observed WE behavior. **Correct, keep.**
