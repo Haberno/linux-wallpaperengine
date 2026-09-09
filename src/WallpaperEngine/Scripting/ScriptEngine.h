@@ -54,6 +54,7 @@ public:
 	bool cursorEvents = false;
 	bool cursorInside = false;
 	bool cursorPressedInside = false;
+	std::optional<Media::MediaSource::MediaInfo> lastMedia;
     };
     struct JSObjectAdapters {
 	std::unique_ptr<Adapters::VectorAdapter<4>> vec4;
