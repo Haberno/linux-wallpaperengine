@@ -13,6 +13,7 @@
 #include "WallpaperEngine/Data/Model/Project.h"
 #include "WallpaperEngine/Data/Model/Wallpaper.h"
 #include "WallpaperEngine/Data/Parsers/MaterialParser.h"
+#include "WallpaperEngine/Data/Parsers/DynamicValueParser.h"
 #include "WallpaperEngine/Data/Parsers/ObjectParser.h"
 #include "WallpaperEngine/Data/Parsers/WallpaperParser.h"
 #include "WallpaperEngine/FileSystem/Container.h"
@@ -25,6 +26,18 @@ using WallpaperEngine::Data::Parsers::ObjectParser;
 using WallpaperEngine::Data::Parsers::WallpaperParser;
 using WallpaperEngine::FileSystem::Container;
 using WallpaperEngine::Render::Wallpapers::CScene;
+
+TEST_CASE ("dynamic strings preserve song titles and script layer names containing spaces") {
+    const Properties properties;
+    for (const std::string text : { "mxpheebz - The Beach", "Code therapy w / R...", "Song Title", "22:49 PM", "1 2oops" }) {
+	const auto value = WallpaperEngine::Data::Parsers::DynamicValueParser::parse (JSON (text), properties, false);
+	REQUIRE (value->getType () == DynamicValue::String);
+	REQUIRE (value->getString () == text);
+    }
+    const auto vector = WallpaperEngine::Data::Parsers::DynamicValueParser::parse (JSON ("1.5 -2 3"), properties, false);
+    REQUIRE (vector->getType () == DynamicValue::Vec3);
+    REQUIRE (vector->getVec3 () == glm::vec3 (1.5f, -2.0f, 3.0f));
+}
 
 TEST_CASE ("text parses authored width and row limits") {
     const Project project {};
