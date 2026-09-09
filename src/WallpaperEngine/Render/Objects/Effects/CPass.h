@@ -11,6 +11,7 @@
 #include "WallpaperEngine/Render/FBOProvider.h"
 #include "WallpaperEngine/Render/Helpers/ContextAware.h"
 #include "WallpaperEngine/Render/Shaders/Shader.h"
+#include "WallpaperEngine/Render/Shaders/ShaderProgramCache.h"
 #include "WallpaperEngine/Render/Shaders/Variables/ShaderVariable.h"
 
 namespace WallpaperEngine::Render::Objects {
@@ -150,6 +151,8 @@ private:
     };
 
     void setupShaders ();
+    void setupProgramSharing ();
+    void leaveProgramSharing ();
     void setupShaderVariables ();
     void setupUniforms ();
     void setupTextureUniforms ();
@@ -264,6 +267,9 @@ private:
     glm::vec4 m_effectiveColor4 = {};
 
     GLuint m_programID = GL_NONE;
+    std::shared_ptr<Shaders::ShaderProgramCache::SharingGroup> m_programSharingGroup;
+    std::shared_ptr<const Shaders::ShaderProgramCache::SharedProgram> m_sharedProgram;
+    bool m_programSharingChecked = false;
 
     // shader variables used temporary
     GLint g_Texture0Rotation = -1;

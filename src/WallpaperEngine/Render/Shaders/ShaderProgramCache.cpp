@@ -8,6 +8,42 @@
 using namespace WallpaperEngine::Render::Shaders;
 
 namespace {
+// Geometry callbacks cache attribute locations, and CPass caches uniform
+// locations. A shared executable must preserve both, including array extents.
+std::string programInterface (GLuint program) {
+    std::string result;
+    for (const bool uniforms : { false, true }) {
+	GLint count = 0;
+	GLint maxLength = 0;
+	glGetProgramiv (program, uniforms ? GL_ACTIVE_UNIFORMS : GL_ACTIVE_ATTRIBUTES, &count);
+	glGetProgramiv (program, uniforms ? GL_ACTIVE_UNIFORM_MAX_LENGTH : GL_ACTIVE_ATTRIBUTE_MAX_LENGTH, &maxLength);
+	std::vector<char> name (std::max (maxLength, 1));
+	std::vector<std::string> entries;
+	for (GLint index = 0; index < count; ++index) {
+	    GLsizei length = 0;
+	    GLint size = 0;
+	    GLenum type = 0;
+	    if (uniforms) {
+		glGetActiveUniform (program, index, name.size (), &length, &size, &type, name.data ());
+	    } else {
+		glGetActiveAttrib (program, index, name.size (), &length, &size, &type, name.data ());
+	    }
+	    const GLint location
+		= uniforms ? glGetUniformLocation (program, name.data ()) : glGetAttribLocation (program, name.data ());
+	    entries.push_back (
+		std::string (name.data (), length) + ':' + std::to_string (location) + ':' + std::to_string (type) + ':'
+		+ std::to_string (size) + ';'
+	    );
+	}
+	std::sort (entries.begin (), entries.end ());
+	result += '|';
+	for (const auto& entry : entries) {
+	    result += entry;
+	}
+    }
+    return result;
+}
+
 GLuint compileStage (const std::string& source, GLenum type) {
     const GLuint shader = glCreateShader (type);
     const char* text = source.c_str ();
@@ -35,7 +71,12 @@ GLuint compileStage (const std::string& source, GLenum type) {
 }
 } // namespace
 
-GLuint ShaderProgramCache::createProgram (const std::string& vertex, const std::string& fragment) {
+GLuint ShaderProgramCache::createProgram (
+    const std::string& vertex, const std::string& fragment, std::shared_ptr<SharingGroup>* group
+) {
+    if (group) {
+	group->reset ();
+    }
     // All authored defines, generated lighting, bone counts and source edits must
     // participate in the key. Length-prefixing keeps the two stages unambiguous.
     const std::string key = std::to_string (vertex.size ()) + ':' + vertex + fragment;
@@ -49,6 +90,9 @@ GLuint ShaderProgramCache::createProgram (const std::string& vertex, const std::
 	    glGetProgramiv (program, GL_LINK_STATUS, &linked);
 	    if (linked == GL_TRUE) {
 		found->second.lastUsed = ++m_useCounter;
+		if (group) {
+		    *group = entry.group;
+		}
 		Debug::RenderHealth::count ("shader.program_cache_hit");
 		return program;
 	    }
@@ -123,10 +167,58 @@ GLuint ShaderProgramCache::createProgram (const std::string& vertex, const std::
 		    m_bytes -= oldest->first.size () + oldest->second.binary.size ();
 		    m_entries.erase (oldest);
 		}
+		if (group) {
+		    *group = entry.group;
+		}
 		m_entries.emplace (key, std::move (entry));
 		m_bytes += bytes;
 	    }
 	}
     }
+    return program;
+}
+
+ShaderProgramCache::SharedProgram::~SharedProgram () { glDeleteProgram (id); }
+
+std::shared_ptr<const ShaderProgramCache::SharedProgram> ShaderProgramCache::shareProgram (
+    GLuint privateProgram, const std::shared_ptr<SharingGroup>& group, const std::string& layout
+) {
+    if (!group) {
+	return nullptr;
+    }
+    std::erase_if (group->programs, [] (const auto& item) { return item.second.expired (); });
+    const std::string interface = programInterface (privateProgram);
+    const std::string key = std::to_string (layout.size ()) + ':' + layout + interface;
+    if (const auto found = group->programs.find (key); found != group->programs.end ()) {
+	if (auto program = found->second.lock ()) {
+	    Debug::RenderHealth::count ("shader.live_program_hit");
+	    return program;
+	}
+    }
+
+    // Clone into a separate object: callers retain their private executable for
+    // uniform registration and can leave sharing if their write layout changes.
+    GLint length = 0;
+    glGetProgramiv (privateProgram, GL_PROGRAM_BINARY_LENGTH, &length);
+    if (length <= 0) {
+	return nullptr;
+    }
+    std::vector<char> binary (length);
+    GLenum format = 0;
+    GLsizei written = 0;
+    glGetProgramBinary (privateProgram, length, &written, &format, binary.data ());
+    if (written <= 0) {
+	return nullptr;
+    }
+    auto program = std::make_shared<SharedProgram> (glCreateProgram ());
+    glProgramBinary (program->id, format, binary.data (), written);
+    GLint linked = GL_FALSE;
+    glGetProgramiv (program->id, GL_LINK_STATUS, &linked);
+    if (linked != GL_TRUE || programInterface (program->id) != interface) {
+	Debug::RenderHealth::count ("shader.live_program_rejected");
+	return nullptr;
+    }
+    group->programs.emplace (key, program);
+    Debug::RenderHealth::count ("shader.live_program_created");
     return program;
 }

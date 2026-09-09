@@ -199,7 +199,7 @@ void CPass::setupRenderFramebuffer (const std::shared_ptr<const CFBO>& drawTo) c
 
 void CPass::setupRenderTexture () {
     // use the shader we have registered
-    glUseProgram (this->m_programID);
+    glUseProgram (this->m_sharedProgram ? this->m_sharedProgram->id : this->m_programID);
 
     auto texture0 = this->resolveTexture0 ();
     const auto animation = this->resolveTextureAnimationState (texture0);
@@ -534,6 +534,9 @@ void CPass::render () {
 	return;
     }
 
+    if (!this->m_programSharingChecked) {
+	this->setupProgramSharing ();
+    }
     this->setupRenderFramebuffer (drawTo);
     this->setupRenderTexture ();
     // genericimage3/4 (and VERSION-enabled genericimage2) encode object opacity in
@@ -789,7 +792,7 @@ void CPass::setupShaders () {
 	= Shaders::GLSLContext::get ().toGlsl (this->m_shader->vertex (), this->m_shader->fragment ());
 
     this->m_programID = this->m_renderable.getScene ().getContext ().getShaderProgramCache ().createProgram (
-	vertex, fragment
+	vertex, fragment, &this->m_programSharingGroup
     );
 #if !NDEBUG
     glObjectLabel (GL_PROGRAM, this->m_programID, -1, shaderName.c_str ());
@@ -810,6 +813,45 @@ void CPass::setupShaders () {
 void CPass::setupAttributes () {
     this->addAttribute ("a_TexCoord", GL_FLOAT, 2, &this->a_TexCoord);
     this->addAttribute ("a_Position", GL_FLOAT, 3, &this->a_Position);
+}
+
+void CPass::setupProgramSharing () {
+    this->m_programSharingChecked = true;
+    if (!this->m_programSharingGroup) {
+	return;
+    }
+    // Every entry is uploaded before every draw. Including names, locations,
+    // types and array counts prevents a pass from inheriting another pass's
+    // extra uniforms or array tail. Unregistered uniforms retain GLSL defaults.
+    std::ostringstream layout;
+    for (const auto& [name, uniform] : this->m_uniforms) {
+	layout << name << ':' << uniform->id << ':' << uniform->type << ':' << uniform->count << ';';
+    }
+    layout << '|';
+    for (const auto& [name, uniform] : this->m_referenceUniforms) {
+	layout << name << ':' << uniform->id << ':' << uniform->type << ';';
+    }
+    layout << '|' << this->g_Texture0Rotation << ':' << this->g_Texture0Translation;
+    this->m_sharedProgram
+	= Shaders::ShaderProgramCache::shareProgram (this->m_programID, this->m_programSharingGroup, layout.str ());
+}
+
+void CPass::leaveProgramSharing () {
+    if (!this->m_sharedProgram) {
+	return;
+    }
+    // Registration normally finishes before the first render. If a caller
+    // changes it later, keep this pass private from now on. Materialize its own
+    // values before changing the old layout, preserving partially written arrays
+    // without copying whichever other material last used the shared program.
+    GLint previous = 0;
+    glGetIntegerv (GL_CURRENT_PROGRAM, &previous);
+    glUseProgram (this->m_programID);
+    this->setupRenderUniforms ();
+    this->setupRenderReferenceUniforms ();
+    glUseProgram (previous);
+    this->m_sharedProgram.reset ();
+    this->m_programSharingGroup.reset ();
 }
 
 void CPass::setupTextureUniforms () {
@@ -1152,6 +1194,7 @@ template <typename T> void CPass::addUniform (const std::string& name, UniformTy
     if (id == -1) {
 	return;
     }
+    this->leaveProgramSharing ();
 
     // build a copy of the value and allocate it somewhere
     auto newValue = std::make_shared<T> (value);
@@ -1171,6 +1214,7 @@ template <typename T> void CPass::addUniform (const std::string& name, UniformTy
     if (id == -1) {
 	return;
     }
+    this->leaveProgramSharing ();
 
     // uniform found, add it to the list
     this->m_referenceUniforms.erase (name);
@@ -1185,6 +1229,7 @@ template <typename T> void CPass::addUniform (const std::string& name, UniformTy
     if (id == -1) {
 	return;
     }
+    this->leaveProgramSharing ();
 
     // uniform found, add it to the list
     this->m_uniforms.erase (name);
