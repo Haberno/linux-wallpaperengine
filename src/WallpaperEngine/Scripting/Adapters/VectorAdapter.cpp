@@ -179,29 +179,76 @@ auto vector_try_get (JSContext* ctx, JSValue source) -> std::optional<decltype (
 template <int components> auto vector_get (JSContext* ctx, int argc, JSValueConst* argv) -> decltype (auto) {
     static_assert (components >= 2 && components <= 4, "Unsupported vector type");
 
-    if (argc == 0) {
+    if (argc == 0 || JS_IsUndefined (argv[0])) {
 	return vector_new<components> ();
     }
 
-    if (argc >= components) {
-	bool allNumbers = true;
-	for (int i = 0; i < components; i++) {
-	    allNumbers = allNumbers && JS_IsNumber (argv[i]);
+    // Constructor overloads follow the shipped SceneScript baseclasses.js. Keep
+    // these separate from arithmetic operand conversion: partial numeric inputs
+    // and space-separated strings have constructor-specific behavior.
+    if (JS_IsString (argv[0])) {
+	JSValue separator = JS_NewString (ctx, " ");
+	const JSValue split = JS_GetPropertyStr (ctx, argv[0], "split");
+	const JSValue parts = JS_Call (ctx, split, argv[0], 1, &separator);
+	const JSValue global = JS_GetGlobalObject (ctx);
+	const JSValue parseFloat = JS_GetPropertyStr (ctx, global, "parseFloat");
+	ScopeGuard valuesGuard ([&] {
+	    JS_FreeValue (ctx, separator);
+	    JS_FreeValue (ctx, split);
+	    JS_FreeValue (ctx, parts);
+	    JS_FreeValue (ctx, global);
+	    JS_FreeValue (ctx, parseFloat);
+	});
+	if (JS_IsException (parts)) {
+	    throw std::runtime_error ("Could not split vector string");
 	}
-
-	if (allNumbers) {
-	    double values[4] = {};
-	    for (int i = 0; i < components; i++) {
-		JS_ToFloat64 (ctx, &values[i], argv[i]);
+	auto value = vector_new<components> ();
+	for (int i = 0; i < components; ++i) {
+	    JSValue part = JS_GetPropertyUint32 (ctx, parts, i);
+	    const JSValue parsed = JS_Call (ctx, parseFloat, JS_UNDEFINED, 1, &part);
+	    ScopeGuard partGuard ([&] {
+		JS_FreeValue (ctx, part);
+		JS_FreeValue (ctx, parsed);
+	    });
+	    double number = 0.0;
+	    if (JS_IsException (parsed) || JS_ToFloat64 (ctx, &number, parsed) < 0) {
+		throw std::runtime_error ("Could not parse vector string component");
 	    }
+	    value[i] = static_cast<float> (number);
+	}
+	return value;
+    }
 
-	    if constexpr (components == 2) {
-		return glm::vec2 (values[0], values[1]);
-	    } else if constexpr (components == 3) {
-		return glm::vec3 (values[0], values[1], values[2]);
-	    } else if constexpr (components == 4) {
-		return glm::vec4 (values[0], values[1], values[2], values[3]);
-	    }
+    if (JS_IsNumber (argv[0])) {
+	double values[4] = {};
+	JS_ToFloat64 (ctx, &values[0], argv[0]);
+	const bool hasY = argc > 1 && JS_IsNumber (argv[1]);
+	const bool hasZ = argc > 2 && JS_IsNumber (argv[2]);
+	const bool hasW = argc > 3 && JS_IsNumber (argv[3]);
+	values[1] = values[0];
+	if (hasY) {
+	    JS_ToFloat64 (ctx, &values[1], argv[1]);
+	}
+	values[2] = hasY ? 0.0 : values[0];
+	if (hasZ) {
+	    JS_ToFloat64 (ctx, &values[2], argv[2]);
+	}
+	values[3] = hasZ ? values[2] : (hasY ? 0.0 : values[0]);
+	if (hasW) {
+	    JS_ToFloat64 (ctx, &values[3], argv[3]);
+	}
+	auto value = vector_new<components> ();
+	for (int i = 0; i < components; ++i) {
+	    value[i] = static_cast<float> (values[i]);
+	}
+	return value;
+    }
+
+    if constexpr (components == 2) {
+	JSClassID classId = 0;
+	const auto* source = static_cast<VectorOpaqueContainer<3>*> (JS_GetAnyOpaque (argv[0], &classId));
+	if (source != nullptr && source->magic == static_cast<int> (VEC_OPAQUE_MAGIC + 3)) {
+	    return glm::vec2 (source->value.getVec3 ());
 	}
     }
 
@@ -399,23 +446,21 @@ template <int components> JSValue vector_equals (JSContext* ctx, JSValueConst th
     JSValue other = argv[0];
     auto* otherContainer = static_cast<VectorOpaqueContainer<components>*> (JS_GetAnyOpaque (other, &classId));
 
-    VEC_MAGIC_CHECK_EXCEPTION (otherContainer, components);
+    if (otherContainer == nullptr || otherContainer->magic != static_cast<int> (VEC_OPAQUE_MAGIC + components)) {
+	return JS_FALSE;
+    }
 
     const auto vector = vector_get<components> (container->value);
     const auto otherVector = vector_get<components> (otherContainer->value);
 
-    if constexpr (components == 2) {
-	return vector.x == otherVector.x && vector.y == otherVector.y ? JS_TRUE : JS_FALSE;
-    } else if constexpr (components == 3) {
-	return vector.x == otherVector.x && vector.y == otherVector.y && vector.z == otherVector.z ? JS_TRUE : JS_FALSE;
-    } else if constexpr (components == 4) {
-	return vector.x == otherVector.x && vector.y == otherVector.y && vector.z == otherVector.z
-		&& vector.w == otherVector.w
-	    ? JS_TRUE
-	    : JS_FALSE;
+    for (int i = 0; i < components; ++i) {
+	// Native equals uses an absolute epsilon, and NaN/Infinity do not compare equal.
+	if (!(std::abs (static_cast<double> (vector[i]) - otherVector[i]) < 0.00001)) {
+	    return JS_FALSE;
+	}
     }
 
-    return JS_FALSE;
+    return JS_TRUE;
 }
 
 template JSValue vector_equals<2> (JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv);
