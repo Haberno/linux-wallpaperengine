@@ -41,6 +41,7 @@ CModel::CModel (Wallpapers::CScene& scene, const Model3D& model) :
     // Expose its authored bounds as a vector-like size so those published scripts can
     // keep calculating their pivot even though current IModelLayer docs omit the field.
     this->registerProperty ("size", this->m_size);
+    this->registerProperty ("castshadow", *model.castShadow->value);
 }
 
 CModel::~CModel () {
@@ -434,6 +435,7 @@ void CModel::render () {
 
 void CModel::renderShadow (const glm::mat4& lightViewProjection) {
     if (!this->m_initialized || this->m_shadowProgram == GL_NONE
+	|| !this->m_model.castShadow->value->getBool ()
 	|| !this->m_model.groupVisible->value->getBool () || !this->isVisibleThroughParents ()) {
 	return;
     }

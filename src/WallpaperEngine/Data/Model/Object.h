@@ -680,6 +680,8 @@ struct Model3DData {
     std::vector<ImageAnimationLayerUniquePtr> animationLayers;
     /** Materials referenced by the submesh headers, aligned with mesh.submeshes */
     std::vector<MaterialUniquePtr> materials;
+    /** Whether this model participates in light-space shadow rendering. */
+    UserSettingUniquePtr castShadow;
 };
 
 class Model3D : public Object, public Model3DData {
