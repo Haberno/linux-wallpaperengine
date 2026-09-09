@@ -152,6 +152,9 @@ struct SoundData {
     UserSettingUniquePtr volume;
     /** Wait for a script or event to start this layer. */
     bool startSilent = false;
+    /** Delay between randomly selected sounds, in seconds. */
+    UserSettingUniquePtr minTime;
+    UserSettingUniquePtr maxTime;
     /** Playback mode, loop, */
     // TODO: WRITE AN ENUM FOR THIS
     std::optional<std::string> playbackmode;
