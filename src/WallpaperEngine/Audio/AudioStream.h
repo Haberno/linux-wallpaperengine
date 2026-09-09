@@ -161,6 +161,7 @@ private:
      * @param filename
      */
     void loadCustomContent (const char* filename = nullptr);
+    void release ();
     /**
      * Converts the audio frame from the original format to one supported by the audio driver
      *
@@ -196,6 +197,7 @@ private:
     AVCodecContext* m_context = nullptr;
     /** The format context that controls how data is read off the file */
     AVFormatContext* m_formatContext = nullptr;
+    AVIOContext* m_customIO = nullptr;
     /** The stream index for the audio being played */
     int m_audioStream = NO_AUDIO_STREAM;
     /** File data pointer */

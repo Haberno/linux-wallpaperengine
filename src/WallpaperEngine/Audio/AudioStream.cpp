@@ -128,40 +128,64 @@ int64_t audio_seek_data_callback (void* streamarg, int64_t offset, int whence) {
 
 AudioStream::AudioStream (AudioContext& context, const std::string& filename, const bool repeat) :
     m_audioContext (context), m_repeat (repeat) {
-    this->loadCustomContent (filename.c_str ());
+    try {
+	this->loadCustomContent (filename.c_str ());
+    } catch (...) {
+	this->release ();
+	throw;
+    }
 }
 
 AudioStream::AudioStream (AudioContext& context, const ReadStreamSharedPtr& buffer, const bool repeat) :
     m_audioContext (context), m_repeat (repeat) {
-    // setup a custom context first
-    this->m_formatContext = avformat_alloc_context ();
+    try {
+	// setup a custom context first
+	this->m_formatContext = avformat_alloc_context ();
 
-    if (this->m_formatContext == nullptr) {
-	sLog.exception ("Cannot allocate ffmpeg format context");
+	if (this->m_formatContext == nullptr) {
+	    sLog.exception ("Cannot allocate ffmpeg format context");
+	}
+
+	this->m_buffer = buffer;
+
+	// setup custom io for it
+	auto* ioBuffer = static_cast<uint8_t*> (av_malloc (4096));
+	if (ioBuffer == nullptr) {
+	    sLog.exception ("Cannot allocate audio IO buffer");
+	}
+	this->m_customIO = avio_alloc_context (
+	    ioBuffer, 4096, 0, this, &audio_read_data_callback, nullptr, &audio_seek_data_callback
+	);
+
+	if (this->m_customIO == nullptr) {
+	    av_free (ioBuffer);
+	    sLog.exception ("Cannot create avio context");
+	}
+	this->m_formatContext->pb = this->m_customIO;
+	this->m_formatContext->flags |= AVFMT_FLAG_CUSTOM_IO;
+
+	// continue the normal load procedure
+	this->loadCustomContent ();
+    } catch (...) {
+	this->release ();
+	throw;
     }
-
-    this->m_buffer = buffer;
-
-    // setup custom io for it
-    this->m_formatContext->pb = avio_alloc_context (
-	static_cast<uint8_t*> (av_malloc (4096)), 4096, 0, this, &audio_read_data_callback, nullptr,
-	&audio_seek_data_callback
-    );
-
-    if (this->m_formatContext->pb == nullptr) {
-	sLog.exception ("Cannot create avio context");
-    }
-
-    // continue the normal load procedure
-    this->loadCustomContent ();
 }
 
 AudioStream::AudioStream (AudioContext& audioContext, AVCodecContext* context) :
-    m_audioContext (audioContext), m_context (context), m_queue (new PacketQueue) {
-    this->initialize ();
+    m_audioContext (audioContext), m_context (context) {
+    try {
+	this->m_queue = new PacketQueue;
+	this->initialize ();
+    } catch (...) {
+	this->release ();
+	throw;
+    }
 }
 
-AudioStream::~AudioStream () {
+AudioStream::~AudioStream () { this->release (); }
+
+void AudioStream::release () {
     // stop the audio
     this->stop ();
 
@@ -176,7 +200,8 @@ AudioStream::~AudioStream () {
     // only the FIFO storage leaks every packet still buffered at wallpaper teardown
     // (up to MAX_QUEUE_SIZE per sound layer). Audio-heavy scenes can have dozens of
     // layers, so repeated switches otherwise retain hundreds of MB per pass.
-    while (this->m_queue != nullptr && this->dequeuePacket ()) {
+    while (this->m_queue != nullptr && this->m_queue->mutex != nullptr && this->m_queue->packetList != nullptr
+	   && this->m_decodePacket != nullptr && this->dequeuePacket ()) {
 	av_packet_unref (this->m_decodePacket);
     }
 
@@ -208,9 +233,16 @@ AudioStream::~AudioStream () {
     }
 
     delete this->m_queue;
+    this->m_queue = nullptr;
 
     if (this->m_formatContext != nullptr) {
-	avformat_free_context (this->m_formatContext);
+	avformat_close_input (&this->m_formatContext);
+    }
+    // Custom AVIO stays caller-owned, including after a failed open.
+    // FFmpeg may replace its buffer while probing, so free the current buffer.
+    if (this->m_customIO != nullptr) {
+	av_freep (&this->m_customIO->buffer);
+	avio_context_free (&this->m_customIO);
     }
 
     if (this->m_context != nullptr) {
@@ -247,18 +279,22 @@ void AudioStream::loadCustomContent (const char* filename) {
     }
 
     // alocate context
-    AVCodecContext* avCodecContext = avcodec_alloc_context3 (aCodec);
+    this->m_context = avcodec_alloc_context3 (aCodec);
+    if (this->m_context == nullptr) {
+	sLog.exception ("Cannot allocate audio decoder context");
+    }
 
-    if (avcodec_parameters_to_context (avCodecContext, this->m_formatContext->streams[this->m_audioStream]->codecpar)
+    if (avcodec_parameters_to_context (this->m_context, this->m_formatContext->streams[this->m_audioStream]->codecpar)
 	!= 0) {
 	sLog.exception ("Cannot initialize audio decoder parameters");
     }
 
     // finally open
-    avcodec_open2 (avCodecContext, aCodec, nullptr);
+    if (avcodec_open2 (this->m_context, aCodec, nullptr) < 0) {
+	sLog.exception ("Cannot open audio decoder");
+    }
 
     // initialize default data
-    this->m_context = avCodecContext;
     this->m_queue = new PacketQueue;
 
     this->initialize ();
