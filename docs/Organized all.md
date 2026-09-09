@@ -357,6 +357,11 @@ Sources: [Audio Capture Silence Investigation](wiki/investigations/Audio%20Captu
 - [x] Drain capture fragments each frame to avoid sustained overruns.
 - [x] Implement float-stereo capture, recovered 64-band frequency/magnitude
   mapping, normalization envelopes, and scene-spectrum smoothing.
+- [x] Restore the native shared stereo peak floor and post-silence envelope
+  reset so quiet frequency groups do not amplify a pure tone's leakage.
+  See [Audio Spectrum](wiki/rendering/Audio%20Spectrum.md) for regression evidence.
+- [ ] **Verify — user confirmation of the 2000 Hz response** on Shin Godzilla
+  (3094637759) and A Solitary Reflection (3644280276).
 - [x] Close the historical flat-capture symptom: basic response to music was
   user-confirmed on 2026-07-17. Preserve the old silence investigation as reference.
 - [x] Make automute aware of corked/muted streams; provide audio enable/mute/volume controls.
@@ -390,6 +395,9 @@ Sources: [Audio Capture Silence Investigation](wiki/investigations/Audio%20Captu
   survived two output sleep/wake cycles; this is separate from the NVIDIA leak.
 - [ ] **Open — recover or independently validate exact 64→32/16 spectrum
   reduction.** Current peak-preserving pooling is inferred.
+- [ ] **Open — investigate full-scale PCM endpoint behavior** in the retained
+  native reciprocal FFT input; synthetic samples at exactly -1 can corrupt
+  the raw spectrum. This is separate from the corrected normalization issue.
 - [ ] **Open — implement `--audio-device` capture-source override.**
 - [ ] **Audit — reconcile simultaneous soundtrack ports with the intentional
   rotation design** before considering `faeb889`.

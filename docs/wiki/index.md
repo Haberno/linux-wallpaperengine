@@ -53,6 +53,8 @@ treated as current behavior.
 
 ## Renderer systems
 
+- [Audio Spectrum](rendering/Audio%20Spectrum.md) — captured frequency bands,
+  scene normalization, and pure-tone regressions.
 - [3D Scene Support](rendering/3D%20Scene%20Support.md) — camera, models,
   lighting, fog, sorting, skinning, attachments, and shadows.
 - [MDL File Format](rendering/MDL%20File%20Format.md) — reverse-engineered MDLV,

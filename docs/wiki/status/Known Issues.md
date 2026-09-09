@@ -412,6 +412,14 @@ queue), see [[Current Status]]. This page keeps the durable issue records.
   `/tmp/we-audio-debug.log`. *Basic live response is user-verified. Exact
   parity is still open because the closed native 64→32/16 provider reduction
   remains inferred as peak-preserving pooling.*
+- **Pure tones raised unrelated frequency bars**: scene normalization omitted
+  the native shared floor of 0.333 times the stereo peak, letting each quiet
+  eight-band group amplify tiny leakage independently. Restored that floor and
+  the native envelope reset after silence. Sustained-tone regressions pass;
+  the captured 2000 Hz example drops from 58 elevated bands to two adjacent
+  bands. Live confirmation on Shin Godzilla (3094637759) and A Solitary
+  Reflection (3644280276) remains pending. See [[Audio Spectrum]] for binary
+  evidence and the separate full-scale PCM endpoint limitation.
 
 ## Deferred / not implemented
 - Puppet bone constraint JSON (`"tp"`/`"tm"`) — mouse-interactive puppets.
