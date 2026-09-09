@@ -38,6 +38,7 @@ PropertyAnimationUniquePtr parseAnimation (const json& data) {
     animation->length = options.has_value () ? options->optional ("length", 0.0f) : 0.0f;
     animation->mode = options.has_value () ? options->optional<std::string> ("mode", "loop") : "loop";
     animation->relative = it.optional ("relative", false);
+    const bool wrapLoop = options.has_value () && options->optional ("wraploop", false);
 
     // channels are stored as c0/c1/c2... keys mapping to keyframe arrays
     for (const auto& [key, channelData] : it.items ()) {
@@ -63,6 +64,24 @@ PropertyAnimationUniquePtr parseAnimation (const json& data) {
 	    });
 	}
 	std::ranges::sort (keyframes, {}, &PropertyKeyframe::frame);
+	// The native loader closes wraploop curves before playback. Holding the
+	// last authored key until fmod wraps causes a pause followed by a hard cut.
+	if (wrapLoop && animation->length > 0.0f) {
+	    while (keyframes.size () > 1 && keyframes.back ().frame > animation->length) {
+		keyframes.pop_back ();
+	    }
+	    if (keyframes.size () >= 2) {
+		const auto first = keyframes.front ();
+		if (keyframes.back ().frame != animation->length) {
+		    keyframes.push_back (PropertyKeyframe { .frame = animation->length, .value = first.value });
+		}
+		auto& closing = keyframes.back ();
+		closing.value = first.value;
+		closing.incoming = first.outgoing.enabled
+		    ? PropertyKeyframeHandle { .enabled = true, .offset = -first.outgoing.offset }
+		    : PropertyKeyframeHandle {};
+	    }
+	}
     }
 
     return animation;
