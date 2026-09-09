@@ -238,6 +238,8 @@ private:
     void renderShadowAtlas ();
     void registerFogScripts ();
     void updateFogState ();
+    void initializeBloom ();
+    void updateBloomState ();
     void updateCameraObject ();
     void updateCameraPath (float deltaTime);
     [[nodiscard]] const CameraPathSource* findActiveCameraPathSource () const;
@@ -247,6 +249,7 @@ private:
     std::unique_ptr<Camera> m_camera;
     ObjectUniquePtr m_bloomObjectData;
     CObject* m_bloomObject = nullptr;
+    bool m_bloomSetupAttempted = false;
     // Keeps runtime-created layer data (createLayer) alive: CImage holds a const Image& into it.
     std::vector<ObjectUniquePtr> m_runtimeLayerData = {};
     std::set<int> m_objectsInCreation = {};
