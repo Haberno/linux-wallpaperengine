@@ -135,6 +135,7 @@ static std::string normalizeSceneScriptModuleSyntax (std::string source) {
     std::ostringstream output;
     bool needsWEMath = false;
     bool needsWEVector = false;
+    bool needsWEColor = false;
 
     std::string line;
     while (std::getline (input, line)) {
@@ -144,6 +145,7 @@ static std::string normalizeSceneScriptModuleSyntax (std::string source) {
 	if (trimmed.rfind ("import ", 0) == 0) {
 	    needsWEMath = needsWEMath || trimmed.find ("WEMath") != std::string_view::npos;
 	    needsWEVector = needsWEVector || trimmed.find ("WEVector") != std::string_view::npos;
+	    needsWEColor = needsWEColor || trimmed.find ("WEColor") != std::string_view::npos;
 	    continue;
 	}
 
@@ -156,6 +158,9 @@ static std::string normalizeSceneScriptModuleSyntax (std::string source) {
     }
     if (needsWEVector) {
 	prefix += "const WEVector = globalThis.WEVector;\n";
+    }
+    if (needsWEColor) {
+	prefix += "const WEColor = globalThis.WEColor;\n";
     }
 
     return prefix + output.str ();
@@ -433,6 +438,18 @@ void ScriptEngine::installBuiltins () {
     );
     if (JS_IsException (result)) {
 	logJSException (this->m_context, "installBuiltins");
+    }
+    JS_FreeValue (this->m_context, result);
+
+    // Property scripts run through the lowered wrapper, so their removed
+    // imports never instantiate C modules. Publish the real color module once
+    // per context and let the wrapper bind its namespace like WEMath/WEVector.
+    constexpr char colorModule[] = "import * as WEColor from 'WEColor'; globalThis.WEColor = WEColor;";
+    result = JS_Eval (
+	this->m_context, colorModule, sizeof (colorModule) - 1, "<scene-script-color-module>", JS_EVAL_TYPE_MODULE
+    );
+    if (JS_IsException (result)) {
+	logJSException (this->m_context, "installColorModule");
     }
     JS_FreeValue (this->m_context, result);
     this->m_builtinsInstalled = true;
