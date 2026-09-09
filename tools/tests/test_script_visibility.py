@@ -11,14 +11,15 @@ import unittest
 
 @unittest.skipUnless(os.environ.get('LWE_TEST_BINARY'), 'Set LWE_TEST_BINARY for graphics integration tests')
 class ScriptVisibility(unittest.TestCase):
-    def capture(self, root, visible, *, consumer=False, effect=False, direct_control=False):
+    def capture(self, root, visible, *, consumer=False, effect=False, direct_control=False,
+                color_expression='new Vec4(0,1,0,1)', layer_alpha=1.0, texture_alpha=None):
         from PIL import Image
 
         for name in ('models', 'materials', 'effects'):
             (root / name).mkdir(parents=True, exist_ok=True)
         (root / 'project.json').write_text(json.dumps({
             'title': 'Image visibility regression', 'type': 'scene', 'file': 'scene.json'}))
-        alpha = 128 if consumer else 255
+        alpha = texture_alpha if texture_alpha is not None else (128 if consumer else 255)
         Image.new('RGBA', (32, 16), (255, 255, 255, alpha)).save(root / 'materials/source.png')
         Image.new('RGBA', (32, 16), (0, 255, 0, alpha)).save(root / 'materials/green.png')
         for texture in ('source', 'green'):
@@ -40,8 +41,9 @@ class ScriptVisibility(unittest.TestCase):
         if not direct_control:
             objects.append({'id': 1, 'name': 'Source', 'image': 'models/source.json',
                             'origin': '64 128 0', 'size': '32 16', 'visible': visible,
+                            'alpha': layer_alpha,
                             'color': {'value': '1 0 0', 'script':
-                                      'export function update(value) { return new Vec4(0,1,0,1); }'}})
+                                      'export function update(value) { return ' + color_expression + '; }'}})
         if consumer:
             objects.append({'id': 2, 'name': 'Consumer', 'image': 'models/consumer.json',
                             'origin': '192 128 0', 'size': '32 16',
@@ -129,6 +131,25 @@ class ScriptVisibility(unittest.TestCase):
                     actual = self.capture(root / name, visible, consumer=True)
                     self.assertIsNone(ImageChops.difference(control, actual).getbbox(),
                                       'Hiding the source must retain its updated RGBA composite texture')
+
+    def test_rgb_color_scripts_preserve_texture_and_layer_opacity(self):
+        from PIL import ImageChops
+
+        with tempfile.TemporaryDirectory(prefix='lwe-image-color-') as directory:
+            root = Path(directory)
+            for name, expression, layer_alpha, expected_alpha in [
+                ('rgb', 'new Vec3(0,1,0)', 1.0, 128),
+                ('rgb-layer-opacity', 'new Vec3(0,1,0)', .5, 64),
+                ('rgba-explicit-opacity', 'new Vec4(0,1,0,.5)', 1.0, 64),
+            ]:
+                with self.subTest(name=name):
+                    control = self.capture(root / (name + '-control'), False, consumer=True,
+                                           direct_control=True, texture_alpha=expected_alpha)
+                    actual = self.capture(root / name, False, consumer=True,
+                                          color_expression=expression, layer_alpha=layer_alpha)
+                    self.assertGreater(control.getpixel((192, 128))[1], 50)
+                    self.assertIsNone(ImageChops.difference(control, actual).getbbox(),
+                                      'RGB colors must keep opacity; explicit RGBA and layer alpha still apply')
 
 
     @unittest.skipUnless(os.environ.get('LWE_TEST_WORKSHOP'), 'Set LWE_TEST_WORKSHOP for installed puppet regression')
