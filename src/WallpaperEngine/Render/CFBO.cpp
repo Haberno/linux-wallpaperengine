@@ -30,6 +30,11 @@ CFBO::CFBO (
     std::string name, const TextureFormat format, const uint32_t flags, const float scale, uint32_t realWidth,
     uint32_t realHeight, uint32_t textureWidth, uint32_t textureHeight, bool withDepthBuffer, bool depthTexture
 ) : m_depthTexture (depthTexture), m_scale (scale), m_name (std::move (name)), m_format (format), m_flags (flags) {
+    // Hidden effect inputs can have an authored zero dimension (for example a
+    // 64x0 audio buffer). Keep their logical size, but allocate complete GL storage.
+    textureWidth = std::max (textureWidth, 1u);
+    textureHeight = std::max (textureHeight, 1u);
+
     // NOTE: the framebuffer object itself is created lazily on first use (see
     // ensureFramebuffer): FBOs are not shared between GL contexts, so when this
     // constructor runs on the async switch worker only the shared objects
