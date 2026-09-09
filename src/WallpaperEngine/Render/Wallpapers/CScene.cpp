@@ -668,7 +668,10 @@ void CScene::renderFrame (const glm::ivec4& viewport) {
     // in the scene." Letting the script win instead pins the camera wherever the controller starts
     // and every authored shot is discarded.
     if (this->m_scriptCameraTransform.has_value () && !pathOwnsCamera) {
-	this->m_camera->setTransform (*this->m_scriptCameraTransform);
+	CameraTransform transform = *this->m_scriptCameraTransform;
+	// CameraTransforms owns eye/center/up/zoom; FOV remains a scene or camera-layer property.
+	transform.fov = this->m_camera->getDefaultTransform ().fov;
+	this->m_camera->setTransform (transform);
     }
 
 
@@ -874,6 +877,10 @@ void CScene::registerFogScripts () {
     queue ("camerashakeamplitude", scene.camera.shake.amplitude);
     queue ("camerashakeroughness", scene.camera.shake.roughness);
     queue ("camerashakespeed", scene.camera.shake.speed);
+    queue ("fov", scene.camera.projection.fov);
+    queue ("zoom", scene.camera.projection.zoom);
+    queue ("nearz", scene.camera.projection.nearz);
+    queue ("farz", scene.camera.projection.farz);
 }
 
 void CScene::updateFogState () {
@@ -1048,6 +1055,18 @@ void CScene::updateCameraObject () {
     }
 
     if (active == nullptr) {
+	// Scenes without a camera layer still have live projection properties. Refresh
+	// the fallback without claiming a runtime pose for the editor's 2D camera.
+	CameraTransform transform = this->m_camera->getDefaultTransform ();
+	const auto& projection = this->getScene ().camera.projection;
+	transform.fov = projection.fov->evaluateFloat (this->getTime ());
+	transform.zoom = projection.zoom->evaluateFloat (this->getTime ());
+	this->m_camera->setDefaultTransform (transform, false);
+	const bool pathActive = this->m_activeCameraPathSource != nullptr
+	    && this->m_activeCameraPathIndex.has_value ();
+	if (!pathActive && !this->m_scriptCameraTransform.has_value ()) {
+	    this->m_camera->resetTransform ();
+	}
 	return;
     }
 
