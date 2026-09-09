@@ -138,6 +138,100 @@ uint32_t WallpaperEngine::Render::Objects::nextUtf8Codepoint (const std::string&
     return code;
 }
 
+std::vector<std::string> WallpaperEngine::Render::Objects::layoutTextLines (
+    const std::string& text, const TextLayoutLimits& limits, const std::function<int (uint32_t)>& glyphAdvance
+) {
+    struct Glyph {
+	size_t begin;
+	size_t end;
+	uint32_t code;
+	int advance;
+    };
+    const auto whitespace = [] (uint32_t code) { return code == ' ' || code == '\t'; };
+    std::vector<std::string> lines;
+    for (size_t paragraph = 0, end = 0; end <= text.size (); end++) {
+	if (end != text.size () && text[end] != '\n') {
+	    continue;
+	}
+	size_t paragraphEnd = end;
+	if (paragraphEnd > paragraph && text[paragraphEnd - 1] == '\r') {
+	    paragraphEnd--;
+	}
+	std::vector<Glyph> glyphs;
+	for (size_t offset = paragraph; offset < paragraphEnd;) {
+	    const size_t begin = offset;
+	    const auto code = nextUtf8Codepoint (text, offset);
+	    glyphs.push_back ({ begin, offset, code, glyphAdvance (code) });
+	}
+	if (glyphs.empty ()) {
+	    lines.emplace_back ();
+	}
+	for (size_t start = 0; start < glyphs.size ();) {
+	    int width = 0;
+	    size_t lastSpace = std::string::npos;
+	    size_t stop = start;
+	    for (; stop < glyphs.size (); stop++) {
+		// Always consume at least one glyph, even if it alone exceeds the limit.
+		if (limits.width > 0.0f && stop > start && width + glyphs[stop].advance > limits.width) {
+		    break;
+		}
+		width += glyphs[stop].advance;
+		if (whitespace (glyphs[stop].code)) {
+		    lastSpace = stop;
+		}
+	    }
+	    size_t next = stop;
+	    if (stop < glyphs.size () && !whitespace (glyphs[stop].code) && lastSpace != std::string::npos
+		&& lastSpace > start) {
+		stop = lastSpace;
+		while (stop > start && whitespace (glyphs[stop - 1].code)) {
+		    stop--;
+		}
+		if (stop == start) {
+		    stop = next;
+		} // preserve an explicitly indented row
+		else {
+		    next = lastSpace + 1;
+		}
+	    }
+	    lines.push_back (text.substr (glyphs[start].begin, glyphs[stop - 1].end - glyphs[start].begin));
+	    start = next;
+	    while (start < glyphs.size () && whitespace (glyphs[start].code)) {
+		start++;
+	    }
+	}
+	paragraph = end + 1;
+    }
+    if (limits.rows > 0 && lines.size () > limits.rows) {
+	lines.resize (limits.rows);
+	if (limits.ellipsis) {
+	    auto& last = lines.back ();
+	    const auto measure = [&] (const std::string& value) {
+		int width = 0;
+		for (size_t offset = 0; offset < value.size ();) {
+		    width += glyphAdvance (nextUtf8Codepoint (value, offset));
+		}
+		return width;
+	    };
+	    std::string dots = "...";
+	    while (limits.width > 0.0f && dots.size () > 1 && measure (dots) > limits.width) {
+		dots.pop_back ();
+	    }
+	    while (!last.empty ()
+		   && (whitespace (static_cast<unsigned char> (last.back ()))
+		       || (limits.width > 0.0f && measure (last) + measure (dots) > limits.width))) {
+		size_t offset = last.size () - 1;
+		while (offset > 0 && (static_cast<unsigned char> (last[offset]) & 0xC0) == 0x80) {
+		    offset--;
+		}
+		last.resize (offset);
+	    }
+	    last += dots;
+	}
+    }
+    return lines;
+}
+
 glm::vec2 WallpaperEngine::Render::Objects::computeTextAlignmentOffset (
     const std::string& horizontalAlign, const std::string& verticalAlign, const glm::vec4& glyphBounds,
     const float ascender, const float descender, const float lineSpacing, const size_t lineCount
@@ -237,7 +331,11 @@ CText::CText (Wallpapers::CScene& scene, const Text& text) :
     this->registerProperty ("visible", *text.visible->value);
     this->registerProperty ("pointSize", *text.pointSize->value);
     this->registerProperty ("text", *text.text->value);
-    this->registerProperty ("pointSize", *text.pointSize->value);
+    this->registerProperty ("limitwidth", *text.limitWidth->value);
+    this->registerProperty ("maxwidth", *text.maxWidth->value);
+    this->registerProperty ("limitrows", *text.limitRows->value);
+    this->registerProperty ("maxrows", *text.maxRows->value);
+    this->registerProperty ("limituseellipsis", *text.limitUseEllipsis->value);
 }
 
 CText::~CText () {
@@ -662,6 +760,17 @@ unsigned int CText::computeEffectivePixelSize () const {
     );
 }
 
+TextLayoutLimits CText::currentLayoutLimits () const {
+    const float width = m_text.maxWidth->value->getFloat ();
+    return {
+	.width = m_text.limitWidth->value->getBool () && std::isfinite (width) ? std::max (0.0f, width) : 0.0f,
+	.rows = m_text.limitRows->value->getBool ()
+	    ? static_cast<size_t> (std::max (1, m_text.maxRows->value->getInt ()))
+	    : 0,
+	.ellipsis = m_text.limitUseEllipsis->value->getBool (),
+    };
+}
+
 void CText::initScriptLayer () {
     const auto& script = m_text.text->value->getScriptSource ();
 
@@ -696,18 +805,17 @@ void CText::rebuildTextureFrom (const std::string& text) {
     const int ascender = static_cast<int> (m_ftFace->size->metrics.ascender >> 6);
     const int descender = static_cast<int> (m_ftFace->size->metrics.descender >> 6);
 
-    // \n splitting is UTF-8 safe: continuation bytes are always >= 0x80
+    m_lastLayoutLimits = currentLayoutLimits ();
     struct Line {
 	std::string text;
 	int width = 0;
 	int x = 0;
     };
     std::vector<Line> lines;
-    for (size_t start = 0, i = 0; i <= text.size (); i++) {
-	if (i == text.size () || text[i] == '\n') {
-	    lines.push_back ({ .text = text.substr (start, i - start) });
-	    start = i + 1;
-	}
+    for (auto& line : layoutTextLines (text, m_lastLayoutLimits, [this, slot] (uint32_t code) {
+	     return FT_Load_Char (m_ftFace, code, FT_LOAD_DEFAULT) == 0 ? static_cast<int> (slot->advance.x >> 6) : 0;
+	 })) {
+	lines.push_back ({ .text = std::move (line) });
     }
 
     int maxLineWidth = 0;
@@ -983,7 +1091,7 @@ void CText::render () {
 	FT_Set_Pixel_Sizes (m_ftFace, 0, static_cast<FT_UInt> (m_lastPixelSize));
 	rebuildTextureFrom (renderedText);
 	rebuiltGlyphs = true;
-    } else if (renderedText != m_lastRenderedText) {
+    } else if (renderedText != m_lastRenderedText || currentLayoutLimits () != m_lastLayoutLimits) {
 	rebuildTextureFrom (renderedText);
 	rebuiltGlyphs = true;
     }
