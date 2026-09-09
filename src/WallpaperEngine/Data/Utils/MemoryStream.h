@@ -22,6 +22,8 @@ struct MemoryStream : std::istream, private std::streambuf {
 	return gptr () - eback ();
     }
 
+    [[nodiscard]] size_t size () const { return this->egptr () - this->eback (); }
+
     std::unique_ptr<char[]> m_buffer;
 };
 

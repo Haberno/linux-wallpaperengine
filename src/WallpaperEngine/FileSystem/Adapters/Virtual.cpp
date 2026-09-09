@@ -14,7 +14,13 @@ ReadStreamSharedPtr VirtualAdapter::open (const std::filesystem::path& path) con
 	throw std::filesystem::filesystem_error ("Cannot find file", path, std::error_code ());
     }
 
-    return file->second;
+    // Each open owns its read position, just like a physical/package stream.
+    // Sharing the stored stream made a second read see EOF and let concurrent
+    // consumers change one another's cursor.
+    const auto size = file->second->size ();
+    auto buffer = std::make_unique<char[]> (size);
+    std::memcpy (buffer.get (), file->second->m_buffer.get (), size);
+    return std::make_shared<MemoryStream> (std::move (buffer), size);
 }
 
 bool VirtualAdapter::exists (const std::filesystem::path& path) const { return this->files.contains (path); }

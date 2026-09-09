@@ -51,3 +51,21 @@ TEST_CASE ("short workshop shader paths fail normally and valid overrides still 
     CHECK (locator.fragmentShader ("workshop/123/effect/example.frag") == "compatibility shader");
     CHECK (locator.fragmentShader ("workshop/456/effect/example.frag") == "fallback shader");
 }
+
+TEST_CASE ("virtual files can be reopened and read independently", "[assets]") {
+    WallpaperEngine::FileSystem::Container files;
+    const std::string contents ("a\0bc", 4);
+    files.getVFS ().add ("generated.bin", contents);
+
+    CHECK (files.readString ("generated.bin") == contents);
+    CHECK (files.readString ("generated.bin") == contents);
+
+    const auto first = files.read ("generated.bin");
+    const auto second = files.read ("generated.bin");
+    CHECK (first->get () == 'a');
+    CHECK (first->get () == '\0');
+    CHECK (second->get () == 'a');
+    CHECK (first->get () == 'b');
+    CHECK (files.readString ("generated.bin") == contents);
+    CHECK (second->get () == '\0');
+}
