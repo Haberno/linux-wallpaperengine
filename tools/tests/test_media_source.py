@@ -1,0 +1,191 @@
+"""Private-bus MPRIS regressions; no graphics or desktop media session required.
+
+LWE_TEST_LIBRARY=build-release/output/liblinux-wallpaperengine-lib.so \
+    python3 -m unittest discover -s tools/tests -p test_media_source.py
+Requires a C++ compiler, pkg-config, dbus-daemon, dbus-python and PyGObject.
+The helper compiles the current DBusMediaSource.cpp without rebuilding shared targets.
+"""
+import json
+import os
+from pathlib import Path
+import queue
+import signal
+import subprocess
+import sys
+import tempfile
+import threading
+import time
+import unittest
+
+
+PROBE = r'''
+#include <memory>
+#include <optional>
+#include <iomanip>
+#include <iostream>
+#include <thread>
+#include "WallpaperEngine/Media/DBusMediaSource.h"
+int main() {
+    WallpaperEngine::Media::DBusMediaSource media(std::chrono::milliseconds(20));
+    for (;;) {
+        media.update();
+        const auto& info = media.getMediaInfo();
+        std::cout << "{\"title\":" << std::quoted(info.title)
+                  << ",\"artist\":" << std::quoted(info.artist)
+                  << ",\"album\":" << std::quoted(info.album)
+                  << ",\"art\":" << std::quoted(info.url.value_or(""))
+                  << ",\"state\":" << info.playbackState
+                  << ",\"position\":" << info.position
+                  << ",\"duration\":" << info.duration
+                  << ",\"available\":" << (info.available ? "true" : "false")
+                  << "}" << std::endl;
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+}
+'''
+
+PLAYER = r'''
+import dbus, dbus.service, dbus.mainloop.glib, json, sys
+from gi.repository import GLib
+dbus.mainloop.glib.DBusGMainLoop(set_as_default=True)
+class Player(dbus.service.Object):
+    def __init__(self):
+        self.name = dbus.service.BusName('org.mpris.MediaPlayer2.' + sys.argv[1], dbus.SessionBus())
+        super().__init__(self.name, '/org/mpris/MediaPlayer2')
+        self.state = sys.argv[2]
+        self.metadata = {'xesam:title': sys.argv[1], 'xesam:artist': ['Original Artist'],
+                         'xesam:album': 'Original Album', 'mpris:artUrl': 'file:///original.png',
+                         'mpris:length': 180000000}
+    def typedMetadata(self):
+        result = {}
+        for key, value in self.metadata.items():
+            result[key] = dbus.Int64(value) if isinstance(value, int) else (
+                dbus.Array(value, signature='s') if isinstance(value, list) else value)
+        return dbus.Dictionary(result, signature='sv')
+    @dbus.service.method('org.freedesktop.DBus.Properties', in_signature='ss', out_signature='v')
+    def Get(self, iface, prop):
+        if prop == 'PlaybackStatus': return self.state
+        if prop == 'Position': return dbus.Int64(30000000)
+        if prop == 'Metadata': return self.typedMetadata()
+        raise dbus.exceptions.DBusException('Unknown property')
+    @dbus.service.signal('org.freedesktop.DBus.Properties', signature='sa{sv}as')
+    def PropertiesChanged(self, iface, props, invalidated): pass
+    def command(self, source, condition):
+        line = sys.stdin.readline()
+        if not line: return False
+        self.state, self.metadata = json.loads(line)
+        self.PropertiesChanged('org.mpris.MediaPlayer2.Player', {
+            'PlaybackStatus': self.state, 'Metadata': self.typedMetadata()}, [])
+        print('READY', flush=True)
+        return True
+player = Player()
+GLib.io_add_watch(sys.stdin, GLib.IO_IN, player.command)
+print('READY', flush=True)
+GLib.MainLoop().run()
+'''
+
+
+@unittest.skipUnless(os.environ.get('LWE_TEST_LIBRARY'), 'Set LWE_TEST_LIBRARY for private DBus integration tests')
+class MediaSource(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.build = tempfile.TemporaryDirectory(prefix='lwe-media-test-build-')
+        cls.addClassCleanup(cls.build.cleanup)
+        root = Path(__file__).resolve().parents[2]
+        library = Path(os.environ['LWE_TEST_LIBRARY']).resolve()
+        source = Path(cls.build.name) / 'probe.cpp'
+        source.write_text(PROBE)
+        cls.binary = Path(cls.build.name) / 'probe'
+        flags = subprocess.check_output(['pkg-config', '--cflags', '--libs', 'dbus-1'], text=True).split()
+        subprocess.run([
+            'c++', '-std=c++20', '-include', 'memory', '-include', 'optional', '-DNDEBUG',
+            '-I', str(root / 'src'), '-I', str(root / 'src/External/json/include'),
+            str(source), str(root / 'src/WallpaperEngine/Media/DBusMediaSource.cpp'),
+            str(library), '-Wl,-rpath,' + str(library.parent), *flags, '-o', str(cls.binary),
+        ], check=True, capture_output=True, text=True)
+
+    def setUp(self):
+        self.children = []
+        self.addCleanup(self.cleanup_children)
+        daemon = self.child(['dbus-daemon', '--session', '--nofork', '--print-address=1'])
+        address = daemon.stdout.readline().strip()
+        self.assertTrue(address.startswith('unix:'), daemon.stderr.read() if not address else address)
+        self.env = dict(os.environ, DBUS_SESSION_BUS_ADDRESS=address)
+
+    def child(self, command, **kwargs):
+        process = subprocess.Popen(command, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                                   stderr=subprocess.PIPE, text=True, **kwargs)
+        self.children.append(process)
+        return process
+
+    def player(self, name, state):
+        player = self.child([sys.executable, '-u', '-c', PLAYER, name, state], env=self.env)
+        self.assertEqual(player.stdout.readline().strip(), 'READY')
+        return player
+
+    def command(self, player, state, metadata):
+        player.stdin.write(json.dumps([state, metadata]) + '\n')
+        player.stdin.flush()
+        self.assertEqual(player.stdout.readline().strip(), 'READY')
+
+    def start_probe(self):
+        self.samples = queue.Queue()
+        self.probe = self.child([str(self.binary)], env=self.env)
+        def collect():
+            for line in self.probe.stdout:
+                if line.startswith('{'):
+                    self.samples.put(json.loads(line))
+        self.reader = threading.Thread(target=collect, daemon=True)
+        self.reader.start()
+
+    def wait_for(self, predicate, timeout=3):
+        deadline = time.monotonic() + timeout
+        last = None
+        while time.monotonic() < deadline:
+            try:
+                last = self.samples.get(timeout=max(.01, deadline - time.monotonic()))
+            except queue.Empty:
+                break
+            if predicate(last):
+                return last
+        self.fail(f'Media condition not reached; last snapshot: {last}')
+
+    def test_active_player_selection_ignores_foreign_signals_and_tracks_owner_lifecycle(self):
+        paused = self.player('lwe_test_paused', 'Paused')
+        active = self.player('lwe_test_active', 'Playing')
+        self.start_probe()
+        self.wait_for(lambda row: row['title'] == 'lwe_test_active' and row['state'] == 1)
+        self.command(paused, 'Paused', {'xesam:title': 'Foreign Paused Track'})
+        # Inspect every delivered sample, not just an eventual correction by polling.
+        deadline = time.monotonic() + .25
+        while time.monotonic() < deadline:
+            row = self.samples.get(timeout=1)
+            self.assertEqual(row['title'], 'lwe_test_active')
+            self.assertEqual(row['state'], 1)
+        self.stop(active)
+        self.wait_for(lambda row: row['title'] == 'Foreign Paused Track' and row['state'] == 2)
+        self.stop(paused)
+        cleared = self.wait_for(lambda row: not row['available'])
+        self.assertEqual(cleared, {'title': '', 'artist': '', 'album': '', 'art': '', 'state': 0,
+                                   'position': 0, 'duration': 0, 'available': False})
+        self.player('lwe_test_late', 'Playing')
+        self.wait_for(lambda row: row['title'] == 'lwe_test_late' and row['state'] == 1)
+
+    @staticmethod
+    def stop(process):
+        if process.poll() is None:
+            process.send_signal(signal.SIGINT)
+            try:
+                process.wait(timeout=3)
+            except subprocess.TimeoutExpired:
+                process.kill()
+                process.wait()
+
+    def cleanup_children(self):
+        for process in reversed(self.children):
+            self.stop(process)
+        if hasattr(self, 'reader'):
+            self.reader.join(timeout=1)
+        for process in self.children:
+            for pipe in (process.stdin, process.stdout, process.stderr):
+                pipe.close()
