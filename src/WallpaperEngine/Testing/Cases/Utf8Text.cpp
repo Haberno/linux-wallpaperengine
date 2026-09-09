@@ -4,7 +4,43 @@
 
 using WallpaperEngine::Render::Objects::computeTextAlignmentOffset;
 using WallpaperEngine::Render::Objects::computeTextEffectLayout;
+using WallpaperEngine::Render::Objects::layoutTextLines;
 using WallpaperEngine::Render::Objects::nextUtf8Codepoint;
+
+TEST_CASE ("text width wraps words and narrow vertical dates without splitting UTF-8") {
+    const auto advance = [] (uint32_t) { return 10; };
+    REQUIRE (
+	layoutTextLines ("Wed\n9/Sep/2026", { .width = 10 }, advance)
+	== std::vector<std::string> { "W", "e", "d", "9", "/", "S", "e", "p", "/", "2", "0", "2", "6" }
+    );
+    REQUIRE (
+	layoutTextLines ("one two three", { .width = 60 }, advance)
+	== std::vector<std::string> { "one", "two", "three" }
+    );
+    REQUIRE (layoutTextLines ("é画😀", { .width = 5 }, advance) == std::vector<std::string> { "é", "画", "😀" });
+    REQUIRE (
+	layoutTextLines ("one  two\r\n\nthree\n", {}, advance)
+	== std::vector<std::string> { "one  two", "", "three", "" }
+    );
+    REQUIRE (layoutTextLines ("", {}, advance) == std::vector<std::string> { "" });
+}
+
+TEST_CASE ("text row limits truncate with a width-fitting ellipsis only when needed") {
+    const auto advance = [] (uint32_t code) { return code == '.' ? 2 : 10; };
+    REQUIRE (
+	layoutTextLines ("Code therapy w / R...", { .width = 120, .rows = 1, .ellipsis = true }, advance)
+	== std::vector<std::string> { "Code therap..." }
+    );
+    REQUIRE (
+	layoutTextLines ("é画😀\nmore", { .width = 30, .rows = 1, .ellipsis = true }, advance)
+	== std::vector<std::string> { "é画..." }
+    );
+    REQUIRE (layoutTextLines ("abc\ndef", { .rows = 1 }, advance) == std::vector<std::string> { "abc" });
+    REQUIRE (
+	layoutTextLines ("abc", { .width = 30, .rows = 1, .ellipsis = true }, advance)
+	== std::vector<std::string> { "abc" }
+    );
+}
 
 TEST_CASE ("utf8 codepoint decoding") {
     // "aé画😀" — 1-, 2-, 3- and 4-byte sequences
