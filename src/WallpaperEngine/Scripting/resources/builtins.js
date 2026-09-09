@@ -79,7 +79,7 @@ globalThis.MediaPlaybackEvent = globalThis.MediaPlaybackEvent || {
       return new Vec2(this.x - 2 * d * normal.x, this.y - 2 * d * normal.y);
     });
     addMethod(P2, 'perpendicular', function () {
-      return new Vec2(-this.y, this.x);
+      return new Vec2(this.y, -this.x);
     });
     addMethod(P2, 'project', function (value) {
       var lenSqr = value.x * value.x + value.y * value.y;
