@@ -6,7 +6,8 @@
 
 using namespace WallpaperEngine::Render::Objects;
 
-CSound::CSound (Wallpapers::CScene& scene, const Sound& sound) : CObject (scene, sound), m_sound (sound) {
+CSound::CSound (Wallpapers::CScene& scene, const Sound& sound) :
+    CObject (scene, sound), ScriptableObject (scene, sound), m_sound (sound) {
     const auto& audioSettings = this->getContext ().getApp ().getContext ().settings.audio;
     if (audioSettings.enabled && audioSettings.volume > 0) {
 	// A zero-volume wallpaper can still use live audio-input processing, but its authored
@@ -69,13 +70,13 @@ void CSound::render () {
     auto& audioContext = this->getScene ().getAudioContext ();
     const bool active = audioContext.isActiveSoundPlayer (this->m_wallpaperKey, this->m_soundKey, this);
 
-    if (active && this->m_audioStreams.empty ()) {
+    if (active && this->m_playing && this->m_audioStreams.empty ()) {
 	// became the audible soundtrack (startup, rotation, or the previous owner went away):
 	// streams start from the top of the track
 	this->load ();
     } else if (!active && !this->m_audioStreams.empty ()) {
 	this->unload ();
-    } else if (active && audioContext.distinctSoundWallpaperCount () > 1) {
+    } else if (active && this->m_playing && audioContext.distinctSoundWallpaperCount () > 1) {
 	// several wallpapers have music: rotate to the next one when this track finishes a
 	// full pass (the read thread counts completions at demuxer EOF, loop or not)
 	for (const auto& [id, stream] : this->m_audioStreams) {
@@ -86,4 +87,23 @@ void CSound::render () {
 	    }
 	}
     }
+}
+
+void CSound::play () {
+    this->m_playing = true;
+    for (const auto& [id, stream] : this->m_audioStreams) {
+	stream->setPaused (false);
+    }
+}
+
+void CSound::pause () {
+    this->m_playing = false;
+    for (const auto& [id, stream] : this->m_audioStreams) {
+	stream->setPaused (true);
+    }
+}
+
+void CSound::stop () {
+    this->m_playing = false;
+    this->unload ();
 }

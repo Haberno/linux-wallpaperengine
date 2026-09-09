@@ -6,7 +6,9 @@
 #include "WallpaperEngine/Audio/Drivers/AudioDriver.h"
 #include "WallpaperEngine/Audio/Drivers/Detectors/AudioPlayingDetector.h"
 #include "WallpaperEngine/Audio/Drivers/Recorders/PlaybackRecorder.h"
+#include "WallpaperEngine/Audio/Drivers/SDLAudioDriver.h"
 #include "WallpaperEngine/Data/Utils/MemoryStream.h"
+#include "WallpaperEngine/Data/Utils/ScopeGuard.h"
 #include "WallpaperEngine/Render/Drivers/Detectors/FullScreenDetector.h"
 
 #include <array>
@@ -111,4 +113,57 @@ TEST_CASE ("looping audio resets its decoder in packet order", "[audio][loop]") 
 
     stream.stop ();
     applicationContext.state.general.keepRunning = false;
+}
+
+TEST_CASE ("paused sound streams preserve buffered samples until resumed", "[audio]") {
+    const char* oldDriver = SDL_getenv ("SDL_AUDIODRIVER");
+    const std::string savedDriver = oldDriver != nullptr ? oldDriver : "";
+    SDL_setenv ("SDL_AUDIODRIVER", "dummy", 1);
+    WallpaperEngine::Data::Utils::ScopeGuard restoreDriver ([&] {
+	if (oldDriver != nullptr) {
+	    SDL_setenv ("SDL_AUDIODRIVER", savedDriver.c_str (), 1);
+	} else {
+	    unsetenv ("SDL_AUDIODRIVER");
+	}
+    });
+    char executable[] = "tests";
+    char* argv[] = { executable };
+    ApplicationContext applicationContext (1, argv);
+    applicationContext.state.general.keepRunning = true;
+    applicationContext.state.audio.volume = SDL_MIX_MAXVOLUME;
+    FullScreenDetector fullscreenDetector (applicationContext);
+    AudioPlayingDetector audioDetector (applicationContext, fullscreenDetector);
+    PlaybackRecorder recorder;
+    WallpaperEngine::Audio::Drivers::SDLAudioDriver driver (applicationContext, audioDetector, recorder);
+    REQUIRE (driver.getSpec ().format == AUDIO_F32);
+    AudioContext audioContext (driver);
+    AudioStream stream (audioContext, shortPcmWave (), true);
+    stream.setPaused (true);
+    const int id = driver.addStream (&stream);
+    WallpaperEngine::Data::Utils::ScopeGuard removeStream ([&] { driver.removeStream (id); });
+
+    const auto deadline = std::chrono::steady_clock::now () + std::chrono::seconds (2);
+    while (stream.isQueueEmpty () && std::chrono::steady_clock::now () < deadline) {
+	std::this_thread::yield ();
+    }
+    REQUIRE_FALSE (stream.isQueueEmpty ());
+    // Hold SDL's recursive mutex to keep the dummy device's callback out while
+    // directly exercising the real mixer with a known, partly consumed buffer.
+    SDL_LockMutex (driver.getStreamMutex ());
+    WallpaperEngine::Data::Utils::ScopeGuard unlock ([&] { SDL_UnlockMutex (driver.getStreamMutex ()); });
+    auto* buffer = driver.getStreams ().at (id);
+    const std::array<float, 4> samples { 0.125f, 0.25f, 0.5f, 0.75f };
+    std::memcpy (buffer->audio_buf, samples.data (), sizeof (samples));
+    buffer->audio_buf_size = sizeof (samples);
+    buffer->audio_buf_index = sizeof (float);
+    std::array<float, 2> output { 1.0f, 1.0f };
+    driver.getSpec ().callback (&driver, reinterpret_cast<Uint8*> (output.data ()), sizeof (output));
+    REQUIRE (output == std::array<float, 2> { 0.0f, 0.0f });
+    REQUIRE (buffer->audio_buf_index == sizeof (float));
+
+    stream.setPaused (false);
+    driver.getSpec ().callback (&driver, reinterpret_cast<Uint8*> (output.data ()), sizeof (output));
+    REQUIRE (output == std::array<float, 2> { 0.25f, 0.5f });
+    REQUIRE (buffer->audio_buf_index == 3 * sizeof (float));
+    stream.setPaused (true);
 }
