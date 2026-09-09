@@ -74,14 +74,30 @@ std::optional<size_t> CObject::getAttachmentIndex (const std::string&) const { r
 
 std::optional<std::string> CObject::getAttachmentName (const size_t) const { return std::nullopt; }
 
-glm::vec2 CObject::resolveParallaxDepth () const {
+glm::vec2 CObject::calculateParallaxOffset (
+    const glm::vec2& rootOrigin, const glm::vec2& depth, const glm::vec2& canvasSize, const glm::vec2& displacement,
+    const float amount
+) {
+    // The native renderer subtracts the influenced cursor in canvas coordinates
+    // from the root layer's origin, not from the canvas center. Omitting the
+    // origin term makes off-center backgrounds expose clear color (Gojo).
+    const glm::vec2 cursor = canvasSize * (glm::vec2 (0.5f) + displacement * CScene::PARALLAX_TRANSLATION_SPAN);
+    return (rootOrigin - cursor) * depth * amount * glm::vec2 (1.0f, -1.0f);
+}
+
+glm::vec2 CObject::resolveParallaxOffset () const {
+    const auto& parallax = this->m_scene.getScene ().camera.parallax;
+    if (!parallax.enabled->value->getBool ()
+	|| this->getContext ().getApp ().getContext ().settings.mouse.disableparallax) {
+	return glm::vec2 (0.0f);
+    }
     constexpr int kMaxParentDepth = 32;
     const Object* current = &this->m_object;
 
     // Wallpaper Engine applies camera parallax while rendering a root layer and then
     // renders the complete child subtree under that translated transform. Consequently,
-    // only the root-most layer's depth controls the subtree; a child-authored depth does
-    // not override its parent (3367988661 pins a date/clock subtree this way).
+    // both origin and depth belong to the root-most layer. A child-authored depth
+    // does not override its parent (3367988661 pins a date/clock subtree this way).
     for (int depth = 0; current->parent.has_value () && depth <= kMaxParentDepth; depth++) {
 	const auto* parentObject = this->m_scene.getObject (current->parent.value ());
 	if (parentObject == nullptr) {
@@ -90,24 +106,28 @@ glm::vec2 CObject::resolveParallaxDepth () const {
 	current = &parentObject->getObject ();
     }
 
+    glm::vec2 depth (1.0f);
     if (current->authoredParallaxDepth.has_value ()) {
 	// Read the live typed property so user settings and SceneScript changes keep working.
 	if (current->is<Image> ()) {
-	    return current->as<Image> ()->parallaxDepth->value->getVec2 ();
+	    depth = current->as<Image> ()->parallaxDepth->value->getVec2 ();
+	} else if (current->is<Particle> ()) {
+	    depth = current->as<Particle> ()->parallaxDepth->value->getVec2 ();
+	} else if (current->is<Text> ()) {
+	    depth = current->as<Text> ()->parallaxDepth->value->getVec2 ();
+	} else {
+	    depth = *current->authoredParallaxDepth;
 	}
-	if (current->is<Particle> ()) {
-	    return current->as<Particle> ()->parallaxDepth->value->getVec2 ();
-	}
-	if (current->is<Text> ()) {
-	    return current->as<Text> ()->parallaxDepth->value->getVec2 ();
-	}
-	return *current->authoredParallaxDepth;
     }
 
     // The official Layer constructor initializes parallaxDepth to 1,1. Older workshop
     // scenes often omit the field and depend on that default (Gojo 3100265648 and the
     // puppet/window layer in 3487328036). Explicit 0,0 is the authored pin value.
-    return glm::vec2 (1.0f);
+    return calculateParallaxOffset (
+	glm::vec2 (current->origin->evaluateVec3 (this->m_scene.getTime ())), depth,
+	{ this->m_scene.getWidth (), this->m_scene.getHeight () }, *this->m_scene.getParallaxDisplacement (),
+	parallax.amount->value->getFloat ()
+    );
 }
 
 bool CObject::isVisibleThroughParents () const {
@@ -141,7 +161,7 @@ bool CObject::isVisibleThroughParents () const {
 glm::mat4 CObject::resolveWorldMatrix () const {
     constexpr int kMaxParentDepth = 32;
 
-    // walk leaf-first like resolveParallaxDepth, bounded to guard against cycles
+    // walk leaf-first like resolveParallaxOffset, bounded to guard against cycles
     const Object* chain[kMaxParentDepth + 1];
     int count = 0;
     const Object* current = &this->m_object;
