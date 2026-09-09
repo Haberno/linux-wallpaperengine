@@ -163,16 +163,35 @@ work is a content-addressed disk cache; fixed regex patterns are already
 `RenderContext` also owns a 64 MiB `ShaderProgramCache` (2026-09-08). It
 keys complete translated vertex/fragment sources, including all combos and
 generated lighting/skinning code, and stores driver program binaries in RAM.
-Material passes and model shadow passes each get a fresh GL program loaded
-from that binary, so uniforms and per-material settings remain independent.
+Material passes and model shadow passes each get a private GL program loaded
+from that binary for uniform registration and fallback.
 Entries are evicted by least recent use; unsupported formats and rejected
 binaries fall back to normal compilation. No GPU objects or files are retained
 by this cache. It complements the source/translation caches above and speeds
 up repeated model submeshes and instances; timings are in [[Load Performance]].
 
+Material passes additionally share a live executable at their first draw when
+both the complete linked interface and uniform write layout match (2026-09-09).
+The layout includes names, locations, types, array counts, reference uniforms,
+and texture animation uniforms. Every pass uploads its own values before each
+draw; incompatible layouts use separate executables so unwritten uniforms and
+array tails retain their defaults. A later uniform registration leaves sharing
+and restores that material's values to its private program. Cached attribute
+locations remain valid because binary clones must have an identical interface.
+
+Live programs are owned by material passes, with only weak references in each
+shader family's lookup table. The last material releases the GL object; cache
+eviction cannot invalidate a live material. There is no permanent GPU cache or
+new disk cache. This avoids NVIDIA's repeated first-draw compilation for binary
+clones, which retrieving a binary after drawing did not eliminate in testing.
+Health counters `shader.live_program_created`, `shader.live_program_hit`, and
+`shader.live_program_rejected` distinguish this reuse from binary-cache hits.
+
 The hidden GL regression suite (`build/output/tests '[gl]'`) needs a desktop
 session. It checks independent uniforms, keys that include both shader stages,
 a cache budget too small for a binary, and recovery after compile/link errors.
+Pixel checks alternate shared material colors and a separate partial-array
+layout, then verify private defaults and program release/recreation.
 
 ## Debugging: dumping composed sources
 
