@@ -3,6 +3,8 @@
 #include "UserSettingParser.h"
 #include "WallpaperEngine/Data/Model/DynamicValue.h"
 
+#include <sstream>
+
 using namespace WallpaperEngine::Data::Parsers;
 
 DynamicValueUniquePtr DynamicValueParser::parse (const json& data, const Properties& properties, bool expectColor) {
@@ -29,8 +31,17 @@ DynamicValueUniquePtr DynamicValueParser::parse (const json& data, const Propert
 	} else {
 	    std::string str = valueIt;
 	    int size = Builders::VectorBuilder::preparseSize (str);
-
-	    if (size == 1) {
+	    // Spaces also occur in song titles and script layer names. Only interpret
+	    // a multi-component string as a vector if every component is numeric.
+	    std::istringstream components (str);
+	    float component;
+	    int numericComponents = 0;
+	    while (components >> component) {
+		numericComponents++;
+	    }
+	    if (size > 1 && (!components.eof () || numericComponents != size)) {
+		value->update (str, DynamicValue::UpdateSource::Initialization);
+	    } else if (size == 1) {
 		// scalar? text value?
 		std::size_t parsed = 0;
 		try {
