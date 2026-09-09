@@ -111,7 +111,7 @@ int64_t audio_seek_data_callback (void* streamarg, int64_t offset, int whence) {
 	return end;
     }
 
-    switch (whence) {
+    switch (whence & ~AVSEEK_FORCE) {
 	case SEEK_CUR:
 	    stream->getBuffer ()->seekg (offset, std::ios_base::cur);
 	    break;
@@ -121,9 +121,12 @@ int64_t audio_seek_data_callback (void* streamarg, int64_t offset, int whence) {
 	case SEEK_END:
 	    stream->getBuffer ()->seekg (offset, std::ios_base::end);
 	    break;
+	default:
+	    return AVERROR (EINVAL);
     }
 
-    return 0;
+    const auto position = stream->getBuffer ()->tellg ();
+    return position == std::streampos (-1) ? AVERROR (EIO) : static_cast<int64_t> (position);
 }
 
 AudioStream::AudioStream (AudioContext& context, const std::string& filename, const bool repeat) :
