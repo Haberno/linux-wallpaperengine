@@ -151,6 +151,7 @@ SceneUniquePtr WallpaperParser::parseScene (const JSON& file, Project& project) 
         }, SceneData {
             .transparentSorting = general.optional ("transparentsorting", false),
             .customSortOrder = general.optional ("customsortorder", false),
+            .clearEnabled = general.user ("clearenabled", properties, true),
             .colors = {
                 .ambient  = general.user ("ambientcolor", properties, glm::vec3 (0.0f)),
                 .skylight = general.user ("skylightcolor", properties, glm::vec3 (0.0f)),
