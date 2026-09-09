@@ -308,7 +308,12 @@ globalThis.MediaPlaybackEvent = globalThis.MediaPlaybackEvent || {
 
   // ---- Mat4 -----------------------------------------------------------------
   function Mat4(src) {
-    if (src && src.length === 16) {
+    if (src instanceof Mat4) {
+      this.m = src.m.slice();
+      return;
+    }
+    if (typeof src === 'string') src = src.split(' ').map(parseFloat);
+    if (Array.isArray(src) && src.length === 16) {
       this.m = src.slice();
     } else {
       this.m = [
@@ -408,10 +413,11 @@ globalThis.MediaPlaybackEvent = globalThis.MediaPlaybackEvent || {
   };
 
   Mat4.prototype.translation = function (position) {
-    if (position !== undefined && position !== null) {
+    if (position instanceof Vec3 || position instanceof Vec2) {
       this.m[12] = position.x;
       this.m[13] = position.y;
-      this.m[14] = (typeof position.z === 'number' ? position.z : 0);
+      this.m[14] = position instanceof Vec3 ? position.z : 0;
+      return this;
     }
     return new Vec3(this.m[12], this.m[13], this.m[14]);
   };
@@ -613,7 +619,12 @@ globalThis.MediaPlaybackEvent = globalThis.MediaPlaybackEvent || {
 
   // ---- Mat3 -----------------------------------------------------------------
   function Mat3(src) {
-    if (src && src.length === 9) {
+    if (src instanceof Mat3) {
+      this.m = src.m.slice();
+      return;
+    }
+    if (typeof src === 'string') src = src.split(' ').map(parseFloat);
+    if (Array.isArray(src) && src.length === 9) {
       this.m = src.slice();
     } else {
       this.m = [
@@ -674,9 +685,10 @@ globalThis.MediaPlaybackEvent = globalThis.MediaPlaybackEvent || {
   };
 
   Mat3.prototype.translation = function (position) {
-    if (position !== undefined && position !== null) {
+    if (position instanceof Vec2) {
       this.m[6] = position.x;
       this.m[7] = position.y;
+      return this;
     }
     return new Vec2(this.m[6], this.m[7]);
   };
