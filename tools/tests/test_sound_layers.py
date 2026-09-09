@@ -52,6 +52,32 @@ export function update(value) { shared.soundVolumeUpdated = true; return 0.2; }
         ]
         self.run_scene('gain', sounds, script, 'SOUND_VOLUME_OK')
 
+    def test_initial_silence_and_explicit_controls_work_while_muted(self):
+        script = '''
+export function init(value) {
+    const automatic = thisScene.getLayer('Automatic Sound');
+    const silent = thisScene.getLayer('Silent Sound');
+    if (!automatic.isPlaying()) throw new Error('Default sound should start playing');
+    if (silent.isPlaying()) throw new Error('startsilent was ignored');
+    silent.play();
+    if (!silent.isPlaying()) throw new Error('play did not override initial silence');
+    silent.pause();
+    if (silent.isPlaying()) throw new Error('pause did not preserve explicit state');
+    silent.play();
+    if (!silent.isPlaying()) throw new Error('play did not resume');
+    silent.stop();
+    if (silent.isPlaying()) throw new Error('stop did not preserve explicit state');
+    console.log('SOUND_STARTSILENT_OK default=playing silent=stopped play/pause/resume/stop=ok');
+    return value;
+}
+'''
+        sounds = [
+            {'id': 1, 'name': 'Automatic Sound', 'sound': [], 'playbackmode': 'loop'},
+            {'id': 2, 'name': 'Silent Sound', 'sound': ['sounds/not-opened-while-muted.ogg'],
+             'playbackmode': 'loop', 'startsilent': True},
+        ]
+        self.run_scene('startsilent', sounds, script, 'SOUND_STARTSILENT_OK')
+
     def run_scene(self, label, sounds, script, marker):
         with tempfile.TemporaryDirectory(prefix='lwe-sound-layers-') as directory:
             root = Path(directory)
