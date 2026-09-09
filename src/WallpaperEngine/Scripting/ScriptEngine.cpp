@@ -1140,6 +1140,11 @@ void ScriptEngine::notifyMediaUpdate (const Media::MediaSource::MediaInfo& media
     JS_SetPropertyStr (ctx, mediaThumbnailEvent, "secondaryColor", secondaryColor);
     JS_SetPropertyStr (ctx, mediaThumbnailEvent, "tertiaryColor", tertiaryColor);
     JS_SetPropertyStr (ctx, mediaThumbnailEvent, "highContrastColor", highContrastColor);
+    // Until cover palette extraction is implemented, use the contrast color of
+    // the fallback palette. Consumers still require a usable Vec3 text color.
+    JS_SetPropertyStr (
+	ctx, mediaThumbnailEvent, "textColor", this->m_adapters.vec3->instantiate (highContrastColorValue, true)
+    );
 
     JSValue propertiesArgs[] = { propertiesEvent };
     JSValue playbackArgs[] = { playbackEvent };
