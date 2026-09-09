@@ -9,7 +9,7 @@
 namespace WallpaperEngine::Data::Model {
 struct PropertyKeyframeHandle {
     bool enabled { false };
-    /** Handle offset in seconds/value units, matching the editor's curve format. */
+    /** X is normalized to half the segment's frame span; Y is an absolute value offset. */
     glm::vec2 offset { 0.0f };
 };
 
@@ -33,15 +33,15 @@ struct PropertyAnimation {
     float fps;
     /** Timeline length in frames */
     float length;
-    /** Playback mode, "loop" repeats the timeline, anything else clamps at the end */
+    /** "loop" repeats, "mirror" repeats forwards/backwards, "single" clamps at the end. */
     std::string mode;
     /** Whether channel values offset the base property value instead of replacing it */
     bool relative;
 
     /**
      * Samples one channel at the given time (in seconds), using the authored
-     * time/value Bezier when both segment handles are enabled and linear
-     * interpolation otherwise. Returns fallback when the channel has no keyframes.
+     * time/value Bezier. Disabled handles collapse onto their keyframe.
+     * Returns fallback when the channel has no keyframes.
      */
     [[nodiscard]] float evaluateChannel (int channel, float time, float fallback) const;
 

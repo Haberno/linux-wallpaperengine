@@ -16,47 +16,55 @@ float PropertyAnimation::evaluateChannel (int channel, float time, float fallbac
     const auto it = this->channels.find (channel);
 
     if (it == this->channels.end () || it->second.empty ()) {
-        return fallback;
+	return fallback;
     }
 
     const auto& keyframes = it->second;
     float frame = time * this->fps;
 
-    if (this->mode == "loop" && this->length > 0.0f) {
-        frame = std::fmod (frame, this->length);
+    if (this->length > 0.0f && (this->mode == "loop" || this->mode == "mirror")) {
+	const float period = this->length * (this->mode == "mirror" ? 2.0f : 1.0f);
+	frame = std::fmod (frame, period);
+	if (frame < 0.0f) {
+	    frame += period;
+	}
+	if (this->mode == "mirror" && frame > this->length) {
+	    frame = period - frame;
+	}
     }
 
     if (frame <= keyframes.front ().frame) {
-        return keyframes.front ().value;
+	return keyframes.front ().value;
     }
     if (frame >= keyframes.back ().frame) {
-        return keyframes.back ().value;
+	return keyframes.back ().value;
     }
 
     for (size_t i = 1; i < keyframes.size (); i++) {
-        const auto& previous = keyframes [i - 1];
-        const auto& next = keyframes [i];
+	const auto& previous = keyframes[i - 1];
+	const auto& next = keyframes[i];
 
-        if (frame > next.frame) {
-            continue;
-        }
+	if (frame > next.frame) {
+	    continue;
+	}
 
-        const float span = next.frame - previous.frame;
-        if (span <= 0.0f) {
-            return next.value;
-        }
+	const float span = next.frame - previous.frame;
+	if (span <= 0.0f) {
+	    return next.value;
+	}
 
 	const float amount = (frame - previous.frame) / span;
-	if (!previous.outgoing.enabled || !next.incoming.enabled) {
+	if (!previous.outgoing.enabled && !next.incoming.enabled) {
 	    return previous.value + (next.value - previous.value) * amount;
 	}
 
-	// Keyframe positions are frames, while the editor stores handle X offsets
-	// in seconds. Convert the offsets to frames and solve the time curve before
-	// sampling its value curve, matching camera-path/property animation playback.
+	// Property animations share the native camera-path curve format. Handle X
+	// offsets scale with half this segment's length, independently of playback FPS.
+	const glm::vec2 outgoing = previous.outgoing.enabled ? previous.outgoing.offset : glm::vec2 (0.0f);
+	const glm::vec2 incoming = next.incoming.enabled ? next.incoming.offset : glm::vec2 (0.0f);
 	const float time0 = previous.frame;
-	const float time1 = previous.frame + previous.outgoing.offset.x * this->fps;
-	const float time2 = next.frame + next.incoming.offset.x * this->fps;
+	const float time1 = previous.frame + outgoing.x * span * 0.5f;
+	const float time2 = next.frame + incoming.x * span * 0.5f;
 	const float time3 = next.frame;
 	float lower = 0.0f;
 	float upper = 1.0f;
@@ -71,8 +79,7 @@ float PropertyAnimation::evaluateChannel (int channel, float time, float fallbac
 
 	const float parameter = (lower + upper) * 0.5f;
 	return cubicBezier (
-	    previous.value, previous.value + previous.outgoing.offset.y, next.value + next.incoming.offset.y,
-	    next.value, parameter
+	    previous.value, previous.value + outgoing.y, next.value + incoming.y, next.value, parameter
 	);
     }
 
