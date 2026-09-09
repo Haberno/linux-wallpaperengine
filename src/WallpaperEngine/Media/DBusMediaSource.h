@@ -12,6 +12,7 @@ public:
     void parseMetadata (DBusMessageIter& variant);
     void parsePlaybackStatus (DBusMessageIter& variant, const char* sender);
     void parsePosition (DBusMessageIter& variant);
+    DBusHandlerResult handleMessage (DBusMessage* message);
 
     void update () override;
 
@@ -19,6 +20,7 @@ protected:
     void performUpdate () override;
     void fetchMetadata ();
     void detectPlayer ();
+    void clearPlayer ();
 
     DBusMessage* dbusMessage (
 	const char* bus_name, const char* path, const char* interface, const char* method, const char* iface = nullptr,
@@ -26,6 +28,7 @@ protected:
     );
 
     std::optional<std::string> m_currentPlayer = std::nullopt;
+    bool m_playerListChanged = false;
 
     DBusConnection* m_connection;
 };

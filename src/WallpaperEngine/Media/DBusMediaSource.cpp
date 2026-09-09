@@ -6,7 +6,23 @@
 using namespace WallpaperEngine::Media;
 
 DBusHandlerResult dbus_message_filter (DBusConnection* connection, DBusMessage* message, void* user_data) {
-    const auto mediaSource = static_cast<DBusMediaSource*> (user_data);
+    return static_cast<DBusMediaSource*> (user_data)->handleMessage (message);
+}
+
+DBusHandlerResult DBusMediaSource::handleMessage (DBusMessage* message) {
+    if (dbus_message_is_signal (message, "org.freedesktop.DBus", "NameOwnerChanged")) {
+	const char* name = nullptr;
+	const char* oldOwner = nullptr;
+	const char* newOwner = nullptr;
+	if (dbus_message_get_args (
+		message, nullptr, DBUS_TYPE_STRING, &name, DBUS_TYPE_STRING, &oldOwner, DBUS_TYPE_STRING, &newOwner,
+		DBUS_TYPE_INVALID
+	    )
+	    && std::string_view (name).starts_with ("org.mpris.MediaPlayer2.")) {
+	    this->m_playerListChanged = true;
+	}
+	return DBUS_HANDLER_RESULT_HANDLED;
+    }
 
     if (!dbus_message_is_signal (message, "org.freedesktop.DBus.Properties", "PropertiesChanged")) {
 	return DBUS_HANDLER_RESULT_NOT_YET_HANDLED;
@@ -15,7 +31,9 @@ DBusHandlerResult dbus_message_filter (DBusConnection* connection, DBusMessage* 
     const char* interface = nullptr;
     DBusMessageIter iter;
 
-    dbus_message_iter_init (message, &iter);
+    if (!dbus_message_iter_init (message, &iter) || dbus_message_iter_get_arg_type (&iter) != DBUS_TYPE_STRING) {
+	return DBUS_HANDLER_RESULT_NOT_YET_HANDLED;
+    }
     dbus_message_iter_get_basic (&iter, &interface);
 
     std::string iface = interface ?: "";
@@ -26,8 +44,13 @@ DBusHandlerResult dbus_message_filter (DBusConnection* connection, DBusMessage* 
 
     DBusMessageIter changed;
 
-    dbus_message_iter_next (&iter);
+    if (!dbus_message_iter_next (&iter) || dbus_message_iter_get_arg_type (&iter) != DBUS_TYPE_ARRAY) {
+	return DBUS_HANDLER_RESULT_NOT_YET_HANDLED;
+    }
     dbus_message_iter_recurse (&iter, &changed);
+
+    const char* sender = dbus_message_get_sender (message);
+    const bool selected = sender != nullptr && this->m_currentPlayer == sender;
 
     while (dbus_message_iter_get_arg_type (&changed) == DBUS_TYPE_DICT_ENTRY) {
 	DBusMessageIter entry;
@@ -42,10 +65,15 @@ DBusHandlerResult dbus_message_filter (DBusConnection* connection, DBusMessage* 
 	dbus_message_iter_next (&entry);
 	dbus_message_iter_recurse (&entry, &value);
 
-	if (keyStr == "Metadata") {
-	    mediaSource->parseMetadata (value);
+	if (keyStr == "Metadata" && selected) {
+	    this->parseMetadata (value);
 	} else if (keyStr == "PlaybackStatus") {
-	    mediaSource->parsePlaybackStatus (value, dbus_message_get_sender (message));
+	    // A different player may have started, or the selected player may have
+	    // paused. Re-evaluate after dispatch, without borrowing its metadata/state.
+	    this->m_playerListChanged = true;
+	    if (selected) {
+		this->parsePlaybackStatus (value, sender);
+	    }
 	}
 
 	dbus_message_iter_next (&changed);
@@ -70,6 +98,12 @@ DBusMediaSource::DBusMediaSource (std::chrono::milliseconds updateInterval) : Me
 
     dbus_bus_add_match (
 	this->m_connection, "type='signal',interface='org.freedesktop.DBus.Properties',member='PropertiesChanged'",
+	nullptr
+    );
+    dbus_bus_add_match (
+	this->m_connection,
+	"type='signal',sender='org.freedesktop.DBus',interface='org.freedesktop.DBus',"
+	"member='NameOwnerChanged',arg0namespace='org.mpris.MediaPlayer2'",
 	nullptr
     );
 
@@ -185,23 +219,18 @@ void DBusMediaSource::parseMetadata (DBusMessageIter& variant) {
 }
 
 void DBusMediaSource::parsePlaybackStatus (DBusMessageIter& variant, const char* sender) {
+    if ((sender != nullptr && this->m_currentPlayer != sender)
+	|| dbus_message_iter_get_arg_type (&variant) != DBUS_TYPE_STRING) {
+	return;
+    }
     const char* status = nullptr;
     dbus_message_iter_get_basic (&variant, &status);
     std::string statusStr = status ?: "";
     PlaybackState newState = this->m_mediaInfo.playbackState;
 
     if (statusStr == "Playing") {
-	if (sender != nullptr) {
-	    this->m_currentPlayer = sender;
-	}
-
 	newState = PlaybackState::Playing;
     } else if (statusStr == "Paused") {
-	// Adopt a paused player when none is selected yet so an already-paused track still
-	// provides metadata; a Playing player (handled above) still takes precedence.
-	if (sender != nullptr && !this->m_currentPlayer.has_value ()) {
-	    this->m_currentPlayer = sender;
-	}
 	newState = PlaybackState::Paused;
     } else {
 	newState = PlaybackState::Stopped;
@@ -224,13 +253,18 @@ void DBusMediaSource::parsePosition (DBusMessageIter& variant) {
 }
 
 void DBusMediaSource::update () {
-    this->MediaSource::update ();
-
     // drain any dbus events
     dbus_connection_read_write (this->m_connection, 0);
 
     while (dbus_connection_dispatch (this->m_connection) == DBUS_DISPATCH_DATA_REMAINS)
 	;
+
+    if (this->m_playerListChanged) {
+	this->m_playerListChanged = false;
+	this->detectPlayer ();
+	this->fetchMetadata ();
+    }
+    this->MediaSource::update ();
 }
 
 DBusMessage* DBusMediaSource::dbusMessage (
@@ -291,10 +325,9 @@ void DBusMediaSource::detectPlayer () {
 	dbus_message_iter_next (&array);
     }
 
-    if (players.empty ()) {
-	return;
-    }
-
+    std::optional<std::string> selectedPlayer;
+    PlaybackState selectedState = PlaybackState::Stopped;
+    int selectedPriority = -1;
     for (const auto& player : players) {
 	// also get playback status
 	reply = this->dbusMessage (
@@ -303,21 +336,68 @@ void DBusMediaSource::detectPlayer () {
 	);
 
 	if (reply == nullptr) {
-	    return;
+	    continue;
 	}
 
 	Data::Utils::ScopeGuard guard2 ([reply] { dbus_message_unref (reply); });
 
 	DBusMessageIter outer;
-	dbus_message_iter_init (reply, &outer);
+	if (!dbus_message_iter_init (reply, &outer) || dbus_message_iter_get_arg_type (&outer) != DBUS_TYPE_VARIANT) {
+	    continue;
+	}
 	DBusMessageIter variant;
 	dbus_message_iter_recurse (&outer, &variant);
-
-	this->parsePlaybackStatus (variant, player.c_str ());
-
-	if (this->m_currentPlayer.has_value ()) {
-	    break;
+	if (dbus_message_iter_get_arg_type (&variant) != DBUS_TYPE_STRING) {
+	    continue;
 	}
+	const char* status = nullptr;
+	dbus_message_iter_get_basic (&variant, &status);
+	const PlaybackState state = std::string_view (status) == "Playing" ? PlaybackState::Playing
+	    : std::string_view (status) == "Paused"                        ? PlaybackState::Paused
+									   : PlaybackState::Stopped;
+	const int priority = state == PlaybackState::Playing ? 2 : state == PlaybackState::Paused ? 1 : 0;
+	// Replies and signals carry the unique bus owner, whereas ListNames returns
+	// well-known MPRIS names. Keep one identity for both polling and filtering.
+	const char* owner = dbus_message_get_sender (reply);
+	if (owner != nullptr
+	    && (priority > selectedPriority || (priority == selectedPriority && this->m_currentPlayer == owner))) {
+	    selectedPlayer = owner;
+	    selectedState = state;
+	    selectedPriority = priority;
+	}
+    }
+
+    if (!selectedPlayer.has_value ()) {
+	this->clearPlayer ();
+	return;
+    }
+    const bool changed = this->m_currentPlayer != selectedPlayer;
+    const bool hadArt = this->m_mediaInfo.url.has_value ();
+    const bool stateChanged = this->m_mediaInfo.playbackState != selectedState;
+    if (changed) {
+	this->m_mediaInfo = {};
+    }
+    this->m_currentPlayer = std::move (selectedPlayer);
+    this->m_mediaInfo.playbackState = selectedState;
+    this->m_mediaInfo.available = true;
+    if (changed || stateChanged) {
+	this->fireMetadataListeners ();
+    }
+    if (changed && hadArt) {
+	this->fireAlbumArtListeners ();
+    }
+}
+
+void DBusMediaSource::clearPlayer () {
+    const bool hadPlayer = this->m_currentPlayer.has_value ();
+    const bool hadArt = this->m_mediaInfo.url.has_value ();
+    this->m_currentPlayer.reset ();
+    this->m_mediaInfo = {};
+    if (hadPlayer) {
+	this->fireMetadataListeners ();
+    }
+    if (hadArt) {
+	this->fireAlbumArtListeners ();
     }
 }
 
