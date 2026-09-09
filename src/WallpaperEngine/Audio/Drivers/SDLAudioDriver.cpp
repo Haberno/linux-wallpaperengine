@@ -1,6 +1,9 @@
 #include "SDLAudioDriver.h"
 #include "WallpaperEngine/Logging/Log.h"
 
+#include <algorithm>
+#include <cmath>
+
 #define SDL_AUDIO_BUFFER_SIZE 4096
 #define MAX_AUDIO_FRAME_SIZE 192000
 
@@ -22,6 +25,8 @@ void audio_callback (void* userdata, uint8_t* streamData, int length) {
     for (const auto& buffer : driver->getStreams () | std::views::values) {
 	uint8_t* streamDataPointer = streamData;
 	int streamLength = length;
+	const float gain = buffer->stream->getGain ()
+	    * static_cast<float> (driver->getApplicationContext ().state.audio.volume) / SDL_MIX_MAXVOLUME;
 
 	// sound is not initialized or stopped and is not in loop mode
 	// ignore mixing it in
@@ -57,11 +62,20 @@ void audio_callback (void* userdata, uint8_t* streamData, int length) {
 		len1 = streamLength;
 	    }
 
-	    // mix the audio
-	    SDL_MixAudioFormat (
-		streamDataPointer, &buffer->audio_buf[buffer->audio_buf_index], driver->getSpec ().format, len1,
-		driver->getApplicationContext ().state.audio.volume
-	    );
+	    if (driver->getSpec ().format == AUDIO_F32SYS) {
+		// SDL's integer 0..128 mixer volume loses quiet authored gains after
+		// squaring. Keep the native gain precision on the normal float output.
+		auto* output = reinterpret_cast<float*> (streamDataPointer);
+		const auto* input = reinterpret_cast<const float*> (&buffer->audio_buf[buffer->audio_buf_index]);
+		for (int sample = 0; sample < len1 / static_cast<int> (sizeof (float)); sample++) {
+		    output[sample] = std::clamp (output[sample] + input[sample] * gain, -1.0f, 1.0f);
+		}
+	    } else {
+		SDL_MixAudioFormat (
+		    streamDataPointer, &buffer->audio_buf[buffer->audio_buf_index], driver->getSpec ().format, len1,
+		    static_cast<int> (std::lround (std::clamp (gain, 0.0f, 1.0f) * SDL_MIX_MAXVOLUME))
+		);
+	    }
 
 	    streamLength -= len1;
 	    streamDataPointer += len1;
