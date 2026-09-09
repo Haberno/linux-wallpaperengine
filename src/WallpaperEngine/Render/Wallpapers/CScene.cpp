@@ -706,6 +706,9 @@ void CScene::renderFrame (const glm::ivec4& viewport) {
     // the clear must write all channels: a leaked alpha-disabled color mask would silently keep the
     // framebuffer's stale alpha, which every alpha-blended effect writeback then composites against
     glColorMask (true, true, true, true);
+    // Scripts and other scenes can change this context state between frames.
+    const glm::vec3 clearColor = this->getScene ().colors.clear->evaluateVec3 (this->getTime ());
+    glClearColor (clearColor.r, clearColor.g, clearColor.b, 1.0f);
     glClear (GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
     const std::vector<CObject*> renderOrder = this->buildFrameRenderOrder ();
