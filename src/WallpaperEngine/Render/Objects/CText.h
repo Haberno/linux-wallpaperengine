@@ -10,7 +10,6 @@
 #include <glm/vec4.hpp>
 
 #include "WallpaperEngine/Render/CObject.h"
-#include "WallpaperEngine/Scripting/ScriptEngine.h"
 #include "WallpaperEngine/Scripting/ScriptableObject.h"
 
 // Forward-declare FreeType types to avoid leaking the header into users.
@@ -89,17 +88,8 @@ TextEffectLayout computeTextEffectLayout (
 );
 
 /**
- * Phase 1 text renderer.
- *
- * Renders static text objects as a single FreeType-rasterized RGBA texture
- * drawn on a textured quad with its own minimal GLSL shader. Does NOT go
- * through CRenderable / materials / passes — Phase 1 does not need effects.
- *
- * Phase 2 (scripted/dynamic text, alignment from properties, effect passes)
- * is intentionally not implemented here. When the scene provides a dynamic
- * `text: { script: "..." }` object this class captures the script source in
- * the data model but renders an empty string — the Wallpaper Engine JS
- * runtime required to evaluate it is out of scope for Phase 1.
+ * FreeType text renderer with live SceneScript properties, authored layout,
+ * parent transforms and optional material effect passes.
  */
 class CText final : virtual public CObject, public Scripting::ScriptableObject {
 public:
@@ -123,7 +113,6 @@ private:
     bool loadSystemFont ();
     unsigned int computeEffectivePixelSize () const;
     TextLayoutLimits currentLayoutLimits () const;
-    void initScriptLayer ();
 
     // text-effect chain (rebuilt when dynamic glyph metrics change, like the native renderer)
     void setupEffectChain ();
@@ -134,7 +123,6 @@ private:
     std::string m_lastRenderedText;
     unsigned int m_lastPixelSize = 0;
     TextLayoutLimits m_lastLayoutLimits;
-    Scripting::ScriptLayerHandle m_layerHandle = Scripting::kInvalidLayerHandle;
 
     FT_Library m_ftLibrary = nullptr;
     FT_Face m_ftFace = nullptr;

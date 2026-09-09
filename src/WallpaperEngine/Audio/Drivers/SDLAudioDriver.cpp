@@ -25,7 +25,7 @@ void audio_callback (void* userdata, uint8_t* streamData, int length) {
 
 	// sound is not initialized or stopped and is not in loop mode
 	// ignore mixing it in
-	if (!buffer->stream->isInitialized ()) {
+	if (!buffer->stream->isInitialized () || buffer->stream->isPaused ()) {
 	    continue;
 	}
 

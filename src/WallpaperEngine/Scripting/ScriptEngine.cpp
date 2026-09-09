@@ -843,6 +843,7 @@ void ScriptEngine::initializeModule (const std::string& key, LoadedModule& loade
 
     // run the script's init hook (if any) followed by the first update, mirroring WE's lifecycle
     this->callLifecycleHook (key, loaded, "init");
+    this->notifyMediaUpdate (this->m_mediaSource.getMediaInfo (), &loaded);
     this->callLifecycleHook (key, loaded, "update");
 }
 
@@ -893,6 +894,12 @@ void ScriptEngine::initializeQueuedScripts () {
     // skipping it strands them in their inert branch - Passing Breeze 2244339517 only starts
     // orbiting its camera because applyUserProperties sets isCircular.
     this->dispatchAllUserProperties ();
+
+    // A player may already be running before these modules subscribe. Seed only
+    // the new modules after every init, so handlers can safely access other layers.
+    for (const auto& [key, module] : started) {
+	this->notifyMediaUpdate (this->m_mediaSource.getMediaInfo (), module);
+    }
 
     for (const auto& [key, module] : started) {
 	this->callLifecycleHook (*key, *module, "update");
@@ -1073,7 +1080,7 @@ void ScriptEngine::dispatchCursorEvents () {
     this->m_lastCursorWorldPosition = worldPosition;
 }
 
-void ScriptEngine::notifyMediaUpdate (const Media::MediaSource::MediaInfo& media) {
+void ScriptEngine::notifyMediaUpdate (const Media::MediaSource::MediaInfo& media, LoadedModule* target) {
     JSContext* ctx = this->m_context;
 
     DynamicValue primaryColorValue (glm::vec3 (0.12f, 0.12f, 0.12f));
@@ -1117,16 +1124,23 @@ void ScriptEngine::notifyMediaUpdate (const Media::MediaSource::MediaInfo& media
     JSValue mediaThumbnailArgs[] = { mediaThumbnailEvent };
 
     for (auto& module : this->m_scriptModules | std::views::values) {
-	// call all methods
-	JSValue result1 = this->call (module.module, 1, propertiesArgs, "mediaPropertiesChanged");
-	JSValue result2 = this->call (module.module, 1, playbackArgs, "mediaPlaybackChanged");
-	JSValue result3 = this->call (module.module, 1, mediaTimelineArgs, "mediaTimelineChanged");
-	JSValue result4 = this->call (module.module, 1, mediaThumbnailArgs, "mediaThumbnailChanged");
-
-	JS_FreeValue (ctx, result1);
-	JS_FreeValue (ctx, result2);
-	JS_FreeValue (ctx, result3);
-	JS_FreeValue (ctx, result4);
+	if (!module.initialized || (target != nullptr && target != &module)) {
+	    continue;
+	}
+	auto* previous = this->m_runningModule;
+	ScopeGuard restore ([&] { this->m_runningModule = previous; });
+	this->m_runningModule = &module;
+	const auto dispatch = [&] (const char* name, JSValue* args) {
+	    JSValue result = this->call (module.module, 1, args, name);
+	    if (JS_IsException (result)) {
+		logJSException (ctx, name);
+	    }
+	    JS_FreeValue (ctx, result);
+	};
+	dispatch ("mediaPropertiesChanged", propertiesArgs);
+	dispatch ("mediaPlaybackChanged", playbackArgs);
+	dispatch ("mediaTimelineChanged", mediaTimelineArgs);
+	dispatch ("mediaThumbnailChanged", mediaThumbnailArgs);
     }
 
     // free all created objects as we don't keep a ref to them anymore
