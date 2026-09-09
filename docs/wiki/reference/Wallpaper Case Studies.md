@@ -77,6 +77,22 @@ Workshop wallpapers that drove fixes; useful as a regression suite.
   positions), **v_TexCoord widening fix** (both backgrounds failed to set up),
   **root default depth 1** (backgrounds didn't drift).
 - Also exposed the media-update segfault → [[Known Issues]].
+- Gray left edge with the cursor at the far left: fixed the missing root-origin
+  term in camera parallax. Its background root sits at X=525.984 on a 1920-wide
+  canvas; both background halves share that origin. Native translation at the
+  left extreme is +5.06 px, not the former +52.8 px. Zoom is correctly 1.0.
+  Fixed-cursor engine capture now covers the edge; user confirmation pending.
+
+## 3768356757 / 3755078205 — parallax overscan
+
+- **Stratospheric Twilight [4K]** and **Dark Leaf | northway.** author
+  `general.zoom` 1.03 and 1.05 respectively. The 2D parser formerly ignored
+  these values and used 1.0, exposing the gray clear color near mouse corners.
+- The parser now honors the authored zoom. Fixed-cursor engine screenshots
+  reproduce the strips before the change and remove them after it.
+- Dark Leaf additionally uses the `depthparallax` effect; its shader inputs and
+  ray-march strength were not changed. User confirmation pending.
+
 
 ## 2665939987 — pinned-character scene
 - The wallpaper that motivated the (wrong) locktransforms exclusion: its

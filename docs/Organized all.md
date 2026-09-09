@@ -248,9 +248,14 @@ Sources: [Puppet Warp Pipeline](wiki/rendering/Puppet%20Warp%20Pipeline.md),
 - [x] Parse blend/scalar-track boundaries without inventing bogus animation
   records; recover Reze's authored blink clip.
 - [x] Drive the single-row puppet texture-channel overlay with `g_BlendMap`.
-- [x] Implement native parallax defaults, root depth ownership, half-canvas
+- [x] Implement native parallax defaults, root origin/depth ownership, half-canvas
   displacement, delay response, and shader input semantics; editor
   `locktransforms` no longer suppresses parallax.
+- [x] Honor 2D `general.zoom` overscan and the root-origin parallax term;
+  reproduce and remove gray edge strips on Stratospheric Twilight (3768356757),
+  Dark Leaf (3755078205), and Gojo (3100265648) in fixed-cursor captures.
+- [ ] **Verify — user confirmation of those three live wallpapers** at all
+  corners and the left/right extremes; full Windows visual parity remains open.
 - [x] Supply rotation-aware effect projection matrices for depth parallax.
 - [x] Implement orthographic camera auto-size and authored 2D opening animations.
 - [ ] **Open — compose nested/multiple clipping masks and nonzero descriptor
