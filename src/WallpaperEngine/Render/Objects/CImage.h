@@ -153,6 +153,7 @@ private:
     );
     void uploadGeometryBuffers (const glm::vec2& size);
     [[nodiscard]] bool shouldRenderFinalPass (bool isLastPass) const;
+    void updateFinalPassVisibility ();
     bool configurePassTarget (
 	Effects::CPass* pass, std::shared_ptr<const CFBO>& drawTo,
 	const std::shared_ptr<const TextureProvider>& asInput, std::shared_ptr<const TextureProvider>& effectInput,
@@ -254,8 +255,18 @@ private:
     bool m_geometryBufferCacheValid = false;
 
     bool m_initialized = false;
-    /** True when the last pass was pointed at the scene framebuffer, i.e. this layer can actually
-     *  draw into the scene. Layers built while invisible only ever write to their own targets. */
+    struct FinalPassRouting {
+	Effects::CPass* pass;
+	std::shared_ptr<const CFBO> offscreenTarget;
+	std::shared_ptr<const TextureProvider> input;
+	GLuint offscreenPosition;
+	const glm::mat4* offscreenProjection;
+	const glm::mat4* offscreenProjectionInverse;
+	bool samplesSourceTexture;
+    };
+    std::optional<FinalPassRouting> m_finalPassRouting;
+    bool m_puppetFinalPassConfigured = false;
+    /** Current routing of the implicit final pass; visibility may change after setup. */
     bool m_finalPassDrawsToScene = false;
 
     struct {

@@ -1654,52 +1654,18 @@ void CImage::setupPasses () {
 	);
 
 	writesToTarget = this->configurePassTarget (pass, drawTo, asInput, effectInput, inTargetEffectSequence);
-	// determine if it's the last element in the list as this is a screen-copy-like process
-	// TODO: PROPERLY CHECK IF THIS IS ALL THAT'S NEEDED
 	if (!writesToTarget && this->shouldRenderFinalPass (std::next (cur) == end)) {
-	    // TODO: PROPERLY CHECK EFFECT'S VISIBILITY AND TAKE IT INTO ACCOUNT
-	    drawTo = this->getScene ().getFBO ();
-	    this->m_finalPassDrawsToScene = true;
-
-	    if (this->getImage ().model->passthrough && this->getImage ().model->fullscreen) {
-		// A fullscreen passthrough layer is a whole-frame post-process (it sampled the scene from
-		// _rt_FullFrameBuffer and graded it). Its writeback must cover the entire framebuffer. The
-		// scene-space quad routes through m_modelViewProjectionScreen (ortho * camera lookAt), whose
-		// lookAt tilts this flat z=0 quad so its corners fall outside the [-1,1] depth-clip volume —
-		// the GPU clips a slab and the uncovered pixels keep the ungraded scene (the "coloring applies
-		// only halfway" artifact on Starscape). Use the identity-projected full -1..1 NDC quad instead,
-		// exactly like the copy/intermediate passes (and like WE's untransformed passthrough.vert).
-		spacePosition = this->getPassSpacePosition ();
-		projection = &this->m_modelViewProjectionPass;
-		inverseProjection = &this->m_modelViewProjectionPassInverse;
-	    } else {
-		spacePosition = this->getSceneSpacePosition ();
-		projection = &this->m_modelViewProjectionScreen;
-		inverseProjection = &this->m_modelViewProjectionScreenInverse;
-
-		// genericimage3/4's LIGHTING branch does not use g_ModelViewProjectionMatrix for
-		// vertex placement. It multiplies by g_ModelMatrix and g_ViewProjectionMatrix
-		// separately so lighting can retain world-space position and normals. Point the
-		// final scene pass at the same world/camera split used by 3D models; leaving the
-		// image-copy matrices here turns lit image layers into giant top-left slabs.
-		if (this->getScene ().getScene ().camera.projection.isPerspective) {
-		    pass->setModelMatrix (&this->m_sceneModelMatrix);
-		    pass->setViewProjectionMatrix (&this->m_sceneViewProjectionMatrix);
-		    pass->addUniform ("g_NormalModelMatrix", &this->m_sceneNormalModelMatrix);
-		}
-	    }
-
-		    // puppet warp deforms the final on-screen geometry only; every earlier pass works on
-		    // the untouched image so effect masks keep lining up with it in the intermediate FBOs
-		    if (this->m_hasPuppetMesh) {
-			const bool samplesSourceTexture = isFirstPass && this->m_puppetAlbedoFBO == nullptr;
-			this->m_hasPuppetClipping = this->setupPuppetClippingPasses (
-			    *pass, asInput, drawTo, projection, inverseProjection, samplesSourceTexture
-			);
-			if (!this->m_hasPuppetClipping) {
-			    this->setupPuppetGeometryCallback (pass, samplesSourceTexture);
-			}
-		    }
+	    // Keep the offscreen route as well as the scene route. A layer may become
+	    // visible after scripts initialize, or hide while another layer samples it.
+	    this->m_finalPassRouting = FinalPassRouting {
+		.pass = pass,
+		.offscreenTarget = drawTo,
+		.input = asInput,
+		.offscreenPosition = spacePosition,
+		.offscreenProjection = projection,
+		.offscreenProjectionInverse = inverseProjection,
+		.samplesSourceTexture = isFirstPass && this->m_puppetAlbedoFBO == nullptr,
+	    };
 	}
 
 	pass->setDestination (drawTo);
@@ -1709,6 +1675,9 @@ void CImage::setupPasses () {
 	pass->setTexCoord (texcoord);
 	pass->setModelViewProjectionMatrix (projection);
 	pass->setModelViewProjectionMatrixInverse (inverseProjection);
+	if (this->m_finalPassRouting.has_value () && this->m_finalPassRouting->pass == pass) {
+	    this->updateFinalPassVisibility ();
+	}
 
 	texcoord = this->getTexCoordPass ();
 
@@ -1725,12 +1694,75 @@ void CImage::setupPasses () {
 }
 
 bool CImage::shouldRenderFinalPass (bool isLastPass) const {
-    if (!isLastPass || !this->getImage ().visible->value->getBool ()) {
+    if (!isLastPass) {
 	return false;
     }
 
     const auto& debug = this->getScene ().getContext ().getApp ().getContext ().settings.render.debug;
     return !(debug.noSolidFinal && this->getImage ().model->solidlayer);
+}
+
+void CImage::updateFinalPassVisibility () {
+    if (!this->m_finalPassRouting.has_value ()) {
+	return;
+    }
+    const bool visible = this->getImage ().visible->value->getBool ();
+    if (visible == this->m_finalPassDrawsToScene) {
+	return;
+    }
+
+    const auto& route = *this->m_finalPassRouting;
+    Effects::CPass* pass = route.pass;
+    this->m_finalPassDrawsToScene = visible;
+    if (!visible) {
+	pass->setDestination (route.offscreenTarget);
+	pass->setPosition (route.offscreenPosition);
+	pass->setModelViewProjectionMatrix (route.offscreenProjection);
+	pass->setModelViewProjectionMatrixInverse (route.offscreenProjectionInverse);
+	pass->setModelMatrix (&this->m_modelMatrix);
+	pass->setViewProjectionMatrix (&this->m_viewProjectionMatrix);
+	static const glm::mat3 identityNormal (1.0f);
+	pass->addUniform ("g_NormalModelMatrix", &identityNormal);
+	pass->setGeometryCallback ({}, {}, {});
+	return;
+    }
+
+    const auto destination = this->getScene ().getFBO ();
+    const glm::mat4* projection;
+    const glm::mat4* inverseProjection;
+    if (this->getImage ().model->passthrough && this->getImage ().model->fullscreen) {
+	// Full-frame post-processing uses the untransformed NDC quad.
+	pass->setPosition (this->getPassSpacePosition ());
+	projection = &this->m_modelViewProjectionPass;
+	inverseProjection = &this->m_modelViewProjectionPassInverse;
+    } else {
+	pass->setPosition (this->getSceneSpacePosition ());
+	projection = &this->m_modelViewProjectionScreen;
+	inverseProjection = &this->m_modelViewProjectionScreenInverse;
+	if (this->getScene ().getScene ().camera.projection.isPerspective) {
+	    // Lit image shaders consume model/view matrices separately from the MVP.
+	    pass->setModelMatrix (&this->m_sceneModelMatrix);
+	    pass->setViewProjectionMatrix (&this->m_sceneViewProjectionMatrix);
+	    pass->addUniform ("g_NormalModelMatrix", &this->m_sceneNormalModelMatrix);
+	}
+    }
+    pass->setDestination (destination);
+    pass->setModelViewProjectionMatrix (projection);
+    pass->setModelViewProjectionMatrixInverse (inverseProjection);
+
+    // Hidden composite textures use the undeformed image quad. Build puppet
+    // scene geometry once, and restore it whenever this layer becomes visible.
+    if (this->m_hasPuppetMesh) {
+	if (!this->m_puppetFinalPassConfigured) {
+	    this->m_hasPuppetClipping = this->setupPuppetClippingPasses (
+		*pass, route.input, destination, projection, inverseProjection, route.samplesSourceTexture
+	    );
+	    this->m_puppetFinalPassConfigured = true;
+	}
+	if (!this->m_hasPuppetClipping) {
+	    this->setupPuppetGeometryCallback (pass, route.samplesSourceTexture);
+	}
+    }
 }
 
 bool CImage::configurePassTarget (
@@ -1785,17 +1817,9 @@ void CImage::render () {
 	return;
     }
 
-    // A hidden layer still has to fill its own composite render target. 3D characters keep their
-    // face on a separate image layer and sample it from the model's material as
-    // _rt_imageLayerComposite_<id>_a, and those layers are authored invisible on purpose so the
-    // quad itself never appears in the scene (3737268876 does this for all 27 of its faces, plus
-    // its water normal map). Such a layer had no pass pointed at the scene FBO in the first place
-    // (shouldRenderFinalPass), so rendering it can only touch its own targets. Layers that were
-    // visible when their passes were built do reach the scene, and those still stop here when
-    // hidden at runtime.
-    if (!this->getImage ().visible->value->getBool () && this->m_finalPassDrawsToScene) {
-	return;
-    }
+    // Visibility gates only the scene draw. Hidden image layers still update
+    // their composite textures for model faces, reflections, and effect inputs.
+    this->updateFinalPassVisibility ();
 
     // a hidden container hides its whole subtree; children often have no visible of their own
     if (!this->isVisibleThroughParents ()) {
@@ -1835,7 +1859,7 @@ void CImage::render () {
     auto cur = this->m_passes.begin ();
 
     for (const auto end = this->m_passes.end (); cur != end; ++cur) {
-	if (std::next (cur) == end) {
+	if (std::next (cur) == end && this->m_finalPassDrawsToScene) {
 	    if (this->m_hasPuppetClipping) {
 		this->renderPuppetClipping ();
 		continue;
