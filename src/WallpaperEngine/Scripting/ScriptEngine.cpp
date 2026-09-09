@@ -167,15 +167,9 @@ static std::string normalizeSceneScriptModuleSyntax (std::string source) {
     return prefix + output.str ();
 }
 
-static JSValue anglesToJs (JSContext* ctx, const DynamicValue& value) {
-    const glm::vec3 degrees = glm::degrees (value.getVec3 ());
-    JSValue result = JS_NewObject (ctx);
-
-    JS_SetPropertyStr (ctx, result, "x", JS_NewFloat64 (ctx, degrees.x));
-    JS_SetPropertyStr (ctx, result, "y", JS_NewFloat64 (ctx, degrees.y));
-    JS_SetPropertyStr (ctx, result, "z", JS_NewFloat64 (ctx, degrees.z));
-
-    return result;
+static JSValue anglesToJs (WallpaperEngine::Scripting::Adapters::VectorAdapter<3>& adapter, const DynamicValue& value) {
+    DynamicValue degrees (glm::degrees (value.getVec3 ()));
+    return adapter.instantiate (degrees, true);
 }
 
 static void jsToAngles (JSContext* ctx, JSValue result, JSValue argument, DynamicValue& source) {
@@ -840,7 +834,7 @@ void ScriptEngine::callLifecycleHook (const std::string& key, LoadedModule& load
     this->m_runningModule = &loaded;
 
     const bool angles = isAnglesProperty (key);
-    JSValue args[] = { angles ? anglesToJs (this->m_context, loaded.value) : this->dynamicToJs (loaded.value) };
+    JSValue args[] = { angles ? anglesToJs (*this->m_adapters.vec3, loaded.value) : this->dynamicToJs (loaded.value) };
     JSValue result = this->call (loaded.module, 1, args, hook);
 
     ScopeGuard guard2 ([this, args, result] () {
@@ -1016,7 +1010,7 @@ void ScriptEngine::tick () {
 	this->m_runningModule = &module;
 
 	const bool angles = isAnglesProperty (key);
-	JSValue args[] = { angles ? anglesToJs (this->m_context, module.value) : this->dynamicToJs (module.value) };
+	JSValue args[] = { angles ? anglesToJs (*this->m_adapters.vec3, module.value) : this->dynamicToJs (module.value) };
 	JSValue result = this->call (module.module, 1, args, "update");
 	ScopeGuard guard ([result, args, this] () {
 	    JS_FreeValue (this->m_context, result);
