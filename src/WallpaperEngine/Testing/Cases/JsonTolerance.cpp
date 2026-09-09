@@ -107,6 +107,35 @@ TEST_CASE ("orthographic camera layers retain their own animated projection sett
     CHECK (scene->camera.objectProjections[1].zoom->evaluateFloat (0.0f) == Catch::Approx (0.75f));
 }
 
+TEST_CASE ("Scene zoom honors general settings in both 2D and 3D wallpapers") {
+    const auto parsedZoom = [] (const std::string& general, const std::string& cameraFields) {
+	auto filesystem = std::make_unique<Container> ();
+	filesystem->getVFS ().add (
+	    "scene.json",
+	    "{\"camera\":{\"center\":\"0 0 -1\",\"eye\":\"0 0 0\",\"up\":\"0 1 0\"" + cameraFields
+		+ "},\"general\":" + general + ",\"objects\":[]}"
+	);
+	Project project {};
+	project.type = Project::Type_Scene;
+	project.assetLocator = std::make_unique<WallpaperEngine::Assets::AssetLocator> (std::move (filesystem));
+	const auto wallpaper = WallpaperParser::parse (JSON ("scene.json"), project);
+	return wallpaper->as<Scene> ()->camera.projection.zoom->evaluateFloat (0.0f);
+    };
+    // Stratospheric Twilight / Dark Leaf author the overscan here, not in camera.
+    CHECK (
+	parsedZoom (R"({"orthogonalprojection":{"width":3840,"height":2160},"zoom":1.03})", "") == Catch::Approx (1.03f)
+    );
+    CHECK (
+	parsedZoom (R"({"orthogonalprojection":{"width":3840,"height":2160},"zoom":1.05})", ",\"zoom\":2")
+	== Catch::Approx (1.05f)
+    );
+    CHECK (
+	parsedZoom (R"({"orthogonalprojection":{"width":1920,"height":1080}})", ",\"zoom\":1.2") == Catch::Approx (1.2f)
+    );
+    CHECK (parsedZoom (R"({"orthogonalprojection":{"width":1920,"height":1080}})", "") == Catch::Approx (1.0f));
+    CHECK (parsedZoom (R"({"orthogonalprojection":null,"zoom":1.4})", ",\"zoom\":2") == Catch::Approx (1.4f));
+}
+
 TEST_CASE ("missing image effects are skipped without discarding neighboring effects") {
     auto filesystem = std::make_unique<Container> ();
     filesystem->getVFS ().add ("effects/before.json", R"({"name":"before","passes":[]})");
