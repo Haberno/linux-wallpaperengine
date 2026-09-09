@@ -40,7 +40,6 @@
 	  "// ======================================================\n"                                                \
 	  "precision highp float;\n"                                                                                   \
 	  "#define mul(x, y) ((y) * (x))\n"                                                                            \
-	  "#define max(x, y) max (y, x)\n"                                                                             \
 	  "#define lerp mix\n"                                                                                         \
 	  "#define frac fract\n"                                                                                       \
 	  "#define CAST2(x) (vec2(x))\n"                                                                               \
@@ -153,6 +152,93 @@ void ShaderUnit::preprocessVariables () {
 }
 
 namespace {
+// Keep native GLSL min/max overloads. Only the HLSL literal-first max idiom
+// needs reordering: its literal is known to be scalar, while the other argument
+// may be a vector. Each argument is still evaluated once and constants remain
+// built-in constant expressions. Never infer types from local variable names.
+std::string reorderLiteralMax (std::string source) {
+    std::string code = source;
+    const auto blank = [&code] (size_t begin, size_t end) {
+        for (size_t i = begin; i < end; ++i) {
+            if (code[i] != '\n') code[i] = ' ';
+        }
+    };
+    // Mask comments/strings without changing offsets or source text.
+    for (size_t i = 0; i < code.size ();) {
+        size_t end = i;
+        if (code.compare (i, 2, "//") == 0) {
+            end = code.find ('\n', i + 2);
+            if (end == std::string::npos) end = code.size ();
+        } else if (code.compare (i, 2, "/*") == 0) {
+            end = code.find ("*/", i + 2);
+            end = end == std::string::npos ? code.size () : end + 2;
+        } else if (code[i] == '"' || code[i] == '\'') {
+            const char quote = code[i];
+            for (end = i + 1; end < code.size (); ++end) {
+                if (code[end] == '\\' && end + 1 < code.size ()) ++end;
+                else if (code[end] == quote) { ++end; break; }
+            }
+        }
+        if (end > i) { blank (i, end); i = end; }
+        else ++i;
+    }
+    // An authored macro/function owns its own argument semantics.
+    static const std::regex customMax (
+        R"((^|\n)[ \t]*#[ \t]*(?:define|undef)[ \t]+max\b|\b(?:float[234]?|double|int[234]?|uint|[iu]?vec[234])\s+max\s*\()");
+    if (std::regex_search (code, customMax)) return source;
+    // Leave directives, including continued macro bodies, to the preprocessor.
+    for (size_t begin = 0; begin < code.size ();) {
+        size_t end = code.find ('\n', begin);
+        if (end == std::string::npos) end = code.size ();
+        const size_t first = code.find_first_not_of (" \t\r", begin);
+        if (first < end && code[first] == '#') {
+            size_t last = end;
+            while (last > begin && (code[last - 1] == '\r' || code[last - 1] == ' ' || code[last - 1] == '\t')) --last;
+            while (last > begin && code[last - 1] == '\\' && end < code.size ()) {
+                end = code.find ('\n', end + 1);
+                if (end == std::string::npos) end = code.size ();
+                last = end;
+                while (last > begin && (code[last - 1] == '\r' || code[last - 1] == ' ' || code[last - 1] == '\t')) --last;
+            }
+            blank (begin, end);
+        }
+        begin = end < code.size () ? end + 1 : end;
+    }
+    static const std::regex literal (
+        R"(\s*[+-]?\s*(?:0[xX][0-9a-fA-F]+[uU]?|(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)(?:[eE][+-]?[0-9]+)?[uUfF]?)\s*)");
+    const auto word = [] (char c) { return std::isalnum (static_cast<unsigned char> (c)) || c == '_'; };
+    for (size_t pos = 0; (pos = code.find ("max", pos)) != std::string::npos;) {
+        const size_t name = pos;
+        pos += 3;
+        if ((name > 0 && word (code[name - 1])) || (pos < code.size () && word (code[pos]))) continue;
+        const size_t open = code.find_first_not_of (" \t\r\n", pos);
+        if (open == std::string::npos || code[open] != '(') continue;
+        size_t comma = std::string::npos, close = open + 1;
+        int depth = 1;
+        bool extraArgument = false;
+        for (; close < code.size (); ++close) {
+            const char c = code[close];
+            if (c == '(' || c == '[') ++depth;
+            else if (c == ')' || c == ']') { if (--depth == 0) break; }
+            else if (c == ',' && depth == 1) {
+                if (comma != std::string::npos) extraArgument = true;
+                else comma = close;
+            }
+        }
+        if (close == code.size () || comma == std::string::npos || extraArgument) continue;
+        if (!std::regex_match (code.cbegin () + open + 1, code.cbegin () + comma, literal)) continue;
+        // Swapping is length-preserving. Resume inside the first argument so
+        // nested calls are processed without repeatedly swapping the outer call.
+        for (std::string* text : { &source, &code }) {
+            const std::string first = text->substr (open + 1, comma - open - 1);
+            const std::string second = text->substr (comma + 1, close - comma - 1);
+            text->replace (open + 1, close - open - 1, second + "," + first);
+        }
+        pos = open + 1;
+    }
+    return source;
+}
+
 // memoization cache for the include+ifdef preprocessing passes: their result only
 // depends on the unit's source text and the container includes resolve from, so
 // repeated builds (combo variants, wallpaper re-switches) can skip the string work
@@ -1298,6 +1384,7 @@ std::string ShaderUnit::applyNumericInitializerCompatibility (std::string source
 
 std::string ShaderUnit::applyVectorBuiltinCompatibility (std::string source) const {
     const std::string original = source;
+    source = reorderLiteralMax (std::move (source));
 
     // These are the recurring HLSL idioms found by the corpus validator. Keep the rules
     // syntax-directed: guessing types from identifier names across combo branches can corrupt
