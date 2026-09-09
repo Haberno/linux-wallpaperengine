@@ -1,5 +1,7 @@
 #pragma once
 
+#include <random>
+
 #include "WallpaperEngine/Audio/AudioStream.h"
 #include "WallpaperEngine/Render/CObject.h"
 #include "WallpaperEngine/Scripting/ScriptableObject.h"
@@ -23,7 +25,7 @@ public:
     void pause ();
     void stop ();
     /** Authored playback state, independent of output volume and duplicate-screen ownership. */
-    [[nodiscard]] bool isPlaying () const { return m_playing; }
+    [[nodiscard]] bool isPlaying () const { return m_playing && !m_waiting; }
 
 protected:
     void load ();
@@ -40,5 +42,12 @@ private:
     /** registered with the AudioContext soundtrack coordinator */
     bool m_registered = false;
     bool m_playing = true;
+    bool m_paused = false;
+    bool m_waiting = false;
+    bool m_started = false;
+    double m_nextStartRemaining = 0.0;
+    float m_previousTime = 0.0f;
+    uint32_t m_lastCompletion = 0;
+    std::mt19937 m_random { std::random_device {}() };
 };
 } // namespace WallpaperEngine::Render::Objects
