@@ -26,6 +26,20 @@ using WallpaperEngine::Data::Parsers::WallpaperParser;
 using WallpaperEngine::FileSystem::Container;
 using WallpaperEngine::Render::Wallpapers::CScene;
 
+TEST_CASE ("text parses authored width and row limits") {
+    const Project project {};
+    const auto object = ObjectParser::parse (JSON::parse (R"({
+        "id":353,"name":"Date","text":"Wed","limitwidth":true,"maxwidth":30,
+        "limitrows":false,"maxrows":1,"limituseellipsis":false
+    })"), project);
+    const auto* text = object->as<Text> ();
+    REQUIRE (text->limitWidth->value->getBool ());
+    REQUIRE (text->maxWidth->value->getFloat () == 30.0f);
+    REQUIRE_FALSE (text->limitRows->value->getBool ());
+    REQUIRE (text->maxRows->value->getInt () == 1);
+    REQUIRE_FALSE (text->limitUseEllipsis->value->getBool ());
+}
+
 TEST_CASE ("optional tolerates authored type drift") {
     // workshop 3758354038 authors text "padding" as a vector string where older scenes
     // store a number; a mismatched optional must default, not std::terminate the engine

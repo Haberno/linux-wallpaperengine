@@ -647,7 +647,11 @@ struct TextData {
     UserSettingUniquePtr brightness;
     /** Effects applied over the rendered text, same pipeline as image effects */
     std::vector<ImageEffectUniquePtr> effects;
-    // TODO: PARSE LIMITS TOO!
+    UserSettingUniquePtr limitWidth;
+    UserSettingUniquePtr maxWidth;
+    UserSettingUniquePtr limitRows;
+    UserSettingUniquePtr maxRows;
+    UserSettingUniquePtr limitUseEllipsis;
 };
 
 class Text : public Object, public TextData {

@@ -186,6 +186,11 @@ TextUniquePtr ObjectParser::parseText (const JSON& it, const Project& project, O
 	    }(),
 	    .brightness = it.user ("brightness", project.properties, 1.0f),
 	    .effects = effects.has_value () ? parseEffects (*effects, project) : std::vector<ImageEffectUniquePtr> {},
+	    .limitWidth = it.user ("limitwidth", project.properties, false),
+	    .maxWidth = it.user ("maxwidth", project.properties, 500.0f),
+	    .limitRows = it.user ("limitrows", project.properties, false),
+	    .maxRows = it.user ("maxrows", project.properties, 1),
+	    .limitUseEllipsis = it.user ("limituseellipsis", project.properties, false),
 	}
     );
 }

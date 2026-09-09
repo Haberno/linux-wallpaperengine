@@ -1,5 +1,6 @@
 #pragma once
 
+#include <functional>
 #include <string>
 #include <vector>
 
@@ -38,6 +39,19 @@ using namespace WallpaperEngine::Data::Model;
  *  Malformed bytes decode as U+FFFD one byte at a time. No overlong/range validation —
  *  the result only feeds glyph lookup, where a bogus codepoint just misses the charmap. */
 uint32_t nextUtf8Codepoint (const std::string& text, size_t& offset);
+
+struct TextLayoutLimits {
+    float width = 0.0f; // zero disables wrapping
+    size_t rows = 0; // zero disables truncation
+    bool ellipsis = false;
+    bool operator== (const TextLayoutLimits&) const = default;
+};
+
+/** Wrap at spaces, split oversized words on UTF-8 character boundaries, and
+ * truncate to the authored row count with a width-fitting ellipsis if enabled. */
+std::vector<std::string> layoutTextLines (
+    const std::string& text, const TextLayoutLimits& limits, const std::function<int (uint32_t)>& glyphAdvance
+);
 
 /**
  * Return Wallpaper Engine's glyph-bounds alignment offset in y-up font space.
@@ -108,6 +122,7 @@ private:
     bool loadEmbeddedFont ();
     bool loadSystemFont ();
     unsigned int computeEffectivePixelSize () const;
+    TextLayoutLimits currentLayoutLimits () const;
     void initScriptLayer ();
 
     // text-effect chain (rebuilt when dynamic glyph metrics change, like the native renderer)
@@ -118,6 +133,7 @@ private:
     const Text& m_text;
     std::string m_lastRenderedText;
     unsigned int m_lastPixelSize = 0;
+    TextLayoutLimits m_lastLayoutLimits;
     Scripting::ScriptLayerHandle m_layerHandle = Scripting::kInvalidLayerHandle;
 
     FT_Library m_ftLibrary = nullptr;
