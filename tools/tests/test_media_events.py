@@ -55,7 +55,12 @@ function report(){ console.log('MEDIA_EVENTS '+JSON.stringify({counts,position,t
 export function mediaPropertiesChanged(event){counts.properties++;title=event.title;report();}
 export function mediaPlaybackChanged(event){counts.playback++;state=event.state;report();}
 export function mediaTimelineChanged(event){counts.timeline++;position=event.position;report();}
-export function mediaThumbnailChanged(event){counts.thumbnail++;thumbnail=event.hasThumbnail;report();}
+export function mediaThumbnailChanged(event){
+    counts.thumbnail++;thumbnail=event.hasThumbnail;report();
+    if (!(event.textColor instanceof Vec3)) throw new Error('Thumbnail text color must be Vec3');
+    for (const key of ['x','y','z'])
+        if (!Number.isFinite(event.textColor[key])) throw new Error('Invalid thumbnail text color');
+}
 export function update(value){return value;}
 '''
 
