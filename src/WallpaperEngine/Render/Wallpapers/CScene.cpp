@@ -751,7 +751,8 @@ void CScene::renderFrame (const glm::ivec4& viewport) {
     // Scripts and other scenes can change this context state between frames.
     const glm::vec3 clearColor = this->getScene ().colors.clear->evaluateVec3 (this->getTime ());
     glClearColor (clearColor.r, clearColor.g, clearColor.b, 1.0f);
-    glClear (GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+    const GLbitfield colorClear = this->getScene ().clearEnabled->value->getBool () ? GL_COLOR_BUFFER_BIT : 0;
+    glClear (colorClear | GL_DEPTH_BUFFER_BIT);
 
     const std::vector<CObject*> renderOrder = this->buildFrameRenderOrder ();
     const auto& debug = this->getContext ().getApp ().getContext ().settings.render.debug;
@@ -906,6 +907,7 @@ void CScene::registerFogScripts () {
     queue ("ambientcolor", scene.colors.ambient);
     queue ("skylightcolor", scene.colors.skylight);
     queue ("clearcolor", scene.colors.clear);
+    queue ("clearenabled", scene.clearEnabled);
     queue ("camerafade", scene.camera.fade);
     queue ("bloom", scene.camera.bloom.enabled);
     queue ("bloomstrength", scene.camera.bloom.strength);

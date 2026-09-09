@@ -38,7 +38,7 @@ JSValue get_bloomthreshold (JSContext* ctx, JSValueConst this_val, int argc, JSV
 JSValue get_clearenabled (JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
     auto* container = get_opaque (this_val);
 
-    return JS_NewBool (ctx, container->getScene ().getScene ().camera.bloom.enabled->value->getBool ());
+    return JS_NewBool (ctx, container->getScene ().getScene ().clearEnabled->value->getBool ());
 }
 
 JSValue get_clearcolor (JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
@@ -192,10 +192,6 @@ JSValue get_layer (JSContext* ctx, JSValueConst this_val, int argc, JSValueConst
     return JS_UNDEFINED;
 }
 
-JSValue scene_set_value (JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
-    return JS_ThrowTypeError (ctx, "Cannot assign to read-only property");
-}
-
 // Instantiate a real engine Vec3 rather than a bare {x,y,z} bag: stock camera controllers chain
 // vector math straight off getCameraTransforms() (`p2.subtract(p1).divide(len)`), so a plain
 // object throws "not a function" on the first tick and kills the whole script.
@@ -246,7 +242,7 @@ static bool read_script_vec3 (JSContext* ctx, JSValueConst value, glm::vec3& res
 }
 
 enum class SceneField {
-    Bloom, BloomStrength, BloomThreshold, ClearColor, AmbientColor, SkylightColor, Fov, NearZ, FarZ, CameraFade, CameraShake, CameraShakeSpeed, CameraShakeAmplitude, CameraShakeRoughness, CameraParallax, CameraParallaxAmount, CameraParallaxDelay, CameraParallaxMouseInfluence
+    Bloom, BloomStrength, BloomThreshold, ClearEnabled, ClearColor, AmbientColor, SkylightColor, Fov, NearZ, FarZ, CameraFade, CameraShake, CameraShakeSpeed, CameraShakeAmplitude, CameraShakeRoughness, CameraParallax, CameraParallaxAmount, CameraParallaxDelay, CameraParallaxMouseInfluence
 };
 
 // Native IScene installs both property callbacks (scenescript64.dll
@@ -263,6 +259,7 @@ JSValue set_scene_field (JSContext* ctx, JSValueConst this_val, int argc, JSValu
         case SceneField::Bloom: target = scene.camera.bloom.enabled->value.get (); break;
         case SceneField::BloomStrength: target = scene.camera.bloom.strength->value.get (); break;
         case SceneField::BloomThreshold: target = scene.camera.bloom.threshold->value.get (); break;
+        case SceneField::ClearEnabled: target = scene.clearEnabled->value.get (); break;
         case SceneField::ClearColor: target = scene.colors.clear->value.get (); break;
         case SceneField::AmbientColor: target = scene.colors.ambient->value.get (); break;
         case SceneField::SkylightColor: target = scene.colors.skylight->value.get (); break;
@@ -288,7 +285,7 @@ JSValue set_scene_field (JSContext* ctx, JSValueConst this_val, int argc, JSValu
             return JS_ThrowTypeError (ctx, "Scene color expects a Vec3");
         }
         target->update (value, DynamicValue::UpdateSource::Script);
-    } else if (field == SceneField::Bloom || field == SceneField::CameraFade
+    } else if (field == SceneField::Bloom || field == SceneField::ClearEnabled || field == SceneField::CameraFade
                || field == SceneField::CameraShake || field == SceneField::CameraParallax) {
         if (!JS_IsBool (argv[0])) {
             return JS_ThrowTypeError (ctx, "Scene toggle expects a boolean");
@@ -505,7 +502,8 @@ SceneObject::SceneObject (ScriptEngine& engine, Render::Wallpapers::CScene& scen
     JS_DefinePropertyGetSet (
 	this->m_engine.getContext (), this->m_instance, JS_NewAtom (this->m_engine.getContext (), "clearenabled"),
 	JS_NewCFunction (this->m_engine.getContext (), get_clearenabled, "get", 0),
-	JS_NewCFunction (this->m_engine.getContext (), scene_set_value, "set", 1), JS_PROP_ENUMERABLE
+	JS_NewCFunctionMagic (this->m_engine.getContext (), set_scene_field, "set", 1, JS_CFUNC_generic_magic,
+	    static_cast<int> (SceneField::ClearEnabled)), JS_PROP_ENUMERABLE
     );
     JS_DefinePropertyGetSet (
 	this->m_engine.getContext (), this->m_instance, JS_NewAtom (this->m_engine.getContext (), "clearcolor"),
