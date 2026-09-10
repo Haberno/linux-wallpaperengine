@@ -1,3 +1,4 @@
+#include <algorithm>
 #include <cstdint>
 #include <cstring>
 #include <limits>
@@ -150,6 +151,73 @@ TEST_CASE ("MDL animation parser shares legacy skeleton attachments and event-on
     CHECK (animationData.animations[1].id == 9);
     CHECK (animationData.animations[1].mode.empty ());
     CHECK (animationData.animations[1].boneFrames.empty ());
+}
+
+TEST_CASE ("MDLA events follow versioned tracks and cropped clip metadata", "[mdl][animation]") {
+    auto data = makeAnimatedModelSections ();
+    const std::string marker = "MDLA0006";
+    const auto begin = std::search (data.begin (), data.end (), marker.begin (), marker.end ());
+    data.resize (std::distance (data.begin (), begin));
+    appendMarker (data, "MDLA0006");
+    const auto endField = data.size ();
+    appendValue<uint32_t> (data, 0);
+    appendValue<uint32_t> (data, 1);
+    appendValue<uint32_t> (data, 35);
+    appendValue<uint32_t> (data, 0);
+    appendString (data, "Idle");
+    appendString (data, "");
+    appendValue<float> (data, 24);
+    appendValue<uint32_t> (data, 60);
+    appendValue<uint32_t> (data, 0x401);
+    appendValue<uint32_t> (data, 2);
+    for (int bone = 0; bone < 2; ++bone) {
+	appendValue<uint32_t> (data, 0);
+	appendValue<uint32_t> (data, 36);
+	appendFrame (data, glm::vec3 (0));
+    }
+    appendValue<uint32_t> (data, 0); // blend tracks
+    appendValue<uint8_t> (data, 0); // earlier scalar tracks
+    appendValue<uint8_t> (data, 1); // v4 constraint tracks
+    for (int bone = 0; bone < 2; ++bone) {
+	appendValue<uint32_t> (data, 1);
+	appendValue<float> (data, 1);
+	appendValue<uint16_t> (data, 1);
+	appendValue<uint16_t> (data, 0);
+	appendValue<uint32_t> (data, 61 * sizeof (float));
+	for (int frame = 0; frame < 61; ++frame) appendValue<float> (data, 1);
+    }
+    for (int component = 0; component < 6; ++component) appendValue<float> (data, 0); // v5 bounds
+    appendValue<uint8_t> (data, 1); // v6 scalar tracks
+    for (int bone = 0; bone < 2; ++bone) {
+	appendValue<uint32_t> (data, 0);
+	appendValue<uint32_t> (data, 61 * sizeof (float));
+	for (int frame = 0; frame < 61; ++frame) appendValue<float> (data, 1);
+    }
+    appendValue<uint16_t> (data, 0); // source clip/range descriptor, flags bit 0
+    for (const uint32_t field : { 128u, 188u, 0u, UINT32_MAX }) appendValue<uint32_t> (data, field);
+    appendValue<uint32_t> (data, 2);
+    appendValue<float> (data, 59.0f / 24.0f);
+    appendString (data, R"({"frame":59,"name":"end"})");
+    appendValue<float> (data, 45.0f / 24.0f);
+    appendString (data, R"({"frame":45,"name":"cry"})");
+    patchU32 (data, endField, data.size ());
+
+    const auto parsed = MdlAnimationParser::parse (data, "events.mdl");
+    REQUIRE (parsed.animations.size () == 1);
+    const auto& clip = parsed.animations.front ();
+    CHECK (clip.flags == 0x401);
+    REQUIRE (clip.events.size () == 2);
+    CHECK (clip.events[0].frame == Catch::Approx (59));
+    CHECK (clip.events[0].name == "end");
+    CHECK (clip.events[1].frame == Catch::Approx (45));
+    CHECK (clip.events[1].name == "cry");
+
+    data.pop_back (); // A truncated event must not corrupt the usable bone data.
+    patchU32 (data, endField, data.size ());
+    const auto truncated = MdlAnimationParser::parse (data, "truncated-event.mdl");
+    REQUIRE (truncated.animations.size () == 1);
+    CHECK (truncated.animations.front ().events.empty ());
+    CHECK (truncated.animations.front ().boneFrames.size () == 2);
 }
 
 TEST_CASE ("MDL animation evaluator interpolates and composes parent bones") {
