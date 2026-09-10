@@ -1072,6 +1072,15 @@ void CText::render () {
     const float alpha = m_text.alpha->value->getFloat ();
     const float brightness = m_text.brightness->value->getFloat ();
 
+    // A preceding hidden image can leave its composite FBO and viewport bound.
+    // Direct text draws must select the active scene/composition target themselves.
+    const auto sceneTarget = this->getScene ().getActiveRenderTarget ();
+    glBindFramebuffer (GL_FRAMEBUFFER, sceneTarget->getFramebuffer ());
+    glViewport (0, 0, sceneTarget->getRealWidth (), sceneTarget->getRealHeight ());
+    // Glyph plates are double-sided, including the mirrored 2D path and the
+    // initial raster pass of an effect chain. Never inherit image-material culling.
+    glDisable (GL_CULL_FACE);
+
     // 3D scenes: no screen-space centering or parallax; the world matrix carries the
     // transform chain (origin, parents, text scale)
     if (getScene ().getScene ().camera.projection.isPerspective) {
@@ -1091,10 +1100,6 @@ void CText::render () {
 
 	glEnable (GL_BLEND);
 	glBlendFunc (GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
-	// the mirror flips the quad's winding, and the last material pass may have left
-	// face culling on; text plates are double-sided anyway
-	glDisable (GL_CULL_FACE);
-
 	glUseProgram (m_program);
 	glUniformMatrix4fv (m_uMVP, 1, GL_FALSE, glm::value_ptr (mvp));
 	glUniform4f (m_uColor, color.r * brightness, color.g * brightness, color.b * brightness, color.a * alpha);
