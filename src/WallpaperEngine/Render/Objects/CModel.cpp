@@ -43,6 +43,40 @@ CModel::CModel (Wallpapers::CScene& scene, const Model3D& model) :
     // keep calculating their pivot even though current IModelLayer docs omit the field.
     this->registerProperty ("size", this->m_size);
     this->registerProperty ("castshadow", *model.castShadow->value);
+    const auto addLayer = [&] (const ImageAnimationLayer* settings, const MdlAnimationClip* clip) {
+	auto layer = std::make_unique<AnimationLayer> ();
+	layer->settings = settings;
+	layer->clip = clip;
+	layer->key = "__model_animation_" + std::to_string (m_nextAnimationLayer++);
+	layer->timeline.name = settings != nullptr ? settings->name : clip->name;
+	if (clip != nullptr) {
+	    layer->timeline.fps = clip->fps;
+	    layer->timeline.length = static_cast<float> (clip->frameCount);
+	    layer->timeline.mode = clip->mode.empty () ? "loop" : clip->mode;
+	    layer->timeline.events = clip->events;
+	}
+	if (settings != nullptr) layer->timeline.rate = settings->rate->value->getFloat ();
+	registerAnimation (layer->key, layer->timeline);
+	m_animationLayers.push_back (std::move (layer));
+    };
+    for (const auto& settings : model.animationLayers) {
+	const auto found = std::find_if (model.animationData.animations.begin (), model.animationData.animations.end (),
+	    [&] (const MdlAnimationClip& clip) {
+		return clip.id == static_cast<uint32_t> (settings->animation->value->getInt ());
+	    });
+	addLayer (settings.get (), found == model.animationData.animations.end () ? nullptr : &*found);
+	const auto prefix = "animation_" + std::to_string (settings->id) + "_";
+	for (const auto& [name, value] : std::initializer_list<std::pair<const char*, const UserSetting*>> {
+	    { "rate", settings->rate.get () }, { "blend", settings->blend.get () },
+	    { "visible", settings->visible.get () }, { "animation", settings->animation.get () },
+	    { "additive", settings->additive.get () }, { "blendin", settings->blendIn.get () },
+	    { "blendout", settings->blendOut.get () }, { "blendtime", settings->blendTime.get () } }) {
+	    registerProperty (prefix + name, *value);
+	}
+    }
+    if (model.animationLayers.empty () && !model.animationData.animations.empty ()) {
+	addLayer (nullptr, &model.animationData.animations.front ());
+    }
 }
 
 CModel::~CModel () {
@@ -308,6 +342,101 @@ void CModel::setupGeometryCallback (Effects::CPass* pass, size_t submeshIndex) {
     );
 }
 
+void CModel::syncAnimationLayers () const {
+    const float time = getScene ().getTime ();
+    for (const auto& layer : m_animationLayers) {
+	if (layer->settings == nullptr) continue;
+	const auto& settings = *layer->settings;
+	const auto id = static_cast<uint32_t> (settings.animation->value->getInt ());
+	if (layer->clip == nullptr || layer->clip->id != id) {
+	    const auto& clips = m_model.animationData.animations;
+	    const auto found = std::find_if (clips.begin (), clips.end (),
+		[id] (const MdlAnimationClip& clip) { return clip.id == id; });
+	    layer->clip = found == clips.end () ? nullptr : &*found;
+	    if (layer->clip != nullptr) {
+		layer->timeline.fps = layer->clip->fps;
+		layer->timeline.length = static_cast<float> (layer->clip->frameCount);
+		layer->timeline.mode = layer->clip->mode.empty () ? "loop" : layer->clip->mode;
+		layer->timeline.events = layer->clip->events;
+		layer->timeline.setFrame (0.0f, time);
+	    } else {
+		layer->timeline.events.clear ();
+	    }
+	    m_poseTime = std::numeric_limits<float>::quiet_NaN ();
+	}
+	const float rate = settings.rate->value->getFloat ();
+	if (rate != layer->timeline.rate) layer->timeline.setRate (rate, time);
+    }
+}
+
+void CModel::prepareAnimationEvents () {
+    syncAnimationLayers ();
+    const float time = getScene ().getTime ();
+    // Keep a completed clip until its last event interval has been dispatched.
+    // Retire only here, never from a callback while ScriptEngine iterates events.
+    std::erase_if (m_animationLayers, [&] (const auto& layer) {
+	if (!layer->single || layer->timeline.elapsedFrame (time) < layer->timeline.length
+	    || layer->timeline.previousEventFrame < layer->timeline.length) return false;
+	unregisterAnimation (layer->key);
+	return true;
+    });
+}
+
+CModel::AnimationLayer* CModel::findAnimationLayer (const std::string& key) {
+    for (const auto& layer : m_animationLayers) if (layer->key == key) return layer.get ();
+    return nullptr;
+}
+
+CModel::AnimationLayer* CModel::getAnimationLayer (const std::string& name) {
+    for (const auto& layer : m_animationLayers) if (layer->timeline.name == name) return layer.get ();
+    return nullptr;
+}
+
+CModel::AnimationLayer* CModel::getAnimationLayer (const size_t index) {
+    return index < m_animationLayers.size () ? m_animationLayers[index].get () : nullptr;
+}
+
+size_t CModel::getAnimationLayerCount () const { return m_animationLayers.size (); }
+
+CModel::AnimationLayer* CModel::playSingleAnimation (const std::string& name, const SingleAnimationConfig& config) {
+    const auto& clips = m_model.animationData.animations;
+    const auto found = std::find_if (clips.begin (), clips.end (),
+	[&] (const MdlAnimationClip& clip) { return clip.name == name; });
+    if (found == clips.end () || found->fps <= 0.0f || found->frameCount == 0) return nullptr;
+    auto layer = std::make_unique<AnimationLayer> ();
+    layer->clip = &*found;
+    layer->single = true;
+    layer->blendIn = config.blendIn;
+    layer->blendOut = config.blendOut;
+    layer->blendTime = std::max (config.blendTime, 0.0f);
+    layer->key = "__model_animation_" + std::to_string (m_nextAnimationLayer++);
+    layer->timeline.fps = found->fps;
+    layer->timeline.length = static_cast<float> (found->frameCount);
+    layer->timeline.mode = "single";
+    layer->timeline.name = found->name;
+    layer->timeline.events = found->events;
+    layer->timeline.setFrame (0.0f, getScene ().getTime ());
+    registerAnimation (layer->key, layer->timeline);
+    auto* result = layer.get ();
+    // Native one-shot layers blend over the base animation, before additive detail.
+    const auto position = std::find_if (m_animationLayers.begin (), m_animationLayers.end (), [] (const auto& other) {
+	return other->settings != nullptr && other->settings->additive->value->getBool ();
+    });
+    m_animationLayers.insert (position, std::move (layer));
+    m_poseTime = std::numeric_limits<float>::quiet_NaN ();
+    return result;
+}
+
+void CModel::animationControlsChanged (PropertyAnimation& animation) {
+    for (const auto& layer : m_animationLayers) {
+	if (&layer->timeline == &animation && layer->settings != nullptr
+	    && layer->settings->rate->value->getFloat () != animation.rate) {
+	    layer->settings->rate->value->update (animation.rate, DynamicValue::UpdateSource::User);
+	}
+    }
+    m_poseTime = std::numeric_limits<float>::quiet_NaN ();
+}
+
 void CModel::updateAnimationPose () const {
     const auto& animationData = this->m_model.animationData;
     if (animationData.bones.empty ()) {
@@ -316,35 +445,29 @@ void CModel::updateAnimationPose () const {
 
     std::vector<MdlActiveAnimation> activeAnimations;
     const float sceneTime = this->getScene ().getTime ();
+    syncAnimationLayers ();
     if (sceneTime == this->m_poseTime) {
 	return;
     }
 
-    if (this->m_model.animationLayers.empty ()) {
-	if (!animationData.animations.empty ()) {
-	    activeAnimations.push_back ({ .animation = &animationData.animations.front (), .time = sceneTime });
-	}
-    } else {
-	for (const auto& layer : this->m_model.animationLayers) {
-	    const auto animationId = static_cast<uint32_t> (layer->animation->value->getInt ());
-	    const auto found = std::find_if (
-		animationData.animations.begin (), animationData.animations.end (),
-		[animationId] (const MdlAnimationClip& animation) { return animation.id == animationId; }
-	    );
-	    if (found == animationData.animations.end ()) {
-		continue;
+    for (const auto& layer : m_animationLayers) {
+	if (layer->clip == nullptr) continue;
+	const auto* settings = layer->settings;
+	const bool visible = settings != nullptr ? settings->visible->value->getBool () : layer->visible;
+	float weight = visible ? std::clamp (settings != nullptr ? settings->blend->value->getFloat () : layer->blend,
+	    0.0f, 1.0f) : 0.0f;
+	if (layer->single) {
+	    const float elapsed = layer->timeline.elapsedFrame (sceneTime) / layer->timeline.fps;
+	    const float duration = layer->timeline.length / layer->timeline.fps;
+	    if (elapsed >= duration) continue;
+	    if (layer->blendTime > 0.0f) {
+		if (layer->blendIn) weight *= std::clamp (elapsed / layer->blendTime, 0.0f, 1.0f);
+		if (layer->blendOut) weight *= std::clamp ((duration - elapsed) / layer->blendTime, 0.0f, 1.0f);
 	    }
-
-	    const bool visible = layer->visible->value->getBool ();
-	    activeAnimations.push_back (
-		{
-		    .animation = &*found,
-		    .time = sceneTime * layer->rate->value->getFloat (),
-		    .weight = visible ? std::clamp (layer->blend->value->getFloat (), 0.0f, 1.0f) : 0.0f,
-		    .additive = layer->additive->value->getBool (),
-		}
-	    );
-	}
+        }
+	activeAnimations.push_back ({ .animation = layer->clip, .weight = weight,
+	    .additive = settings != nullptr && settings->additive->value->getBool (),
+	    .frame = layer->timeline.frameAt (sceneTime) });
     }
 
     auto pose = MdlAnimationEvaluator::evaluate (animationData, activeAnimations);
