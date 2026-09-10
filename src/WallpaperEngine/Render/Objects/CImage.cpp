@@ -258,6 +258,20 @@ CImage::CImage (Wallpapers::CScene& scene, const Image& image) :
 	// TODO: CHANGE ALIGNMENT TOO?
     }
     this->m_size = size;
+    // Effects use source-image pixels even when the layer stretches that image
+    // to a different geometric size. Using the quad size here shrinks overlays
+    // and misplaces pixel offsets (for example, notes on Ocarina's staff).
+    // Procedural solids and scene-sized targets retain their authored extent.
+    m_effectSize = size;
+    if (!image.model->fullscreen && !image.model->passthrough && !isCompositionLayer ()
+	&& !m_material.passes.empty ()) {
+	const auto source = m_material.passes.front ()->textures.find (0);
+	if (source != m_material.passes.front ()->textures.end ()
+	    && !source->second.starts_with ("_rt_") && !source->second.starts_with ("_alias_")
+	    && !(image.model->solidlayer && source->second == "util/white")) {
+	    m_effectSize = { m_texture->getRealWidth (), m_texture->getRealHeight () };
+	}
+    }
 
     glm::vec2 scaledSize = size * glm::vec2 (scale);
 
@@ -297,10 +311,10 @@ CImage::CImage (Wallpapers::CScene& scene, const Image& image) :
     nameB << "_rt_imageLayerComposite_" << this->getImage ().id << "_b";
 
     this->m_currentMainFBO = this->m_mainFBO = scene.create (
-	nameA.str (), TextureFormat_ARGB8888, this->m_texture->getFlags (), 1, { size.x, size.y }, { size.x, size.y }
+	nameA.str (), TextureFormat_ARGB8888, this->m_texture->getFlags (), 1, m_effectSize, m_effectSize
     );
     this->m_currentSubFBO = this->m_subFBO = scene.create (
-	nameB.str (), TextureFormat_ARGB8888, this->m_texture->getFlags (), 1, { size.x, size.y }, { size.x, size.y }
+	nameB.str (), TextureFormat_ARGB8888, this->m_texture->getFlags (), 1, m_effectSize, m_effectSize
     );
 
     // build a list of vertices, these might need some change later (or maybe invert the camera)
@@ -1451,7 +1465,7 @@ void CImage::setup () {
 
 	    // create all the fbos for this effect
 	    for (const auto& fbo : cur->effect->fbos) {
-		fboProvider->create (*fbo, this->m_texture->getFlags (), this->getSize ());
+		fboProvider->create (*fbo, this->m_texture->getFlags (), m_effectSize);
 	    }
 
 	    // TODO: MAKE USE OF ZIP OPERATOR IN BOOST? WAY OVERKILL JUST FOR THIS...
