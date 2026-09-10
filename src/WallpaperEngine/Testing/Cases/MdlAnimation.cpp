@@ -153,6 +153,74 @@ TEST_CASE ("MDL animation parser shares legacy skeleton attachments and event-on
     CHECK (animationData.animations[1].boneFrames.empty ());
 }
 
+TEST_CASE ("MDL bone controls retain their extra animation pose tracks", "[mdl][animation]") {
+    std::vector<char> data;
+    appendMarker (data, "MDLS0002");
+    const auto skeletonEnd = data.size ();
+    appendValue<uint32_t> (data, 0);
+    appendValue<uint32_t> (data, 2);
+    for (int bone = 0; bone < 2; ++bone) {
+	appendString (data, "bone");
+	appendValue<uint32_t> (data, 3);
+	appendValue<int32_t> (data, bone - 1);
+	appendValue<uint32_t> (data, 64);
+	appendMatrix (data, glm::mat4 (1.0f));
+	appendString (data, "");
+    }
+    appendValue<uint16_t> (data, 2);
+    size_t controlledBoneOffset = 0;
+    for (uint32_t type = 0; type < 2; ++type) {
+	appendString (data, type == 0 ? "wrist" : "target");
+	controlledBoneOffset = data.size ();
+	appendValue<uint32_t> (data, 1);
+	appendValue<uint32_t> (data, type);
+	appendMatrix (data, glm::translate (glm::mat4 (1.0f), glm::vec3 (5.0f, 6.0f, 0.0f)));
+    }
+    patchU32 (data, skeletonEnd, data.size ());
+    appendMarker (data, "MDLA0002");
+    const auto animationEnd = data.size ();
+    appendValue<uint32_t> (data, 0);
+    appendValue<uint32_t> (data, 2);
+    for (uint32_t clip = 0; clip < 2; ++clip) {
+	appendValue<uint32_t> (data, clip + 1);
+	appendValue<uint32_t> (data, 0);
+	appendString (data, "move");
+	appendString (data, "loop");
+	appendValue<float> (data, 30.0f);
+	appendValue<uint32_t> (data, 1);
+	appendValue<uint32_t> (data, 0);
+	appendValue<uint32_t> (data, 2);
+	for (uint32_t track = 0; track < 4; ++track) {
+	    appendValue<uint32_t> (data, 0);
+	    appendValue<uint32_t> (data, 72);
+	    appendFrame (data, glm::vec3 (static_cast<float> (track), 0, 0));
+	    appendFrame (data, glm::vec3 (static_cast<float> (track), static_cast<float> (clip + 1), 0));
+	}
+	appendValue<uint32_t> (data, 0);
+	appendValue<uint8_t> (data, 0);
+	appendValue<uint32_t> (data, 0);
+    }
+    patchU32 (data, animationEnd, data.size ());
+    const auto parsed = MdlAnimationParser::parse (data, "controls.mdl");
+    REQUIRE (parsed.controls.size () == 2);
+    CHECK (parsed.controls[0].name == "wrist");
+    CHECK (parsed.controls[0].bone == 1);
+    CHECK (parsed.controls[0].type == 0);
+    CHECK (parsed.controls[1].type == 1);
+    CHECK (parsed.controls[0].bindWorld[3].x == Catch::Approx (5));
+    REQUIRE (parsed.animations.size () == 2);
+    for (size_t clip = 0; clip < 2; ++clip) {
+	const auto& animation = parsed.animations[clip];
+	REQUIRE (animation.controlFrames.size () == 2);
+	CHECK (animation.controlFrames[0][1].translation.x == Catch::Approx (2));
+	CHECK (animation.controlFrames[0][1].translation.y == Catch::Approx (clip + 1));
+	CHECK (animation.controlFrames[1][1].translation.x == Catch::Approx (3));
+	CHECK (animation.boneFrames[1][1].translation.x == Catch::Approx (1));
+    }
+    patchU32 (data, controlledBoneOffset, 8);
+    CHECK_THROWS (MdlAnimationParser::parse (data, "invalid-control.mdl"));
+}
+
 TEST_CASE ("MDLA events follow versioned tracks and cropped clip metadata", "[mdl][animation]") {
     auto data = makeAnimatedModelSections ();
     const std::string marker = "MDLA0006";
