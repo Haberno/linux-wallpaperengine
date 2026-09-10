@@ -18,6 +18,10 @@ struct MdlBone {
     int32_t parent = -1;
     glm::mat4 bindLocal = glm::mat4 (1.0f);
     glm::mat4 inverseBindWorld = glm::mat4 (1.0f);
+    bool ikFollowEnd = false;
+    bool ikAimToTarget = false;
+    float ikAimDistance = 1.0f;
+    bool ikAngleLimits = false;
 };
 
 struct MdlAttachment {
@@ -37,6 +41,26 @@ struct MdlBoneControl {
     uint32_t bone = 0;
     uint32_t type = 0;
     glm::mat4 bindWorld = glm::mat4 (1.0f);
+    std::optional<glm::mat4> referenceWorld;
+};
+
+struct MdlIkChain {
+    uint32_t flags = 0;
+    float maxLength = 0.0f;
+    float minLength = 0.0f;
+    /** Ordered from the chain root to its controlled end bone. */
+    std::vector<uint32_t> bones;
+};
+
+struct MdlIkNode {
+    uint32_t root = 0;
+    std::vector<MdlIkChain> branches;
+};
+
+struct MdlIkGroup {
+    uint32_t root = 0;
+    bool hasDependencies = false;
+    std::vector<MdlIkNode> nodes;
 };
 
 struct MdlAnimationClip {
@@ -64,6 +88,9 @@ struct MdlAnimationClip {
 struct MdlAnimationData {
     std::vector<MdlBone> bones = {};
     std::vector<MdlBoneControl> controls;
+    std::vector<float> boneLengths;
+    std::vector<std::map<uint32_t, glm::vec3>> boneDirections;
+    std::vector<MdlIkGroup> ikGroups;
     std::map<std::string, MdlAttachment> attachments = {};
     std::vector<MdlAnimationClip> animations = {};
 };
