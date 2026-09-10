@@ -253,16 +253,17 @@ TEST_CASE ("Off-center parallax layers use their root origin relative to the can
 }
 
 TEST_CASE ("Scene timing includes global frames skipped by an asynchronous output") {
-    // The first render has no scene-local history, so it uses the application frame delta.
-    CHECK (CScene::calculateSceneDeltaTime (2.0f, 1.0f / 165.0f, std::nullopt) == Catch::Approx (1.0f / 165.0f));
+    // A new wallpaper starts at zero even after a long load or an hours-old engine process.
+    CHECK (CScene::calculateSceneDeltaTime (2.0f, std::nullopt) == 0.0f);
+    CHECK (CScene::calculateSceneDeltaTime (7200.0f, std::nullopt) == 0.0f);
 
     // A 60 Hz output can render after several 165 Hz application iterations. Its scene clock
     // must advance by the full time since that scene last rendered, not one 165 Hz iteration.
-    CHECK (CScene::calculateSceneDeltaTime (2.0f + 1.0f / 60.0f, 1.0f / 165.0f, 2.0f) == Catch::Approx (1.0f / 60.0f));
+    CHECK (CScene::calculateSceneDeltaTime (2.0f + 1.0f / 60.0f, 2.0f) == Catch::Approx (1.0f / 60.0f));
 
     // Duplicate renders of a shared/span scene at one application timestamp do not advance twice.
-    CHECK (CScene::calculateSceneDeltaTime (2.0f, 1.0f / 165.0f, 2.0f) == 0.0f);
-    CHECK (CScene::calculateSceneDeltaTime (1.0f, 1.0f / 165.0f, 2.0f) == 0.0f);
+    CHECK (CScene::calculateSceneDeltaTime (2.0f, 2.0f) == 0.0f);
+    CHECK (CScene::calculateSceneDeltaTime (1.0f, 2.0f) == 0.0f);
 }
 
 TEST_CASE ("Lit perspective images use the authored world transform") {

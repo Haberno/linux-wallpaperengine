@@ -81,7 +81,7 @@ public:
     /** Recover the elapsed time for this scene rather than the application loop. Wayland outputs
      * can present independently, so a slower monitor may skip several global render iterations. */
     [[nodiscard]] static float
-    calculateSceneDeltaTime (float currentTime, float globalDeltaTime, std::optional<float> previousSceneTime);
+    calculateSceneDeltaTime (float currentTime, std::optional<float> previousSceneTime);
     /** Pack the authoring start/end values into common_fog.h's
      * {start, range, startDensity, densityRange} uniform layout. */
     [[nodiscard]] static glm::vec4

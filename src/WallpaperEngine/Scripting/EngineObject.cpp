@@ -13,12 +13,12 @@
 
 using namespace WallpaperEngine::Scripting;
 
-extern float g_Time;
-extern float g_TimeLast;
 extern float g_Daytime;
 
 static uint32_t EngineInstanceId = 0;
 std::map<uint32_t, EngineObject&> engineInstances;
+
+static EngineObject* engineForGetter (JSContext* ctx, JSValueConst* data);
 
 JSValue engine_set_value (JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
     return JS_ThrowTypeError (ctx, "Cannot assign to read-only property");
@@ -28,16 +28,29 @@ JSValue engine_open_user_shortcut (JSContext* ctx, JSValueConst this_val, int ar
     return JS_UNDEFINED;
 }
 
-JSValue engine_get_frametime (JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+JSValue engine_get_frametime (
+    JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv, int magic, JSValueConst* data
+) {
+    const auto* engine = engineForGetter (ctx, data);
+    if (engine == nullptr) {
+	return JS_EXCEPTION;
+    }
     // Never report a zero-length frame. The stock SceneScript idiom for framerate-normalizing a
     // smoothing factor is `engine.frametime * (1 / engine.frametime)`, which is 0 * Infinity = NaN
     // when the delta is exactly zero -- and it is zero on the first tick, before any frame has
     // elapsed. That NaN gets integrated into the script's own state and never washes out.
-    return JS_NewFloat64 (ctx, std::max (g_Time - g_TimeLast, 0.0001f));
+    return JS_NewFloat64 (ctx, std::max (engine->getScene ().getDeltaTime (), 0.0001f));
 }
 
-JSValue engine_get_runtime (JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
-    return JS_NewFloat64 (ctx, g_Time);
+JSValue engine_get_runtime (
+    JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv, int magic, JSValueConst* data
+) {
+    const auto* engine = engineForGetter (ctx, data);
+    if (engine == nullptr) {
+	return JS_EXCEPTION;
+    }
+    // Entrance scripts belong to the wallpaper, not the age of the persistent process.
+    return JS_NewFloat64 (ctx, engine->getScene ().getTime ());
 }
 
 JSValue engine_get_daytime (JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
@@ -309,12 +322,12 @@ EngineObject::EngineObject (ScriptEngine& engine, Render::Wallpapers::CScene& sc
     JS_SetOpaque (this->m_instance, this);
     JS_DefinePropertyGetSet (
 	this->m_engine.getContext (), this->m_instance, JS_NewAtom (this->m_engine.getContext (), "frametime"),
-	JS_NewCFunction (this->m_engine.getContext (), engine_get_frametime, "get", 0),
+	JS_NewCFunctionData (this->m_engine.getContext (), engine_get_frametime, 0, 0, 1, &instanceId),
 	JS_NewCFunction (this->m_engine.getContext (), engine_set_value, "set", 1), JS_PROP_ENUMERABLE
     );
     JS_DefinePropertyGetSet (
 	this->m_engine.getContext (), this->m_instance, JS_NewAtom (this->m_engine.getContext (), "runtime"),
-	JS_NewCFunction (this->m_engine.getContext (), engine_get_runtime, "get", 0),
+	JS_NewCFunctionData (this->m_engine.getContext (), engine_get_runtime, 0, 0, 1, &instanceId),
 	JS_NewCFunction (this->m_engine.getContext (), engine_set_value, "set", 1), JS_PROP_ENUMERABLE
     );
     JS_DefinePropertyGetSet (
