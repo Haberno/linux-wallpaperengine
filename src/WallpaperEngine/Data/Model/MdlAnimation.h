@@ -9,6 +9,7 @@
 #include <glm/gtc/quaternion.hpp>
 #include <glm/mat4x4.hpp>
 #include <glm/vec3.hpp>
+#include "PropertyAnimation.h"
 
 namespace WallpaperEngine::Data::Model {
 struct MdlBone {
@@ -36,6 +37,8 @@ struct MdlAnimationClip {
     std::string mode = {};
     float fps = 0.0f;
     uint32_t frameCount = 0;
+    uint32_t flags = 0;
+    std::vector<PropertyAnimation::Event> events;
     std::vector<uint32_t> boneFlags = {};
     /** boneFrames[bone][frame], commonly frameCount + 1 entries for loop interpolation. */
     std::vector<std::vector<MdlBoneFrame>> boneFrames = {};

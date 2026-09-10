@@ -9,6 +9,7 @@
 #include <glm/gtc/matrix_inverse.hpp>
 
 #include "WallpaperEngine/Assets/AssetLocator.h"
+#include "WallpaperEngine/Data/JSON.h"
 #include "WallpaperEngine/Data/Model/Project.h"
 
 using namespace WallpaperEngine::Data::Parsers;
@@ -347,6 +348,57 @@ bool skipBoneScalarTracks (
     }
 }
 
+void readAnimationEvents (
+    const std::vector<char>& data, size_t offset, const size_t recordEnd, const int version,
+    const size_t skeletonBoneCount, MdlAnimationClip& animation
+) {
+    // Native MDLA loader: version-4 constraints, version-5 bounds, version-6
+    // scalar tracks, optional clip range (flags bit 0), then timed JSON markers.
+    // Consume complete records; never search sample bytes for event-looking JSON.
+    try {
+	if (version >= 4 && readValue<uint8_t> (data, offset, recordEnd) != 0) {
+	    for (size_t bone = 0; bone < skeletonBoneCount; ++bone) {
+		const auto flags = readValue<uint32_t> (data, offset, recordEnd);
+		if ((flags & 1) == 0) continue;
+		readValue<float> (data, offset, recordEnd);
+		const auto targets = readValue<uint16_t> (data, offset, recordEnd);
+		for (uint16_t target = 0; target < targets; ++target) {
+		    readValue<uint16_t> (data, offset, recordEnd);
+		    const auto bytes = readValue<uint32_t> (data, offset, recordEnd);
+		    if (bytes != (static_cast<size_t> (animation.frameCount) + 1) * sizeof (float)
+			|| bytes > recordEnd - offset) return;
+		    offset += bytes;
+		}
+	    }
+	}
+	if (version >= 5) {
+	    for (int component = 0; component < 6; ++component) readValue<float> (data, offset, recordEnd);
+	}
+	if (version >= 6 && !skipBoneScalarTracks (data, offset, recordEnd, animation)) return;
+	if ((animation.flags & 1) != 0) {
+	    readValue<uint16_t> (data, offset, recordEnd);
+	    for (int field = 0; field < 4; ++field) readValue<uint32_t> (data, offset, recordEnd);
+	}
+	const auto count = readValue<uint32_t> (data, offset, recordEnd);
+	if (count > (recordEnd - offset) / 5) return;
+	std::vector<PropertyAnimation::Event> events;
+	for (uint32_t i = 0; i < count; ++i) {
+	    const float time = readValue<float> (data, offset, recordEnd);
+	    const auto payload = WallpaperEngine::Data::JSON::JSON::parse (
+		readString (data, offset, recordEnd), nullptr, false
+	    );
+	    if (!std::isfinite (time) || !payload.is_object () || !payload.contains ("name")
+		|| !payload["name"].is_string ()) continue;
+	    const float frame = time * animation.fps;
+	    if (frame < 0.0f || frame > static_cast<float> (animation.frameCount) + 0.001f) continue;
+	    events.push_back ({ .frame = frame, .name = payload["name"].get<std::string> () });
+	}
+	if (offset == recordEnd) animation.events = std::move (events);
+    } catch (const std::exception&) {
+	// Keep usable bone data when a newer/unknown optional metadata encoding is present.
+    }
+}
+
 void parseAnimations (
     const std::vector<char>& data, const size_t sectionOffset, const std::string& filename, MdlAnimationData& result
 ) {
@@ -371,7 +423,7 @@ void parseAnimations (
 	animation.mode = readString (data, offset, sectionEnd);
 	animation.fps = readValue<float> (data, offset, sectionEnd);
 	animation.frameCount = readValue<uint32_t> (data, offset, sectionEnd);
-	readValue<uint32_t> (data, offset, sectionEnd);
+	animation.flags = readValue<uint32_t> (data, offset, sectionEnd);
 	const uint32_t boneCount = readValue<uint32_t> (data, offset, sectionEnd);
 	if (boneCount != 0 && boneCount != result.bones.size ()) {
 	    throw std::runtime_error ("animation bone count does not match the skeleton in " + filename);
@@ -409,16 +461,17 @@ void parseAnimations (
 	    skipBoneScalarTracks (data, offset, sectionEnd, animation);
 	}
 
-	result.animations.push_back (std::move (animation));
+	size_t recordEnd = sectionEnd;
 	if (index + 1 < animationCount) {
 	    const auto next = findNextAnimationRecord (data, offset, sectionEnd, result.bones.size ());
 	    if (!next.has_value ()) {
 		throw std::runtime_error ("could not locate the next animation record in " + filename);
 	    }
-	    offset = *next;
-	} else {
-	    offset = sectionEnd;
+	    recordEnd = *next;
 	}
+	readAnimationEvents (data, offset, recordEnd, version.back () - '0', result.bones.size (), animation);
+	result.animations.push_back (std::move (animation));
+	offset = recordEnd;
     }
 }
 } // namespace
