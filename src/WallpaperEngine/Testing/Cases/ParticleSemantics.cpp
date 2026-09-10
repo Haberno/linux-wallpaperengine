@@ -8,6 +8,7 @@
 #include <catch2/catch_test_macros.hpp>
 
 using WallpaperEngine::Render::Objects::calculateParticleEmissionRate;
+using WallpaperEngine::Render::Objects::calculateControlPointAttraction;
 using WallpaperEngine::Render::Objects::calculateParticleSimulationDelta;
 using WallpaperEngine::Render::Objects::calculateRopeTrailVisualValue;
 using WallpaperEngine::Render::Objects::convertParticleRotationForRender;
@@ -37,4 +38,18 @@ TEST_CASE ("rope trails use the live particle visual state", "[particle]") {
     CHECK (calculateRopeTrailVisualValue (0.25f, 0.0f, true) == Catch::Approx (0.0f));
     CHECK (calculateRopeTrailVisualValue (0.25f, 0.5f, true) == Catch::Approx (0.125f));
     CHECK (calculateRopeTrailVisualValue (0.25f, 1.0f, true) == Catch::Approx (0.25f));
+}
+
+TEST_CASE ("control point attraction fades through the full authored radius", "[particle]") {
+    // At three quarters of the radius, force must still act at one quarter strength.
+    CHECK (calculateControlPointAttraction ({ 750.0f, 0.0f, 0.0f }, 200.0f, 1000.0f, 0.1f).x
+	   == Catch::Approx (5.0f));
+    CHECK (calculateControlPointAttraction ({ 250.0f, 0.0f, 0.0f }, 200.0f, 1000.0f, 0.1f).x
+	   == Catch::Approx (15.0f));
+    CHECK (calculateControlPointAttraction ({ 0.0f, 0.0f, 750.0f }, -200.0f, 1000.0f, 0.1f).z
+	   == Catch::Approx (-5.0f));
+    CHECK (calculateControlPointAttraction ({ 1000.0f, 0.0f, 0.0f }, 200.0f, 1000.0f, 0.1f)
+	   == glm::vec3 (0.0f));
+    CHECK (calculateControlPointAttraction (glm::vec3 (0.0f), 200.0f, 1000.0f, 0.1f) == glm::vec3 (0.0f));
+    CHECK (calculateControlPointAttraction ({ 1.0f, 0.0f, 0.0f }, 200.0f, 0.0f, 0.1f) == glm::vec3 (0.0f));
 }
