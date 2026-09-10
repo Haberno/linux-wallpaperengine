@@ -145,6 +145,37 @@ TEST_CASE ("commented includes are ignored and spaced includes are expanded", "[
     CHECK_FALSE (translated.second.empty ());
 }
 
+TEST_CASE ("combo editor requirements do not enable other shader options", "[shader][combo][regression]") {
+    // The reference metadata reader stores only combo/default for [COMBO].
+    // Deformer Simulation leaves these child settings on while SHOW_LOCATOR
+    // is off; forcing the parent on replaces the image with an editor grid.
+    const std::string vertexSource
+	= "// [COMBO] {\"combo\":\"SHOW_LOCATOR\",\"default\":0}\n"
+	  "// [COMBO] {\"combo\":\"DEFORMER_LOCATOR\",\"default\":0,\"require\":{\"SHOW_LOCATOR\":1}}\n"
+	  "// [COMBO] {\"combo\":\"OVERLAY_LOCATOR\",\"default\":1,\"require\":{\"SHOW_LOCATOR\":1,\"DEFORMER_LOCATOR\":1}}\n"
+	  "void main() { gl_Position = vec4(float(SHOW_LOCATOR)); }\n";
+    const std::string fragmentSource
+	= "// [COMBO] {\"combo\":\"LIGHTING\",\"default\":1}\n"
+	  "// [COMBO] {\"combo\":\"RIMLIGHTING\",\"default\":0,\"require\":{\"LIGHTING\":1}}\n"
+	  "void main() { gl_FragColor = vec4(float(SHOW_LOCATOR + LIGHTING)); }\n";
+    for (const ComboMap combos : {
+	     ComboMap { { "DEFORMER_LOCATOR", 1 }, { "RIMLIGHTING", 1 }, { "LIGHTING", 0 } },
+	     ComboMap { { "DEFORMER_LOCATOR", 1 }, { "SHOW_LOCATOR", 0 }, { "LIGHTING", 0 } },
+	     ComboMap { { "SHOW_LOCATOR", 1 }, { "RIMLIGHTING", 1 }, { "LIGHTING", 1 } },
+	 }) {
+	const auto [vertex, fragment] = compileLinked (vertexSource, fragmentSource, combos);
+	const int locator = combos.contains ("SHOW_LOCATOR") ? combos.at ("SHOW_LOCATOR") : 0;
+	for (const auto& source : { vertex, fragment }) {
+	    CHECK (source.find ("#define SHOW_LOCATOR " + std::to_string (locator) + "\n") != std::string::npos);
+	    CHECK (source.find ("#define LIGHTING " + std::to_string (combos.at ("LIGHTING")) + "\n")
+		   != std::string::npos);
+	}
+	const auto translated = GLSLContext::get ().toGlsl (vertex, fragment);
+	CHECK_FALSE (translated.first.empty ());
+	CHECK_FALSE (translated.second.empty ());
+    }
+}
+
 TEST_CASE ("invalid combo names do not corrupt shader definitions", "[shader][combo][regression]") {
     for (const std::string metadata : { "{}", "{\"combo\":null}", "{\"combo\":false}", "{\"combo\":\"\"}",
 					"{\"combo\":\"1INVALID\"}", "{\"combo\":\"HAS SPACE\"}" }) {
