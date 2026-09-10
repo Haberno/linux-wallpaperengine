@@ -341,12 +341,11 @@ CText::CText (Wallpapers::CScene& scene, const Text& text) :
 	int passIndex = 0;
 	for (const auto& pass : effect->passOverrides) {
 	    for (const auto& [name, setting] : pass->constants) {
-		if (setting->value != nullptr && setting->value->getScriptSource ().has_value ()) {
-		    this->getScene ().getScriptEngine ().queueScript (
-			name + "_fx" + std::to_string (effect->id) + "_p" + std::to_string (passIndex) + "_"
-			    + std::to_string (this->getId ()),
-			*setting->value, *this
-		    );
+		if (setting->value != nullptr && (setting->value->getScriptSource ().has_value ()
+		    || setting->animation != nullptr)) {
+		    const auto key = name + "_fx" + std::to_string (effect->id) + "_p" + std::to_string (passIndex);
+		    registerProperty (key, *setting);
+		    if (setting->animation != nullptr) registerAnimation (key, *setting->animation);
 		}
 	    }
 	    ++passIndex;

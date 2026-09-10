@@ -384,6 +384,17 @@ void CPass::setupRenderReferenceUniforms () {
 }
 
 void CPass::setupRenderUniforms () {
+    const float time = m_renderable.getScene ().getTime ();
+    for (auto& [name, uniform] : m_animatedUniforms) {
+	const auto& animation = *uniform.setting->animation;
+	glm::vec4 value = uniform.setting->value->getVec4 ();
+	for (int channel = 0; channel < 4; ++channel) {
+	    value[channel] = animation.relative
+		? value[channel] + animation.evaluateChannel (channel, time, 0.0f)
+		: animation.evaluateChannel (channel, time, value[channel]);
+	}
+	uniform.sampled->update (value, DynamicValue::UpdateSource::Initialization);
+    }
     // add uniforms
     for (const auto& value : this->m_uniforms | std::views::values) {
 	switch (value->type) {
@@ -1264,7 +1275,7 @@ void CPass::setupShaderVariables () {
 	}
 
 	ShaderVariable* var = vertex == nullptr ? fragment : vertex;
-	this->addUniform (var, value->value.get ());
+	this->addUniform (var, *value);
 	this->m_constantUniforms.emplace (var->getName ());
     }
 
@@ -1277,12 +1288,24 @@ void CPass::setupShaderVariables () {
 	}
 
 	ShaderVariable* var = vertex == nullptr ? fragment : vertex;
-	this->addUniform (var, value->value.get ());
+	this->addUniform (var, *value);
 	this->m_constantUniforms.emplace (var->getName ());
     }
 }
 
 // define some basic methods for the template
+void CPass::addUniform (const ShaderVariable* value, const UserSetting& setting) {
+    m_animatedUniforms.erase (value->getName ());
+    if (setting.animation == nullptr) {
+	addUniform (value, setting.value.get ());
+	return;
+    }
+    auto [entry, inserted] = m_animatedUniforms.emplace (value->getName (), AnimatedUniform {
+	.setting = &setting, .sampled = std::make_unique<DynamicValue> (*setting.value)
+    });
+    addUniform (value, entry->second.sampled.get ());
+}
+
 void CPass::addUniform (ShaderVariable* value) {
     // no need to re-implement this, call the version that takes a CDynamicValue as second parameter
     // and that handles casting and everything

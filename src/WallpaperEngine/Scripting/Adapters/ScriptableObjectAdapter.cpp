@@ -774,6 +774,78 @@ static JSValue property_animation_controller (JSContext* ctx, JSValueConst layer
     return result;
 }
 
+static const std::vector<ImageEffectUniquePtr>* scriptable_effects (JSValueConst owner) {
+    const auto* container = scriptable_container (owner);
+    if (container == nullptr) return nullptr;
+    const auto& object = container->object.getObject ();
+    if (object.is<Image> ()) return &object.as<Image> ()->effects;
+    if (object.is<Text> ()) return &object.as<Text> ()->effects;
+    return nullptr;
+}
+
+static JSValue effect_material_get_animation (
+    JSContext* ctx, JSValueConst thisVal, int argc, JSValueConst* argv, int magic, JSValueConst* data
+) {
+    const auto* effects = scriptable_effects (data[0]);
+    int32_t effectIndex = -1, passIndex = -1;
+    if (effects == nullptr || argc < 1 || !JS_IsString (argv[0])
+	|| JS_ToInt32 (ctx, &effectIndex, data[1]) < 0 || JS_ToInt32 (ctx, &passIndex, data[2]) < 0
+	|| effectIndex < 0 || static_cast<size_t> (effectIndex) >= effects->size ()) return JS_UNDEFINED;
+    const auto& effect = *(*effects)[effectIndex];
+    if (passIndex < 0 || static_cast<size_t> (passIndex) >= effect.passOverrides.size ()) return JS_UNDEFINED;
+    const char* name = JS_ToCString (ctx, argv[0]);
+    if (name == nullptr) return JS_EXCEPTION;
+    ScopeGuard releaseName ([&] { JS_FreeCString (ctx, name); });
+    for (const auto& [property, setting] : effect.passOverrides[passIndex]->constants) {
+	if (setting->animation == nullptr || setting->animation->name != name) continue;
+	const auto key = property + "_fx" + std::to_string (effect.id) + "_p" + std::to_string (passIndex);
+	JSValue animationKey = JS_NewString (ctx, key.c_str ());
+	JSValue result = property_animation_controller (ctx, data[0], animationKey);
+	JS_FreeValue (ctx, animationKey);
+	return result;
+    }
+    return JS_UNDEFINED;
+}
+
+static JSValue effect_get_material (
+    JSContext* ctx, JSValueConst thisVal, int argc, JSValueConst* argv, int magic, JSValueConst* data
+) {
+    const auto* effects = scriptable_effects (data[0]);
+    int32_t effectIndex = -1, passIndex = -1;
+    if (effects == nullptr || argc < 1 || !JS_IsNumber (argv[0])
+	|| JS_ToInt32 (ctx, &effectIndex, data[1]) < 0 || JS_ToInt32 (ctx, &passIndex, argv[0]) < 0
+	|| effectIndex < 0 || static_cast<size_t> (effectIndex) >= effects->size ()) return JS_UNDEFINED;
+    const auto& effect = *(*effects)[effectIndex];
+    if (passIndex < 0 || static_cast<size_t> (passIndex) >= effect.passOverrides.size ()) return JS_UNDEFINED;
+    JSValue materialData[] = { data[0], data[1], argv[0] };
+    JSValue result = JS_NewObject (ctx);
+    JS_SetPropertyStr (ctx, result, "getAnimation",
+	JS_NewCFunctionData (ctx, effect_material_get_animation, 1, 0, 3, materialData));
+    return result;
+}
+
+static JSValue scriptable_get_effect (JSContext* ctx, JSValueConst owner, int argc, JSValueConst* argv) {
+    const auto* effects = scriptable_effects (owner);
+    if (effects == nullptr || argc < 1) return JS_UNDEFINED;
+    int32_t index = -1;
+    if (JS_IsNumber (argv[0])) {
+	if (JS_ToInt32 (ctx, &index, argv[0]) < 0) return JS_EXCEPTION;
+    } else if (JS_IsString (argv[0])) {
+	const char* name = JS_ToCString (ctx, argv[0]);
+	if (name == nullptr) return JS_EXCEPTION;
+	for (size_t i = 0; i < effects->size (); ++i) {
+	    if ((*effects)[i]->name == name) { index = static_cast<int32_t> (i); break; }
+	}
+	JS_FreeCString (ctx, name);
+    }
+    if (index < 0 || static_cast<size_t> (index) >= effects->size ()) return JS_UNDEFINED;
+    JSValue data[] = { owner, JS_NewInt32 (ctx, index) };
+    JSValue result = JS_NewObject (ctx);
+    JS_SetPropertyStr (ctx, result, "getMaterial", JS_NewCFunctionData (ctx, effect_get_material, 1, 0, 2, data));
+    JS_FreeValue (ctx, data[1]);
+    return result;
+}
+
 static JSValue scriptable_get_animation (JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
     if (auto* model = scriptable_model (this_val); model != nullptr && argc > 0) {
 	WallpaperEngine::Render::Objects::CModel::AnimationLayer* layer = nullptr;
@@ -1034,6 +1106,9 @@ JSValue scriptableobject_property_get (JSContext* ctx, JSValueConst obj_val, JSA
 
     if (std::strcmp (name, "getAnimation") == 0 || std::strcmp (name, "getAnimationLayer") == 0) {
 	return JS_NewCFunction (ctx, scriptable_get_animation, name, 1);
+    }
+    if (std::strcmp (name, "getEffect") == 0) {
+	return JS_NewCFunction (ctx, scriptable_get_effect, name, 1);
     }
     if (std::strcmp (name, "getTextureAnimation") == 0) {
 	return JS_NewCFunction (ctx, scriptable_get_texture_animation, name, 0);
