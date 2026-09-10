@@ -4,6 +4,8 @@
 #include <cmath>
 
 #include <glm/gtc/matrix_transform.hpp>
+#define GLM_ENABLE_EXPERIMENTAL
+#include <glm/gtx/quaternion.hpp>
 
 using namespace WallpaperEngine::Data::Model;
 
@@ -74,22 +76,156 @@ float sampleFrame (const MdlActiveAnimation& layer) {
     return frame;
 }
 
-MdlBoneFrame sampleBone (const MdlActiveAnimation& layer, const size_t bone) {
-    if (layer.animation == nullptr || bone >= layer.animation->boneFrames.size ()) {
-	return {};
-    }
-
-    const auto& frames = layer.animation->boneFrames[bone];
-    if (frames.empty ()) {
-	return {};
-    }
-
+MdlBoneFrame samplePose (const MdlActiveAnimation& layer, const std::vector<MdlBoneFrame>& frames) {
     const float frame = sampleFrame (layer);
     const auto firstFrame = static_cast<size_t> (frame);
     const float blend = frame - static_cast<float> (firstFrame);
     const auto& current = frames[std::min (firstFrame, frames.size () - 1)];
     const auto& next = frames[std::min (firstFrame + 1, frames.size () - 1)];
     return blendPose (current, next, blend);
+}
+
+void composeLayer (
+    MdlBoneFrame& pose, const MdlBoneFrame& reference, const MdlBoneFrame& sampled,
+    const MdlActiveAnimation& layer
+) {
+    const float weight = std::clamp (layer.weight, 0.0f, 1.0f);
+    if (layer.additive) {
+	pose.translation += (sampled.translation - reference.translation) * weight;
+	const glm::quat delta = glm::normalize (glm::inverse (reference.rotation) * sampled.rotation);
+	pose.rotation = glm::normalize (
+	    pose.rotation * glm::slerp (glm::quat (1.0f, 0.0f, 0.0f, 0.0f), delta, weight)
+	);
+	pose.scale += (sampled.scale - reference.scale) * weight;
+    } else {
+	pose = blendPose (pose, sampled, weight);
+    }
+}
+
+glm::vec3 directionOr (const glm::vec3& vector, const glm::vec3& fallback) {
+    const float length = glm::length (vector);
+    return length > 1e-6f ? vector / length : fallback;
+}
+
+/** Fixed-length, independent IK chains, as evaluated by the native 140271910 solver. */
+void applyBoneControls (
+    const MdlAnimationData& data, const std::vector<MdlActiveAnimation>& layers,
+    const std::vector<glm::mat4>& locals, MdlPose& pose
+) {
+    std::vector<MdlBoneFrame> controls;
+    for (size_t index = 0; index < data.controls.size (); ++index) {
+	const auto& control = data.controls[index];
+	const auto reference = matrixPose (control.referenceWorld.value_or (control.bindWorld));
+	auto value = reference;
+	for (const auto& layer : layers) {
+	    if (!layer.animation || layer.weight <= 0.0f || index >= layer.animation->controlFrames.size ())
+		continue;
+	    const auto& frames = layer.animation->controlFrames[index];
+	    if (!frames.empty ()) composeLayer (value, reference, samplePose (layer, frames), layer);
+	}
+	controls.push_back (value);
+    }
+    const auto findControl = [&] (const uint32_t bone, const uint32_t type) -> const MdlBoneFrame* {
+	for (size_t index = 0; index < data.controls.size (); ++index)
+	    if (data.controls[index].bone == bone && data.controls[index].type == type) return &controls[index];
+	return nullptr;
+    };
+    std::vector<bool> solved (data.bones.size (), false);
+    for (const auto& group : data.ikGroups) {
+	// Coupled branches, scalar dependencies, joint limits and physics need their
+	// own constraint pass. Do not approximate those rigs with an independent chain.
+	if (group.hasDependencies || group.nodes.size () != 1 || group.nodes.front ().branches.size () != 1)
+	    continue;
+	const auto& chain = group.nodes.front ().branches.front ();
+	if (chain.bones.size () < 2 || chain.flags != 1 || chain.bones.front () != group.root) continue;
+	const auto tip = chain.bones.back ();
+	const auto* target = findControl (tip, 0);
+	if (!target) continue;
+	bool valid = true;
+	for (size_t index = 0; index < chain.bones.size (); ++index) {
+	    const auto bone = chain.bones[index];
+	    if (bone >= data.bones.size () || bone >= data.boneLengths.size ()
+		|| bone >= data.boneDirections.size () || data.bones[bone].ikAngleLimits) {
+		valid = false;
+		break;
+	    }
+	    if (index && (data.bones[bone].parent != static_cast<int32_t> (chain.bones[index - 1])
+		|| data.boneLengths[bone] <= 1e-6f
+		|| !data.boneDirections[chain.bones[index - 1]].contains (bone))) valid = false;
+	}
+	if (!valid) continue;
+	std::vector<glm::vec3> points;
+	for (const auto bone : chain.bones) points.emplace_back (pose.worldBones[bone][3]);
+	const auto root = points.front ();
+	const auto* pole = findControl (tip, 1);
+	const size_t last = points.size () - 1;
+	for (int iteration = 0; iteration < 10; ++iteration) {
+	    glm::vec3 end = target->translation;
+	    const auto axis = directionOr (end - points.front (), glm::vec3 (1, 0, 0));
+	    const float distance = glm::length (end - points.front ());
+	    if (distance < chain.minLength) end += axis * (chain.minLength - distance);
+	    glm::vec3 poleOffset = pole ? pole->translation - end : glm::vec3 (0.0f);
+	    poleOffset -= axis * glm::dot (poleOffset, axis);
+	    const auto normal = directionOr (glm::cross (axis, poleOffset), glm::vec3 (0.0f));
+	    points.back () = end;
+	    float travelled = 0.0f;
+	    for (size_t index = last; index > 0; --index) {
+		glm::vec3 direction = points[index - 1] - points[index];
+		const float length = data.boneLengths[chain.bones[index]];
+		if (distance >= chain.maxLength) {
+		    direction = -axis;
+		} else if (index == last || travelled + length < chain.maxLength * 0.5f) {
+		    if (glm::dot (poleOffset, poleOffset) > 0.01f) direction -= normal * glm::dot (direction, normal);
+		    const float side = glm::dot (direction, poleOffset);
+		    if (side < 0.0f) direction -= 2.0f * poleOffset * side;
+		}
+		points[index - 1] = points[index] + directionOr (direction, -axis) * length;
+		travelled += length;
+	    }
+	    // A root attached to another bone stays pinned; a top-level chain root
+	    // follows its end control. Pinning every root stretches Miss Fortune's arm.
+	    if (data.bones[group.root].parent >= 0) points.front () = root;
+	    for (size_t index = 1; index <= last; ++index) {
+		points[index] = points[index - 1]
+		    + directionOr (points[index] - points[index - 1], axis) * data.boneLengths[chain.bones[index]];
+	    }
+	    const auto error = points.back () - target->translation;
+	    if (glm::dot (error, error) <= 0.1f) break;
+	}
+	for (size_t index = 0; index < last; ++index) {
+	    const auto bone = chain.bones[index];
+	    const auto reference = data.boneDirections[bone].at (chain.bones[index + 1]);
+	    const auto direction = directionOr (points[index + 1] - points[index], reference);
+	    const auto rotation = glm::rotation (directionOr (reference, direction), direction);
+	    pose.worldBones[bone] = glm::mat4_cast (rotation) * glm::inverse (data.bones[bone].inverseBindWorld);
+	}
+	const auto& endBone = data.bones[tip];
+	if (!endBone.ikFollowEnd) {
+	    auto rotation = target->rotation;
+	    const auto error = target->translation - points.back ();
+	    const float distance = glm::length (error);
+	    if (endBone.ikAimToTarget && distance > 1.0f) {
+		rotation = glm::slerp (rotation, glm::rotation (glm::vec3 (1, 0, 0), error / distance),
+		    std::clamp ((distance - 1.0f) / endBone.ikAimDistance, 0.0f, 1.0f));
+	    }
+	    pose.worldBones[tip] = glm::mat4_cast (glm::normalize (rotation));
+	} else if (last > 1) {
+	    pose.worldBones[tip] = pose.worldBones[chain.bones[last - 1]];
+	}
+	for (size_t index = 0; index <= last; ++index) {
+	    const auto bone = chain.bones[index];
+	    pose.worldBones[bone][3] = glm::vec4 (points[index], 1.0f);
+	    solved[bone] = true;
+	}
+	// Recompose descendants so the gun and its attachment follow the same wrist.
+	for (size_t bone = 0; bone < data.bones.size (); ++bone) {
+	    if (solved[bone]) continue;
+	    const auto parent = data.bones[bone].parent;
+	    pose.worldBones[bone] = parent >= 0 ? pose.worldBones[parent] * locals[bone] : locals[bone];
+	}
+    }
+    for (size_t bone = 0; bone < data.bones.size (); ++bone)
+	pose.skinBones[bone] = pose.worldBones[bone] * data.bones[bone].inverseBindWorld;
 }
 
 /**
@@ -131,6 +267,8 @@ MdlPose MdlAnimationEvaluator::evaluate (
     MdlPose pose;
     pose.worldBones.resize (animationData.bones.size ());
     pose.skinBones.resize (animationData.bones.size ());
+    std::vector<glm::mat4> locals;
+    if (!animationData.ikGroups.empty ()) locals.resize (animationData.bones.size ());
 
     for (size_t bone = 0; bone < animationData.bones.size (); bone++) {
 	const MdlBoneFrame bind = matrixPose (animationData.bones[bone].bindLocal);
@@ -147,29 +285,18 @@ MdlPose MdlAnimationEvaluator::evaluate (
 		continue;
 	    }
 
-	    const MdlBoneFrame sampled = sampleBone (layer, bone);
-	    const float weight = std::clamp (layer.weight, 0.0f, 1.0f);
-	    if (layer.additive) {
-		// The native evaluator keeps translation, rotation, and scale as separate
-		// arrays and gives every additive layer the same persistent reference
-		// buffer. Using raw MDLS here scatters constraint-resolved MDLS0002 bones;
-		// using each clip's frame zero cancels later one-shot entrance clips.
-		local.translation += (sampled.translation - reference.translation) * weight;
-		const glm::quat delta = glm::normalize (glm::inverse (reference.rotation) * sampled.rotation);
-		local.rotation = glm::normalize (
-		    local.rotation * glm::slerp (glm::quat (1.0f, 0.0f, 0.0f, 0.0f), delta, weight)
-		);
-		local.scale += (sampled.scale - reference.scale) * weight;
-	    } else {
-		local = blendPose (local, sampled, weight);
-	    }
+	    // Every layer uses the same reference and composes T/R/S separately.
+	    composeLayer (local, reference, samplePose (layer, frames), layer);
 	}
 
 	const auto parent = animationData.bones[bone].parent;
 	const glm::mat4 localMatrix = poseMatrix (local);
+	if (!locals.empty ()) locals[bone] = localMatrix;
 	pose.worldBones[bone] = parent >= 0 ? pose.worldBones[parent] * localMatrix : localMatrix;
 	pose.skinBones[bone] = pose.worldBones[bone] * animationData.bones[bone].inverseBindWorld;
     }
+
+    if (!animationData.ikGroups.empty ()) applyBoneControls (animationData, activeAnimations, locals, pose);
 
     // scalar blend tracks compose exactly like the bones do, one value per track row
     size_t blendRows = 0;
