@@ -25,6 +25,7 @@
 #include "WallpaperEngine/Render/Objects/CRenderable.h"
 #include "WallpaperEngine/Render/Objects/Effects/CPass.h"
 #include "WallpaperEngine/Render/Wallpapers/CScene.h"
+#include "WallpaperEngine/Scripting/ScriptEngine.h"
 
 using namespace WallpaperEngine::Render::Objects;
 
@@ -332,6 +333,24 @@ CText::CText (Wallpapers::CScene& scene, const Text& text) :
     this->registerProperty ("limitrows", *text.limitRows->value);
     this->registerProperty ("maxrows", *text.maxRows->value);
     this->registerProperty ("limituseellipsis", *text.limitUseEllipsis->value);
+
+    // Effect parameters carry property scripts just like image effects. Queue them
+    // once for this layer, so rebuilding changing glyphs does not restart fades.
+    for (const auto& effect : text.effects) {
+	int passIndex = 0;
+	for (const auto& pass : effect->passOverrides) {
+	    for (const auto& [name, setting] : pass->constants) {
+		if (setting->value != nullptr && setting->value->getScriptSource ().has_value ()) {
+		    this->getScene ().getScriptEngine ().queueScript (
+			name + "_fx" + std::to_string (effect->id) + "_p" + std::to_string (passIndex) + "_"
+			    + std::to_string (this->getId ()),
+			*setting->value, *this
+		    );
+		}
+	    }
+	    ++passIndex;
+	}
+    }
 }
 
 CText::~CText () {
