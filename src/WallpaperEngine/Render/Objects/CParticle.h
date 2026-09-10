@@ -34,6 +34,7 @@ constexpr uint32_t DEFAULT_MAX_PARTICLES = 1000;
  * Runtime particle instance state
  */
 struct ParticleInstance {
+    uint64_t serial = 0; // Stable across pool compaction; never reused by this emitter.
     struct TrailPoint {
 	glm::vec3 position { 0.0f };
     };
@@ -204,10 +205,24 @@ private:
 	std::unique_ptr<CParticle> renderer;
     };
     std::vector<ChildSystem> m_children;
+    struct FollowChildSystem {
+	ObjectUniquePtr definition;
+	const ParticleChild* settings = nullptr;
+	struct Instance {
+	    std::unique_ptr<CParticle> renderer;
+	    uint64_t parentSerial = 0;
+	};
+	std::vector<Instance> instances;
+    };
+    std::vector<FollowChildSystem> m_followChildren;
+    std::optional<glm::vec3> m_followPosition;
+    uint64_t m_nextParticleSerial = 0;
     size_t m_childSystemCount = 0; // Root-owned allocation budget for the entire tree.
     int m_controlPointStartIndex = 0;
 
     void setupChildren ();
+    void updateFollowChildren (uint32_t firstNewParticle);
+    [[nodiscard]] bool hasLivingParticles () const;
     [[nodiscard]] const ParticleInstanceOverride& getInstanceOverride () const;
 
     std::vector<ParticleInstance> m_particles;
