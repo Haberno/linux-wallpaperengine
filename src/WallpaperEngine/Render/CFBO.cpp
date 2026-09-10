@@ -136,6 +136,36 @@ CFBO::CFBO (
     this->m_frames.push_back (frame);
 }
 
+void CFBO::resize (uint32_t width, uint32_t height) {
+    width = std::max (width, 1u);
+    height = std::max (height, 1u);
+    if (m_resolution == glm::vec4 (width, height, width, height)) {
+	return;
+    }
+    glBindTexture (GL_TEXTURE_2D, m_texture);
+    glTexImage2D (
+	GL_TEXTURE_2D, 0, m_depthTexture ? GL_DEPTH_COMPONENT24 : GL_RGBA8, width, height, 0,
+	m_depthTexture ? GL_DEPTH_COMPONENT : GL_RGBA, m_depthTexture ? GL_UNSIGNED_INT : GL_UNSIGNED_BYTE, nullptr
+    );
+    if (m_depthbuffer != GL_NONE) {
+	glBindRenderbuffer (GL_RENDERBUFFER, m_depthbuffer);
+	glRenderbufferStorage (GL_RENDERBUFFER, GL_DEPTH_COMPONENT24, width, height);
+    }
+    m_resolution = { width, height, width, height };
+    m_frames.front ()->width1 = m_frames.front ()->width2 = width;
+    m_frames.front ()->height1 = m_frames.front ()->height2 = height;
+    s_liveGpuBytes.fetch_sub (m_approximateGpuBytes, std::memory_order_relaxed);
+    m_approximateGpuBytes = static_cast<size_t> (width) * height * (m_depthbuffer != GL_NONE ? 8 : 4);
+    s_liveGpuBytes.fetch_add (m_approximateGpuBytes, std::memory_order_relaxed);
+    {
+	std::lock_guard lock (s_liveFBOsMutex);
+	auto& info = s_liveFBOs.at (this);
+	info.width = width;
+	info.height = height;
+	info.bytes = m_approximateGpuBytes;
+    }
+}
+
 CFBO::~CFBO () {
     // free opengl texture and framebuffer
     glDeleteTextures (1, &this->m_texture);
