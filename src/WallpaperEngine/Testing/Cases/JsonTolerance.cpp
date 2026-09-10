@@ -53,6 +53,37 @@ TEST_CASE ("text parses authored width and row limits") {
     REQUIRE_FALSE (text->limitUseEllipsis->value->getBool ());
 }
 
+TEST_CASE ("image instances replace material texture defaults without changing sibling instances") {
+    auto filesystem = std::make_unique<Container> ();
+    filesystem->getVFS ().add (
+	"models/instance.json", R"({"material":"materials/instance.json","width":256,"height":256})"
+    );
+    filesystem->getVFS ().add (
+	"materials/instance.json", R"({"passes":[{"shader":"genericimage4",
+	    "textures":["util/white","normal"],"usertextures":["default_albedo","default_normal"]}]})"
+    );
+    Project project {};
+    project.assetLocator = std::make_unique<WallpaperEngine::Assets::AssetLocator> (std::move (filesystem));
+    const auto overridden = ObjectParser::parse (JSON::parse (R"({
+	"id":613,"name":"seaweed source","image":"models/instance.json",
+	"instance":{"textures":["seaweed",null,"extra"],"usertextures":["custom_albedo",null,"custom_extra"]}
+    })"), project);
+    const auto& pass = *overridden->as<Image> ()->model->material->passes.front ();
+    CHECK (pass.textures.at (0) == "seaweed");
+    CHECK (pass.textures.at (1) == "normal");
+    CHECK (pass.textures.at (2) == "extra");
+    CHECK (pass.usertextures.at (0) == "custom_albedo");
+    CHECK (pass.usertextures.at (1) == "default_normal");
+    CHECK (pass.usertextures.at (2) == "custom_extra");
+
+    const auto sibling = ObjectParser::parse (
+	JSON::parse (R"({"id":2,"name":"default source","image":"models/instance.json"})"), project
+    );
+    const auto& siblingPass = *sibling->as<Image> ()->model->material->passes.front ();
+    CHECK (siblingPass.textures.at (0) == "util/white");
+    CHECK (siblingPass.usertextures.at (0) == "default_albedo");
+}
+
 TEST_CASE ("optional tolerates authored type drift") {
     // workshop 3758354038 authors text "padding" as a vector string where older scenes
     // store a number; a mismatched optional must default, not std::terminate the engine
