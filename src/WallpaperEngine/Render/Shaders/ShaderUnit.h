@@ -122,8 +122,8 @@ private:
      */
     [[nodiscard]] std::string applyHeaderMacroCompatibility (std::string source) const;
     /**
-     * Makes v_TexCoord writable in fragment shaders by injecting a local variable alias at the
-     * top of main() that shadows the read-only varying input.
+     * Makes assigned fragment inputs writable with local copies at the start of main(),
+     * preserving the preprocessor conditions of their declarations.
      */
     [[nodiscard]] std::string applyFragmentWritableVaryings (std::string source) const;
     /**

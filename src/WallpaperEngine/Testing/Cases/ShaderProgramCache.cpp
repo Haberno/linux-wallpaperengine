@@ -1,4 +1,5 @@
 #include "WallpaperEngine/Render/Shaders/ShaderProgramCache.h"
+#include "WallpaperEngine/Render/Shaders/ShaderUnit.h"
 
 #include <GLFW/glfw3.h>
 #include <catch2/catch_test_macros.hpp>
@@ -40,6 +41,60 @@ void checkLinked (GLuint program) {
     REQUIRE (linked == GL_TRUE);
 }
 } // namespace
+
+TEST_CASE ("Writable fragment copies retain interpolated input values", "[.][gl][varying]") {
+    using namespace WallpaperEngine::Render::Shaders;
+    GLContext context;
+    ShaderProgramCache cache;
+    auto container = std::make_unique<WallpaperEngine::FileSystem::Container> ();
+    WallpaperEngine::Assets::AssetLocator assets (std::move (container));
+    const ShaderConstantMap constants;
+    const TextureMap textures;
+    const std::string declarations
+	= "varying vec2 v_Depth;\n#if WIDE\nvarying vec4 v_TexCoord;\n"
+	  "#else\nvarying vec2 v_TexCoord;\n#endif\nvarying float v_ReadOnly;\n";
+    GLuint vao = 0;
+    glGenVertexArrays (1, &vao);
+    glBindVertexArray (vao);
+    glViewport (0, 0, 1, 1);
+    for (const int wide : { 0, 1, 0 }) {
+	const ComboMap combos = { { "WIDE", wide } };
+	ShaderUnit vertexUnit (
+	    GLSLContext::UnitType_Vertex, "writable.vert",
+	    declarations
+		+ "void main() {\n#if WIDE\nv_TexCoord = vec4(0.5);\n"
+		  "#else\nv_TexCoord = vec2(0.5);\n#endif\n"
+		  "v_Depth = vec2(0.125, 0.375); v_ReadOnly = 1.0;\n"
+		  "gl_Position = vec4(float((gl_VertexID << 1) & 2) * 2.0 - 1.0, "
+		  "float(gl_VertexID & 2) * 2.0 - 1.0, 0.0, 1.0);\n}\n",
+	    assets, constants, textures, textures, combos, combos
+	);
+	ShaderUnit fragmentUnit (
+	    GLSLContext::UnitType_Fragment, "writable.frag",
+	    declarations + "void main() { v_Depth += vec2(0.125); v_TexCoord.xy *= 1.5;\n"
+			   "gl_FragColor = vec4(v_Depth, v_TexCoord.x, v_ReadOnly); }\n",
+	    assets, constants, textures, textures, combos, combos
+	);
+	vertexUnit.linkToUnit (&fragmentUnit);
+	fragmentUnit.linkToUnit (&vertexUnit);
+	const auto sources = GLSLContext::get ().toGlsl (vertexUnit.compile (), fragmentUnit.compile ());
+	const GLuint program = cache.createProgram (sources.first, sources.second);
+	checkLinked (program);
+	glUseProgram (program);
+	glDrawArrays (GL_TRIANGLES, 0, 3);
+	unsigned char pixel[4] = {};
+	glReadPixels (0, 0, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, pixel);
+	const int expected[] = { 64, 128, 191, 255 };
+	for (int i = 0; i < 4; ++i) {
+	    CHECK (int (pixel[i]) >= expected[i] - 1);
+	    CHECK (int (pixel[i]) <= expected[i] + 1);
+	}
+	glUseProgram (0);
+	glDeleteProgram (program);
+    }
+    glDeleteVertexArrays (1, &vao);
+    CHECK (glGetError () == GL_NO_ERROR);
+}
 
 // Explicit opt-in: build/output/tests '[gl]' requires a desktop graphics session.
 TEST_CASE ("Cached programs keep independent uniforms and include both stages in their key", "[.][gl]") {

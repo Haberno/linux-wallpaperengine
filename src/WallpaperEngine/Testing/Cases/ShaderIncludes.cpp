@@ -111,6 +111,63 @@ TEST_CASE ("continued shader lines are joined before metadata and GLSL parsing",
     }
 }
 
+TEST_CASE ("writable fragment inputs preserve conditional types across cached variants", "[shader][varying]") {
+    const std::string declarations
+	= "#if SHAPE == 1\nvarying vec4 v_TexCoord;\n"
+	  "#elif SHAPE == 2\nvarying vec3 v_TexCoord;\n"
+	  "#else\nvarying vec2 v_TexCoord;\n#endif\n"
+	  "varying vec2 v_Depth;\nvarying float v_ReadOnly;\n";
+    for (const int shape : { 0, 1, 2, 0 }) {
+	const auto [vertex, fragment] = compileLinked (
+	    declarations
+		+ "void main() {\n#if SHAPE == 1\nv_TexCoord = vec4(0.5);\n"
+		  "#elif SHAPE == 2\nv_TexCoord = vec3(0.5);\n#else\nv_TexCoord = vec2(0.5);\n#endif\n"
+		  "v_Depth = vec2(0.25); v_ReadOnly = 1.0; gl_Position = vec4(0.0);\n}\n",
+	    declarations
+		+ "void main() {\nv_Depth += vec2(0.125); v_TexCoord.xy *= 0.5;\n"
+		  "if (v_ReadOnly == 1.0) gl_FragColor = vec4(v_Depth, v_TexCoord.xy);\n}\n",
+	    { { "SHAPE", shape } }
+	);
+	CHECK (fragment.find ("float v_ReadOnly = v_ReadOnly;") == std::string::npos);
+	const auto translated = GLSLContext::get ().toGlsl (vertex, fragment);
+	CHECK_FALSE (translated.first.empty ());
+	CHECK_FALSE (translated.second.empty ());
+    }
+}
+
+TEST_CASE ("authored local copies of fragment inputs are left intact", "[shader][varying]") {
+    // Lens Flare Sun (Last Train, 2488626583) declares unused vec4 inputs
+    // then shadows them with scalar locals. Chromatic Aberration also makes
+    // its own copies; injecting another declaration would break both effects.
+    const auto [vertex, fragment] = compileLinked (
+	"varying vec4 timer;\nvarying vec4 rValue;\n"
+	"void main() { timer = vec4(0.0); rValue = vec4(0.0); gl_Position = vec4(0.0); }\n",
+	"varying vec4 timer;\nvarying vec4 rValue;\n"
+	"void main() { float timer = 0.25; vec4 rValue = vec4(0.5);\n"
+	"timer += 0.25; rValue.xy *= timer; gl_FragColor = rValue; }\n", {}
+    );
+    const auto translated = GLSLContext::get ().toGlsl (vertex, fragment);
+    CHECK_FALSE (translated.first.empty ());
+    CHECK_FALSE (translated.second.empty ());
+}
+
+TEST_CASE ("each conditional fragment entry point gets writable inputs", "[shader][varying]") {
+    for (const int mode : { 0, 1, 2 }) {
+	const auto [vertex, fragment] = compileLinked (
+	    "varying vec2 v_Depth;\nvoid main() { v_Depth = vec2(0.5); gl_Position = vec4(0.0); }\n",
+	    "varying vec2 v_Depth;\n"
+	    "#if MODE == 0\nvoid main() { float v_Depth = 0.5; gl_FragColor = vec4(v_Depth); }\n"
+	    "#elif MODE == 1\nvoid main() { /* } vec2 v_Depth; */\n"
+	    "// vec2 v_Depth = v_Depth;\nv_Depth += vec2(0.5); gl_FragColor = vec4(v_Depth, 0.0, 1.0); }\n"
+	    "#else\nvoid main() { v_Depth *= 0.5; gl_FragColor = vec4(v_Depth, 0.0, 1.0); }\n#endif\n",
+	    { { "MODE", mode } }
+	);
+	const auto translated = GLSLContext::get ().toGlsl (vertex, fragment);
+	CHECK_FALSE (translated.first.empty ());
+	CHECK_FALSE (translated.second.empty ());
+    }
+}
+
 TEST_CASE ("malformed includes fail at their own line", "[shader][include][regression]") {
     for (const std::string directive : { "#include", "#include test_ordering.h", "#include \"\"",
 					 "#include \"test_ordering.h", "#include \"test_ordering.h\" junk" }) {
