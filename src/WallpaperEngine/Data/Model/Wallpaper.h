@@ -40,6 +40,8 @@ public:
 };
 
 struct SceneData {
+    /** Authored HDR bloom mode; text overbrightness is disabled in ordinary LDR scenes. */
+    bool hdr = false;
     /** Automatically order blended 3D models from back to front. */
     bool transparentSorting;
     /** Preserve an explicitly authored layer order instead of automatic depth sorting. */

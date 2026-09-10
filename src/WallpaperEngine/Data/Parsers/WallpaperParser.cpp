@@ -149,6 +149,7 @@ SceneUniquePtr WallpaperParser::parseScene (const JSON& file, Project& project) 
             .filename = "",
             .project = project
         }, SceneData {
+            .hdr = general.optional ("hdr", false),
             .transparentSorting = general.optional ("transparentsorting", false),
             .customSortOrder = general.optional ("customsortorder", false),
             .clearEnabled = general.user ("clearenabled", properties, true),
