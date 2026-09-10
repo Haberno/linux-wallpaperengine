@@ -1374,7 +1374,8 @@ void CImage::setup () {
 	// Some have attempted to declare effects with visible set to false.
 	bool allEffectsInvisible = true;
 	for (const auto& cur : this->m_image.effects) {
-	    if (cur->visible->value->getBool ()) {
+	    if (cur->visible->value->getBool () || cur->visible->value->getScriptSource ().has_value ()
+		|| cur->visible->property != nullptr) {
 		allEffectsInvisible = false;
 		break;
 	    }
@@ -1412,17 +1413,24 @@ void CImage::setup () {
 		continue;
 	    }
 
-	    // do not add non-visible effects, this might need some adjustements tho as some effects might not be
-	    // visible but affect the output of the image...
-	    if (!cur->visible->value->getBool ()) {
+	    const bool dynamicVisibility = cur->visible->value->getScriptSource ().has_value ()
+		|| cur->visible->property != nullptr;
+	    if (dynamicVisibility) {
+		this->getScene ().getScriptEngine ().queueScript (
+		    "visible_fx" + std::to_string (cur->id) + "_" + std::to_string (getId ()),
+		    *cur->visible->value, *this
+		);
+	    }
+	    if (!cur->visible->value->getBool () && !dynamicVisibility) {
 		continue;
 	    }
+	    const size_t firstEffectPass = m_passes.size ();
 
 	    // Register any script-driven shader constants in this effect's pass overrides so their per-frame
 	    // scripts actually run. The script source is parsed onto the constant's DynamicValue, but unlike
 	    // object-level properties these effect constants are never queued — so e.g. a "rainbow" colour
 	    // cycle (a tint colour driven by a JS update()) stays frozen at its static fallback. Queue them
-	    // here (visible effects only) so tick() advances the value and CPass uploads the live result.
+	    // here so tick() advances the value and CPass uploads the live result.
 	    {
 		int passIndex = 0;
 		for (const auto& passOverride : cur->passOverrides) {
@@ -1510,6 +1518,11 @@ void CImage::setup () {
 		    }
 		}
 	    }
+	    if (dynamicVisibility) {
+		for (size_t index = firstEffectPass; index < m_passes.size (); ++index) {
+		    m_passVisibility.emplace (m_passes[index], cur->visible.get ());
+		}
+	    }
 	}
     }
 
@@ -1567,7 +1580,9 @@ void CImage::setup () {
     // manipulate a_Position in image space (e.g. pulse, foliagesway), so hijacking the last
     // effect pass with scene-space puppet geometry mangles the mesh (gojo in 3100265648);
     // a passthrough pass is position-neutral and safe to warp
-    if (this->m_hasPuppetMesh && this->m_passes.size () > 1) {
+    // A stable final pass also lets scripted effects switch without moving scene
+    // geometry or depth/blend state onto a different effect shader.
+    if ((this->m_hasPuppetMesh || !m_passVisibility.empty ()) && this->m_passes.size () > 1) {
 	const bool hasClipping = this->getImage ().model->puppetMesh.has_value ()
 	    && !this->getImage ().model->puppetMesh->clippingDescriptors.empty ();
 	this->m_materials.compatibilityMaterials.emplace_back (
@@ -1620,27 +1635,48 @@ void CImage::setup () {
 
     CRenderable::setup ();
 
-    this->setupPasses ();
+    this->updateEffectVisibility ();
     this->m_initialized = true;
 }
 
+void CImage::updateEffectVisibility () {
+    const auto enabled = [&] (Effects::CPass* pass) {
+	const auto entry = m_passVisibility.find (pass);
+	return entry == m_passVisibility.end () || entry->second->value->getBool ();
+    };
+    size_t active = 0;
+    bool changed = false;
+    for (auto* pass : m_passes) {
+	if (!enabled (pass)) continue;
+	changed |= active >= m_activePasses.size () || m_activePasses[active] != pass;
+	++active;
+    }
+    if (!changed && active == m_activePasses.size ()) return;
+    m_activePasses.clear ();
+    for (auto* pass : m_passes) {
+	if (enabled (pass)) m_activePasses.push_back (pass);
+    }
+    setupPasses ();
+}
+
 void CImage::setupPasses () {
+    m_currentMainFBO = m_mainFBO;
+    m_currentSubFBO = m_subFBO;
+    m_finalPassRouting.reset ();
+    m_finalPassDrawsToScene = false;
     // do a pass on everything and setup proper inputs and values
     std::shared_ptr<const CFBO> drawTo = this->m_currentMainFBO;
     std::shared_ptr<const TextureProvider> asInput
 	= this->m_puppetAlbedoFBO != nullptr ? this->m_puppetAlbedoFBO : this->getTexture ();
     GLuint texcoord = this->m_puppetAlbedoFBO != nullptr ? this->getTexCoordPass () : this->getTexCoordCopy ();
 
-    auto cur = this->m_passes.begin ();
-    auto end = this->m_passes.end ();
+    auto cur = this->m_activePasses.begin ();
+    auto end = this->m_activePasses.end ();
     bool first = true;
     bool inTargetEffectSequence = false;
     std::shared_ptr<const TextureProvider> effectInput = nullptr;
 
     for (; cur != end; ++cur) {
-	// TODO: PROPERLY CHECK EFFECT'S VISIBILITY AND TAKE IT INTO ACCOUNT
-	// TODO: THIS REQUIRES ON-THE-FLY EVALUATION OF EFFECTS VISIBILITY TO FIGURE OUT
-	// TODO: WHICH ONE IS THE LAST + A FEW OTHER THINGS
 	Effects::CPass* pass = *cur;
 	std::shared_ptr<const CFBO> prevDrawTo = drawTo;
 	bool writesToTarget = false;
@@ -1764,6 +1800,7 @@ void CImage::updateFinalPassVisibility () {
 	    );
 	    this->m_puppetFinalPassConfigured = true;
 	}
+	for (auto* clippingPass : m_puppetClippingPasses) clippingPass->setInput (route.input);
 	if (!this->m_hasPuppetClipping) {
 	    this->setupPuppetGeometryCallback (pass, route.samplesSourceTexture);
 	}
@@ -1822,6 +1859,7 @@ void CImage::render () {
 	return;
     }
 
+    updateEffectVisibility ();
     // Own and inherited visibility gate only the scene draw. Hidden image layers
     // still update their composite textures for model faces and effect inputs;
     // the dress in 3761619125 samples sources inside a hidden parent group.
@@ -1857,9 +1895,9 @@ void CImage::render () {
     glPushDebugGroup (GL_DEBUG_SOURCE_APPLICATION, 0, -1, str.c_str ());
 #endif /* DEBUG */
 
-    auto cur = this->m_passes.begin ();
+    auto cur = this->m_activePasses.begin ();
 
-    for (const auto end = this->m_passes.end (); cur != end; ++cur) {
+    for (const auto end = this->m_activePasses.end (); cur != end; ++cur) {
 	if (std::next (cur) == end && this->m_finalPassDrawsToScene) {
 	    if (this->m_hasPuppetClipping) {
 		this->renderPuppetClipping ();
