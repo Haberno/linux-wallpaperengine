@@ -1986,7 +1986,48 @@ const ComboMap& ShaderUnit::getCombos () const { return this->m_combos; }
 
 const ComboMap& ShaderUnit::getDiscoveredCombos () const { return this->m_discoveredCombos; }
 
-void ShaderUnit::linkToUnit (const ShaderUnit* unit) { this->m_link = unit; }
+void ShaderUnit::linkToUnit (const ShaderUnit* unit) {
+    this->m_link = unit;
+    if (unit == nullptr || this->m_type != GLSLContext::UnitType_Fragment) return;
+
+    // D3D keeps vertex and pixel constants separate. GLSL links equally named
+    // uniforms, even when their material controls differ. Foliage sway uses
+    // g_Strength for vertex displacement (default 100) and UV sway (default .3).
+    // Give conflicting fragment controls their own binding before translation.
+    std::map<std::string, std::string> renamed;
+    for (auto* parameter : this->m_parameters) {
+	for (const auto* linked : unit->getParameters ()) {
+	    if (parameter->getName () == linked->getName ()
+		&& parameter->getIdentifierName () != linked->getIdentifierName ()) {
+		const std::string original = parameter->getName ();
+		const std::string replacement = "_lweFragment_" + original;
+		renamed.emplace (original, replacement);
+		parameter->setName (replacement);
+		break;
+	    }
+	}
+    }
+    if (renamed.empty ()) return;
+
+    // Replace complete identifiers only; leave comments and material metadata
+    // intact. Applying the same map to declarations, macros and uses also keeps
+    // inactive combo branches valid without evaluating the preprocessor here.
+    const std::string code = maskShaderComments (this->m_preprocessed);
+    static const std::regex identifier (R"(\b[A-Za-z_][A-Za-z_0-9]*\b)");
+    std::string result;
+    size_t copied = 0;
+    for (auto it = std::sregex_iterator (code.begin (), code.end (), identifier);
+	 it != std::sregex_iterator (); ++it) {
+	const auto replacement = renamed.find (it->str ());
+	if (replacement == renamed.end ()) continue;
+	const size_t position = it->position ();
+	result.append (this->m_preprocessed, copied, position - copied);
+	result.append (replacement->second);
+	copied = position + it->length ();
+    }
+    result.append (this->m_preprocessed, copied);
+    this->m_preprocessed = std::move (result);
+}
 
 const ShaderUnit* ShaderUnit::getLinkedUnit () const { return this->m_link; }
 
