@@ -324,10 +324,11 @@ void parseSkeleton (
 	}
     }
 
-    // Revision 2 adds named control transforms after the bones. Their count
+    // The puppet revisions (2 and 4) add named controls after the bones. The
+    // separate legacy MDLS0003 layout has a different tail. Their count
     // determines the extra MDLA pose streams; they are not ordinary bone tracks
     // or scalar blend channels (native loader FUN_140261880, 1402625da).
-    if (version != "MDLS0001" && offset < sectionEnd) {
+    if (nameBeforeTransform && offset < sectionEnd) {
 	const auto controlCount = readValue<uint16_t> (data, offset, sectionEnd);
 	for (uint16_t index = 0; index < controlCount; ++index) {
 	    MdlBoneControl control;

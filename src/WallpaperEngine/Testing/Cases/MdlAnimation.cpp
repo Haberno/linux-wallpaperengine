@@ -253,6 +253,29 @@ TEST_CASE ("MDL bone controls retain their extra animation pose tracks", "[mdl][
     CHECK_THROWS (MdlAnimationParser::parse (data, "invalid-control.mdl"));
 }
 
+TEST_CASE ("Legacy MDLS0003 metadata is not a puppet control table", "[mdl][animation]") {
+    std::vector<char> data;
+    appendMarker (data, "MDLS0003");
+    const auto endOffset = data.size ();
+    appendValue<uint32_t> (data, 0);
+    appendValue<uint32_t> (data, 1);
+    appendValue<uint8_t> (data, 0);
+    appendValue<uint32_t> (data, 1);
+    appendValue<int32_t> (data, -1);
+    appendValue<uint32_t> (data, 64);
+    appendMatrix (data, glm::mat4 (1));
+    appendString (data, "root");
+    // This optional legacy tail starts with a byte flag, not a u16 control count.
+    appendValue<uint8_t> (data, 1);
+    appendMatrix (data, glm::mat4 (1));
+    patchU32 (data, endOffset, data.size ());
+    const auto parsed = MdlAnimationParser::parse (data, "legacy-3d.mdl");
+    REQUIRE (parsed.bones.size () == 1);
+    CHECK (parsed.bones.front ().name == "root");
+    CHECK (parsed.controls.empty ());
+    CHECK (parsed.ikGroups.empty ());
+}
+
 TEST_CASE ("MDLA events follow versioned tracks and cropped clip metadata", "[mdl][animation]") {
     auto data = makeAnimatedModelSections ();
     const std::string marker = "MDLA0006";
