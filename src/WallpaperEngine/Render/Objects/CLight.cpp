@@ -41,7 +41,7 @@ glm::vec3 CLight::getTubeEndPosition () const {
 }
 
 glm::vec3 CLight::getPremultipliedColor () const {
-    if (!this->m_light.groupVisible->value->getBool ()) {
+    if (!this->m_light.groupVisible->value->getBool () || !this->isVisibleThroughParents ()) {
 	return glm::vec3 (0.0f);
     }
 
