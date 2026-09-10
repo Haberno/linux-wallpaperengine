@@ -49,6 +49,7 @@ MdlBoneFrame blendPose (const MdlBoneFrame& from, const MdlBoneFrame& to, const 
 float sampleFrame (const MdlActiveAnimation& layer) {
     const auto& animation = *layer.animation;
     const float frameCount = static_cast<float> (animation.frameCount);
+    if (layer.frame.has_value ()) return std::clamp (*layer.frame, 0.0f, frameCount);
     float frame = layer.time * animation.fps;
 
     if (animation.mode == "single") {

@@ -242,6 +242,14 @@ TEST_CASE ("MDL animation evaluator interpolates and composes parent bones") {
     CHECK_FALSE (MdlAnimationEvaluator::attachmentTransform (animationData, pose.worldBones, "missing").has_value ());
 }
 
+TEST_CASE ("An explicit model playhead preserves the final frame of a looping source clip", "[mdl][animation]") {
+    const auto data = MdlAnimationParser::parse (makeAnimatedModelSections (), "playhead.mdl");
+    const auto wrapped = MdlAnimationEvaluator::evaluate (data, {{ .animation = &data.animations.front (), .time = 1.0f }});
+    const auto held = MdlAnimationEvaluator::evaluate (data, {{ .animation = &data.animations.front (), .frame = 1.0f }});
+    CHECK (wrapped.worldBones[0][3].x == Catch::Approx (0.0f));
+    CHECK (held.worldBones[0][3].x == Catch::Approx (2.0f));
+}
+
 TEST_CASE ("additive MDL entrance clips resolve against the shared reference pose") {
     MdlAnimationData animationData;
     const glm::mat4 bind = glm::translate (glm::mat4 (1.0f), glm::vec3 (10.0f, 20.0f, 0.0f));

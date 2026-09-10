@@ -22,10 +22,16 @@ public:
 
     const std::map<std::string, PropertyEntry>& getProperties () const;
     const std::map<std::string, PropertyAnimation*>& getAnimations () const { return m_animations; }
+    /** Synchronize playback and retire finished layers before event iteration starts. */
+    virtual void prepareAnimationEvents () { }
 
 protected:
     void registerProperty (const std::string& name, DynamicValue& value);
     void registerProperty (const std::string& name, const UserSetting& setting);
+    void registerAnimation (const std::string& key, PropertyAnimation& animation) {
+	m_animations.insert_or_assign (key, &animation);
+    }
+    void unregisterAnimation (const std::string& key) { m_animations.erase (key); }
 
 private:
     std::map<std::string, PropertyEntry> m_properties;

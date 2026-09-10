@@ -1009,10 +1009,14 @@ void ScriptEngine::tick () {
     for (const auto& [key, module] : m_scriptModules) {
 	if (module.initialized && module.object != nullptr) animatedObjects.insert (module.object);
     }
+    for (auto* object : m_scene.getObjectsByRenderOrder ()) {
+	if (auto* scriptable = dynamic_cast<ScriptableObject*> (object)) animatedObjects.insert (scriptable);
+    }
+    for (auto* object : animatedObjects) object->prepareAnimationEvents ();
     for (auto* object : animatedObjects) {
 	for (const auto& [name, animation] : object->getAnimations ()) {
 	    for (const auto& event : animation->takeEvents (m_scene.getTime ())) {
-		dispatchAnimationEvent (*object, event, name);
+		dispatchAnimationEvent (*object, event, animation->name.empty () ? name : animation->name);
 	    }
 	}
     }
