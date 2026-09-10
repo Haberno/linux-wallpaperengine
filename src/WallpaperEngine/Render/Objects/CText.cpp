@@ -1169,7 +1169,11 @@ void CText::render () {
 
     const glm::vec4 color = m_text.color->value->getVec4 ();
     const float alpha = m_text.alpha->value->getFloat ();
-    const float brightness = m_text.brightness->value->getFloat ();
+    // Native text draws (140257d70 / 140258050) multiply RGB by brightness
+    // only with the HDR bloom flag (0x2000). LDR projects may save zero here.
+    const auto& scene = getScene ().getScene ();
+    const float brightness = scene.hdr && scene.camera.bloom.enabled->value->getBool ()
+	? m_text.brightness->evaluateFloat (getScene ().getTime ()) : 1.0f;
 
     // A preceding hidden image can leave its composite FBO and viewport bound.
     // Direct text draws must select the active scene/composition target themselves.
