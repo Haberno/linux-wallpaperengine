@@ -1017,6 +1017,10 @@ JSValue scriptableobject_property_get (JSContext* ctx, JSValueConst obj_val, JSA
 	return JS_NewCFunction (ctx, scriptable_emit_particles, name, 1);
     }
 
+    // Scripts probe optional layer fields every frame. A missing field has
+    // always returned undefined here; avoid logging and throwing just to catch
+    // it below, which floods the log for unsupported fields such as solid.
+    if (!container->object.getProperties ().contains (name)) return JS_UNDEFINED;
     try {
 	// find the property inside, otherwise return undefined
 	auto& property = container->object.getProperty (name);
@@ -1087,6 +1091,7 @@ int scriptableobject_property_set (
 
     ScopeGuard guard ([=] { JS_FreeCString (ctx, name); });
 
+    if (!container->object.getProperties ().contains (name)) return 1;
     try {
 	auto& property = container->object.getProperty (name);
 
