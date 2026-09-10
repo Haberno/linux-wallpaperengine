@@ -257,6 +257,7 @@ private:
     glm::vec4 m_pos = {};
     glm::vec3 m_sceneCenter = {};
     glm::vec2 m_size = {};
+    glm::vec2 m_effectSize = {};
 
     std::array<GLfloat, 18> m_cachedSceneSpacePosition = {};
     std::array<GLfloat, 18> m_cachedCopySpacePosition = {};
