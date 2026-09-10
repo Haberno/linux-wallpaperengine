@@ -1140,7 +1140,9 @@ void ScriptEngine::dispatchCursorEvents () {
 	    }
 	    this->m_runningModule = &module;
 	    const glm::vec3 local = localPosition.value_or (glm::vec3 (0.0f));
-	    JSValue event = this->makeCursorEvent (worldPosition, local);
+	    const glm::vec3 hit = inside && !m_scene.getCamera ().isOrthogonal ()
+		? glm::vec3 (image->resolveWorldMatrix () * glm::vec4 (local, 1.0f)) : worldPosition;
+	    JSValue event = this->makeCursorEvent (hit, local);
 	    JSValue args[] = { event };
 	    JSValue result = this->call (module.module, 1, args, hook);
 	    if (JS_IsException (result)) {
