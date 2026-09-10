@@ -11,6 +11,33 @@ from test_text_effect_targets import base_scene
 
 @unittest.skipUnless(os.environ.get('LWE_TEST_BINARY'), 'Set LWE_TEST_BINARY for graphics integration tests')
 class ParticleFollow(unittest.TestCase):
+    def test_large_first_child_pool_does_not_discard_its_siblings(self):
+        with tempfile.TemporaryDirectory(prefix='lwe-follow-siblings-') as directory:
+            root = Path(directory)
+            (root / 'particles').mkdir()
+            (root / 'materials').mkdir()
+            (root / 'materials/probe.json').write_text(json.dumps({'passes': [{
+                'shader': 'genericparticle', 'textures': ['util/white'],
+                'blending': 'translucent', 'cullmode': 'nocull',
+                'depthtest': 'disabled', 'depthwrite': 'disabled'}]}))
+            base = {'maxcount': 100, 'material': 'materials/probe.json',
+                    'emitter': [{'name': 'sphererandom', 'instantaneous': 1, 'rate': 0,
+                                 'distancemin': 0, 'distancemax': 0}],
+                    'initializer': [{'name': 'lifetimerandom', 'min': 10, 'max': 10},
+                                    {'name': 'sizerandom', 'min': 10, 'max': 10}]}
+            for index, position in enumerate((-40, 40)):
+                child = dict(base, emitter=[dict(base['emitter'][0], origin=f'{position} 0 0')])
+                (root / f'particles/child{index}.json').write_text(json.dumps(child))
+            parent = dict(base, initializer=[*base['initializer'],
+                          {'name': 'alpharandom', 'min': 0, 'max': 0}], children=[
+                {'name': f'particles/child{index}.json', 'type': 'eventfollow', 'maxcount': maximum}
+                for index, maximum in enumerate((100, 40))])
+            (root / 'particles/root.json').write_text(json.dumps(parent))
+            frame, _ = render_scene(self, root, base_scene([{
+                'id': 1, 'name': 'Parent', 'particle': 'particles/root.json', 'origin': '160 90 0'}]))
+            self.assertGreater(min(frame.getpixel((120, 90))), 240)
+            self.assertGreater(min(frame.getpixel((200, 90))), 240)
+
     def test_children_follow_births_and_finish_after_the_parent_dies(self):
         with tempfile.TemporaryDirectory(prefix='lwe-particle-follow-') as directory:
             for label, lifetime, child_lifetime, probability, visible in (
