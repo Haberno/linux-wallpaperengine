@@ -118,7 +118,6 @@ void ShaderUnit::preprocess () {
     this->preprocessIncludes ();
     this->preprocessRequires ();
     this->preprocessVariables ();
-    this->resolveComboRequires ();
     this->stripOrphanedEndifs ();
 
     // replace gl_FragColor with the equivalent
@@ -1595,8 +1594,8 @@ std::string ShaderUnit::applyFragmentWritableVaryings (std::string source) const
 
     // Build an uppercase combo map so we can evaluate #if/#ifdef/#ifndef guards the same way
     // the GLSL compiler does (combos are emitted as uppercase #defines). Insertion order follows
-    // this unit's own combo precedence (see resolveComboRequires's `effective` lambda): promoted
-    // > override > material > discovered, since emplace keeps the first value seen per key.
+    // this unit's own combo precedence: override > material > discovered,
+    // since emplace keeps the first value seen per key.
     std::map<std::string, int> upperCombos;
     const auto insertUpper = [&] (const ComboMap& map) {
 	for (const auto& [k, v] : map) {
@@ -1605,7 +1604,6 @@ std::string ShaderUnit::applyFragmentWritableVaryings (std::string source) const
 	    upperCombos.emplace (up, v);
 	}
     };
-    insertUpper (this->m_promotedCombos);
     insertUpper (this->m_overrideCombos);
     insertUpper (this->m_combos);
     insertUpper (this->m_discoveredCombos);
@@ -1715,20 +1713,9 @@ void ShaderUnit::parseComboConfiguration (const std::string& content, const int 
     // const auto type = data.find ("type");
     const auto defvalue = data.find ("default");
 
-    // Record the "require" dependency, e.g. {"combo":"RIMLIGHTING","require":{"LIGHTING":1}}. Wallpaper Engine
-    // only compiles a combo's code path when its requirements hold, so an enabled combo forces its requirement
-    // on (resolved later in resolveComboRequires once every combo's value is known).
-    if (const auto require = data.find ("require"); require != data.end () && require->is_object ()) {
-	ComboMap requirements;
-	for (const auto& [name, value] : require->items ()) {
-	    if (value.is_number_integer ()) {
-		requirements.emplace (name, value.get<int> ());
-	    }
-	}
-	if (!requirements.empty ()) {
-	    this->m_comboRequires.emplace (combo, std::move (requirements));
-	}
-    }
+    // "require" describes availability in the editor, not runtime overrides.
+    // The native [COMBO] reader retains combo/default only. A saved child
+    // option must not enable a parent option the author has disabled.
 
     // check the combos
     const auto entry = this->m_combos.find (combo);
@@ -1752,48 +1739,6 @@ void ShaderUnit::parseComboConfiguration (const std::string& content, const int 
 	    sLog.exception ("string combos are not supported in shader ", this->m_file, ". ", combo);
 	} else {
 	    sLog.exception ("cannot parse combo information ", combo, ". unknown type for ", defvalue->dump ());
-	}
-    }
-}
-
-void ShaderUnit::resolveComboRequires () {
-    if (this->m_comboRequires.empty ()) {
-	return;
-    }
-
-    // Effective value of a combo across the precedence chain (promoted > override > material > discovered).
-    const auto effective = [this] (const std::string& name) -> int {
-	if (const auto it = this->m_promotedCombos.find (name); it != this->m_promotedCombos.end ()) {
-	    return it->second;
-	}
-	if (const auto it = this->m_overrideCombos.find (name); it != this->m_overrideCombos.end ()) {
-	    return it->second;
-	}
-	if (const auto it = this->m_combos.find (name); it != this->m_combos.end ()) {
-	    return it->second;
-	}
-	if (const auto it = this->m_discoveredCombos.find (name); it != this->m_discoveredCombos.end ()) {
-	    return it->second;
-	}
-	return 0;
-    };
-
-    // Fixed-point iteration so transitive requirements (A requires B requires C) all resolve. The combo set
-    // is tiny, so the bounded loop is cheap; the guard just prevents a cyclic annotation from spinning.
-    constexpr int kMaxComboRequireIterations = 16;
-    bool changed = true;
-    for (int guard = 0; changed && guard < kMaxComboRequireIterations; ++guard) {
-	changed = false;
-	for (const auto& [combo, requirements] : this->m_comboRequires) {
-	    if (effective (combo) == 0) {
-		continue; // combo disabled -> its requirements do not apply
-	    }
-	    for (const auto& [required, value] : requirements) {
-		if (effective (required) != value) {
-		    this->m_promotedCombos.insert_or_assign (required, value);
-		    changed = true;
-		}
-	    }
 	}
     }
 }
@@ -2037,8 +1982,6 @@ const ComboMap& ShaderUnit::getCombos () const { return this->m_combos; }
 
 const ComboMap& ShaderUnit::getDiscoveredCombos () const { return this->m_discoveredCombos; }
 
-const ComboMap& ShaderUnit::getPromotedCombos () const { return this->m_promotedCombos; }
-
 void ShaderUnit::linkToUnit (const ShaderUnit* unit) { this->m_link = unit; }
 
 const ShaderUnit* ShaderUnit::getLinkedUnit () const { return this->m_link; }
@@ -2057,29 +2000,6 @@ const std::string& ShaderUnit::compile () {
     }
 
     std::map<std::string, bool> addedCombos;
-
-    // Combos forced on by the [COMBO] "require" chain come first so they win over the material/override values.
-    // The linked unit's promotions are emitted too: the [COMBO] annotations live in one unit (usually the
-    // fragment) but the #if guards span both, so vertex and fragment must agree on the promoted combo values or
-    // their varyings desync and the program fails to link.
-    const ComboMap* promotedSets[] = {
-	&this->m_promotedCombos,
-	this->m_link != nullptr ? &this->m_link->getPromotedCombos () : nullptr,
-    };
-    for (const ComboMap* promoted : promotedSets) {
-	if (promoted == nullptr) {
-	    continue;
-	}
-	for (const auto& [name, value] : *promoted) {
-	    std::string uppercase;
-	    std::ranges::transform (name, std::back_inserter (uppercase), ::toupper);
-
-	    if (!addedCombos.contains (uppercase)) {
-		this->m_final += comboDefinition (uppercase, value);
-		addedCombos.emplace (uppercase, true);
-	    }
-	}
-    }
 
     for (const auto& [name, value] : this->m_overrideCombos) {
 	std::string uppercase;
