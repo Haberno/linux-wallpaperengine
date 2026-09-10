@@ -54,6 +54,7 @@ public:
 	/** Cleared after an authored update hook throws, preventing per-frame retries/log spam. */
 	bool updateEnabled = true;
 	bool animationEvents = false;
+	std::string animationScope;
 	bool cursorEvents = false;
 	bool cursorInside = false;
 	bool cursorPressedInside = false;
@@ -121,7 +122,7 @@ public:
      */
     void tick ();
     void dispatchAnimationEvent (ScriptableObject& object, const PropertyAnimation::Event& event,
-	const std::string& animationName);
+	const std::string& animationName, const std::string& animationScope = {});
 
     // -------------------------------------------------------------------
     // Layer-script API (Phase 2 — dynamic text)
