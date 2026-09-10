@@ -654,6 +654,8 @@ struct TextData {
     UserSettingUniquePtr brightness;
     /** Effects applied over the rendered text, same pipeline as image effects */
     std::vector<ImageEffectUniquePtr> effects;
+    /** Blend the finished glyph/effect surface with the scene behind it. */
+    UserSettingUniquePtr colorBlendMode;
     UserSettingUniquePtr limitWidth;
     UserSettingUniquePtr maxWidth;
     UserSettingUniquePtr limitRows;

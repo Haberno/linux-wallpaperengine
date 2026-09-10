@@ -323,6 +323,7 @@ CText::CText (Wallpapers::CScene& scene, const Text& text) :
     CObject (scene, text), ScriptableObject (scene, text), m_text (text) {
     this->registerProperty ("color", *text.color->value);
     this->registerProperty ("alpha", *text.alpha->value);
+    this->registerProperty ("colorBlendMode", *text.colorBlendMode);
     this->registerProperty ("origin", *text.origin->value);
     this->registerProperty ("scale", *text.scale->value);
     this->registerProperty ("visible", *text.visible->value);
@@ -396,7 +397,7 @@ void CText::setup () {
     const bool sampledByLayer = std::ranges::any_of (getScene ().getScene ().objects, [this] (const auto& object) {
         return std::ranges::find (object->dependencies, getId ()) != object->dependencies.end ();
     });
-    if (!m_text.effects.empty () || sampledByLayer) {
+    if (!m_text.effects.empty () || sampledByLayer || m_text.colorBlendMode->value->getInt () != 0) {
 	try {
 	    setupEffectChain ();
 	} catch (const std::exception& e) {
@@ -597,10 +598,42 @@ void CText::setupEffectChain () {
     glBindBuffer (GL_ARRAY_BUFFER, m_compositeVbo);
     glBufferData (GL_ARRAY_BUFFER, sizeof (quad), quad, GL_STATIC_DRAW);
 
+    m_colorBlendMode = m_text.colorBlendMode->value->getInt ();
+    if (m_colorBlendMode > 0) {
+	m_colorBlendProvider = std::make_shared<FBOProvider> (&getScene ());
+	// All text draws are sequential. Share one scene snapshot instead of keeping
+	// a full-resolution copy for every clock/date/media label.
+	m_blendBackground = getScene ().find ("_rt_TextBlendBackground");
+	if (!m_blendBackground) {
+	    const auto target = getScene ().getFBO ();
+	    const glm::vec2 size (target->getRealWidth (), target->getRealHeight ());
+	    m_blendBackground = getScene ().create (
+		"_rt_TextBlendBackground", TextureFormat_ARGB8888, TextureFlags_ClampUVs, 1.0f, size, size
+	    );
+	}
+	m_colorBlendProvider->alias ("_rt_FullFrameBuffer", m_blendBackground);
+	m_colorBlendOverride = std::make_unique<ImageEffectPassOverride> ();
+	m_colorBlendOverride->combos["BLENDMODE"] = m_colorBlendMode;
+	static const TextureMap blendBinds { { 0, "previous" } };
+	m_colorBlendPass = std::make_unique<Effects::CPass> (
+	    *m_effectHost, m_colorBlendProvider, **m_effectMaterial->passes.begin (),
+	    *m_colorBlendOverride, blendBinds, std::nullopt
+	);
+	m_colorBlendPass->setInput (m_publishedFBO);
+	m_colorBlendPass->setDestination (getScene ().getFBO ());
+	m_colorBlendPass->setPosition (m_ndcPosition);
+	m_colorBlendPass->setTexCoord (m_passTexCoord);
+	m_colorBlendPass->setModelViewProjectionMatrix (&m_colorBlendMVP);
+    }
     m_effectsEnabled = true;
 }
 
 void CText::destroyEffectChain () {
+    m_colorBlendPass.reset ();
+    m_colorBlendOverride.reset ();
+    m_colorBlendProvider.reset ();
+    m_blendBackground.reset ();
+    m_colorBlendMode = 0;
     for (const auto* pass : m_effectPasses) {
 	delete pass;
     }
@@ -704,7 +737,20 @@ void CText::renderEffectChain (const glm::mat4& mvp, const float brightness, con
     const auto sceneTarget = this->getScene ().getActiveRenderTarget ();
     glBindFramebuffer (GL_FRAMEBUFFER, sceneTarget->getFramebuffer ());
     glViewport (0, 0, sceneTarget->getRealWidth (), sceneTarget->getRealHeight ());
-    if (drawToScene) {
+    if (drawToScene && m_colorBlendPass) {
+	const auto width = sceneTarget->getRealWidth ();
+	const auto height = sceneTarget->getRealHeight ();
+	if (m_blendBackground->getRealWidth () != width || m_blendBackground->getRealHeight () != height) {
+	    m_blendBackground->resize (width, height);
+	}
+	glBindFramebuffer (GL_READ_FRAMEBUFFER, sceneTarget->getFramebuffer ());
+	glBindFramebuffer (GL_DRAW_FRAMEBUFFER, m_blendBackground->getFramebuffer ());
+	glBlitFramebuffer (0, 0, width, height, 0, 0, width, height, GL_COLOR_BUFFER_BIT, GL_NEAREST);
+	m_colorBlendMVP = mvp
+	    * glm::translate (glm::mat4 (1.0f), glm::vec3 (m_effectCompositeOffset, 0.0f))
+	    * glm::scale (glm::mat4 (1.0f), glm::vec3 (m_effectSurface * 0.5f, 1.0f));
+	m_colorBlendPass->render ();
+    } else if (drawToScene) {
         glEnable (GL_BLEND);
         glBlendFunc (GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
         glUniformMatrix4fv (m_cuMVP, 1, GL_FALSE, glm::value_ptr (mvp));
@@ -1109,7 +1155,7 @@ void CText::render () {
     // Native text regenerates its tight effect target when dynamic glyph metrics change.
     // Rebuilding here keeps scripted clocks at native resolution instead of reserving a
     // larger editor-size surface whose UV scale changes authored effects.
-    if (rebuiltGlyphs && m_effectsEnabled) {
+    if ((rebuiltGlyphs && m_effectsEnabled) || m_text.colorBlendMode->value->getInt () != m_colorBlendMode) {
 	destroyEffectChain ();
 	try {
 	    setupEffectChain ();
