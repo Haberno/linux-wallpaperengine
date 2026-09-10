@@ -821,7 +821,7 @@ ParticleInitializerUniquePtr ObjectParser::parseParticleInitializer (const JSON&
 	);
     } else if (name == "velocityrandom") {
 	return std::make_unique<VelocityRandomInitializer> (
-	    it.user ("min", properties, glm::vec3 (-32.0f)), it.user ("max", properties, glm::vec3 (32.0f))
+	    it.user ("min", properties, glm::vec3 (0.0f)), it.user ("max", properties, glm::vec3 (0.0f))
 	);
     } else if (name == "rotationrandom") {
 	return std::make_unique<RotationRandomInitializer> (
