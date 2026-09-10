@@ -276,6 +276,58 @@ TEST_CASE ("Legacy MDLS0003 metadata is not a puppet control table", "[mdl][anim
     CHECK (parsed.ikGroups.empty ());
 }
 
+TEST_CASE ("MDLS reference transforms survive parsing with or without controls", "[mdl][animation]") {
+    for (const auto* version : { "MDLS0002", "MDLS0004" }) {
+	for (const uint16_t controlCount : { 0, 1 }) {
+	    for (const bool hasReference : { false, true }) {
+		CAPTURE (version, controlCount, hasReference);
+		std::vector<char> data;
+		appendString (data, version);
+		const auto endOffset = data.size ();
+		appendValue<uint32_t> (data, 0);
+		appendValue<uint32_t> (data, 2);
+		for (int bone = 0; bone < 2; ++bone) {
+		    appendString (data, "bone");
+		    appendValue<uint32_t> (data, 1);
+		    appendValue<int32_t> (data, bone - 1);
+		    appendValue<uint32_t> (data, 64);
+		    appendMatrix (data, glm::translate (glm::mat4 (1), glm::vec3 (100 * (bone + 1), 0, 0)));
+		    appendString (data, "");
+		}
+		appendValue<uint16_t> (data, controlCount);
+		if (controlCount) {
+		    appendString (data, "tip");
+		    appendValue<uint32_t> (data, 1);
+		    appendValue<uint32_t> (data, 0);
+		    appendMatrix (data, glm::mat4 (1));
+		}
+		appendValue<uint8_t> (data, hasReference);
+		if (hasReference) {
+		    for (int bone = 0; bone < 2; ++bone)
+			appendMatrix (data, glm::translate (glm::mat4 (1), glm::vec3 (10 * (bone + 1), 0, 0)));
+		    if (controlCount)
+			appendMatrix (data, glm::translate (glm::mat4 (1), glm::vec3 (99, 0, 0)));
+		}
+		appendValue<uint32_t> (data, 0); // Dependencies.
+		appendValue<uint16_t> (data, 0); // Bone lengths.
+		appendValue<uint16_t> (data, 0); // IK groups.
+		patchU32 (data, endOffset, data.size ());
+		const auto parsed = MdlAnimationParser::parse (data, "reference.mdl");
+		REQUIRE (parsed.bones.size () == 2);
+		CHECK (parsed.bones[0].referenceLocal.has_value () == hasReference);
+		CHECK (parsed.bones[1].bindLocal[3].x == Catch::Approx (200));
+		CHECK (parsed.bones[1].inverseBindWorld[3].x == Catch::Approx (-300));
+		const auto pose = MdlAnimationEvaluator::evaluate (parsed, {});
+		CHECK (pose.worldBones[1][3].x == Catch::Approx (hasReference ? 30 : 300));
+		if (controlCount) {
+		    CHECK (parsed.controls[0].referenceWorld.has_value () == hasReference);
+		    if (hasReference) CHECK ((*parsed.controls[0].referenceWorld)[3].x == Catch::Approx (99));
+		}
+	    }
+	}
+    }
+}
+
 TEST_CASE ("MDLA events follow versioned tracks and cropped clip metadata", "[mdl][animation]") {
     auto data = makeAnimatedModelSections ();
     const std::string marker = "MDLA0006";
@@ -513,6 +565,8 @@ TEST_CASE ("additive bone deltas are composed per component") {
 	    .name = "root",
 	    .bindLocal = bind,
 	    .inverseBindWorld = glm::inverse (bind),
+	    .referenceLocal = glm::translate (glm::mat4 (1), glm::vec3 (4, 8, 0))
+		* glm::scale (glm::mat4 (1), glm::vec3 (0.8f, 0.8f, 1)),
 	}
     );
 
@@ -548,7 +602,7 @@ TEST_CASE ("additive bone deltas are composed per component") {
     CHECK (glm::length (glm::vec3 (pose.worldBones[0][1])) == Catch::Approx (0.8f));
 }
 
-TEST_CASE ("legacy constrained puppets use one shared resolved reference pose") {
+TEST_CASE ("puppets use their explicit shared reference pose for partial additive layers") {
     MdlAnimationData animationData;
     const glm::mat4 bind = glm::translate (glm::mat4 (1.0f), { 1000.0f, -400.0f, 0.0f });
     animationData.bones.push_back (
@@ -556,6 +610,7 @@ TEST_CASE ("legacy constrained puppets use one shared resolved reference pose") 
 	    .name = "constrained",
 	    .bindLocal = bind,
 	    .inverseBindWorld = glm::inverse (bind),
+	    .referenceLocal = glm::translate (glm::mat4 (1), glm::vec3 (10, 20, 0)),
 	}
     );
     animationData.animations = {
@@ -596,4 +651,30 @@ TEST_CASE ("legacy constrained puppets use one shared resolved reference pose") 
     REQUIRE (pose.worldBones.size () == 1);
     CHECK (pose.worldBones[0][3].x == Catch::Approx (11.5f));
     CHECK (pose.worldBones[0][3].y == Catch::Approx (24.0f));
+}
+
+TEST_CASE ("an idle additive clip preserves parts positioned by a base animation", "[mdl][animation]") {
+    MdlAnimationData data;
+    const auto bind = glm::translate (glm::mat4 (1), glm::vec3 (1000, 0, 0));
+    data.bones.push_back ({ .name = "eye", .bindLocal = bind, .inverseBindWorld = glm::inverse (bind) });
+    const MdlAnimationClip base {
+	.id = 1, .mode = "single", .fps = 1, .frameCount = 1,
+	.boneFrames = { { { .translation = { 10, 0, 0 } }, { .translation = { 20, 0, 0 } } } },
+    };
+    const MdlAnimationClip idle {
+	.id = 2, .mode = "single", .fps = 1, .frameCount = 1,
+	.boneFrames = { { { .translation = { 1000, 0, 0 } }, { .translation = { 1000, 0, 0 } } } },
+    };
+    for (const bool reordered : { false, true }) {
+	data.animations = reordered ? std::vector { idle, base } : std::vector { base, idle };
+	for (const float time : { 0.0f, 0.5f, 1.0f }) {
+	    const auto pose = MdlAnimationEvaluator::evaluate (data, {
+		{ .animation = &base, .time = time },
+		{ .animation = &idle, .time = time, .additive = true },
+	    });
+	    CHECK (pose.worldBones[0][3].x == Catch::Approx (10 + 10 * time));
+	}
+	const auto rest = MdlAnimationEvaluator::evaluate (data, {});
+	CHECK (rest.worldBones[0][3].x == Catch::Approx (1000));
+    }
 }
