@@ -2023,7 +2023,7 @@ glm::vec2 CImage::resolveGeometrySize (float sceneWidth, float sceneHeight, glm:
 void CImage::updateScenePosition (
     const glm::vec3& origin, const glm::vec2& size, const glm::vec3& scale, float sceneWidth, float sceneHeight
 ) {
-    // 3D scenes: image quads are plain world-space quads centered on their local origin;
+    // 3D scenes: image quads use local coordinates with the authored alignment;
     // origin/angles/scale (and the parent chain) are applied by the world matrix instead
     // of being baked into the vertices, and there is no screen-space y-flip
     if (this->getScene ().getScene ().camera.projection.isPerspective) {
@@ -2031,6 +2031,20 @@ void CImage::updateScenePosition (
 	this->m_pos.z = size.x / 2.0f;
 	this->m_pos.y = -size.y / 2.0f;
 	this->m_pos.w = size.y / 2.0f;
+	if (this->m_image.alignment.find ("left") != std::string::npos) {
+	    this->m_pos.x += size.x / 2.0f;
+	    this->m_pos.z += size.x / 2.0f;
+	} else if (this->m_image.alignment.find ("right") != std::string::npos) {
+	    this->m_pos.x -= size.x / 2.0f;
+	    this->m_pos.z -= size.x / 2.0f;
+	}
+	if (this->m_image.alignment.find ("top") != std::string::npos) {
+	    this->m_pos.y -= size.y / 2.0f;
+	    this->m_pos.w -= size.y / 2.0f;
+	} else if (this->m_image.alignment.find ("bottom") != std::string::npos) {
+	    this->m_pos.y += size.y / 2.0f;
+	    this->m_pos.w += size.y / 2.0f;
+	}
 	return;
     }
 
