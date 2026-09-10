@@ -127,14 +127,14 @@ class CParticle final : public CRenderable, public Scripting::ScriptableObject {
     friend CObject;
 
 public:
-    CParticle (Wallpapers::CScene& scene, const Particle& particle);
+    CParticle (Wallpapers::CScene& scene, const Particle& particle, CParticle* parent = nullptr);
     ~CParticle ();
 
     void setup () override;
     void render () override;
     void update (float dt);
-    void play () { m_emitting = true; }
-    void pause () { m_emitting = false; }
+    void play ();
+    void pause ();
     void stop ();
     [[nodiscard]] bool isPlaying () const { return m_emitting; }
 
@@ -197,6 +197,18 @@ protected:
 
 private:
     const Particle& m_particle;
+    CParticle* m_particleParent = nullptr;
+    struct ChildSystem {
+	// The renderer holds references into the definition and must die first.
+	ObjectUniquePtr definition;
+	std::unique_ptr<CParticle> renderer;
+    };
+    std::vector<ChildSystem> m_children;
+    size_t m_childSystemCount = 0; // Root-owned allocation budget for the entire tree.
+    int m_controlPointStartIndex = 0;
+
+    void setupChildren ();
+    [[nodiscard]] const ParticleInstanceOverride& getInstanceOverride () const;
 
     std::vector<ParticleInstance> m_particles;
     uint32_t m_particleCount { 0 };

@@ -1,6 +1,7 @@
 #include "CParticle.h"
 
 #include "WallpaperEngine/Data/Model/Property.h"
+#include "WallpaperEngine/Data/Parsers/ObjectParser.h"
 #include "WallpaperEngine/Logging/Log.h"
 #include "WallpaperEngine/Maths.h"
 #include "WallpaperEngine/Render/Utils/NoiseUtils.h"
@@ -52,9 +53,9 @@ glm::vec3 WallpaperEngine::Render::Objects::calculateControlPointAttraction (
     return toCenter * (strength * deltaTime * falloff / distance);
 }
 
-CParticle::CParticle (Wallpapers::CScene& scene, const Particle& particle) :
+CParticle::CParticle (Wallpapers::CScene& scene, const Particle& particle, CParticle* parent) :
     CObject (scene, particle), CRenderable (scene, particle, *particle.material->material),
-    ScriptableObject (scene, particle), m_particle (particle) {
+    ScriptableObject (scene, particle), m_particle (particle), m_particleParent (parent) {
     this->registerProperty ("scale", *particle.scale->value);
     this->registerProperty ("angles", *particle.angles->value);
     this->registerProperty ("visible", *particle.visible->value);
@@ -217,7 +218,7 @@ void CParticle::setup () {
     // those offsets are in scene coordinates (top-left origin, y-down) and take priority
     // over the particle defaults; convert to the centered y-up space the sim runs in,
     // mirroring the origin conversion above
-    for (const auto& [id, offset] : m_particle.instanceOverride.controlPointOffsets) {
+    for (const auto& [id, offset] : getInstanceOverride ().controlPointOffsets) {
 	if (id >= 0 && id < PARTICLE_CONTROL_POINT_COUNT) {
 	    const glm::vec3 centered {
 		offset.x - m_lastScreenWidth / 2.0f,
@@ -233,7 +234,54 @@ void CParticle::setup () {
 	}
     }
 
+    setupChildren ();
     m_initialized = true;
+}
+
+const ParticleInstanceOverride& CParticle::getInstanceOverride () const {
+    return m_particleParent ? m_particleParent->getInstanceOverride () : m_particle.instanceOverride;
+}
+
+void CParticle::setupChildren () {
+    for (const auto& child : m_particle.children) {
+	if (child.type != "static" || child.particleFile.empty ()) {
+	    continue;
+	}
+	bool recursive = false;
+	int depth = 0;
+	CParticle* root = this;
+	for (auto* ancestor = this; ancestor; ancestor = ancestor->m_particleParent) {
+	    root = ancestor;
+	    recursive |= ancestor->m_particle.particleFile == child.particleFile;
+	    ++depth;
+	}
+	if (recursive || depth >= 8 || root->m_childSystemCount >= 64) {
+	    sLog.error ("Skipping recursive or excessive particle child: ", child.particleFile);
+	    continue;
+	}
+	++root->m_childSystemCount;
+	try {
+	    using WallpaperEngine::Data::JSON::JSON;
+	    auto definition = WallpaperEngine::Data::Parsers::ObjectParser::parse (
+		JSON { { "id", -1 }, { "name", child.name }, { "particle", child.particleFile } },
+		getScene ().getScene ().project
+	    );
+	    auto* particle = definition->as<Particle> ();
+	    if (!particle || !particle->material || !particle->material->material
+		|| particle->material->material->passes.empty ()) {
+		continue;
+	    }
+	    particle->origin->value->update (child.origin, DynamicValue::UpdateSource::Initialization);
+	    particle->angles->value->update (child.angles, DynamicValue::UpdateSource::Initialization);
+	    particle->scale->value->update (child.scale, DynamicValue::UpdateSource::Initialization);
+	    auto renderer = std::make_unique<CParticle> (getScene (), *particle, this);
+	    renderer->m_controlPointStartIndex = child.controlPointStartIndex;
+	    renderer->setup ();
+	    m_children.push_back ({ std::move (definition), std::move (renderer) });
+	} catch (const std::exception& error) {
+	    sLog.error ("Cannot load child particle system: ", child.particleFile, " - ", error.what ());
+	}
+    }
 }
 
 void CParticle::render () {
@@ -241,17 +289,9 @@ void CParticle::render () {
 	return;
     }
 
-    // Initialize time on first render to avoid huge dt spike
+    // All children start with the parent, including systems with no root emitter.
     if (m_time == 0.0) {
 	m_time = g_Time;
-	// Skip update on first frame to avoid weird initial burst
-	// This ensures all particles start from a clean state
-	if (m_useRopeRenderer) {
-	    renderRope ();
-	} else {
-	    renderSprites ();
-	}
-	return;
     }
 
     // Update particles
@@ -262,7 +302,7 @@ void CParticle::render () {
 	// Cap dt to prevent simulation instability
 	// Also provides more consistent behavior across different FPS
 	dt = std::min (dt, 0.1f);
-	dt = calculateParticleSimulationDelta (dt, m_particle.instanceOverride.rate->value->getFloat ());
+	dt = calculateParticleSimulationDelta (dt, getInstanceOverride ().rate->value->getFloat ());
 	if (dt > 0.0f) {
 	    m_simulationTime += dt;
 	    update (dt);
@@ -277,6 +317,23 @@ void CParticle::render () {
 	    renderSprites ();
 	}
     }
+    for (auto& child : m_children) {
+	child.renderer->render ();
+    }
+}
+
+void CParticle::play () {
+    m_emitting = true;
+    for (auto& child : m_children) {
+	child.renderer->play ();
+    }
+}
+
+void CParticle::pause () {
+    m_emitting = false;
+    for (auto& child : m_children) {
+	child.renderer->pause ();
+    }
 }
 
 void CParticle::stop () {
@@ -284,6 +341,9 @@ void CParticle::stop () {
     m_particleCount = 0;
     m_emitters.clear ();
     setupEmitters ();
+    for (auto& child : m_children) {
+	child.renderer->stop ();
+    }
 }
 
 void CParticle::update (float dt) {
@@ -310,7 +370,7 @@ void CParticle::update (float dt) {
 	// Instance override offsets are stored raw in scene coordinates; the centered
 	// values cached in m_controlPoints depend on the screen size, so redo the
 	// scene-to-centered conversion from setup() with the new dimensions
-	for (const auto& [id, offset] : m_particle.instanceOverride.controlPointOffsets) {
+	for (const auto& [id, offset] : getInstanceOverride ().controlPointOffsets) {
 	    if (id >= 0 && id < PARTICLE_CONTROL_POINT_COUNT) {
 		const glm::vec3 centered {
 		    offset.x - screenWidth / 2.0f,
@@ -348,6 +408,19 @@ void CParticle::update (float dt) {
 		// Convert to particle local space to prevent double transformation by model matrix
 		// Both world-space and local-space CPs are handled the same way now
 		cp.position = position - m_transformedOrigin;
+	    }
+	}
+    }
+
+    if (m_particleParent) {
+	const glm::mat4 flipY = glm::scale (glm::mat4 (1.0f), glm::vec3 (1.0f, -1.0f, 1.0f));
+	const glm::mat4 parentToLocal = glm::inverse (flipY * resolveWorldMatrix () * flipY);
+	for (size_t i = 0; i < m_controlPoints.size (); ++i) {
+	    const int source = static_cast<int> (i) + m_controlPointStartIndex;
+	    if (source >= 0 && source < static_cast<int> (m_particleParent->m_controlPoints.size ())) {
+		m_controlPoints[i].position = glm::vec3 (
+		    parentToLocal * glm::vec4 (m_particleParent->m_controlPoints[source].position, 1.0f)
+		);
 	    }
 	}
     }
@@ -483,22 +556,22 @@ const Particle& CParticle::getParticle () const { return m_particle; }
 
 const float& CParticle::getBrightness () const { return m_overbright; }
 
-const float& CParticle::getUserAlpha () const { return m_particle.instanceOverride.alpha->value->getFloat (); }
+const float& CParticle::getUserAlpha () const { return getInstanceOverride ().alpha->value->getFloat (); }
 
-const float& CParticle::getAlpha () const { return m_particle.instanceOverride.alpha->value->getFloat (); }
+const float& CParticle::getAlpha () const { return getInstanceOverride ().alpha->value->getFloat (); }
 
 const glm::vec3& CParticle::getColor () const {
     static const glm::vec3 defaultColor (1.0f);
-    if (m_particle.instanceOverride.color && m_particle.instanceOverride.color->value) {
-	return m_particle.instanceOverride.color->value->getVec3 ();
+    if (getInstanceOverride ().color && getInstanceOverride ().color->value) {
+	return getInstanceOverride ().color->value->getVec3 ();
     }
     return defaultColor;
 }
 
 const glm::vec4& CParticle::getColor4 () const {
     static const glm::vec4 defaultColor (1.0f);
-    if (m_particle.instanceOverride.color && m_particle.instanceOverride.color->value) {
-	return m_particle.instanceOverride.color->value->getVec4 ();
+    if (getInstanceOverride ().color && getInstanceOverride ().color->value) {
+	return getInstanceOverride ().color->value->getVec4 ();
     }
     return defaultColor;
 }
@@ -527,7 +600,7 @@ void CParticle::setupEmitters () {
 }
 
 EmitterFunc CParticle::createBoxEmitter (const ParticleEmitter& emitter) {
-    DynamicValue* countOverride = m_particle.instanceOverride.count->value.get ();
+    DynamicValue* countOverride = getInstanceOverride ().count->value.get ();
 
     glm::vec3 transformedEmitterOrigin = emitter.origin;
     transformedEmitterOrigin.y = -transformedEmitterOrigin.y;
@@ -651,10 +724,10 @@ EmitterFunc CParticle::createBoxEmitter (const ParticleEmitter& emitter) {
 		p.angularVelocity = glm::vec3 (0.0f);
 		p.angularAcceleration = glm::vec3 (0.0f);
 
-		p.color = glm::vec3 (1.0f) * m_particle.instanceOverride.colorn->value->getVec3 ();
-		p.alpha = 1.0f * m_particle.instanceOverride.alpha->value->getFloat ();
-		p.size = 20.0f * m_particle.instanceOverride.size->value->getFloat ();
-		p.lifetime = 1.0f * m_particle.instanceOverride.lifetime->value->getFloat ();
+		p.color = glm::vec3 (1.0f) * getInstanceOverride ().colorn->value->getVec3 ();
+		p.alpha = 1.0f * getInstanceOverride ().alpha->value->getFloat ();
+		p.size = 20.0f * getInstanceOverride ().size->value->getFloat ();
+		p.lifetime = 1.0f * getInstanceOverride ().lifetime->value->getFloat ();
 		p.age = 0.0f;
 		p.alive = true;
 		p.frame = -1.0f;
@@ -682,8 +755,8 @@ EmitterFunc CParticle::createBoxEmitter (const ParticleEmitter& emitter) {
 }
 
 EmitterFunc CParticle::createSphereEmitter (const ParticleEmitter& emitter) {
-    DynamicValue* countOverride = m_particle.instanceOverride.count->value.get ();
-    float lifetime = 1.0f * m_particle.instanceOverride.lifetime->value->getFloat ();
+    DynamicValue* countOverride = getInstanceOverride ().count->value.get ();
+    float lifetime = 1.0f * getInstanceOverride ().lifetime->value->getFloat ();
 
     // Convert emitter origin from screen space (Y down) to centered space (Y up)
     glm::vec3 transformedEmitterOrigin = emitter.origin;
@@ -803,9 +876,9 @@ EmitterFunc CParticle::createSphereEmitter (const ParticleEmitter& emitter) {
 	    p.angularVelocity = glm::vec3 (0.0f);
 	    p.angularAcceleration = glm::vec3 (0.0f);
 
-	    p.color = glm::vec3 (1.0f) * m_particle.instanceOverride.colorn->value->getVec3 ();
-	    p.alpha = 1.0f * m_particle.instanceOverride.alpha->value->getFloat ();
-	    p.size = 20.0f * m_particle.instanceOverride.size->value->getFloat ();
+	    p.color = glm::vec3 (1.0f) * getInstanceOverride ().colorn->value->getVec3 ();
+	    p.alpha = 1.0f * getInstanceOverride ().alpha->value->getFloat ();
+	    p.size = 20.0f * getInstanceOverride ().size->value->getFloat ();
 	    p.lifetime = lifetime;
 	    p.age = 0.0f;
 	    p.alive = true;
@@ -877,7 +950,7 @@ void CParticle::setupInitializers () {
 InitializerFunc CParticle::createColorRandomInitializer (const ColorRandomInitializer& init) {
     DynamicValue* minValue = init.min->value.get ();
     DynamicValue* maxValue = init.max->value.get ();
-    DynamicValue* colorOverride = m_particle.instanceOverride.colorn->value.get ();
+    DynamicValue* colorOverride = getInstanceOverride ().colorn->value.get ();
 
     return [this, minValue, maxValue, colorOverride] (ParticleInstance& p) {
 	p.color = WallpaperEngine::Maths::randomVec3 (m_rng, minValue->getVec3 (), maxValue->getVec3 ())
@@ -890,7 +963,7 @@ InitializerFunc CParticle::createSizeRandomInitializer (const SizeRandomInitiali
     DynamicValue* minValue = init.min->value.get ();
     DynamicValue* maxValue = init.max->value.get ();
     DynamicValue* exponentValue = init.exponent->value.get ();
-    DynamicValue* sizeOverride = m_particle.instanceOverride.size->value.get ();
+    DynamicValue* sizeOverride = getInstanceOverride ().size->value.get ();
 
     return [this, minValue, maxValue, exponentValue, sizeOverride] (ParticleInstance& p) {
 	float t = WallpaperEngine::Maths::randomFloat (m_rng, 0.0f, 1.0f);
@@ -908,7 +981,7 @@ InitializerFunc CParticle::createSizeRandomInitializer (const SizeRandomInitiali
 InitializerFunc CParticle::createAlphaRandomInitializer (const AlphaRandomInitializer& init) {
     DynamicValue* minValue = init.min->value.get ();
     DynamicValue* maxValue = init.max->value.get ();
-    DynamicValue* alphaOverride = m_particle.instanceOverride.alpha->value.get ();
+    DynamicValue* alphaOverride = getInstanceOverride ().alpha->value.get ();
 
     return [this, minValue, maxValue, alphaOverride] (ParticleInstance& p) {
 	p.alpha = WallpaperEngine::Maths::randomFloat (m_rng, minValue->getFloat (), maxValue->getFloat ())
@@ -920,7 +993,7 @@ InitializerFunc CParticle::createAlphaRandomInitializer (const AlphaRandomInitia
 InitializerFunc CParticle::createLifetimeRandomInitializer (const LifetimeRandomInitializer& init) {
     DynamicValue* minValue = init.min->value.get ();
     DynamicValue* maxValue = init.max->value.get ();
-    DynamicValue* lifetimeOverride = m_particle.instanceOverride.lifetime->value.get ();
+    DynamicValue* lifetimeOverride = getInstanceOverride ().lifetime->value.get ();
 
     return [this, minValue, maxValue, lifetimeOverride] (ParticleInstance& p) {
 	p.lifetime = WallpaperEngine::Maths::randomFloat (m_rng, minValue->getFloat (), maxValue->getFloat ())
@@ -932,7 +1005,7 @@ InitializerFunc CParticle::createLifetimeRandomInitializer (const LifetimeRandom
 InitializerFunc CParticle::createVelocityRandomInitializer (const VelocityRandomInitializer& init) {
     DynamicValue* minValue = init.min->value.get ();
     DynamicValue* maxValue = init.max->value.get ();
-    DynamicValue* speedOverride = m_particle.instanceOverride.speed->value.get ();
+    DynamicValue* speedOverride = getInstanceOverride ().speed->value.get ();
 
     return [this, minValue, maxValue, speedOverride] (ParticleInstance& p) {
 	glm::vec3 vel = WallpaperEngine::Maths::randomVec3 (m_rng, minValue->getVec3 (), maxValue->getVec3 ())
@@ -945,7 +1018,7 @@ InitializerFunc CParticle::createVelocityRandomInitializer (const VelocityRandom
 InitializerFunc CParticle::createRotationRandomInitializer (const RotationRandomInitializer& init) {
     DynamicValue* minValue = init.min->value.get ();
     DynamicValue* maxValue = init.max->value.get ();
-    DynamicValue* speedOverride = m_particle.instanceOverride.speed->value.get ();
+    DynamicValue* speedOverride = getInstanceOverride ().speed->value.get ();
 
     return [this, minValue, maxValue, speedOverride] (ParticleInstance& p) {
 	p.rotation = WallpaperEngine::Maths::randomVec3 (m_rng, minValue->getVec3 (), maxValue->getVec3 ())
@@ -957,7 +1030,7 @@ InitializerFunc CParticle::createAngularVelocityRandomInitializer (const Angular
     DynamicValue* minValue = init.min->value.get ();
     DynamicValue* maxValue = init.max->value.get ();
     DynamicValue* exponentValue = init.exponent->value.get ();
-    DynamicValue* speedOverride = m_particle.instanceOverride.speed->value.get ();
+    DynamicValue* speedOverride = getInstanceOverride ().speed->value.get ();
 
     return [this, minValue, maxValue, exponentValue, speedOverride] (ParticleInstance& p) {
 	glm::vec3 minVec = minValue->getVec3 ();
@@ -989,7 +1062,7 @@ InitializerFunc CParticle::createTurbulentVelocityRandomInitializer (const Turbu
     DynamicValue* phaseMinVal = init.phaseMin->value.get ();
     DynamicValue* phaseMaxVal = init.phaseMax->value.get ();
     DynamicValue* rightVal = init.right->value.get ();
-    DynamicValue* speedOverride = m_particle.instanceOverride.speed->value.get ();
+    DynamicValue* speedOverride = getInstanceOverride ().speed->value.get ();
 
     return [this, speedMin, speedMax, offsetVal, scaleVal, forwardVal, timeScaleVal, phaseMinVal, phaseMaxVal, rightVal,
 	    speedOverride] (ParticleInstance& p) {
@@ -1089,7 +1162,7 @@ CParticle::createMapSequenceAroundControlPointInitializer (const MapSequenceArou
     DynamicValue* speedMaxValue = init.speedMax->value.get ();
     DynamicValue* axisValue = init.axis->value.get ();
     DynamicValue* controlPointValue = init.controlPoint->value.get ();
-    DynamicValue* speedOverride = m_particle.instanceOverride.speed->value.get ();
+    DynamicValue* speedOverride = getInstanceOverride ().speed->value.get ();
     const bool mirror = init.limitBehavior == "mirror";
 
     // The official initializer stores a normalized [0, 1] phase and a signed
@@ -1210,7 +1283,7 @@ void CParticle::setupOperators () {
 OperatorFunc CParticle::createMovementOperator (const MovementOperator& op) {
     DynamicValue* dragValue = op.drag->value.get ();
     DynamicValue* gravityValue = op.gravity->value.get ();
-    DynamicValue* speedOverride = m_particle.instanceOverride.speed->value.get ();
+    DynamicValue* speedOverride = getInstanceOverride ().speed->value.get ();
 
     return [dragValue, gravityValue, speedOverride] (
 	       std::vector<ParticleInstance>& particles, uint32_t count, const std::vector<ControlPointData>&, float,
@@ -1250,7 +1323,7 @@ OperatorFunc CParticle::createMovementOperator (const MovementOperator& op) {
 OperatorFunc CParticle::createAngularMovementOperator (const AngularMovementOperator& op) {
     DynamicValue* dragValue = op.drag->value.get ();
     DynamicValue* forceValue = op.force->value.get ();
-    DynamicValue* speedOverride = m_particle.instanceOverride.speed->value.get ();
+    DynamicValue* speedOverride = getInstanceOverride ().speed->value.get ();
 
     return [dragValue, forceValue, speedOverride] (
 	       std::vector<ParticleInstance>& particles, uint32_t count, const std::vector<ControlPointData>&, float,
@@ -1434,7 +1507,7 @@ OperatorFunc CParticle::createTurbulenceOperator (const TurbulenceOperator& op) 
     DynamicValue* maskValue = op.mask->value.get ();
     DynamicValue* phaseMinValue = op.phaseMin->value.get ();
     DynamicValue* phaseMaxValue = op.phaseMax->value.get ();
-    DynamicValue* speedOverride = m_particle.instanceOverride.speed->value.get ();
+    DynamicValue* speedOverride = getInstanceOverride ().speed->value.get ();
 
     // TODO: Audio processing support
     // DynamicValue* audioModeValue = op.audioProcessingMode->value.get ();
@@ -1499,7 +1572,7 @@ OperatorFunc CParticle::createVortexOperator (const VortexOperator& op) {
     DynamicValue* ringPullDistanceValue = op.ringPullDistance->value.get ();
     DynamicValue* ringPullForceValue = op.ringPullForce->value.get ();
     DynamicValue* audioModeValue = op.audioProcessingMode->value.get ();
-    DynamicValue* speedOverride = m_particle.instanceOverride.speed->value.get ();
+    DynamicValue* speedOverride = getInstanceOverride ().speed->value.get ();
 
     // Check if audio processing is enabled
     int audioMode = static_cast<int> (audioModeValue->getFloat ());
@@ -1648,7 +1721,7 @@ OperatorFunc CParticle::createControlPointAttractOperator (const ControlPointAtt
     DynamicValue* originValue = op.origin->value.get ();
     DynamicValue* scaleValue = op.scale->value.get ();
     DynamicValue* thresholdValue = op.threshold->value.get ();
-    DynamicValue* speedOverride = m_particle.instanceOverride.speed->value.get ();
+    DynamicValue* speedOverride = getInstanceOverride ().speed->value.get ();
 
     return [controlPoint, originValue, scaleValue, thresholdValue, speedOverride] (
 	       std::vector<ParticleInstance>& particles, uint32_t count,
@@ -1775,7 +1848,7 @@ OperatorFunc CParticle::createOscillatePositionOperator (const OscillatePosition
     DynamicValue* phaseMinValue = op.phaseMin->value.get ();
     DynamicValue* phaseMaxValue = op.phaseMax->value.get ();
     DynamicValue* maskValue = op.mask->value.get ();
-    DynamicValue* speedOverride = m_particle.instanceOverride.speed->value.get ();
+    DynamicValue* speedOverride = getInstanceOverride ().speed->value.get ();
 
     return [this, freqMinValue, freqMaxValue, scaleMinValue, scaleMaxValue, phaseMinValue, phaseMaxValue, maskValue,
 	    speedOverride] (
@@ -2063,8 +2136,13 @@ void CParticle::updateMatrices () {
     // The simulation reflects authored Y coordinates. In a 3D scene, undo that
     // reflection before applying the layer/attachment transform; a canvas offset
     // would put small world-space emitters hundreds of units outside the camera.
-    m_modelMatrix = (is3D ? glm::mat4 (1.0f) : sceneToParticle) * this->resolveWorldMatrix () * flipY;
-    if (!is3D) {
+    if (m_particleParent) {
+	m_particleParent->updateMatrices ();
+	m_modelMatrix = m_particleParent->m_modelMatrix * flipY * resolveWorldMatrix () * flipY;
+    } else {
+	m_modelMatrix = (is3D ? glm::mat4 (1.0f) : sceneToParticle) * resolveWorldMatrix () * flipY;
+    }
+    if (!is3D && !m_particleParent) {
 	this->applyParallaxToModelMatrix ();
     }
     m_modelMatrixInverse = glm::inverse (m_modelMatrix);
