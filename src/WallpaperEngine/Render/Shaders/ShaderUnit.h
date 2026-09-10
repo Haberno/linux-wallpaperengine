@@ -82,6 +82,8 @@ private:
      * Parses the input shader looking for require directives and resolves them into generated code
      */
     void preprocessRequires ();
+    /** Rename authored identifiers reserved by GLSL before recording uniform names. */
+    void preprocessReservedIdentifiers ();
     /**
      * Resolves a #require module name to generated GLSL code
      *
