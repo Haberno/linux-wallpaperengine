@@ -176,6 +176,31 @@ TEST_CASE ("MDL bone controls retain their extra animation pose tracks", "[mdl][
 	appendValue<uint32_t> (data, type);
 	appendMatrix (data, glm::translate (glm::mat4 (1.0f), glm::vec3 (5.0f, 6.0f, 0.0f)));
     }
+    appendValue<uint8_t> (data, 0); // Alternate reference transforms.
+    appendValue<uint32_t> (data, 0); // Scalar dependencies.
+    appendValue<uint16_t> (data, 2);
+    appendValue<float> (data, 0);
+    appendValue<float> (data, 5);
+    appendValue<uint16_t> (data, 1);
+    appendValue<uint32_t> (data, 1);
+    appendValue<float> (data, 0);
+    appendValue<float> (data, 1);
+    appendValue<float> (data, 0);
+    appendValue<uint16_t> (data, 0);
+    appendValue<uint16_t> (data, 1); // One IK group, root bone zero.
+    appendValue<uint32_t> (data, 0);
+    appendValue<uint32_t> (data, 1); // One end control.
+    appendValue<uint32_t> (data, 0);
+    appendValue<uint16_t> (data, 1); // One node, root zero, one branch.
+    appendValue<uint32_t> (data, 0);
+    appendValue<uint16_t> (data, 1);
+    appendValue<uint32_t> (data, 1); // End bone.
+    appendValue<uint32_t> (data, 1); // Controlled chain flag.
+    appendValue<float> (data, 5);
+    appendValue<float> (data, 0);
+    appendValue<uint16_t> (data, 2);
+    appendValue<uint32_t> (data, 0);
+    appendValue<uint32_t> (data, 1);
     patchU32 (data, skeletonEnd, data.size ());
     appendMarker (data, "MDLA0002");
     const auto animationEnd = data.size ();
@@ -208,6 +233,13 @@ TEST_CASE ("MDL bone controls retain their extra animation pose tracks", "[mdl][
     CHECK (parsed.controls[0].type == 0);
     CHECK (parsed.controls[1].type == 1);
     CHECK (parsed.controls[0].bindWorld[3].x == Catch::Approx (5));
+    REQUIRE (parsed.ikGroups.size () == 1);
+    const auto& group = parsed.ikGroups.front ();
+    REQUIRE (group.nodes.size () == 1);
+    REQUIRE (group.nodes.front ().branches.size () == 1);
+    CHECK (group.nodes.front ().branches.front ().bones == std::vector<uint32_t> { 0, 1 });
+    CHECK (parsed.boneLengths == std::vector<float> { 0, 5 });
+    CHECK (parsed.boneDirections[0].at (1).y == Catch::Approx (1));
     REQUIRE (parsed.animations.size () == 2);
     for (size_t clip = 0; clip < 2; ++clip) {
 	const auto& animation = parsed.animations[clip];
@@ -308,6 +340,80 @@ TEST_CASE ("MDL animation evaluator interpolates and composes parent bones") {
     CHECK ((*attachmentWorld)[3].y == Catch::Approx (1.0f));
     CHECK ((*attachmentWorld)[3].z == Catch::Approx (3.0f));
     CHECK_FALSE (MdlAnimationEvaluator::attachmentTransform (animationData, pose.worldBones, "missing").has_value ());
+}
+
+TEST_CASE ("Authored IK end controls move rigid chains and their attachments", "[mdl][animation]") {
+    const auto makeRig = [] (const bool pinned, const bool pole) {
+	MdlAnimationData data;
+	std::vector<glm::vec3> offsets = pole
+	    ? std::vector<glm::vec3> {{0, 0, 0}, {0, 0, 0}, {5, 5, 0}, {5, -5, 0}}
+	    : pinned ? std::vector<glm::vec3> {{2, 3, 0}, {0, 0, 0}, {0, 10, 0}}
+	    : std::vector<glm::vec3> {{0, 0, 0}, {0, 10, 0}, {6, 0, 0}};
+	std::vector<glm::mat4> world;
+	data.boneDirections.resize (offsets.size ());
+	for (size_t bone = 0; bone < offsets.size (); ++bone) {
+	    const auto local = glm::translate (glm::mat4 (1), offsets[bone]);
+	    world.push_back (bone ? world.back () * local : local);
+	    data.bones.push_back ({.parent = static_cast<int32_t> (bone) - 1,
+		.bindLocal = local, .inverseBindWorld = glm::inverse (world.back ())});
+	    data.boneLengths.push_back (glm::length (offsets[bone]));
+	    if (bone && data.boneLengths.back () > 0)
+		data.boneDirections[bone - 1][bone] = glm::normalize (offsets[bone]);
+	}
+	const uint32_t tip = pole ? 3 : pinned ? 2 : 1;
+	const uint32_t root = pinned || pole ? 1 : 0;
+	data.controls.push_back ({.bone = tip, .type = 0, .bindWorld = world[tip]});
+	MdlAnimationClip clip;
+	clip.controlFrames = {{{.translation = pole ? glm::vec3 (12, 0, 0)
+	    : pinned ? glm::vec3 (6, 11, 0) : glm::vec3 (4, 8, 0),
+	    .rotation = glm::angleAxis (glm::radians (30.0f), glm::vec3 (0, 0, 1))}}};
+	if (pole) {
+	    data.controls.push_back ({.bone = tip, .type = 1});
+	    clip.controlFrames.push_back ({{.translation = {5, -10, 0}}});
+	}
+	data.animations.push_back (clip);
+	MdlIkChain chain {.flags = 1};
+	for (uint32_t bone = root; bone <= tip; ++bone) {
+	    chain.bones.push_back (bone);
+	    if (bone != root) chain.maxLength += data.boneLengths[bone];
+	}
+	data.ikGroups.push_back ({.root = root, .nodes = {{.root = root, .branches = {chain}}}});
+	return data;
+    };
+    const auto checkPosition = [] (const glm::mat4& matrix, const glm::vec3& expected) {
+	CHECK (matrix[3].x == Catch::Approx (expected.x).margin (0.0001f));
+	CHECK (matrix[3].y == Catch::Approx (expected.y).margin (0.0001f));
+	CHECK (matrix[3].z == Catch::Approx (expected.z).margin (0.0001f));
+    };
+    // Numerical positions recovered by executing the original 140271910 solver
+    // on these synthetic rigs. A free root can translate; an attached root cannot.
+    auto data = makeRig (false, false);
+    data.attachments["tip"] = {.bone = 2, .local = glm::translate (glm::mat4 (1), glm::vec3 (0, 2, 0))};
+    const auto pose = MdlAnimationEvaluator::evaluate (data, {{.animation = &data.animations[0]}});
+    checkPosition (pose.worldBones[0], {-0.47213602f, -0.94427204f, 0});
+    checkPosition (pose.worldBones[1], {4, 8, 0});
+    checkPosition (pose.worldBones[2], {9.1961524f, 11, 0});
+    const auto attached = MdlAnimationEvaluator::attachmentTransform (data, pose.worldBones, "tip");
+    REQUIRE (attached.has_value ());
+    checkPosition (*attached, {8.1961524f, 12.7320508f, 0});
+    CHECK (glm::length (glm::vec3 (pose.worldBones[1][3] - pose.worldBones[0][3])) == Catch::Approx (10));
+    const auto additive = MdlAnimationEvaluator::evaluate (data, {{.animation = &data.animations[0], .additive = true}});
+    checkPosition (additive.worldBones[1], {4, 8, 0});
+    const auto half = MdlAnimationEvaluator::evaluate (data, {{.animation = &data.animations[0], .weight = 0.5f}});
+    checkPosition (half.worldBones[1], {2, 9, 0});
+
+    data = makeRig (true, false);
+    const auto pinned = MdlAnimationEvaluator::evaluate (data, {{.animation = &data.animations[0]}});
+    checkPosition (pinned.worldBones[1], {2, 3, 0});
+    checkPosition (pinned.worldBones[2], {6.47213602f, 11.94427204f, 0});
+
+    data = makeRig (true, true);
+    const auto guided = MdlAnimationEvaluator::evaluate (data, {{.animation = &data.animations[0]}});
+    checkPosition (guided.worldBones[1], {0, 0, 0});
+    checkPosition (guided.worldBones[2], {6.08557749f, -3.60079908f, 0});
+    checkPosition (guided.worldBones[3], {12.12534904f, 0.07631421f, 0});
+    CHECK (glm::length (glm::vec3 (guided.worldBones[2][3] - guided.worldBones[1][3]))
+	== Catch::Approx (std::sqrt (50.0f)));
 }
 
 TEST_CASE ("An explicit model playhead preserves the final frame of a looping source clip", "[mdl][animation]") {
