@@ -439,3 +439,21 @@ TEST_CASE ("max compatibility leaves authored macros and function ownership inta
         "#version 330\nvoid main() { gl_Position = vec4(0.0); }\n", comments
     ).second.empty ());
 }
+
+TEST_CASE ("conditional function signatures preserve output arguments", "[shader][out-parameter]") {
+    // Auto Sway versions share a function name and argument count but place
+    // writable outputs at different positions. Never cast those l-values.
+    for (const int mode : { 0, 1 }) {
+        const auto [vertex, fragment] = compileLinked (
+            "void main() { gl_Position = vec4(0.0); }\n",
+            "#if MODE\nvoid calculate(float amount, out vec2 result) { result = vec2(amount); }\n"
+            "#else\nvoid calculate(out vec2 result, float amount) { result = vec2(amount); }\n#endif\n"
+            "void main() { vec2 result;\n#if MODE\ncalculate(0.5, result);\n"
+            "#else\ncalculate(result, 0.5);\n#endif\ngl_FragColor = vec4(result, 0.0, 1.0); }\n",
+            { { "MODE", mode } }
+        );
+        const auto translated = GLSLContext::get ().toGlsl (vertex, fragment);
+        CHECK_FALSE (translated.first.empty ());
+        CHECK_FALSE (translated.second.empty ());
+    }
+}
