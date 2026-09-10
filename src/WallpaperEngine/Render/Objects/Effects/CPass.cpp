@@ -656,16 +656,18 @@ void CPass::setupShaders () {
 	"SCENE_ORTHO", this->m_renderable.getScene ().getScene ().camera.projection.isPerspective ? 0 : 1
     );
 
-    // FOG_DIST/FOG_HEIGHT are scene-global. FOG_COMPUTED is Wallpaper Engine's
-    // per-material gate: the native model path enables it only when the authored
-    // FOG combo exists and is non-zero.
+    // genericimage shaders gate fog with FOG_COMPUTED, but generic4 selects its fog
+    // branches directly with FOG_DIST/FOG_HEIGHT. Respect an explicit FOG=0 in both
+    // paths, or additive details acquire colored rectangles from the scene fog.
     const auto& fog = this->m_renderable.getScene ().getFog ();
     const auto fogOverride = this->m_override.combos.find ("FOG");
     const auto fogMaterial = this->m_pass.combos.find ("FOG");
     const bool materialFogEnabled = fogOverride != this->m_override.combos.end () ? fogOverride->second != 0
 	: fogMaterial != this->m_pass.combos.end () && fogMaterial->second != 0;
-    this->m_combos.insert_or_assign ("FOG_DIST", fog.distanceEnabled ? 1 : 0);
-    this->m_combos.insert_or_assign ("FOG_HEIGHT", fog.heightEnabled ? 1 : 0);
+    const bool materialFogDisabled = fogOverride != this->m_override.combos.end () ? fogOverride->second == 0
+	: fogMaterial != this->m_pass.combos.end () && fogMaterial->second == 0;
+    this->m_combos.insert_or_assign ("FOG_DIST", fog.distanceEnabled && !materialFogDisabled ? 1 : 0);
+    this->m_combos.insert_or_assign ("FOG_HEIGHT", fog.heightEnabled && !materialFogDisabled ? 1 : 0);
     this->m_combos.insert_or_assign ("FOG_COMPUTED", materialFogEnabled ? 1 : 0);
 
     // scenes with lights need LightingV1 modules compiled with matching uniform array sizes;
