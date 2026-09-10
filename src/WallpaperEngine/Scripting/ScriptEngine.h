@@ -17,6 +17,7 @@
 #include <unordered_set>
 
 #include "WallpaperEngine/Data/Model/DynamicValue.h"
+#include "WallpaperEngine/Data/Model/PropertyAnimation.h"
 #include "WallpaperEngine/Data/Model/Types.h"
 #include "WallpaperEngine/Media/MediaSource.h"
 
@@ -51,6 +52,7 @@ public:
 	bool initialized = false;
 	/** Cleared after an authored update hook throws, preventing per-frame retries/log spam. */
 	bool updateEnabled = true;
+	bool animationEvents = false;
 	bool cursorEvents = false;
 	bool cursorInside = false;
 	bool cursorPressedInside = false;
@@ -116,6 +118,8 @@ public:
      * timeouts, intervals AND calls any update() functions.
      */
     void tick ();
+    void dispatchAnimationEvent (ScriptableObject& object, const PropertyAnimation::Event& event,
+	const std::string& animationName);
 
     // -------------------------------------------------------------------
     // Layer-script API (Phase 2 — dynamic text)

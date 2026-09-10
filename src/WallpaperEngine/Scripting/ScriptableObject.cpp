@@ -38,20 +38,20 @@ ScriptableObject::ScriptableObject (Wallpapers::CScene& scene, const Object& obj
 	scale = text->scale.get ();
 	visible = text->visible.get ();
     }
-    this->registerProperty ("origin", *object.origin->value);
-    this->registerProperty ("scale", *scale->value);
-    this->registerProperty ("angles", *angles->value);
-    this->registerProperty ("visible", *visible->value);
+    this->registerProperty ("origin", *object.origin);
+    this->registerProperty ("scale", *scale);
+    this->registerProperty ("angles", *angles);
+    this->registerProperty ("visible", *visible);
 
     for (const auto& projection : scene.getScene ().camera.objectProjections) {
 	if (projection.id != object.id) {
 	    continue;
 	}
 	if (projection.fov != nullptr) {
-	    this->registerProperty ("fov", *projection.fov->value);
+	    this->registerProperty ("fov", *projection.fov);
 	}
 	if (projection.zoom != nullptr) {
-	    this->registerProperty ("zoom", *projection.zoom->value);
+	    this->registerProperty ("zoom", *projection.zoom);
 	}
 	break;
     }
@@ -69,6 +69,13 @@ DynamicValue& ScriptableObject::getProperty (const std::string& name) {
 
 const std::map<std::string, ScriptableObject::PropertyEntry>& ScriptableObject::getProperties () const {
     return this->m_properties;
+}
+
+void ScriptableObject::registerProperty (const std::string& name, const UserSetting& setting) {
+    registerProperty (name, *setting.value);
+    if (setting.animation != nullptr && !setting.animation->name.empty ()) {
+	m_animations.insert_or_assign (setting.animation->name, setting.animation.get ());
+    }
 }
 
 void ScriptableObject::registerProperty (const std::string& name, DynamicValue& value) {

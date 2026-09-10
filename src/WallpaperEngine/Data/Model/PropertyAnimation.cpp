@@ -1,6 +1,7 @@
 #include "PropertyAnimation.h"
 
 #include <cmath>
+#include <algorithm>
 
 using namespace WallpaperEngine::Data::Model;
 
@@ -12,6 +13,110 @@ float cubicBezier (const float p0, const float p1, const float p2, const float p
 }
 }
 
+float PropertyAnimation::elapsedFrame (const float time) const {
+    return anchorFrame + (playing ? (time - anchorTime) * fps * rate : 0.0f);
+}
+
+float PropertyAnimation::frameAt (const float time) const {
+    float frame = elapsedFrame (time);
+    if (length > 0.0f && (mode == "loop" || mode == "mirror")) {
+	const float period = length * (mode == "mirror" ? 2.0f : 1.0f);
+	frame = std::fmod (frame, period);
+	if (frame < 0.0f) frame += period;
+	if (mode == "mirror" && frame > length) frame = period - frame;
+    } else if (length > 0.0f) {
+	frame = std::clamp (frame, 0.0f, length);
+    }
+    return frame;
+}
+
+bool PropertyAnimation::isPlaying (const float time) const {
+    return playing && (mode != "single" || length <= 0.0f
+	|| (rate < 0.0f ? elapsedFrame (time) > 0.0f : elapsedFrame (time) < length));
+}
+
+void PropertyAnimation::play (const float time) {
+    if (isPlaying (time)) return;
+
+    // Keep the unfolded timeline when resuming the reverse half of a mirror.
+    anchorFrame = elapsedFrame (time);
+    if (mode == "single" && length > 0.0f
+	&& (rate < 0.0f ? anchorFrame <= 0.0f : anchorFrame >= length)) {
+	anchorFrame = rate < 0.0f ? length : 0.0f;
+	previousEventFrame = anchorFrame - (rate < 0.0f ? -0.0001f : 0.0001f);
+    }
+    anchorTime = time;
+    playing = true;
+}
+
+void PropertyAnimation::pause (const float time) {
+    anchorFrame = elapsedFrame (time);
+    anchorTime = time;
+    playing = false;
+}
+
+void PropertyAnimation::stop (const float time) {
+    setFrame (0.0f, time);
+    playing = false;
+}
+
+void PropertyAnimation::setFrame (const float frame, const float time) {
+    if (!std::isfinite (frame)) return;
+    anchorFrame = frame;
+    anchorTime = time;
+    previousEventFrame = frame - (rate < 0.0f ? -0.0001f : 0.0001f);
+}
+
+void PropertyAnimation::setRate (const float value, const float time) {
+    if (!std::isfinite (value)) return;
+    anchorFrame = elapsedFrame (time);
+    anchorTime = time;
+    rate = value;
+}
+
+std::vector<PropertyAnimation::Event> PropertyAnimation::takeEvents (const float time) {
+    std::vector<Event> result;
+    if (!playing) return result;
+    const float current = elapsedFrame (time);
+    const float previous = previousEventFrame;
+    previousEventFrame = current;
+    if (!std::isfinite (current) || !std::isfinite (previous) || current == previous) return result;
+    const bool forward = current > previous;
+    std::vector<std::pair<float, Event>> crossed;
+    const auto append = [&] (const float position, const Event& event) {
+	if (forward ? position > previous && position <= current : position < previous && position >= current) {
+	    crossed.emplace_back (position, event);
+	}
+    };
+    const bool repeats = length > 0.0f && (mode == "loop" || mode == "mirror");
+    const float period = length * (mode == "mirror" ? 2.0f : 1.0f);
+    for (const auto& event : events) {
+	if (event.frame < 0.0f || (length > 0.0f && event.frame > length)) continue;
+	if (!repeats) {
+	    append (event.frame, event);
+	    continue;
+	}
+	const double last = std::floor (std::max (previous, current) / period);
+	const double first = std::max (std::floor (static_cast<double> (std::min (previous, current)) / period), last - 1024.0);
+	for (double cycle = first; cycle <= last; cycle++) {
+	    // The tiny initial cursor offset includes frame zero, but must not
+	    // synthesize an end event from an earlier cycle before playback began.
+	    if (cycle < 0.0 && previous >= -0.0001f && current >= 0.0f) continue;
+	    append (static_cast<float> (cycle * period + event.frame), event);
+	    if (mode == "mirror" && event.frame > 0.0f && event.frame < length) {
+		append (static_cast<float> (cycle * period + period - event.frame), event);
+	    }
+	}
+    }
+    std::stable_sort (crossed.begin (), crossed.end (), [forward] (const auto& left, const auto& right) {
+	if (left.first == right.first) return forward ? left.second.frame > right.second.frame
+	    : left.second.frame < right.second.frame;
+	return forward ? left.first < right.first : left.first > right.first;
+    });
+    for (const auto& [position, event] : crossed) result.push_back (event);
+    return result;
+}
+
 float PropertyAnimation::evaluateChannel (int channel, float time, float fallback) const {
     const auto it = this->channels.find (channel);
 
@@ -20,18 +125,7 @@ float PropertyAnimation::evaluateChannel (int channel, float time, float fallbac
     }
 
     const auto& keyframes = it->second;
-    float frame = time * this->fps;
-
-    if (this->length > 0.0f && (this->mode == "loop" || this->mode == "mirror")) {
-	const float period = this->length * (this->mode == "mirror" ? 2.0f : 1.0f);
-	frame = std::fmod (frame, period);
-	if (frame < 0.0f) {
-	    frame += period;
-	}
-	if (this->mode == "mirror" && frame > this->length) {
-	    frame = period - frame;
-	}
-    }
+    const float frame = frameAt (time);
 
     if (frame <= keyframes.front ().frame) {
 	return keyframes.front ().value;
