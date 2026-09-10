@@ -58,10 +58,20 @@ CScene::CScene (
     float height = scene->camera.projection.height;
     const bool isPerspective = scene->camera.projection.isPerspective;
 
-    // 3D scenes have no authored projection size; render at the output's resolution
+    // 3D scenes have no authored projection size. Each independent wallpaper must
+    // use its own monitor: a desktop-wide target is cropped by fill scaling and
+    // loses screen-space overlays at the edges (for example, a clock).
     if (isPerspective) {
-	width = this->getContext ().getOutput ().getFullWidth ();
-	height = this->getContext ().getOutput ().getFullHeight ();
+	const auto& output = this->getContext ().getOutput ();
+	const auto viewport = output.getViewports ().find (screenName);
+	if (viewport != output.getViewports ().end ()) {
+	    width = viewport->second->viewport.z;
+	    height = viewport->second->viewport.w;
+	} else {
+	    // Shared span groups have no single named viewport.
+	    width = output.getFullWidth ();
+	    height = output.getFullHeight ();
+	}
     }
 
     // detect size if the orthogonal project is auto
