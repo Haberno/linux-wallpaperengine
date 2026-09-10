@@ -17,6 +17,32 @@ using WallpaperEngine::Data::Model::PropertyKeyframe;
 using WallpaperEngine::Data::Parsers::PropertyParser;
 using WallpaperEngine::Data::Parsers::UserSettingParser;
 
+TEST_CASE ("Linked property curves share their parent's pause, seek and mirror clock", "[property-animation]") {
+    PropertyAnimation parent { .fps = 10.0f, .length = 10.0f, .mode = "mirror", .relative = false,
+	.playing = false };
+    const auto setting = UserSettingParser::parse (JSON::parse (R"({"value":0,
+        "animation":{"c0":[{"frame":0,"value":0},{"frame":10,"value":1}],
+        "options":{"parent":{"key":"angles"},"fps":10,"length":10,"mode":"mirror",
+        "events":[{"frame":5,"name":"middle"}]}}})"), {});
+    auto& child = *setting->animation;
+    CHECK (child.parentKey == "angles");
+    child.timelineParent = &parent;
+    CHECK (child.frameAt (20.0f) == 0.0f);
+    CHECK (child.takeEvents (20.0f).empty ());
+    parent.play (20.0f);
+    CHECK (child.evaluateFloat (0.0f, 20.5f) == Catch::Approx (0.5f));
+    REQUIRE (child.takeEvents (20.5f).size () == 1);
+    parent.pause (21.25f);
+    CHECK (child.frameAt (99.0f) == Catch::Approx (7.5f));
+    child.play (22.0f);
+    CHECK (parent.isPlaying (22.0f));
+    CHECK (child.frameAt (22.25f) == Catch::Approx (5.0f));
+    child.setFrame (3.0f, 23.0f);
+    CHECK (parent.frameAt (23.0f) == Catch::Approx (3.0f));
+    child.stop (23.0f);
+    CHECK_FALSE (parent.isPlaying (23.0f));
+}
+
 TEST_CASE ("Named property animations start paused and emit markers once", "[property-animation]") {
     const auto setting = UserSettingParser::parse (JSON::parse (R"({"value":1,
         "animation":{"c0":[{"frame":0,"value":0},{"frame":90,"value":0}],"relative":true,
