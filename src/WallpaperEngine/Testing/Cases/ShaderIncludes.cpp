@@ -88,6 +88,29 @@ TEST_CASE ("vector shader defaults accept numbers without dropping the layer", "
     }
 }
 
+TEST_CASE ("continued shader lines are joined before metadata and GLSL parsing", "[shader][continuation]") {
+    for (const std::string newline : { "\n", "\r\n" }) {
+	const std::string continued = "\\" + newline;
+	const auto fragment = compileFragment (
+	    "#define INCLUDED_VALUE (1 " + continued + "+ 2)\n",
+	    "#include \"test_ordering.h\"\n"
+	    "// continued comment " + continued + "#include \"does_not_exist.h\"\n"
+	    "#define COMBINED to" + continued + "ken\n"
+	    "#if INCLUDED_VALUE != 3\n#error broken macro continuation\n#endif\n"
+	    "uniform vec2 u_Pos; // {\"material\":\"pos\", " + continued + "\"default\":\"0 0\"}\n"
+	    "void main() {\nfloat token = 1.0 " + continued + "+ 2.0;\n"
+	    "gl_FragColor = vec4(COMBINED + u_Pos.x);\n}\n"
+	);
+	CHECK (fragment.find ("#define COMBINED token") != std::string::npos);
+	CHECK (fragment.find ("\\\n") == std::string::npos);
+	CHECK (fragment.find ("\\\r\n") == std::string::npos);
+	const auto translated = GLSLContext::get ().toGlsl (
+	    "#version 330\nvoid main() { gl_Position = vec4(0.0); }\n", fragment
+	);
+	CHECK_FALSE (translated.second.empty ());
+    }
+}
+
 TEST_CASE ("malformed includes fail at their own line", "[shader][include][regression]") {
     for (const std::string directive : { "#include", "#include test_ordering.h", "#include \"\"",
 					 "#include \"test_ordering.h", "#include \"test_ordering.h\" junk" }) {
