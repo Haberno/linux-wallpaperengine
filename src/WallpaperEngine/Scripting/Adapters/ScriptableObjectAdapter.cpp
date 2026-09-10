@@ -900,6 +900,20 @@ scriptable_get_animation_layer_count (JSContext* ctx, JSValueConst this_val, int
     return JS_NewInt64 (ctx, image != nullptr ? static_cast<int64_t> (image->getPuppetAnimationLayerCount ()) : 0);
 }
 
+static JSValue scriptable_emit_particles (JSContext* ctx, JSValueConst thisVal, int argc, JSValueConst* argv) {
+    auto* container = scriptable_container (thisVal);
+    auto* particle = container != nullptr
+	? dynamic_cast<WallpaperEngine::Render::Objects::CParticle*> (&container->object) : nullptr;
+    if (particle == nullptr) return JS_UNDEFINED;
+    double count = 1.0;
+    if (argc > 0 && !JS_IsUndefined (argv[0])
+	&& (JS_ToFloat64 (ctx, &count, argv[0]) < 0 || !std::isfinite (count) || count < 0.0)) {
+	return JS_ThrowTypeError (ctx, "emitParticles expects a nonnegative finite count");
+    }
+    particle->emitParticles (static_cast<uint32_t> (std::min (count, static_cast<double> (UINT32_MAX))));
+    return JS_UNDEFINED;
+}
+
 JSValue scriptableobject_property_get (JSContext* ctx, JSValueConst obj_val, JSAtom atom, JSValueConst receiver) {
     JSClassID classId = 0;
 
@@ -986,6 +1000,10 @@ JSValue scriptableobject_property_get (JSContext* ctx, JSValueConst obj_val, JSA
     }
     if (std::strcmp (name, "playSingleAnimation") == 0 && scriptable_model (obj_val) != nullptr) {
 	return JS_NewCFunction (ctx, scriptable_play_single_animation, name, 2);
+    }
+    if (std::strcmp (name, "emitParticles") == 0
+	&& dynamic_cast<WallpaperEngine::Render::Objects::CParticle*> (&container->object) != nullptr) {
+	return JS_NewCFunction (ctx, scriptable_emit_particles, name, 1);
     }
 
     try {

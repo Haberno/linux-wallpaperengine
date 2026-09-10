@@ -363,7 +363,12 @@ void CParticle::pause () {
     }
 }
 
+void CParticle::emitParticles (const uint32_t count) {
+    m_pendingEmission += std::min (count, m_maxParticles - m_pendingEmission);
+}
+
 void CParticle::stop () {
+    m_pendingEmission = 0;
     m_emitting = false;
     m_particleCount = 0;
     m_emitters.clear ();
@@ -515,8 +520,12 @@ void CParticle::update (float dt) {
     const uint32_t firstNewParticle = m_particleCount;
     if (m_emitting) {
 	for (auto& emitter : m_emitters) {
-	    emitter (m_particles, m_particleCount, dt);
+	    emitter (m_particles, m_particleCount, dt, 0);
 	}
+    }
+    if (m_pendingEmission > 0) {
+	for (auto& emitter : m_emitters) emitter (m_particles, m_particleCount, 0.0f, m_pendingEmission);
+	m_pendingEmission = 0;
     }
     for (uint32_t i = firstNewParticle; i < m_particleCount; ++i) {
 	m_particles[i].serial = ++m_nextParticleSerial;
@@ -714,73 +723,76 @@ EmitterFunc CParticle::createBoxEmitter (const ParticleEmitter& emitter) {
 	[this, emitter, transformedEmitterOrigin, controlPointIndex, countOverride, flippedDirections, limitOnePerFrame,
 	 randomPeriodicEmission, emissionTimer = 0.0f, delayTimer = emitter.delay, durationTimer = 0.0f,
 	 periodicTimer = 0.0f, periodicDuration = 0.0f, periodicDelay = 0.0f, emitting = false,
-	 instantaneousEmitted = false] (std::vector<ParticleInstance>& particles, uint32_t& count, float dt) mutable {
+	 instantaneousEmitted = false] (std::vector<ParticleInstance>& particles, uint32_t& count, float dt, uint32_t burst) mutable {
 	    if (count >= particles.size ()) {
 		return;
 	    }
 
-	    // Handle delay
-	    if (delayTimer > 0.0f) {
-		delayTimer -= dt;
-		return;
-	    }
-
-	    // Handle duration
-	    if (emitter.duration > 0.0f) {
-		durationTimer += dt;
-		if (durationTimer >= emitter.duration) {
+	    uint32_t toEmit = burst;
+	    if (burst == 0) {
+		// Handle delay
+		if (delayTimer > 0.0f) {
+		    delayTimer -= dt;
 		    return;
 		}
-	    }
 
-	    // Handle random periodic emission
-	    if (randomPeriodicEmission) {
-		periodicTimer += dt;
+		// Handle duration
+		if (emitter.duration > 0.0f) {
+		    durationTimer += dt;
+		    if (durationTimer >= emitter.duration) {
+			return;
+		    }
+		}
 
-		if (!emitting) {
-		    if (periodicTimer >= periodicDelay) {
-			emitting = true;
-			periodicTimer = 0.0f;
-			periodicDuration = WallpaperEngine::Maths::randomFloat (
-			    m_rng, emitter.minPeriodicDuration, emitter.maxPeriodicDuration
-			);
+		// Handle random periodic emission
+		if (randomPeriodicEmission) {
+		    periodicTimer += dt;
+
+		    if (!emitting) {
+			if (periodicTimer >= periodicDelay) {
+			    emitting = true;
+			    periodicTimer = 0.0f;
+			    periodicDuration = WallpaperEngine::Maths::randomFloat (
+				m_rng, emitter.minPeriodicDuration, emitter.maxPeriodicDuration
+			    );
+			} else {
+			    return;
+			}
 		    } else {
-			return;
-		    }
-		} else {
-		    if (periodicTimer >= periodicDuration) {
-			emitting = false;
-			periodicTimer = 0.0f;
-			periodicDelay = WallpaperEngine::Maths::randomFloat (
-			    m_rng, emitter.minPeriodicDelay, emitter.maxPeriodicDelay
-			);
-			return;
+			if (periodicTimer >= periodicDuration) {
+			    emitting = false;
+			    periodicTimer = 0.0f;
+			    periodicDelay = WallpaperEngine::Maths::randomFloat (
+				m_rng, emitter.minPeriodicDelay, emitter.maxPeriodicDelay
+			    );
+			    return;
+			}
 		    }
 		}
-	    }
 
-	    // TODO: Audio processing (audioProcessingMode, audioProcessingBounds, etc.)
+		// TODO: Audio processing (audioProcessingMode, audioProcessingBounds, etc.)
 
-	    // Handle instantaneous emission
-	    uint32_t toEmit = 0;
-	    if (emitter.instantaneous > 0 && !instantaneousEmitted) {
-		toEmit = emitter.instantaneous;
-		instantaneousEmitted = true;
-	    }
-
-	    // Rate-based emission with optional cap at 1 per frame
-	    if (emitter.rate > 0.0f) {
-		const float rate = calculateParticleEmissionRate (emitter.rate, countOverride->getFloat ());
-		emissionTimer += dt * rate;
-		uint32_t rateEmit = static_cast<uint32_t> (emissionTimer);
-		emissionTimer -= static_cast<float> (rateEmit);
-		// limitOnePerFrame (flags bit 1): cap at 1 to prevent rope artifacts
-		if (limitOnePerFrame && rateEmit > 1) {
-		    rateEmit = 1;
+		// Handle instantaneous emission
+		toEmit = 0;
+		if (emitter.instantaneous > 0 && !instantaneousEmitted) {
+		    toEmit = emitter.instantaneous;
+		    instantaneousEmitted = true;
 		}
-		toEmit += rateEmit;
-	    }
 
+		// Rate-based emission with optional cap at 1 per frame
+		if (emitter.rate > 0.0f) {
+		    const float rate = calculateParticleEmissionRate (emitter.rate, countOverride->getFloat ());
+		    emissionTimer += dt * rate;
+		    uint32_t rateEmit = static_cast<uint32_t> (emissionTimer);
+		    emissionTimer -= static_cast<float> (rateEmit);
+		    // limitOnePerFrame (flags bit 1): cap at 1 to prevent rope artifacts
+		    if (limitOnePerFrame && rateEmit > 1) {
+			rateEmit = 1;
+		    }
+		    toEmit += rateEmit;
+		}
+
+	    }
 	    // Emit particles
 	    for (uint32_t i = 0; i < toEmit && count < particles.size (); i++) {
 		auto& p = particles[count];
@@ -868,24 +880,27 @@ EmitterFunc CParticle::createSphereEmitter (const ParticleEmitter& emitter) {
     return [this, emitter, transformedEmitterOrigin, controlPointIndex, countOverride, lifetime, limitOnePerFrame,
 	    emissionTimer = 0.0f,
 	    remaining
-	    = emitter.instantaneous] (std::vector<ParticleInstance>& particles, uint32_t& count, float dt) mutable {
+	    = emitter.instantaneous] (std::vector<ParticleInstance>& particles, uint32_t& count, float dt, uint32_t burst) mutable {
 	if (count >= particles.size ()) {
 	    return;
 	}
 
-	// Rate-based emission with optional cap at 1 per frame
-	const float rate = calculateParticleEmissionRate (emitter.rate, countOverride->getFloat ());
-	emissionTimer += dt * rate;
-	uint32_t toEmit = static_cast<uint32_t> (emissionTimer);
-	emissionTimer -= static_cast<float> (toEmit);
-	// limitOnePerFrame (flags bit 1): cap at 1 to prevent rope artifacts
-	if (limitOnePerFrame && toEmit > 1) {
-	    toEmit = 1;
-	}
+	uint32_t toEmit = burst;
+	if (burst == 0) {
+	    // Rate-based emission with optional cap at 1 per frame
+	    const float rate = calculateParticleEmissionRate (emitter.rate, countOverride->getFloat ());
+	    emissionTimer += dt * rate;
+	    toEmit = static_cast<uint32_t> (emissionTimer);
+	    emissionTimer -= static_cast<float> (toEmit);
+	    // limitOnePerFrame (flags bit 1): cap at 1 to prevent rope artifacts
+	    if (limitOnePerFrame && toEmit > 1) {
+		toEmit = 1;
+	    }
 
-	if (remaining > 0) {
-	    toEmit = remaining;
-	    remaining = 0;
+	    if (remaining > 0) {
+		toEmit = remaining;
+		remaining = 0;
+	    }
 	}
 
 	for (uint32_t i = 0; i < toEmit && count < particles.size (); i++) {
