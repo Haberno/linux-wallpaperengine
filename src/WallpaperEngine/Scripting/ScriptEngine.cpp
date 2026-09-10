@@ -25,6 +25,7 @@
 #include <algorithm>
 #include <array>
 #include <cerrno>
+#include <cctype>
 #include <chrono>
 #include <cmath>
 #include <cstring>
@@ -33,6 +34,7 @@
 #include <optional>
 #include <poll.h>
 #include <ranges>
+#include <regex>
 #include <signal.h>
 #include <spawn.h>
 #include <sstream>
@@ -119,52 +121,75 @@ JSValue ScriptEngine::dynamicToJs (DynamicValue& value) const {
 // degree objects instead of live radian adapters.
 static bool isAnglesProperty (const std::string& key) { return key.rfind ("angles_", 0) == 0; }
 
-static void replaceAll (std::string& value, const std::string_view from, const std::string_view to) {
-    size_t pos = 0;
-    while ((pos = value.find (from, pos)) != std::string::npos) {
-	value.replace (pos, from.size (), to);
-	pos += to.size ();
-    }
-}
-
-static std::string normalizeSceneScriptModuleSyntax (std::string source) {
-    replaceAll (source, "'use strict';", "");
-    replaceAll (source, "\"use strict\";", "");
-    replaceAll (source, "export ", "");
-
-    std::istringstream input (source);
-    std::ostringstream output;
-    bool needsWEMath = false;
-    bool needsWEVector = false;
-    bool needsWEColor = false;
-
-    std::string line;
-    while (std::getline (input, line)) {
-	const auto first = line.find_first_not_of (" \t");
-	const auto trimmed = first == std::string::npos ? std::string_view {} : std::string_view (line).substr (first);
-
-	if (trimmed.rfind ("import ", 0) == 0) {
-	    needsWEMath = needsWEMath || trimmed.find ("WEMath") != std::string_view::npos;
-	    needsWEVector = needsWEVector || trimmed.find ("WEVector") != std::string_view::npos;
-	    needsWEColor = needsWEColor || trimmed.find ("WEColor") != std::string_view::npos;
-	    continue;
+static std::string normalizeSceneScriptModuleSyntax (const std::string& source) {
+    // Workshop scripts may put an aliased import in the middle of a minified
+    // line: `setup();import*as math from'WEMath';export function update...`.
+    // Lower declarations, not entire lines or text inside strings/comments.
+    static const std::regex namespaceImport (
+	R"(import\s*\*\s*as\s+([a-zA-Z_$][a-zA-Z0-9_$]*)\s+from\s*(['"])(WEMath|WEVector|WEColor)\2\s*;?)"
+    );
+    const auto identifier = [] (const unsigned char c) {
+	return std::isalnum (c) || c == '_' || c == '$' || c >= 128;
+    };
+    std::string output, imports;
+    int depth = 0;
+    bool expressionExpected = true;
+    for (size_t pos = 0; pos < source.size ();) {
+	const size_t begin = pos;
+	const char c = source[pos++];
+	if (c == '\'' || c == '"' || c == '`') {
+	    while (pos < source.size ()) {
+		const char next = source[pos++];
+		if (next == '\\' && pos < source.size ()) ++pos;
+		else if (next == c) break;
+	    }
+	    expressionExpected = false;
+	} else if (c == '/' && pos < source.size () && source[pos] == '/') {
+	    while (pos < source.size () && source[pos] != '\n') ++pos;
+	} else if (c == '/' && pos < source.size () && source[pos] == '*') {
+	    const size_t end = source.find ("*/", pos + 1);
+	    pos = end == std::string::npos ? source.size () : end + 2;
+	} else if (c == '/' && expressionExpected) {
+	    bool characterClass = false;
+	    while (pos < source.size ()) {
+		const char next = source[pos++];
+		if (next == '\\' && pos < source.size ()) ++pos;
+		else if (next == '[') characterClass = true;
+		else if (next == ']') characterClass = false;
+		else if (next == '/' && !characterClass) break;
+	    }
+	    while (pos < source.size () && identifier (source[pos])) ++pos;
+	    expressionExpected = false;
+	} else if (identifier (c)) {
+	    while (pos < source.size () && identifier (source[pos])) ++pos;
+	    const std::string_view token (source.data () + begin, pos - begin);
+	    if (depth == 0 && token == "import") {
+		std::match_results<std::string::const_iterator> match;
+		if (std::regex_search (source.begin () + begin, source.end (), match, namespaceImport,
+				      std::regex_constants::match_continuous)) {
+		    imports += "const " + match[1].str () + " = globalThis." + match[3].str () + ";\n";
+		    pos = begin + match.length ();
+		    // Keep the original line numbers for script diagnostics.
+		    output.append (std::count (source.begin () + begin, source.begin () + pos, '\n'), '\n');
+		    expressionExpected = true;
+		    continue;
+		}
+	    }
+	    if (depth == 0 && token == "export") {
+		expressionExpected = true;
+		continue;
+	    }
+	    expressionExpected = token == "return" || token == "throw" || token == "case"
+		|| token == "typeof" || token == "void" || token == "delete" || token == "yield"
+		|| token == "await" || token == "in" || token == "instanceof";
+	} else if (!std::isspace (static_cast<unsigned char> (c))) {
+	    if (c == '{') ++depth;
+	    if (c == '}') --depth;
+	    expressionExpected = c != ')' && c != ']' && c != '.';
 	}
-
-	output << line << '\n';
+	output.append (source, begin, pos - begin);
     }
-
-    std::string prefix;
-    if (needsWEMath) {
-	prefix += "const WEMath = globalThis.WEMath;\n";
-    }
-    if (needsWEVector) {
-	prefix += "const WEVector = globalThis.WEVector;\n";
-    }
-    if (needsWEColor) {
-	prefix += "const WEColor = globalThis.WEColor;\n";
-    }
-
-    return prefix + output.str ();
+    return imports + output;
 }
 
 static JSValue anglesToJs (WallpaperEngine::Scripting::Adapters::VectorAdapter<3>& adapter, const DynamicValue& value) {
@@ -364,7 +389,8 @@ ScriptEngine::ScriptEngine (Wallpapers::CScene& scene, Media::MediaSource& media
 	JS_PROP_WRITABLE | JS_PROP_CONFIGURABLE | JS_PROP_ENUMERABLE
     );
     JS_DefinePropertyValueStr (
-	this->m_context, this->m_globalThis, "shared", JS_NewObject (this->m_context), JS_PROP_ENUMERABLE
+	this->m_context, this->m_globalThis, "shared", JS_NewObject (this->m_context),
+	JS_PROP_ENUMERABLE | JS_PROP_WRITABLE
     );
 }
 
