@@ -175,8 +175,12 @@ void parseControlChains (
     // Optional alternate reference transforms precede the scalar dependencies
     // and the baked IK lengths, reference directions and chain topology.
     if (readValue<uint8_t> (data, offset, end)) {
-	for (size_t bone = 0; bone < result.bones.size (); ++bone) {
-	    for (int component = 0; component < 16; ++component) readValue<float> (data, offset, end);
+	for (auto& bone : result.bones) {
+	    glm::mat4 reference;
+	    for (int column = 0; column < 4; ++column)
+		for (int row = 0; row < 4; ++row)
+		    reference[column][row] = readValue<float> (data, offset, end);
+	    bone.referenceLocal = reference;
 	}
 	for (auto& control : result.controls) {
 	    glm::mat4 reference;
@@ -345,7 +349,8 @@ void parseSkeleton (
 	    }
 	    result.controls.push_back (std::move (control));
 	}
-	if (!result.controls.empty () && offset < sectionEnd) {
+	// A skeleton can carry reference transforms even without named controls.
+	if (offset < sectionEnd) {
 	    parseControlChains (data, offset, sectionEnd, version, result);
 	}
     }

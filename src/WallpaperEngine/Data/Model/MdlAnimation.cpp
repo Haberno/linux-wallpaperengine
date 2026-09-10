@@ -228,27 +228,6 @@ void applyBoneControls (
 	pose.skinBones[bone] = pose.worldBones[bone] * data.bones[bone].inverseBindWorld;
 }
 
-/**
- * Wallpaper Engine evaluates every layer against one persistent model reference
- * pose. The embedded frame-zero pose is the constraint-resolved form of that
- * reference: older MDLS0002 puppets can differ substantially from the raw bind
- * transform on constrained bones, while newer puppets such as Lucy serialize
- * the same pose in both places.
- */
-MdlBoneFrame referenceBone (
-    const MdlAnimationData& animationData, const size_t bone, const MdlBoneFrame& bind
-) {
-    for (const auto& animation : animationData.animations) {
-	if (bone < animation.boneFrames.size ()) {
-	    const auto& frames = animation.boneFrames[bone];
-	    if (!frames.empty ()) {
-		return frames.front ();
-	    }
-	}
-    }
-    return bind;
-}
-
 /** Same playhead and interpolation as the bones, on a scalar track instead of a pose. */
 float sampleBlendTrack (const MdlActiveAnimation& layer, const size_t row) {
     const auto& track = layer.animation->blendTracks[row];
@@ -271,8 +250,12 @@ MdlPose MdlAnimationEvaluator::evaluate (
     if (!animationData.ikGroups.empty ()) locals.resize (animationData.bones.size ());
 
     for (size_t bone = 0; bone < animationData.bones.size (); bone++) {
-	const MdlBoneFrame bind = matrixPose (animationData.bones[bone].bindLocal);
-	const MdlBoneFrame reference = referenceBone (animationData, bone, bind);
+	// Native 1401fdf90 initializes the shared blend reference from MDLS's
+	// optional reference matrices, falling back to the skeleton bind pose.
+	// A clip's first frame can already reposition atlas parts; subtracting it
+	// instead makes an idle additive layer displace the dragon's eye (3233141951).
+	const auto& skeletonBone = animationData.bones[bone];
+	const MdlBoneFrame reference = matrixPose (skeletonBone.referenceLocal.value_or (skeletonBone.bindLocal));
 	MdlBoneFrame local = reference;
 
 	for (size_t layerIndex = 0; layerIndex < activeAnimations.size (); layerIndex++) {

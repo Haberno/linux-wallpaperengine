@@ -18,6 +18,8 @@ struct MdlBone {
     int32_t parent = -1;
     glm::mat4 bindLocal = glm::mat4 (1.0f);
     glm::mat4 inverseBindWorld = glm::mat4 (1.0f);
+    /** Optional MDLS reference pose used for layer blending, separate from skinning bind data. */
+    std::optional<glm::mat4> referenceLocal;
     bool ikFollowEnd = false;
     bool ikAimToTarget = false;
     float ikAimDistance = 1.0f;
