@@ -1706,7 +1706,7 @@ void CImage::updateFinalPassVisibility () {
     if (!this->m_finalPassRouting.has_value ()) {
 	return;
     }
-    const bool visible = this->getImage ().visible->value->getBool ();
+    const bool visible = this->getImage ().visible->value->getBool () && this->isVisibleThroughParents ();
     if (visible == this->m_finalPassDrawsToScene) {
 	return;
     }
@@ -1817,14 +1817,10 @@ void CImage::render () {
 	return;
     }
 
-    // Visibility gates only the scene draw. Hidden image layers still update
-    // their composite textures for model faces, reflections, and effect inputs.
+    // Own and inherited visibility gate only the scene draw. Hidden image layers
+    // still update their composite textures for model faces and effect inputs;
+    // the dress in 3761619125 samples sources inside a hidden parent group.
     this->updateFinalPassVisibility ();
-
-    // a hidden container hides its whole subtree; children often have no visible of their own
-    if (!this->isVisibleThroughParents ()) {
-	return;
-    }
 
     // Image opacity can be keyframed independently of its texture animation.
     // Keep the evaluated value in stable member storage because CPass uniforms
