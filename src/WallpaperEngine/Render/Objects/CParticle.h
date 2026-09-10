@@ -32,6 +32,9 @@ constexpr uint32_t DEFAULT_MAX_PARTICLES = 1000;
 [[nodiscard]] glm::vec3 resolveParticleControlPoint (
     const glm::vec3& offset, const glm::mat4& worldToLocal, bool worldSpace
 );
+[[nodiscard]] glm::mat3 calculateFixedParticleOrientation (
+    const glm::vec3& axis, const glm::mat3& model, bool worldSpace
+);
 
 /**
  * Runtime particle instance state
