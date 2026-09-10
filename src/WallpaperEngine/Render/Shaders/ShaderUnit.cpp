@@ -78,6 +78,27 @@ using namespace WallpaperEngine::Render;
 using namespace WallpaperEngine::Data::Builders;
 using namespace WallpaperEngine::Render::Shaders;
 
+namespace {
+std::string spliceShaderLines (std::string source) {
+    // Authored shaders use HLSL-style continuations, including outside macros.
+    // Join logical lines before reading includes, comments, or parameter JSON;
+    // GLSL 330 otherwise rejects the backslash even in inactive branches.
+    size_t position = 0;
+    while ((position = source.find ('\\', position)) != std::string::npos) {
+	size_t newline = position + 1;
+	if (newline < source.size () && source[newline] == '\r') {
+	    newline++;
+	}
+	if (newline < source.size () && source[newline] == '\n') {
+	    source.erase (position, newline - position + 1);
+	} else {
+	    position++;
+	}
+    }
+    return source;
+}
+} // namespace
+
 ShaderUnit::ShaderUnit (
     const GLSLContext::UnitType type, std::string file, std::string content, const AssetLocator& assetLocator,
     const ShaderConstantMap& constants, const TextureMap& passTextures, const TextureMap& overrideTextures,
@@ -91,7 +112,7 @@ ShaderUnit::ShaderUnit (
 }
 
 void ShaderUnit::preprocess () {
-    this->m_preprocessed = this->m_content;
+    this->m_preprocessed = spliceShaderLines (this->m_content);
     this->m_includes = "";
 
     this->preprocessIncludes ();
@@ -496,7 +517,7 @@ void ShaderUnit::preprocessIncludes () {
 	    content += "// begin of include from file ";
 	    content += filename;
 	    content += "\n";
-	    content += this->m_assetLocator.includeShader (filename);
+	    content += spliceShaderLines (this->m_assetLocator.includeShader (filename));
 	    content += "\n// end of included from file ";
 	    content += filename;
 	    content += "\n";
@@ -532,7 +553,7 @@ void ShaderUnit::preprocessIncludes () {
 	    content = "// begin of include from file ";
 	    content += filename;
 	    content += "\n";
-	    content += this->m_assetLocator.includeShader (filename);
+	    content += spliceShaderLines (this->m_assetLocator.includeShader (filename));
 	    content += "\n// end of included from file ";
 	    content += filename;
 	    content += "\n";
