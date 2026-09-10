@@ -111,7 +111,7 @@ struct ControlPointData {
 /**
  * Particle emitter function
  */
-using EmitterFunc = std::function<void (std::vector<ParticleInstance>&, uint32_t&, float)>;
+using EmitterFunc = std::function<void (std::vector<ParticleInstance>&, uint32_t&, float, uint32_t)>;
 
 /**
  * Particle initializer function
@@ -137,6 +137,8 @@ public:
     void play ();
     void pause ();
     void stop ();
+    /** Queue a burst from each authored emitter, including while paused or stopped. */
+    void emitParticles (uint32_t count = 1);
     [[nodiscard]] bool isPlaying () const { return m_emitting; }
 
     [[nodiscard]] const Particle& getParticle () const;
@@ -228,6 +230,7 @@ private:
     std::vector<ParticleInstance> m_particles;
     uint32_t m_particleCount { 0 };
     bool m_emitting = true;
+    uint32_t m_pendingEmission = 0;
     uint32_t m_maxParticles { DEFAULT_MAX_PARTICLES };
 
     std::vector<EmitterFunc> m_emitters;
