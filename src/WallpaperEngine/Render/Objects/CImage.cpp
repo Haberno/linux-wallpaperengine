@@ -185,13 +185,13 @@ CImage::CImage (Wallpapers::CScene& scene, const Image& image) :
     m_modelMatrix (), m_viewProjectionMatrix (), m_image (image), m_resolvedAlpha (image.alpha->value->getFloat ()),
     m_pos (), m_initialized (false) {
     // register any properties in use on this object
-    this->registerProperty ("origin", *image.origin->value);
-    this->registerProperty ("scale", *image.scale->value);
-    this->registerProperty ("angles", *image.angles->value);
-    this->registerProperty ("visible", *image.visible->value);
-    this->registerProperty ("alpha", *image.alpha->value);
-    this->registerProperty ("color", *image.color->value);
-    this->registerProperty ("parallaxDepth", *image.parallaxDepth->value);
+    this->registerProperty ("origin", *image.origin);
+    this->registerProperty ("scale", *image.scale);
+    this->registerProperty ("angles", *image.angles);
+    this->registerProperty ("visible", *image.visible);
+    this->registerProperty ("alpha", *image.alpha);
+    this->registerProperty ("color", *image.color);
+    this->registerProperty ("parallaxDepth", *image.parallaxDepth);
 
     // get scene width and height to calculate positions
     auto scene_width = static_cast<float> (scene.getWidth ());

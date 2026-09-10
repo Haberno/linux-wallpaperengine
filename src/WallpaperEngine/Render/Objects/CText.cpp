@@ -321,19 +321,19 @@ private:
 
 CText::CText (Wallpapers::CScene& scene, const Text& text) :
     CObject (scene, text), ScriptableObject (scene, text), m_text (text) {
-    this->registerProperty ("color", *text.color->value);
-    this->registerProperty ("alpha", *text.alpha->value);
+    this->registerProperty ("color", *text.color);
+    this->registerProperty ("alpha", *text.alpha);
     this->registerProperty ("colorBlendMode", *text.colorBlendMode);
-    this->registerProperty ("origin", *text.origin->value);
-    this->registerProperty ("scale", *text.scale->value);
-    this->registerProperty ("visible", *text.visible->value);
-    this->registerProperty ("pointSize", *text.pointSize->value);
-    this->registerProperty ("text", *text.text->value);
-    this->registerProperty ("limitwidth", *text.limitWidth->value);
-    this->registerProperty ("maxwidth", *text.maxWidth->value);
-    this->registerProperty ("limitrows", *text.limitRows->value);
-    this->registerProperty ("maxrows", *text.maxRows->value);
-    this->registerProperty ("limituseellipsis", *text.limitUseEllipsis->value);
+    this->registerProperty ("origin", *text.origin);
+    this->registerProperty ("scale", *text.scale);
+    this->registerProperty ("visible", *text.visible);
+    this->registerProperty ("pointSize", *text.pointSize);
+    this->registerProperty ("text", *text.text);
+    this->registerProperty ("limitwidth", *text.limitWidth);
+    this->registerProperty ("maxwidth", *text.maxWidth);
+    this->registerProperty ("limitrows", *text.limitRows);
+    this->registerProperty ("maxrows", *text.maxRows);
+    this->registerProperty ("limituseellipsis", *text.limitUseEllipsis);
 
     // Effect parameters carry property scripts just like image effects. Queue them
     // once for this layer, so rebuilding changing glyphs does not restart fades.
