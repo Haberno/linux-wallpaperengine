@@ -1041,7 +1041,10 @@ std::vector<CObject*> CScene::buildFrameRenderOrder () const {
     keys.reserve (this->m_objectsByRenderOrder.size ());
     const glm::mat4& view = this->m_camera->getLookAt ();
     for (const CObject* object : this->m_objectsByRenderOrder) {
-	const bool sortable = object->getObject ().is<Model3D> ();
+	// Blended particles must follow opaque geometry too. Leaving an emitter in
+	// its authored slot lets later scenery paint over bubbles in open water,
+	// preserving them only where an earlier character already wrote depth.
+	const bool sortable = object->getObject ().is<Model3D> () || object->getObject ().is<Particle> ();
 	float cameraDepth = 0.0f;
 	if (sortable) {
 	    cameraDepth = (view * object->resolveWorldMatrix () * glm::vec4 (0.0f, 0.0f, 0.0f, 1.0f)).z;

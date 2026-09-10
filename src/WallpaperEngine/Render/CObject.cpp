@@ -202,6 +202,12 @@ glm::mat4 CObject::resolveWorldMatrix () const {
 
 RenderSortClass CObject::getRenderSortClass () const {
     const Object& object = this->getObject ();
+    if (object.is<Particle> ()) {
+	const auto& material = object.as<Particle> ()->material;
+	if (material != nullptr && material->material != nullptr) {
+	    return classifyMaterial (*material->material);
+	}
+    }
     if (object.is<Model3D> ()) {
 	RenderSortClass result = RenderSortClass::Opaque;
 	for (const auto& material : object.as<Model3D> ()->materials) {
