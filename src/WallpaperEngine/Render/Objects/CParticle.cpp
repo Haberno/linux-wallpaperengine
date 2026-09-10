@@ -38,6 +38,20 @@ float WallpaperEngine::Render::Objects::calculateRopeTrailVisualValue (
     return currentValue * (fadeAlongTrail ? std::clamp (trailPosition, 0.0f, 1.0f) : 1.0f);
 }
 
+glm::vec3 WallpaperEngine::Render::Objects::calculateControlPointAttraction (
+    const glm::vec3& toCenter, const float strength, const float radius, const float deltaTime
+) {
+    const float distance = glm::length (toCenter);
+    if (distance <= 0.001f || distance >= radius) {
+	return glm::vec3 (0.0f);
+    }
+    // The native controlpointattract operator fades linearly over the complete
+    // threshold radius. A constant force in half that radius makes flocks turn
+    // abruptly and changes the shape of magic vortices.
+    const float falloff = 1.0f - distance / radius;
+    return toCenter * (strength * deltaTime * falloff / distance);
+}
+
 CParticle::CParticle (Wallpapers::CScene& scene, const Particle& particle) :
     CObject (scene, particle), CRenderable (scene, particle, *particle.material->material),
     ScriptableObject (scene, particle), m_particle (particle) {
@@ -1643,7 +1657,7 @@ OperatorFunc CParticle::createControlPointAttractOperator (const ControlPointAtt
 	// Get dynamic values
 	glm::vec3 origin = originValue->getVec3 ();
 	float scale = scaleValue->getFloat ();
-	float threshold = thresholdValue->getFloat () / 2.0f;
+	float threshold = thresholdValue->getFloat ();
 
 	// Get control point position
 	if (controlPoint < 0 || controlPoint >= static_cast<int> (controlPoints.size ())) {
@@ -1659,19 +1673,8 @@ OperatorFunc CParticle::createControlPointAttractOperator (const ControlPointAtt
 		continue;
 	    }
 
-	    // Calculate distance and direction to control point
-	    glm::vec3 toCenter = center - p.position;
-	    float distance = glm::length (toCenter);
-
-	    // Only apply force if within threshold
-	    if (distance > 0.001f && distance < threshold) {
-		// Normalize direction
-		glm::vec3 direction = toCenter / distance;
-
-		// Apply constant force in direction of control point
-		glm::vec3 forceVec = direction * scale * dt;
-		p.velocity += forceVec * speedOverride->getFloat ();
-	    }
+	    p.velocity += calculateControlPointAttraction (center - p.position, scale, threshold, dt)
+		* speedOverride->getFloat ();
 	}
     };
 }
