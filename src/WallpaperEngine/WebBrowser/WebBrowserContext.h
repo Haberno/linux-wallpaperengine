@@ -7,6 +7,7 @@
 #include "include/cef_browser_process_handler.h"
 #include "include/wrapper/cef_helpers.h"
 
+#include <filesystem>
 #include <map>
 
 #define WPENGINE_SCHEME "wp"
@@ -37,10 +38,13 @@ public:
     void onBrowserClosed (CefRefPtr<CefBrowser> browser);
 
 private:
+    void removeCacheDirectory ();
+
     CefRefPtr<CefApp> m_browserApplication = nullptr;
     CefRefPtr<CefCommandLine> m_commandLine = nullptr;
     WallpaperEngine::Application::WallpaperApplication& m_wallpaperApplication;
     std::map<int, CefRefPtr<CefBrowser>> m_browsers;
+    std::filesystem::path m_cachePath;
     bool m_initialized = false;
 };
 } // namespace WallpaperEngine::WebBrowser

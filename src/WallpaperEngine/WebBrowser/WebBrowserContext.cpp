@@ -72,7 +72,10 @@ WebBrowserContext::WebBrowserContext (WallpaperEngine::Application::WallpaperApp
 
     // Configurate Chromium
     CefSettings settings;
-    std::string cache_path = (std::filesystem::temp_directory_path () / uuid::generate_uuid_v4 ()).string ();
+    m_cachePath = std::filesystem::temp_directory_path () / ("lwe-cef-" + uuid::generate_uuid_v4 ());
+    if (!std::filesystem::create_directory (m_cachePath)) {
+	sLog.exception ("Cannot create temporary browser profile: ", m_cachePath.string ());
+    }
 
     // Point CEF at its resources dir (icudtl.dat, *.pak, locales/) next to the executable;
     // without it subprocesses fail to load ICU and web wallpapers crash.
@@ -85,7 +88,7 @@ WebBrowserContext::WebBrowserContext (WallpaperEngine::Application::WallpaperApp
 	CefString (&settings.locales_dir_path) = exe_dir + "/locales";
     }
 
-    cef_string_utf8_to_utf16 (cache_path.c_str (), cache_path.length (), &settings.root_cache_path);
+    CefString (&settings.root_cache_path) = m_cachePath.string ();
     settings.windowless_rendering_enabled = true;
     // No sandbox: content is local/trusted, and the sandbox's fd remapping breaks ICU-data loading,
     // so disabling it lets every process read icudtl.dat from resources_dir_path directly.
@@ -95,6 +98,7 @@ WebBrowserContext::WebBrowserContext (WallpaperEngine::Application::WallpaperApp
 
     this->m_initialized = CefInitialize (main_args, settings, this->m_browserApplication, nullptr);
     if (!this->m_initialized) {
+	removeCacheDirectory ();
 	sLog.exception ("CefInitialize: failed");
     }
 }
@@ -152,4 +156,15 @@ WebBrowserContext::~WebBrowserContext () {
     sLog.out ("Shutting down CEF");
     CefShutdown ();
     this->m_initialized = false;
+    removeCacheDirectory ();
+}
+
+void WebBrowserContext::removeCacheDirectory () {
+    // This profile belongs to this context alone and is never reused. Wait until
+    // CEF has released it, then remove it so repeated launches do not fill /tmp.
+    std::error_code error;
+    std::filesystem::remove_all (m_cachePath, error);
+    if (error) {
+	sLog.error ("Cannot remove temporary browser profile ", m_cachePath.string (), ": ", error.message ());
+    }
 }
