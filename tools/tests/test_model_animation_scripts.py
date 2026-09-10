@@ -73,6 +73,59 @@ def write_model(root):
 
 @unittest.skipUnless(os.environ.get('LWE_TEST_BINARY'), 'Set LWE_TEST_BINARY for graphics integration tests')
 class ModelAnimationScripts(unittest.TestCase):
+    def test_property_animations_are_scoped_to_the_selected_model_layer(self):
+        from test_script_property_animation import animation
+
+        script = '''
+let first, second;
+const check = (a,b) => { if (Math.abs(a-b) > .001) throw Error(a+' != '+b); };
+export function init(value) {
+    first = thisLayer.getAnimationLayer('Idle').getAnimation('fade');
+    second = thisLayer.getAnimationLayer('Action').getAnimation('fade');
+    if (!first || !second) throw Error('Missing nested property controller');
+    if (thisLayer.getAnimationLayer('Idle').getAnimation('missing') !== undefined)
+        throw Error('Unknown animation must not select the model clip');
+    first.setFrame(2);
+    second.setFrame(6);
+    check(first.getFrame(), 2);
+    check(second.getFrame(), 6);
+    first.stop();
+    check(second.getFrame(), 6);
+    if (!thisLayer.getAnimationLayer('Idle').isPlaying()) throw Error('Blend stop paused the clip');
+    first.setFrame(0);
+    second.setFrame(0);
+    first.play();
+    second.play();
+    return value;
+}
+export function animationEvent(event, value) {
+    if (event.animation === 'fade') console.log('NESTED_EVENT '+event.name);
+    return value;
+}
+export function update(value) {
+    if (engine.runtime > 1.1) {
+        check(first.getFrame(), 10);
+        check(second.getFrame(), 10);
+        console.log('NESTED_CONTROLS_OK');
+    }
+    return value;
+}
+'''
+        with tempfile.TemporaryDirectory(prefix='lwe-model-nested-') as directory:
+            root = Path(directory)
+            write_model(root)
+            layers = []
+            for index, name in enumerate(('Idle', 'Action')):
+                layers.append({'id': 10 + index, 'name': name, 'animation': index + 1,
+                               'blend': {'value': 0, 'animation': animation(0, .5, name='fade',
+                                   startpaused=True, events=[{'frame': 5, 'name': name}])}})
+            _, output = render_scene(self, root, base_scene([{
+                'id': 1, 'name': 'model probe', 'model': 'models/probe.mdl', 'origin': '160 90 0',
+                'visible': {'value': True, 'script': script}, 'animationlayers': layers}]), frames=15)
+            self.assertIn('NESTED_CONTROLS_OK', output)
+            for name in ('Idle', 'Action'):
+                self.assertEqual(output.count('NESTED_EVENT ' + name), 1)
+
     def test_clip_controls_events_and_return_to_idle(self):
         script = '''
 let idle, action, triggered = false, reset = false, checked = false;
