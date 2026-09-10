@@ -14,6 +14,36 @@ using WallpaperEngine::Render::Objects::calculateParticleSimulationDelta;
 using WallpaperEngine::Render::Objects::calculateRopeTrailVisualValue;
 using WallpaperEngine::Render::Objects::convertParticleRotationForRender;
 using WallpaperEngine::Render::Objects::resolveParticleControlPoint;
+using WallpaperEngine::Render::Objects::calculateFixedParticleOrientation;
+
+TEST_CASE ("fixed particle orientation matches native draw helper vectors", "[particle]") {
+    // Captured by executing wallpaper64.exe's 1402298b0 with the same inputs.
+    const glm::mat3 expected[] {
+	{ { 1, 0, 0 }, { 0, 0, -1 }, { 0, 1, 0 } },
+	{ { .948683381f, 0, -.316227823f }, { -.169030860f, .845154285f, -.507092595f },
+	  { .267261267f, .534522533f, .801783800f } },
+	{ { .996545732f, 0, -.083045490f }, { -.060682733f, .682680666f, -.728192687f },
+	  { .077790990f, .350059390f, .933491766f } },
+	{ { .940148652f, -.340494931f, .013556005f }, { .242097050f, .639406264f, -.729759276f },
+	  { .147441968f, .442325890f, .884651780f } }
+    };
+    for (int sample = 0; sample < 4; ++sample) {
+	const glm::vec3 axis = sample == 0 ? glm::vec3 (0, 1, 0) : glm::vec3 (1, 2, 3);
+	glm::mat4 model (1.0f);
+	if (sample >= 2) {
+	    model = glm::rotate (model, .6f, glm::normalize (glm::vec3 (1, 2, 3)))
+		* glm::scale (glm::mat4 (1.0f), glm::vec3 (2, 3, 4));
+	}
+	const auto actual = calculateFixedParticleOrientation (axis, glm::mat3 (model), sample == 3);
+	for (int column = 0; column < 3; ++column) {
+	    for (int row = 0; row < 3; ++row) {
+		CHECK (actual[column][row] == Catch::Approx (expected[sample][column][row]).margin (0.000001f));
+	    }
+	}
+    }
+    CHECK (calculateFixedParticleOrientation (glm::vec3 (0), glm::mat3 (1.0f), false) == expected[0]);
+    CHECK (calculateFixedParticleOrientation (glm::vec3 (0), glm::mat3 (0.0f), false) == expected[0]);
+}
 
 TEST_CASE ("control point spaces match native mirrored-layer results", "[particle]") {
     // Executed the installed wallpaper64.exe's 14022bd40 with Sea's actual

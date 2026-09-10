@@ -546,6 +546,9 @@ struct ParticleRenderer {
     bool uvSmoothing; // rope only: reduces flickering when lifetimes are identical
     bool fadeAlpha; // ropetrail: fade alpha along trail
     bool fadeSize; // ropetrail: fade size along trail
+    std::string orientation { "screen" };
+    glm::vec3 axis { 0.0f, 1.0f, 0.0f };
+    uint32_t flags { 0 }; // bit 0: orientation ignores the layer transform
 };
 
 /**

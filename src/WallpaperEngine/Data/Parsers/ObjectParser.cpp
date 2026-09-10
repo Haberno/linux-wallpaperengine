@@ -964,6 +964,9 @@ ParticleRenderer ObjectParser::parseParticleRenderer (const JSON& it) {
 	.uvSmoothing = it.optional ("uvsmoothing", true),
 	.fadeAlpha = it.optional ("fadealpha", false),
 	.fadeSize = it.optional ("fadesize", false),
+	.orientation = it.optional ("orientation", std::string ("screen")),
+	.axis = it.optional ("axis", glm::vec3 (0.0f, 1.0f, 0.0f)),
+	.flags = it.optional ("flags", uint32_t (0)),
     };
 }
 
