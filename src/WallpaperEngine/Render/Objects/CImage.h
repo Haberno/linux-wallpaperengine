@@ -19,6 +19,7 @@
 #include <optional>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 using namespace WallpaperEngine;
@@ -252,6 +253,7 @@ private:
     std::vector<Effects::CPass*> m_passes = {};
     std::vector<Effects::CPass*> m_activePasses = {};
     std::unordered_map<Effects::CPass*, const UserSetting*> m_passVisibility;
+    std::unordered_set<const UserSetting*> m_failedEffects;
     std::vector<MaterialPassUniquePtr> m_virtualPassess = {};
 
     glm::vec4 m_pos = {};
