@@ -71,8 +71,14 @@ const std::map<std::string, ScriptableObject::PropertyEntry>& ScriptableObject::
     return this->m_properties;
 }
 
+const UserSetting* ScriptableObject::getPropertySetting (const std::string& name) const {
+    const auto it = m_properties.find (name);
+    return it != m_properties.end () ? it->second.setting : nullptr;
+}
+
 void ScriptableObject::registerProperty (const std::string& name, const UserSetting& setting) {
     registerProperty (name, *setting.value);
+    m_properties.at (name).setting = &setting;
     if (setting.animation != nullptr && !setting.animation->name.empty ()) {
 	m_animations.insert_or_assign (setting.animation->name, setting.animation.get ());
     }
