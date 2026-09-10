@@ -29,10 +29,13 @@ public:
 	CRenderable& renderable, std::shared_ptr<const FBOProvider> fboProvider, const MaterialPass& pass,
 	std::optional<std::reference_wrapper<const ImageEffectPassOverride>> override,
 	std::optional<std::reference_wrapper<const TextureMap>> binds,
-	std::optional<std::reference_wrapper<std::string>> target, ComboMap runtimeCombos = {}
+	std::optional<std::reference_wrapper<std::string>> target, ComboMap runtimeCombos = {},
+	bool deferShaderSetup = false
     );
     ~CPass ();
 
+    /** Build an initially hidden effect only when it first enters the active chain. */
+    void initialize ();
     void render ();
 
     void setDestination (std::shared_ptr<const CFBO> drawTo);
@@ -257,6 +260,7 @@ private:
      * quickly retains hundreds of megabytes.
      */
     std::unique_ptr<Render::Shaders::Shader> m_shader = nullptr;
+    bool m_shaderInitialized = false;
 
     std::shared_ptr<const CFBO> m_drawTo = nullptr;
     std::shared_ptr<const TextureProvider> m_input = nullptr;
