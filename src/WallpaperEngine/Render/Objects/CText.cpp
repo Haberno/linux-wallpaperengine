@@ -393,7 +393,10 @@ void CText::setup () {
     // Initially empty text can be written later by any layer's script.
     rebuildTextureFrom (text.empty () ? std::string (" ") : text);
 
-    if (!m_text.effects.empty ()) {
+    const bool sampledByLayer = std::ranges::any_of (getScene ().getScene ().objects, [this] (const auto& object) {
+        return std::ranges::find (object->dependencies, getId ()) != object->dependencies.end ();
+    });
+    if (!m_text.effects.empty () || sampledByLayer) {
 	try {
 	    setupEffectChain ();
 	} catch (const std::exception& e) {
@@ -419,14 +422,26 @@ void CText::setupEffectChain () {
     );
     m_effectHost = std::make_unique<CTextEffectHost> (this->getScene (), m_text, *m_effectMaterial);
 
+    // Keep working surfaces private. Consumers need the completed result, not
+    // whichever ping-pong surface happens to contain it this frame.
     m_fboA = std::make_shared<CFBO> (
-	"_text_raster_" + std::to_string (this->getId ()), TextureFormat_ARGB8888, TextureFlags_ClampUVs, 1, surface.x,
-	surface.y, surface.x, surface.y
+        "_text_raster_" + std::to_string (getId ()), TextureFormat_ARGB8888,
+        TextureFlags_ClampUVs, 1, surface.x, surface.y, surface.x, surface.y
     );
     m_fboB = std::make_shared<CFBO> (
-	"_text_pingpong_" + std::to_string (this->getId ()), TextureFormat_ARGB8888, TextureFlags_ClampUVs, 1,
-	surface.x, surface.y, surface.x, surface.y
+        "_text_pingpong_" + std::to_string (getId ()), TextureFormat_ARGB8888,
+        TextureFlags_ClampUVs, 1, surface.x, surface.y, surface.x, surface.y
     );
+    const auto targetSize = FBOProvider::calculateTargetSize (surface, getScene ().getRenderScale ());
+    if (m_publishedFBO == nullptr) {
+        const std::string base = "_rt_imageLayerComposite_" + std::to_string (getId ());
+        m_publishedFBO = getScene ().create (
+            base + "_a", TextureFormat_ARGB8888, TextureFlags_ClampUVs, 1, surface, surface
+        );
+        getScene ().alias (base + "_b", m_publishedFBO);
+    } else {
+        m_publishedFBO->resize (targetSize.x, targetSize.y);
+    }
     m_effectHost->setTexture (m_fboA);
 
     // NDC quad + texcoords for the intermediate passes, same layout as CImage's pass buffers
@@ -460,6 +475,8 @@ void CText::setupEffectChain () {
 
 	auto curOverride = effect->passOverrides.begin ();
 	const auto endOverride = effect->passOverrides.end ();
+	std::shared_ptr<const TextureProvider> effectInput;
+	bool inTargetSequence = false;
 
 	for (const auto& effectPass : effect->effect->passes) {
 	    if (!effectPass->material.has_value ()) {
@@ -475,8 +492,6 @@ void CText::setupEffectChain () {
 		    ? *effectPass->target
 		    : std::optional<std::reference_wrapper<std::string>> (std::nullopt);
 
-	std::shared_ptr<const TextureProvider> effectInput;
-	bool inTargetSequence = false;
 		auto* cpass
 		    = new Effects::CPass (*m_effectHost, fboProvider, *pass, override, effectPass->binds, target);
 
@@ -486,6 +501,10 @@ void CText::setupEffectChain () {
 		if (cpass->getTarget ().has_value ()) {
 		    const std::string& targetName = cpass->getTarget ().value ();
 		    if (auto resolved = fboProvider->find (targetName); resolved != nullptr) {
+			if (!inTargetSequence) {
+			    effectInput = asInput;
+			    inTargetSequence = true;
+			}
 			drawTo = resolved;
 			writesToTarget = true;
 		    } else {
@@ -495,16 +514,13 @@ void CText::setupEffectChain () {
 
 		cpass->setDestination (drawTo);
 		cpass->setInput (asInput);
+		cpass->setPreviousInput (inTargetSequence ? effectInput : nullptr);
 		cpass->setPosition (m_ndcPosition);
 		cpass->setTexCoord (m_passTexCoord);
 		// matrices keep CPass' shared identity defaults: intermediate passes are 1:1 blits
 
 		m_effectPasses.push_back (cpass);
 
-			if (!inTargetSequence) {
-			    effectInput = asInput;
-			    inTargetSequence = true;
-			}
 		if (writesToTarget) {
 		    asInput = drawTo;
 		    drawTo = prevDrawTo;
@@ -513,8 +529,8 @@ void CText::setupEffectChain () {
 		    const auto nextDraw = (drawTo == m_fboA) ? m_fboB : m_fboA;
 		    asInput = drawTo;
 		    drawTo = nextDraw;
+		    inTargetSequence = false;
 		}
-		cpass->setPreviousInput (inTargetSequence ? effectInput : nullptr);
 	    }
 
 	    if (curOverride != endOverride) {
@@ -523,13 +539,7 @@ void CText::setupEffectChain () {
 	}
     }
 
-    if (m_effectPasses.empty ()) {
-	destroyEffectChain ();
-	return;
-    }
-
     m_effectResult = std::dynamic_pointer_cast<const CFBO> (asInput);
-		    inTargetSequence = false;
 
     // composite program: same vertex shader, RGBA fragment
     GLuint vs = compileShader (GL_VERTEX_SHADER, kVertexShader);
@@ -625,7 +635,7 @@ void CText::destroyEffectChain () {
     m_effectsEnabled = false;
 }
 
-void CText::renderEffectChain (const glm::mat4& mvp, const float brightness, const float alpha) {
+void CText::renderEffectChain (const glm::mat4& mvp, const float brightness, const float alpha, const bool drawToScene) {
     const glm::vec4 color = m_text.color->value->getVec4 ();
 
     // the scene sets its clear color once at setup, not per frame — leaking ours would
@@ -668,17 +678,19 @@ void CText::renderEffectChain (const glm::mat4& mvp, const float brightness, con
 	pass->render ();
     }
 
-    // 4. composite the result onto the scene with the object's world transform
-    const auto sceneTarget = this->getScene ().getActiveRenderTarget ();
-    glBindFramebuffer (GL_FRAMEBUFFER, sceneTarget->getFramebuffer ());
-    glViewport (0, 0, sceneTarget->getRealWidth (), sceneTarget->getRealHeight ());
-
-    glEnable (GL_BLEND);
-    glBlendFunc (GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+    // Publish the finished, modulated layer through a stable target. A later
+    // clock change can resize it without leaving consumers with an old texture.
+    glBindFramebuffer (GL_FRAMEBUFFER, m_publishedFBO->getFramebuffer ());
+    glViewport (0, 0, m_publishedFBO->getRealWidth (), m_publishedFBO->getRealHeight ());
+    glDisable (GL_BLEND);
+    glDisable (GL_DEPTH_TEST);
     glDisable (GL_CULL_FACE);
-
     glUseProgram (m_compositeProgram);
-    glUniformMatrix4fv (m_cuMVP, 1, GL_FALSE, glm::value_ptr (mvp));
+    const glm::mat4 publishMVP = glm::ortho (
+        -m_effectSurface.x * 0.5f, m_effectSurface.x * 0.5f,
+        -m_effectSurface.y * 0.5f, m_effectSurface.y * 0.5f
+    ) * glm::translate (glm::mat4 (1.0f), glm::vec3 (-m_effectCompositeOffset, 0.0f));
+    glUniformMatrix4fv (m_cuMVP, 1, GL_FALSE, glm::value_ptr (publishMVP));
     const GLint uColor = glGetUniformLocation (m_compositeProgram, "uColor");
     glUniform4f (uColor, brightness, brightness, brightness, alpha);
     glActiveTexture (GL_TEXTURE0);
@@ -687,6 +699,17 @@ void CText::renderEffectChain (const glm::mat4& mvp, const float brightness, con
     ensureCompositeVao ();
     glBindVertexArray (m_compositeVao);
     glDrawArrays (GL_TRIANGLES, 0, 6);
+
+    // Visibility controls the scene draw, not the offscreen layer used by others.
+    const auto sceneTarget = this->getScene ().getActiveRenderTarget ();
+    glBindFramebuffer (GL_FRAMEBUFFER, sceneTarget->getFramebuffer ());
+    glViewport (0, 0, sceneTarget->getRealWidth (), sceneTarget->getRealHeight ());
+    if (drawToScene) {
+        glEnable (GL_BLEND);
+        glBlendFunc (GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+        glUniformMatrix4fv (m_cuMVP, 1, GL_FALSE, glm::value_ptr (mvp));
+        glDrawArrays (GL_TRIANGLES, 0, 6);
+    }
     glBindVertexArray (0);
 
     // restore the state this chain touched that nothing downstream re-sets per draw
@@ -1057,13 +1080,9 @@ void CText::render () {
     if (!m_valid) {
 	return;
     }
-    if (!m_text.visible->value->getBool ()) {
-	return;
-    }
-    // a hidden container hides its whole subtree; MyGO's Clock/Date children carry no
-    // visible of their own — the parent's user-property toggle must gate them too
-    if (!this->isVisibleThroughParents ()) {
-	return;
+    const bool drawToScene = m_text.visible->value->getBool () && this->isVisibleThroughParents ();
+    if (!drawToScene && !m_effectsEnabled) {
+        return;
     }
 
 #if !NDEBUG
@@ -1123,7 +1142,7 @@ void CText::render () {
 	const glm::mat4 mvp = getScene ().getCamera ().getProjection () * getScene ().getCamera ().getLookAt () * model;
 
 	if (m_effectsEnabled) {
-	    renderEffectChain (mvp, brightness, alpha);
+	    renderEffectChain (mvp, brightness, alpha, drawToScene);
 #if !NDEBUG
 	    glPopDebugGroup ();
 #endif /* DEBUG */
@@ -1170,7 +1189,7 @@ void CText::render () {
     const glm::mat4 mvp = getScene ().getCamera ().getProjection () * getScene ().getCamera ().getLookAt () * model;
 
     if (m_effectsEnabled) {
-	renderEffectChain (mvp, brightness, alpha);
+	renderEffectChain (mvp, brightness, alpha, drawToScene);
 #if !NDEBUG
 	glPopDebugGroup ();
 #endif /* DEBUG */
