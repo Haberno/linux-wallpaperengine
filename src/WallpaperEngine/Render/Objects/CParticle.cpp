@@ -1825,18 +1825,24 @@ OperatorFunc CParticle::createVortexOperator (const VortexOperator& op) {
 OperatorFunc CParticle::createControlPointAttractOperator (const ControlPointAttractOperator& op) {
     int controlPoint = op.controlPoint;
     DynamicValue* originValue = op.origin->value.get ();
-    DynamicValue* scaleValue = op.scale->value.get ();
-    DynamicValue* thresholdValue = op.threshold->value.get ();
+    DynamicValue* scaleValue = op.scale ? op.scale->value.get () : nullptr;
+    DynamicValue* thresholdValue = op.threshold ? op.threshold->value.get () : nullptr;
     DynamicValue* speedOverride = getInstanceOverride ().speed->value.get ();
+    // The authored defaults use pixels in an orthographic scene and world units
+    // in a perspective scene. The project is still being parsed when operators
+    // are read, so resolve omitted settings here rather than guessing in the parser.
+    const bool isPerspective = getScene ().getScene ().camera.projection.isPerspective;
+    const float defaultScale = isPerspective ? 20.0f : 512.0f;
+    const float defaultThreshold = isPerspective ? 5.0f : 512.0f;
 
-    return [controlPoint, originValue, scaleValue, thresholdValue, speedOverride] (
+    return [controlPoint, originValue, scaleValue, thresholdValue, speedOverride, defaultScale, defaultThreshold] (
 	       std::vector<ParticleInstance>& particles, uint32_t count,
 	       const std::vector<ControlPointData>& controlPoints, float currentTime, float dt
 	   ) {
 	// Get dynamic values
 	glm::vec3 origin = originValue->getVec3 ();
-	float scale = scaleValue->getFloat ();
-	float threshold = thresholdValue->getFloat ();
+	float scale = scaleValue ? scaleValue->getFloat () : defaultScale;
+	float threshold = thresholdValue ? thresholdValue->getFloat () : defaultThreshold;
 
 	// Get control point position
 	if (controlPoint < 0 || controlPoint >= static_cast<int> (controlPoints.size ())) {
