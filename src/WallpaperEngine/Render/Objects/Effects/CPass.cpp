@@ -48,16 +48,22 @@ CPass::CPass (
     CRenderable& renderable, std::shared_ptr<const FBOProvider> fboProvider, const MaterialPass& pass,
     std::optional<std::reference_wrapper<const ImageEffectPassOverride>> override,
     std::optional<std::reference_wrapper<const TextureMap>> binds,
-    std::optional<std::reference_wrapper<std::string>> target, ComboMap runtimeCombos
+    std::optional<std::reference_wrapper<std::string>> target, ComboMap runtimeCombos, bool deferShaderSetup
 ) :
     Helpers::ContextAware (renderable), m_renderable (renderable), m_fboProvider (std::move (fboProvider)),
     m_pass (pass), m_binds (binds.has_value () ? binds.value ().get () : DEFAULT_BINDS),
     m_override (override.has_value () ? override.value ().get () : DEFAULT_OVERRIDE),
     m_runtimeCombos (std::move (runtimeCombos)), m_target (target),
     m_blendingmode (pass.blending), m_depthtestmode (pass.depthtest), m_depthwritemode (pass.depthwrite) {
-    this->setupShaders ();
+    if (!deferShaderSetup) this->initialize ();
     // NOTE: m_vao is created lazily in render(): VAOs are not shared between GL
     // contexts, so it cannot be created here when built on the async switch worker
+}
+
+void CPass::initialize () {
+    if (m_shaderInitialized) return;
+    setupShaders ();
+    m_shaderInitialized = true;
 }
 
 CPass::~CPass () {
