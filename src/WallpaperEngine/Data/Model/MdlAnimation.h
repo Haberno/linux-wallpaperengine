@@ -61,6 +61,8 @@ struct MdlActiveAnimation {
     float time = 0.0f;
     float weight = 1.0f;
     bool additive = false;
+    /** An explicit playhead from a script-controlled timeline, already wrapped/clamped. */
+    std::optional<float> frame;
 };
 
 struct MdlPose {

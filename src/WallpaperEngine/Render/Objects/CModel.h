@@ -31,6 +31,30 @@ public:
     void renderShadow (const glm::mat4& lightViewProjection);
 
     [[nodiscard]] const Model3D& getModel () const;
+    struct AnimationLayer {
+	const ImageAnimationLayer* settings = nullptr;
+	const MdlAnimationClip* clip = nullptr;
+	PropertyAnimation timeline = {};
+	std::string key;
+	float blend = 1.0f;
+	bool visible = true;
+	bool single = false;
+	bool blendIn = true;
+	bool blendOut = true;
+	float blendTime = 0.5f;
+    };
+    struct SingleAnimationConfig {
+	bool blendIn = true;
+	bool blendOut = true;
+	float blendTime = 0.5f;
+    };
+    void prepareAnimationEvents () override;
+    [[nodiscard]] AnimationLayer* findAnimationLayer (const std::string& key);
+    [[nodiscard]] AnimationLayer* getAnimationLayer (const std::string& name);
+    [[nodiscard]] AnimationLayer* getAnimationLayer (size_t index);
+    [[nodiscard]] size_t getAnimationLayerCount () const;
+    AnimationLayer* playSingleAnimation (const std::string& name, const SingleAnimationConfig& config);
+    void animationControlsChanged (PropertyAnimation& animation);
     [[nodiscard]] std::optional<glm::mat4> getAttachmentTransform (const std::string& name) const override;
     [[nodiscard]] std::optional<size_t> getAttachmentIndex (const std::string& name) const override;
     [[nodiscard]] std::optional<std::string> getAttachmentName (size_t index) const override;
@@ -60,12 +84,17 @@ private:
     void setupShadowProgram ();
     void renderPasses (std::optional<RenderSortClass> renderClass);
     void updateAnimationPose () const;
+    void syncAnimationLayers () const;
     [[nodiscard]] glm::mat4 resolveModelMatrix () const;
     void updateMatrices ();
 
     const Model3D& m_model;
     /** Legacy SceneScript compatibility: published model layers read thisLayer.size. */
     Data::Model::DynamicValue m_size;
+    // Stable addresses for the timelines registered with SceneScript. Controllers
+    // retain keys, so removal never leaves JavaScript holding a dangling pointer.
+    std::vector<std::unique_ptr<AnimationLayer>> m_animationLayers;
+    uint64_t m_nextAnimationLayer = 0;
 
     std::vector<SubmeshBuffers> m_submeshes = {};
     mutable std::vector<glm::mat4> m_worldBones = {};
