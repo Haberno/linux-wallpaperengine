@@ -31,6 +31,14 @@ struct MdlBoneFrame {
     glm::vec3 scale = glm::vec3 (1.0f);
 };
 
+/** An authored world-space bone control (0: end transform, 1: IK pole). */
+struct MdlBoneControl {
+    std::string name;
+    uint32_t bone = 0;
+    uint32_t type = 0;
+    glm::mat4 bindWorld = glm::mat4 (1.0f);
+};
+
 struct MdlAnimationClip {
     uint32_t id = 0;
     std::string name = {};
@@ -42,6 +50,9 @@ struct MdlAnimationClip {
     std::vector<uint32_t> boneFlags = {};
     /** boneFrames[bone][frame], commonly frameCount + 1 entries for loop interpolation. */
     std::vector<std::vector<MdlBoneFrame>> boneFrames = {};
+    std::vector<uint32_t> controlFlags;
+    /** MDLA0002+ stores one additional pose track per MDLS bone control. */
+    std::vector<std::vector<MdlBoneFrame>> controlFrames;
     /**
      * blendTracks[row][frame], the per-frame scalars a clip drives alongside its bones.
      * They become g_BlendMap in the puppettexturechannels shader, fading a channelmap
@@ -52,6 +63,7 @@ struct MdlAnimationClip {
 
 struct MdlAnimationData {
     std::vector<MdlBone> bones = {};
+    std::vector<MdlBoneControl> controls;
     std::map<std::string, MdlAttachment> attachments = {};
     std::vector<MdlAnimationClip> animations = {};
 };
