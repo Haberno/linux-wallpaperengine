@@ -14,19 +14,20 @@
 
 using namespace WallpaperEngine;
 using namespace WallpaperEngine::Render::Objects;
+using WallpaperEngine::Render::RenderSortClass;
 
 namespace {
-int passRenderPriority (const BlendingMode mode) {
+RenderSortClass passRenderClass (const BlendingMode mode) {
     switch (mode) {
 	case BlendingMode_Translucent:
-	    return 1;
+	    return RenderSortClass::Translucent;
 	case BlendingMode_Additive:
-	    return 2;
+	    return RenderSortClass::Additive;
 	case BlendingMode_Normal:
 	case BlendingMode_AlphaToCoverage:
 	case BlendingMode_Unknown:
 	default:
-	    return 0;
+	    return RenderSortClass::Opaque;
     }
 }
 } // namespace
@@ -168,6 +169,12 @@ void CModel::setup () {
 	orderedPasses.push_back (this->m_passes[index]);
     }
     this->m_passes = std::move (orderedPasses);
+    for (const auto* pass : this->m_passes) {
+	const RenderSortClass renderClass = passRenderClass (pass->getBlendingMode ());
+	if (this->m_renderSortClasses.empty () || this->m_renderSortClasses.back () != renderClass) {
+	    this->m_renderSortClasses.push_back (renderClass);
+	}
+    }
 
     if (this->getScene ().getLights ().shadowViewCount > 0) {
 	this->setupShadowProgram ();
@@ -180,7 +187,7 @@ std::vector<size_t> CModel::calculatePassRenderPermutation (const std::vector<Bl
     std::vector<size_t> permutation (modes.size ());
     std::iota (permutation.begin (), permutation.end (), 0);
     std::stable_sort (permutation.begin (), permutation.end (), [&modes] (const size_t left, const size_t right) {
-	return passRenderPriority (modes[left]) < passRenderPriority (modes[right]);
+	return passRenderClass (modes[left]) < passRenderClass (modes[right]);
     });
     return permutation;
 }
@@ -398,7 +405,13 @@ void CModel::updateMatrices () {
     }
 }
 
-void CModel::render () {
+const std::vector<RenderSortClass>& CModel::getRenderSortClasses () const { return this->m_renderSortClasses; }
+
+void CModel::render () { this->renderPasses (std::nullopt); }
+
+void CModel::render (const RenderSortClass renderClass) { this->renderPasses (renderClass); }
+
+void CModel::renderPasses (const std::optional<RenderSortClass> renderClass) {
     if (!this->m_initialized) {
 	return;
     }
@@ -423,7 +436,9 @@ void CModel::render () {
     glColorMask (true, true, true, false);
 
     for (const auto& pass : this->m_passes) {
-	pass->render ();
+	if (!renderClass.has_value () || passRenderClass (pass->getBlendingMode ()) == *renderClass) {
+	    pass->render ();
+	}
     }
 
     glColorMask (true, true, true, true);
