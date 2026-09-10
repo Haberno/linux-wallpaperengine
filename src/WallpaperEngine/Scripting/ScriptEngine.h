@@ -36,6 +36,7 @@ namespace WallpaperEngine::Scripting {
 class ScriptPropertiesObject;
 namespace Adapters {
     class ScriptableObjectAdapter;
+    class VideoTextureAdapter;
 }
 using namespace WallpaperEngine::Data::Model;
 
@@ -63,6 +64,7 @@ public:
 	std::unique_ptr<Adapters::VectorAdapter<3>> vec3;
 	std::unique_ptr<Adapters::VectorAdapter<2>> vec2;
 	std::unique_ptr<Adapters::ScriptableObjectAdapter> object;
+	std::unique_ptr<Adapters::VideoTextureAdapter> video;
     };
 
     ~ScriptEngine ();
