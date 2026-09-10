@@ -1,4 +1,5 @@
 #include "ScriptableObjectAdapter.h"
+#include "VideoTextureAdapter.h"
 
 #include <algorithm>
 #include <cmath>
@@ -914,6 +915,13 @@ static JSValue scriptable_emit_particles (JSContext* ctx, JSValueConst thisVal, 
     return JS_UNDEFINED;
 }
 
+static JSValue scriptable_get_video_texture (JSContext* ctx, JSValueConst thisVal, int, JSValueConst*) {
+    const auto* image = scriptable_image (thisVal);
+    return image != nullptr
+	? image->getScene ().getScriptEngine ().getAdapters ().video->instantiate (image->getTexture ())
+	: JS_UNDEFINED;
+}
+
 JSValue scriptableobject_property_get (JSContext* ctx, JSValueConst obj_val, JSAtom atom, JSValueConst receiver) {
     JSClassID classId = 0;
 
@@ -994,6 +1002,9 @@ JSValue scriptableobject_property_get (JSContext* ctx, JSValueConst obj_val, JSA
     }
     if (std::strcmp (name, "getTextureAnimation") == 0) {
 	return JS_NewCFunction (ctx, scriptable_get_texture_animation, name, 0);
+    }
+    if (std::strcmp (name, "getVideoTexture") == 0) {
+	return JS_NewCFunction (ctx, scriptable_get_video_texture, name, 0);
     }
     if (std::strcmp (name, "getAnimationLayerCount") == 0) {
 	return JS_NewCFunction (ctx, scriptable_get_animation_layer_count, name, 0);
