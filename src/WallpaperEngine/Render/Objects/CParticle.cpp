@@ -2331,7 +2331,7 @@ void CParticle::updateParticleViewProjection () {
 
 void CParticle::updateParticleRenderVars () {
     // Rope-trail geometry already contains the current, partially completed segment.
-    // A time offset of one maps every independent history from tail UV 0 to head UV 1.
+    // A time offset of one maps every independent history from head UV 0 to tail UV 1.
     // Sprite trails use the authored length limits directly in genericparticle.
     m_renderVar0 = m_useRopeTrailRenderer ? glm::vec4 (0.0f, 0.0f, 1.0f, 0.0f)
 					  : glm::vec4 (m_trailLength, m_trailMaxLength, m_trailMinLength, 0.0f);
@@ -2564,14 +2564,17 @@ void CParticle::renderRopeTrail () {
 	    points.push_back (point);
 	};
 
-	for (const auto& point : particle.trailHistory) {
-	    appendPoint (point);
-	}
+	// The stock TRAILRENDERER shader starts UV 0 at the live head, followed
+	// by its recent history. Authored shaft textures narrow toward UV 1;
+	// oldest-first geometry put their wide end at the tail instead.
 	appendPoint (
 	    ParticleInstance::TrailPoint {
 		.position = particle.position,
 	    }
 	);
+	for (auto point = particle.trailHistory.rbegin (); point != particle.trailHistory.rend (); ++point) {
+	    appendPoint (*point);
+	}
 
 	if (points.size () < 2) {
 	    continue;
@@ -2610,7 +2613,7 @@ void CParticle::renderRopeTrail () {
 	if (m_ropeFadeAlpha || m_ropeFadeSize) {
 	    const float denominator = static_cast<float> (totalPoints - 1);
 	    for (uint32_t pointIndex = 0; pointIndex < totalPoints; pointIndex++) {
-		const float tailFade = static_cast<float> (pointIndex) / denominator;
+		const float tailFade = 1.0f - static_cast<float> (pointIndex) / denominator;
 		splineColors[pointIndex].a
 		    = calculateRopeTrailVisualValue (particle.alpha, tailFade, m_ropeFadeAlpha);
 		splineSizes[pointIndex]
