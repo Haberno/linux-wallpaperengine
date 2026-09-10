@@ -704,6 +704,34 @@ static JSValue property_animation_command (
     return JS_UNDEFINED;
 }
 
+static JSValue property_animation_controller (JSContext* ctx, JSValueConst layer, JSValueConst name);
+
+static JSValue model_layer_get_animation (
+    JSContext* ctx, JSValueConst thisVal, int argc, JSValueConst* argv, int magic, JSValueConst* data
+) {
+    auto* model = scriptable_model (data[0]);
+    if (model == nullptr || argc < 1 || !JS_IsString (argv[0])) return JS_UNDEFINED;
+    const char* key = JS_ToCString (ctx, data[1]);
+    if (key == nullptr) return JS_EXCEPTION;
+    auto* layer = model->findAnimationLayer (key);
+    JS_FreeCString (ctx, key);
+    if (layer == nullptr || layer->settings == nullptr) return JS_UNDEFINED;
+    const char* name = JS_ToCString (ctx, argv[0]);
+    if (name == nullptr) return JS_EXCEPTION;
+    ScopeGuard releaseName ([&] { JS_FreeCString (ctx, name); });
+    const auto prefix = "animation_" + std::to_string (layer->settings->id) + "_";
+    for (const auto& [property, entry] : model->getProperties ()) {
+	if (property.starts_with (prefix) && entry.setting != nullptr && entry.setting->animation != nullptr
+	    && entry.setting->animation->name == name) {
+	    JSValue animationKey = JS_NewString (ctx, property.c_str ());
+	    JSValue result = property_animation_controller (ctx, data[0], animationKey);
+	    JS_FreeValue (ctx, animationKey);
+	    return result;
+	}
+    }
+    return JS_UNDEFINED;
+}
+
 static JSValue property_animation_controller (JSContext* ctx, JSValueConst layer, JSValueConst name) {
     JSValue data[] = { layer, name };
     JSValue result = JS_NewObject (ctx);
@@ -717,6 +745,13 @@ static JSValue property_animation_controller (JSContext* ctx, JSValueConst layer
     method ("isPlaying", AnimationCommand_IsPlaying);
     method ("getFrame", AnimationCommand_GetFrame);
     method ("setFrame", AnimationCommand_SetFrame, 1);
+    if (auto* model = scriptable_model (layer); model != nullptr) {
+	const char* key = JS_ToCString (ctx, name);
+	const bool modelLayer = key != nullptr && model->findAnimationLayer (key) != nullptr;
+	JS_FreeCString (ctx, key);
+	if (modelLayer) JS_SetPropertyStr (ctx, result, "getAnimation",
+	    JS_NewCFunctionData (ctx, model_layer_get_animation, 1, 0, 2, data));
+    }
     const JSAtom rate = JS_NewAtom (ctx, "rate");
     JS_DefinePropertyGetSet (ctx, result, rate,
 	JS_NewCFunctionData (ctx, property_animation_command, 0, AnimationCommand_GetRate, 2, data),

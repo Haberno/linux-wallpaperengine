@@ -72,6 +72,7 @@ CModel::CModel (Wallpapers::CScene& scene, const Model3D& model) :
 	    { "additive", settings->additive.get () }, { "blendin", settings->blendIn.get () },
 	    { "blendout", settings->blendOut.get () }, { "blendtime", settings->blendTime.get () } }) {
 	    registerProperty (prefix + name, *value);
+	    if (value->animation != nullptr) registerAnimation (prefix + name, *value->animation);
 	}
     }
     if (model.animationLayers.empty () && !model.animationData.animations.empty ()) {
