@@ -117,7 +117,7 @@ private:
     // text-effect chain (rebuilt when dynamic glyph metrics change, like the native renderer)
     void setupEffectChain ();
     void destroyEffectChain ();
-    void renderEffectChain (const glm::mat4& mvp, float brightness, float alpha);
+    void renderEffectChain (const glm::mat4& mvp, float brightness, float alpha, bool drawToScene);
 
     const Text& m_text;
     std::string m_lastRenderedText;
@@ -160,6 +160,8 @@ private:
     std::vector<std::shared_ptr<const CFBO>> m_effectClears;
     std::shared_ptr<CFBO> m_fboA;
     std::shared_ptr<CFBO> m_fboB;
+    /** Stable published result; other layers keep references across glyph rebuilds. */
+    std::shared_ptr<CFBO> m_publishedFBO;
     std::shared_ptr<const CFBO> m_effectResult;
     GLuint m_ndcPosition = 0;
     GLuint m_passTexCoord = 0;
