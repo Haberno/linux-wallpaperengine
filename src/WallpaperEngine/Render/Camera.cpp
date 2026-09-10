@@ -164,6 +164,14 @@ void Camera::updateMatrices () {
     this->m_lookat = glm::lookAt (this->getEye (), this->getCenter (), this->getUp ());
 
     if (this->m_isOrthogonal) {
+	if (this->m_hasRuntimeTransform) {
+	    // 2D layer geometry reflects authoring-space Y before drawing. Camera
+	    // layers, paths and scripts still supply authoring-space transforms, so
+	    // express their view in that same reflected basis. Conjugating preserves
+	    // an upright view while correcting both translation and camera rotation.
+	    const glm::mat4 basis = glm::scale (glm::mat4 (1.0f), glm::vec3 (1.0f, -1.0f, 1.0f));
+	    this->m_lookat = basis * this->m_lookat * basis;
+	}
 	const float nearz = this->m_camera.projection.nearz->value->getFloat ();
 	const float farz = this->m_camera.projection.farz->value->getFloat ();
 	const float depth = glm::max (glm::abs (nearz), glm::abs (farz));
