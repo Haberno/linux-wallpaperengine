@@ -43,6 +43,17 @@ CModel::CModel (Wallpapers::CScene& scene, const Model3D& model) :
     // keep calculating their pivot even though current IModelLayer docs omit the field.
     this->registerProperty ("size", this->m_size);
     this->registerProperty ("castshadow", *model.castShadow->value);
+    for (size_t materialIndex = 0; materialIndex < model.materials.size (); ++materialIndex) {
+	const auto& material = *model.materials[materialIndex];
+	for (size_t passIndex = 0; passIndex < material.passes.size (); ++passIndex) {
+	    const auto scope = "material_" + std::to_string (materialIndex) + "_pass_" + std::to_string (passIndex) + "_";
+	    for (const auto& [name, setting] : material.passes[passIndex]->constants) {
+		if (setting->animation != nullptr || setting->value->getScriptSource ().has_value ()) {
+		    registerProperty (scope + name, *setting, scope);
+		}
+	    }
+	}
+    }
     const auto addLayer = [&] (const ImageAnimationLayer* settings, const MdlAnimationClip* clip) {
 	auto layer = std::make_unique<AnimationLayer> ();
 	layer->settings = settings;
