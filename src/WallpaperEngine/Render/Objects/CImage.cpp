@@ -1364,8 +1364,6 @@ void CImage::setup () {
 	return;
     }
 
-    // TODO: CHECK ORDER OF THINGS, 2419444134'S ID 27 DEPENDS ON 104'S COMPOSITE_A WHEN OUR LAST RENDER IS ON
-    // COMPOSITE_B
     // TODO: SUPPORT PASSTHROUGH (IT'S A SHADER)
     if (this->m_image.model->passthrough) {
 	// passthrough images without effects are bad, do not draw them
@@ -1875,6 +1873,29 @@ void CImage::render () {
 	}
 
 	(*cur)->render ();
+    }
+
+    // Hidden layers publish their completed effect chain through the named _a
+    // texture. An even number of passes ends on _b; without this copy consumers
+    // see the penultimate result (Lucy's clouds stay still while the land scrolls).
+    // Preserve the working-buffer routes: visible layers and explicit effect
+    // bindings may also depend on them. No additional texture allocation is needed.
+    if (!m_finalPassDrawsToScene && m_finalPassRouting.has_value ()) {
+	const auto& result = m_finalPassRouting->offscreenTarget;
+	if (result != m_mainFBO) {
+	    GLint readFramebuffer, drawFramebuffer;
+	    glGetIntegerv (GL_READ_FRAMEBUFFER_BINDING, &readFramebuffer);
+	    glGetIntegerv (GL_DRAW_FRAMEBUFFER_BINDING, &drawFramebuffer);
+	    const GLboolean scissorEnabled = glIsEnabled (GL_SCISSOR_TEST);
+	    glDisable (GL_SCISSOR_TEST);
+	    glBindFramebuffer (GL_READ_FRAMEBUFFER, result->getFramebuffer ());
+	    glBindFramebuffer (GL_DRAW_FRAMEBUFFER, m_mainFBO->getFramebuffer ());
+	    glBlitFramebuffer (0, 0, result->getRealWidth (), result->getRealHeight (),
+		0, 0, m_mainFBO->getRealWidth (), m_mainFBO->getRealHeight (), GL_COLOR_BUFFER_BIT, GL_NEAREST);
+	    glBindFramebuffer (GL_READ_FRAMEBUFFER, readFramebuffer);
+	    glBindFramebuffer (GL_DRAW_FRAMEBUFFER, drawFramebuffer);
+	    if (scissorEnabled) glEnable (GL_SCISSOR_TEST);
+	}
     }
 
     // Restore alpha writes: leaving the mask disabled leaks it into the next frame's scene clear (the
