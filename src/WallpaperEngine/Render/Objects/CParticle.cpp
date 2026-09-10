@@ -715,7 +715,7 @@ EmitterFunc CParticle::createSphereEmitter (const ParticleEmitter& emitter) {
 
 	    // Orthographic particles (flags & 4 == 0): use 2D disk distribution in X/Y plane
 	    // Perspective particles (flags & 4 != 0): use 3D spherical shell distribution
-	    if ((m_particle.flags & 4) == 0) {
+	    if (!getScene ().getScene ().camera.projection.isPerspective && (m_particle.flags & 4) == 0) {
 		// 2D disk distribution with random Z offset
 		float angle = WallpaperEngine::Maths::randomFloat (m_rng, 0.0f, glm::two_pi<float> ());
 		float minRadius = emitter.distanceMin.x;
@@ -1043,7 +1043,7 @@ InitializerFunc CParticle::createTurbulentVelocityRandomInitializer (const Turbu
 	// For 2D/orthographic particles (flags & 4 == 0), project direction onto XY plane.
 	// curlNoise is 3D but z-drift is meaningless for 2D particles and causes
 	// rope segments to diverge in depth, breaking visual connectivity.
-	if ((m_particle.flags & 4) == 0) {
+	if (!getScene ().getScene ().camera.projection.isPerspective && (m_particle.flags & 4) == 0) {
 	    result.z = 0.0f;
 	    float len2d = glm::length (result);
 	    if (len2d > 0.0001f) {
@@ -2047,8 +2047,14 @@ void CParticle::updateMatrices () {
     // particles near (0, 0) instead of around their parent emitter.
     const glm::mat4 sceneToParticle
 	= glm::translate (glm::mat4 (1.0f), glm::vec3 (-width * 0.5f, height * 0.5f, 0.0f)) * flipY;
-    m_modelMatrix = sceneToParticle * this->resolveWorldMatrix () * flipY;
-    this->applyParallaxToModelMatrix ();
+    const bool is3D = getScene ().getScene ().camera.projection.isPerspective;
+    // The simulation reflects authored Y coordinates. In a 3D scene, undo that
+    // reflection before applying the layer/attachment transform; a canvas offset
+    // would put small world-space emitters hundreds of units outside the camera.
+    m_modelMatrix = (is3D ? glm::mat4 (1.0f) : sceneToParticle) * this->resolveWorldMatrix () * flipY;
+    if (!is3D) {
+	this->applyParallaxToModelMatrix ();
+    }
     m_modelMatrixInverse = glm::inverse (m_modelMatrix);
 
     this->updateParticleViewProjection ();
@@ -2060,6 +2066,18 @@ void CParticle::updateMatrices () {
     m_orientationForward = glm::vec3 (0.0f, 0.0f, 1.0f);
     m_viewUp = glm::vec3 (0.0f, 1.0f, 0.0f);
     m_viewRight = glm::vec3 (1.0f, 0.0f, 0.0f);
+
+    if (is3D) {
+	// Sprite corners are expanded in particle-local space. Express the camera's
+	// basis there, removing parent rotation while retaining the authored size.
+	const glm::mat3 cameraToLocal
+	    = glm::mat3 (m_modelMatrixInverse * glm::inverse (getScene ().getCamera ().getLookAt ()));
+	m_orientationRight = glm::normalize (cameraToLocal[0]);
+	m_orientationUp = glm::normalize (cameraToLocal[1]);
+	m_orientationForward = glm::normalize (cameraToLocal[2]);
+	m_viewRight = m_orientationRight;
+	m_viewUp = m_orientationUp;
+    }
 
     this->updateParticleRenderVars ();
 }
@@ -2077,7 +2095,11 @@ void CParticle::applyParallaxToModelMatrix () {
 }
 
 void CParticle::updateParticleViewProjection () {
-    if ((m_particle.flags & 4) != 0) {
+    if (getScene ().getScene ().camera.projection.isPerspective) {
+	const auto& camera = getScene ().getCamera ();
+	m_viewProjectionMatrix = camera.getProjection () * camera.getLookAt ();
+	m_eyePosition = camera.getEye ();
+    } else if ((m_particle.flags & 4) != 0) {
 	// Perspective particles use a dedicated perspective projection
 	float width = getScene ().getCamera ().getWidth ();
 	float height = getScene ().getCamera ().getHeight ();
