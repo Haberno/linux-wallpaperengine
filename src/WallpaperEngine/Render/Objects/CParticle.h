@@ -281,6 +281,7 @@ private:
 
     // Particle-specific uniform data (stored here, pointed to by CPass)
     glm::mat4 m_modelMatrix { 1.0f };
+    glm::mat4 m_worldModelMatrix { 1.0f }; // Scene projection/parallax without emitter transforms.
     glm::mat4 m_modelMatrixInverse { 1.0f };
     glm::mat4 m_mvpMatrix { 1.0f };
     glm::mat4 m_mvpMatrixInverse { 1.0f };
