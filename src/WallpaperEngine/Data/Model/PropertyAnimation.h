@@ -48,6 +48,12 @@ struct PropertyAnimation {
     float anchorTime = 0.0f;
     float anchorFrame = 0.0f;
     float previousEventFrame = -0.0001f;
+    /** A linked property uses its parent's playback clock, retaining its own curves. */
+    std::string parentKey;
+    PropertyAnimation* timelineParent = nullptr;
+    [[nodiscard]] const PropertyAnimation& playbackClock () const {
+	return timelineParent != nullptr ? timelineParent->playbackClock () : *this;
+    }
 
     [[nodiscard]] float elapsedFrame (float time) const;
     [[nodiscard]] float frameAt (float time) const;

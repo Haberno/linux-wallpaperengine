@@ -13,13 +13,13 @@ using namespace WallpaperEngine::Render::Objects;
 
 CLight::CLight (Wallpapers::CScene& scene, const Light& light) :
     CObject (scene, light), ScriptableObject (scene, light), m_light (light) {
-    this->registerProperty ("color", *light.color->value);
-    this->registerProperty ("intensity", *light.intensity->value);
-    this->registerProperty ("radius", *light.radius->value);
-    this->registerProperty ("exponent", *light.exponent->value);
-    this->registerProperty ("innercone", *light.innerCone->value);
-    this->registerProperty ("outercone", *light.outerCone->value);
-    this->registerProperty ("controlpoint", *light.controlPoint->value);
+    this->registerProperty ("color", *light.color);
+    this->registerProperty ("intensity", *light.intensity);
+    this->registerProperty ("radius", *light.radius);
+    this->registerProperty ("exponent", *light.exponent);
+    this->registerProperty ("innercone", *light.innerCone);
+    this->registerProperty ("outercone", *light.outerCone);
+    this->registerProperty ("controlpoint", *light.controlPoint);
 }
 
 const Light& CLight::getLight () const { return this->m_light; }
@@ -45,7 +45,8 @@ glm::vec3 CLight::getPremultipliedColor () const {
 	return glm::vec3 (0.0f);
     }
 
-    return this->m_light.color->value->getVec3 () * this->m_light.intensity->value->getFloat ();
+    const float time = getScene ().getTime ();
+    return m_light.color->evaluateVec3 (time) * m_light.intensity->evaluateFloat (time);
 }
 
 glm::vec2 CLight::calculateSpotConeCosines (const float innerDegrees, const float outerDegrees) {

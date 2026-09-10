@@ -41,6 +41,9 @@ PropertyAnimationUniquePtr parseAnimation (const json& data) {
     if (options.has_value ()) {
 	animation->name = options->optional<std::string> ("name", "");
 	animation->playing = !options->optional ("startpaused", false);
+	if (const auto parent = options->optional ("parent"); parent.has_value () && parent->is_object ()) {
+	    animation->parentKey = parent->optional<std::string> ("key", "");
+	}
 	if (const auto events = options->optional ("events"); events.has_value () && events->is_array ()) {
 	    for (const auto& event : *events) {
 		animation->events.push_back ({ event.optional ("frame", 0.0f), event.optional<std::string> ("name", "") });

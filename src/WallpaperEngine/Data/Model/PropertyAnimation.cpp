@@ -14,10 +14,12 @@ float cubicBezier (const float p0, const float p1, const float p2, const float p
 }
 
 float PropertyAnimation::elapsedFrame (const float time) const {
+    if (timelineParent != nullptr) return timelineParent->elapsedFrame (time);
     return anchorFrame + (playing ? (time - anchorTime) * fps * rate : 0.0f);
 }
 
 float PropertyAnimation::frameAt (const float time) const {
+    if (timelineParent != nullptr) return timelineParent->frameAt (time);
     float frame = elapsedFrame (time);
     if (length > 0.0f && (mode == "loop" || mode == "mirror")) {
 	const float period = length * (mode == "mirror" ? 2.0f : 1.0f);
@@ -31,11 +33,13 @@ float PropertyAnimation::frameAt (const float time) const {
 }
 
 bool PropertyAnimation::isPlaying (const float time) const {
+    if (timelineParent != nullptr) return timelineParent->isPlaying (time);
     return playing && (mode != "single" || length <= 0.0f
 	|| (rate < 0.0f ? elapsedFrame (time) > 0.0f : elapsedFrame (time) < length));
 }
 
 void PropertyAnimation::play (const float time) {
+    if (timelineParent != nullptr) { timelineParent->play (time); return; }
     if (isPlaying (time)) return;
 
     // Keep the unfolded timeline when resuming the reverse half of a mirror.
@@ -50,17 +54,20 @@ void PropertyAnimation::play (const float time) {
 }
 
 void PropertyAnimation::pause (const float time) {
+    if (timelineParent != nullptr) { timelineParent->pause (time); return; }
     anchorFrame = elapsedFrame (time);
     anchorTime = time;
     playing = false;
 }
 
 void PropertyAnimation::stop (const float time) {
+    if (timelineParent != nullptr) { timelineParent->stop (time); return; }
     setFrame (0.0f, time);
     playing = false;
 }
 
 void PropertyAnimation::setFrame (const float frame, const float time) {
+    if (timelineParent != nullptr) { timelineParent->setFrame (frame, time); return; }
     if (!std::isfinite (frame)) return;
     anchorFrame = frame;
     anchorTime = time;
@@ -68,6 +75,7 @@ void PropertyAnimation::setFrame (const float frame, const float time) {
 }
 
 void PropertyAnimation::setRate (const float value, const float time) {
+    if (timelineParent != nullptr) { timelineParent->setRate (value, time); return; }
     if (!std::isfinite (value)) return;
     anchorFrame = elapsedFrame (time);
     anchorTime = time;
@@ -76,7 +84,8 @@ void PropertyAnimation::setRate (const float value, const float time) {
 
 std::vector<PropertyAnimation::Event> PropertyAnimation::takeEvents (const float time) {
     std::vector<Event> result;
-    if (!playing) return result;
+    const auto& clock = playbackClock ();
+    if (!clock.playing) return result;
     const float current = elapsedFrame (time);
     const float previous = previousEventFrame;
     previousEventFrame = current;
@@ -88,10 +97,10 @@ std::vector<PropertyAnimation::Event> PropertyAnimation::takeEvents (const float
 	    crossed.emplace_back (position, event);
 	}
     };
-    const bool repeats = length > 0.0f && (mode == "loop" || mode == "mirror");
-    const float period = length * (mode == "mirror" ? 2.0f : 1.0f);
+    const bool repeats = clock.length > 0.0f && (clock.mode == "loop" || clock.mode == "mirror");
+    const float period = clock.length * (clock.mode == "mirror" ? 2.0f : 1.0f);
     for (const auto& event : events) {
-	if (event.frame < 0.0f || (length > 0.0f && event.frame > length)) continue;
+	if (event.frame < 0.0f || (clock.length > 0.0f && event.frame > clock.length)) continue;
 	if (!repeats) {
 	    append (event.frame, event);
 	    continue;
@@ -103,7 +112,7 @@ std::vector<PropertyAnimation::Event> PropertyAnimation::takeEvents (const float
 	    // synthesize an end event from an earlier cycle before playback began.
 	    if (cycle < 0.0 && previous >= -0.0001f && current >= 0.0f) continue;
 	    append (static_cast<float> (cycle * period + event.frame), event);
-	    if (mode == "mirror" && event.frame > 0.0f && event.frame < length) {
+	    if (clock.mode == "mirror" && event.frame > 0.0f && event.frame < clock.length) {
 		append (static_cast<float> (cycle * period + period - event.frame), event);
 	    }
 	}

@@ -82,6 +82,21 @@ void ScriptableObject::registerProperty (const std::string& name, const UserSett
     if (setting.animation != nullptr && !setting.animation->name.empty ()) {
 	m_animations.insert_or_assign (setting.animation->name, setting.animation.get ());
     }
+    // Resolve after each registration: a child can precede its clock property
+    // in both serialized data and a derived renderer's registration order.
+    for (const auto& [property, entry] : m_properties) {
+	if (entry.setting == nullptr || entry.setting->animation == nullptr) continue;
+	auto& animation = *entry.setting->animation;
+	if (animation.parentKey.empty ()) continue;
+	const auto* parent = getPropertySetting (animation.parentKey);
+	if (parent == nullptr || parent->animation == nullptr) continue;
+	auto* clock = parent->animation.get ();
+	bool cycle = false;
+	for (auto* ancestor = clock; ancestor != nullptr; ancestor = ancestor->timelineParent) {
+	    if (ancestor == &animation) { cycle = true; break; }
+	}
+	if (!cycle) animation.timelineParent = clock;
+    }
 }
 
 void ScriptableObject::registerProperty (const std::string& name, DynamicValue& value) {
