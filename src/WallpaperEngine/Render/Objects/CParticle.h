@@ -228,6 +228,7 @@ private:
     std::optional<glm::vec3> m_followPosition;
     uint64_t m_nextParticleSerial = 0;
     size_t m_childSystemCount = 0; // Root-owned allocation budget for the entire tree.
+    size_t m_childAllocationLimit = 64; // Absolute end of this branch's share of that budget.
     int m_controlPointStartIndex = 0;
 
     void setupChildren ();

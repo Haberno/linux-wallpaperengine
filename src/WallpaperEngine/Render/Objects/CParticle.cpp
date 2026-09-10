@@ -245,8 +245,13 @@ const ParticleInstanceOverride& CParticle::getInstanceOverride () const {
 }
 
 void CParticle::setupChildren () {
+    const auto supported = [] (const ParticleChild& child) {
+	return (child.type == "static" || (child.type == "eventfollow" && child.maxCount > 0))
+	    && !child.particleFile.empty ();
+    };
+    size_t remainingChildren = std::ranges::count_if (m_particle.children, supported);
     for (const auto& child : m_particle.children) {
-	if ((child.type != "static" && child.type != "eventfollow") || child.particleFile.empty ()) {
+	if (!supported (child)) {
 	    continue;
 	}
 	bool recursive = false;
@@ -257,11 +262,15 @@ void CParticle::setupChildren () {
 	    recursive |= ancestor->m_particle.particleFile == child.particleFile;
 	    ++depth;
 	}
-	if (recursive || depth >= 8 || root->m_childSystemCount >= 64) {
+	// Reserve a share for every sibling before letting this branch allocate
+	// nested systems. A large first event pool must not discard later children
+	// such as the star sprite accompanying a shooting star's glow.
+	const size_t branchEnd = root->m_childSystemCount
+	    + (m_childAllocationLimit - root->m_childSystemCount) / remainingChildren--;
+	if (recursive || depth >= 8 || root->m_childSystemCount >= branchEnd) {
 	    sLog.error ("Skipping recursive or excessive particle child: ", child.particleFile);
 	    continue;
 	}
-	++root->m_childSystemCount;
 	try {
 	    using WallpaperEngine::Data::JSON::JSON;
 	    auto definition = WallpaperEngine::Data::Parsers::ObjectParser::parse (
@@ -277,7 +286,9 @@ void CParticle::setupChildren () {
 	    particle->angles->value->update (child.angles, DynamicValue::UpdateSource::Initialization);
 	    particle->scale->value->update (child.scale, DynamicValue::UpdateSource::Initialization);
 	    if (child.type == "static") {
+		++root->m_childSystemCount;
 		auto renderer = std::make_unique<CParticle> (getScene (), *particle, this);
+		renderer->m_childAllocationLimit = branchEnd;
 		renderer->m_controlPointStartIndex = child.controlPointStartIndex;
 		renderer->setup ();
 		m_children.push_back ({ std::move (definition), std::move (renderer) });
@@ -287,8 +298,10 @@ void CParticle::setupChildren () {
 		// never parse assets or compile shaders in the middle of a rendered frame.
 		const auto capacity = std::min (std::max (child.maxCount, 0), static_cast<int> (m_maxParticles));
 		for (int i = 0; i < capacity; ++i) {
-		    if (i > 0 && root->m_childSystemCount++ >= 64) break;
+		    if (root->m_childSystemCount >= branchEnd) break;
+		    ++root->m_childSystemCount;
 		    auto renderer = std::make_unique<CParticle> (getScene (), *particle, this);
+		    renderer->m_childAllocationLimit = branchEnd;
 		    renderer->m_controlPointStartIndex = child.controlPointStartIndex;
 		    renderer->setup ();
 		    renderer->pause ();
