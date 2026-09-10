@@ -101,6 +101,7 @@ public:
 
 protected:
     void setupPasses ();
+    void updateEffectVisibility ();
 
     void updateScreenSpacePosition ();
 
@@ -249,6 +250,8 @@ private:
     mutable glm::vec4 m_resolvedColor4 { 1.0f };
 
     std::vector<Effects::CPass*> m_passes = {};
+    std::vector<Effects::CPass*> m_activePasses = {};
+    std::unordered_map<Effects::CPass*, const UserSetting*> m_passVisibility;
     std::vector<MaterialPassUniquePtr> m_virtualPassess = {};
 
     glm::vec4 m_pos = {};
