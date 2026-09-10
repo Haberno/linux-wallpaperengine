@@ -20,6 +20,42 @@ def scene_with(objects):
 
 @unittest.skipUnless(os.environ.get('LWE_TEST_BINARY'), 'Set LWE_TEST_BINARY for graphics tests')
 class ScriptPropertyAnimation(unittest.TestCase):
+    def test_saved_layer_vectors_do_not_follow_subsequent_assignments(self):
+        script = '''
+let origin, scale, depth;
+const check = (a,b) => { if (Math.abs(a-b) > .001) throw Error(a+' != '+b); };
+export function init() {
+    origin = thisLayer.origin;
+    scale = thisLayer.scale;
+    depth = thisLayer.parallaxDepth;
+}
+export function update(value) {
+    thisLayer.origin = origin.add(new Vec3(10, 0, 0));
+    thisLayer.scale = scale.multiply(2);
+    thisLayer.parallaxDepth = depth.add(new Vec2(.1, .2));
+    check(origin.x, 160);
+    check(scale.x, 1);
+    check(depth.x, .5);
+    check(thisLayer.origin.x, 170);
+    check(thisLayer.scale.x, 2);
+    check(thisLayer.parallaxDepth.x, .6);
+    let edited = thisLayer.origin;
+    edited.x = 180;
+    check(thisLayer.origin.x, 170);
+    thisLayer.origin = edited;
+    check(thisLayer.origin.x, 180);
+    if (engine.runtime >= 1) console.log('SAVED_VECTORS_OK');
+    return value;
+}
+'''
+        scene = scene_with([{
+            'id': 1, 'name': 'offset driver', 'image': 'models/util/solidlayer.json',
+            'origin': '160 90 0', 'scale': '1 1 1', 'size': '20 20', 'parallaxDepth': '.5 .5',
+            'visible': {'value': True, 'script': script}}])
+        with tempfile.TemporaryDirectory(prefix='lwe-saved-vectors-') as directory:
+            _, output = render_scene(self, Path(directory), scene, frames=15)
+        self.assertIn('SAVED_VECTORS_OK', output)
+
     def test_camera_round_trip_does_not_apply_the_editor_viewport_offset(self):
         frames = []
         for script in ('', 'export function update(v) { thisScene.setCameraTransforms(thisScene.getCameraTransforms()); return v; }'):
