@@ -29,6 +29,9 @@ constexpr uint32_t DEFAULT_MAX_PARTICLES = 1000;
 [[nodiscard]] glm::vec3 calculateControlPointAttraction (
     const glm::vec3& toCenter, float strength, float radius, float deltaTime
 );
+[[nodiscard]] glm::vec3 resolveParticleControlPoint (
+    const glm::vec3& offset, const glm::mat4& worldToLocal, bool worldSpace
+);
 
 /**
  * Runtime particle instance state
@@ -104,8 +107,8 @@ struct ParticleInstance {
 struct ControlPointData {
     glm::vec3 position { 0.0f };
     glm::vec3 offset { 0.0f };
-    bool linkMouse { false };
-    bool worldSpace { false };
+    uint32_t flags { 0 };
+    int parentControlPoint { 0 };
 };
 
 /**
@@ -154,6 +157,8 @@ protected:
     void setupEmitters ();
     void setupInitializers ();
     void setupOperators ();
+    void updateControlPoints ();
+    [[nodiscard]] glm::mat4 particleWorldMatrix ();
 
     // Emitter creators
     EmitterFunc createBoxEmitter (const ParticleEmitter& emitter);
@@ -316,13 +321,6 @@ private:
     // Per-vertex float counts for different renderer types
     static constexpr int SPRITE_FLOATS_PER_VERTEX = 17;
     static constexpr int ROPE_FLOATS_PER_VERTEX = 26;
-
-    // Transformed origin (screen space to centered space conversion)
-    glm::vec3 m_transformedOrigin { 0.0f };
-
-    // Last known resolution for detecting changes
-    float m_lastScreenWidth { 0.0f };
-    float m_lastScreenHeight { 0.0f };
 
     // Random number generator
     std::mt19937 m_rng;

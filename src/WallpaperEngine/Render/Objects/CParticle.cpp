@@ -53,6 +53,19 @@ glm::vec3 WallpaperEngine::Render::Objects::calculateControlPointAttraction (
     return toCenter * (strength * deltaTime * falloff / distance);
 }
 
+glm::vec3 WallpaperEngine::Render::Objects::resolveParticleControlPoint (
+    const glm::vec3& offset, const glm::mat4& worldToLocal, const bool worldSpace
+) {
+    // Native 14022bd40/14022a070: instance overrides replace the reference
+    // position without changing its space. World points use the full inverse
+    // layer transform; local points remain relative to the emitter.
+    const glm::vec3 local = worldSpace ? glm::vec3 (worldToLocal * glm::vec4 (offset, 1.0f)) : offset;
+    if (!std::isfinite (local.x) || !std::isfinite (local.y) || !std::isfinite (local.z)) {
+	return glm::vec3 (0.0f); // A zero-scale layer has no invertible coordinate space.
+    }
+    return { local.x, -local.y, local.z };
+}
+
 CParticle::CParticle (Wallpapers::CScene& scene, const Particle& particle, CParticle* parent) :
     CObject (scene, particle), CRenderable (scene, particle, *particle.material->material),
     ScriptableObject (scene, particle), m_particle (particle), m_particleParent (parent) {
@@ -152,17 +165,6 @@ void CParticle::setup () {
 	return;
     }
 
-    // Convert origin from screen space to centered space
-    // Projection uses ortho(-width/2, width/2, -height/2, height/2)
-    // but particle origins are in screen space where (0,0) is top-left
-    m_lastScreenWidth = getScene ().getCamera ().getWidth ();
-    m_lastScreenHeight = getScene ().getCamera ().getHeight ();
-
-    glm::vec3 origin = m_particle.origin->value->getVec3 ();
-    origin.x -= m_lastScreenWidth / 2.0f;
-    origin.y = m_lastScreenHeight / 2.0f - origin.y;
-    m_transformedOrigin = origin;
-
     // Load particle material constants
     if (m_particle.material && m_particle.material->material && !m_particle.material->material->passes.empty ()) {
 	auto& firstPass = *m_particle.material->material->passes.begin ();
@@ -191,48 +193,21 @@ void CParticle::setup () {
     setupOperators ();
     setupPass ();
 
-    // Setup control points (max 8)
     m_controlPoints.resize (PARTICLE_CONTROL_POINT_COUNT);
     for (const auto& cp : m_particle.controlPoints) {
-	if (cp.id >= 0 && cp.id < PARTICLE_CONTROL_POINT_COUNT) {
-	    m_controlPoints[cp.id].offset = cp.offset;
-	    // Link to mouse if either flags bit 0 is set
-	    m_controlPoints[cp.id].linkMouse = (cp.flags & 1) != 0;
-	    m_controlPoints[cp.id].worldSpace = (cp.flags & 2) != 0;
-
-	    // Initialize position to offset for non-mouse-linked control points
-	    // Mouse-linked CPs will have their position updated in update()
-	    if (!m_controlPoints[cp.id].linkMouse) {
-		if (m_controlPoints[cp.id].worldSpace) {
-		    // World space: offset is in screen-centered coords, convert to particle local space
-		    m_controlPoints[cp.id].position = cp.offset - m_transformedOrigin;
-		} else {
-		    // Local space: offset is already relative to particle system center
-		    m_controlPoints[cp.id].position = cp.offset;
-		}
-	    }
-	}
+	if (cp.id < 0 || cp.id >= PARTICLE_CONTROL_POINT_COUNT) continue;
+	auto& runtime = m_controlPoints[cp.id];
+	runtime.offset = cp.offset;
+	runtime.flags = cp.flags;
+	runtime.parentControlPoint = cp.parentControlPoint;
     }
-
-    // scene objects can reposition control points through their instanceoverride block,
-    // those offsets are in scene coordinates (top-left origin, y-down) and take priority
-    // over the particle defaults; convert to the centered y-up space the sim runs in,
-    // mirroring the origin conversion above
     for (const auto& [id, offset] : getInstanceOverride ().controlPointOffsets) {
-	if (id >= 0 && id < PARTICLE_CONTROL_POINT_COUNT) {
-	    const glm::vec3 centered {
-		offset.x - m_lastScreenWidth / 2.0f,
-		m_lastScreenHeight / 2.0f - offset.y,
-		offset.z,
-	    };
-
-	    m_controlPoints[id].offset = centered;
-
-	    if (!m_controlPoints[id].linkMouse) {
-		m_controlPoints[id].position = centered - m_transformedOrigin;
-	    }
+	// Mouse and inherited points get their positions from their linked source.
+	if (id >= 0 && id < PARTICLE_CONTROL_POINT_COUNT && (m_controlPoints[id].flags & 5) == 0) {
+	    m_controlPoints[id].offset = offset;
 	}
     }
+    updateControlPoints ();
 
     setupChildren ();
     m_initialized = true;
@@ -433,88 +408,52 @@ void CParticle::updateFollowChildren (const uint32_t firstNewParticle) {
     }
 }
 
-void CParticle::update (float dt) {
-    // Detect resolution changes and recalculate transformed origin
-    float screenWidth = static_cast<float> (getScene ().getWidth ());
-    float screenHeight = static_cast<float> (getScene ().getHeight ());
+glm::mat4 CParticle::particleWorldMatrix () {
+    const glm::mat4 local = resolveWorldMatrix ();
+    return m_particleParent ? m_particleParent->particleWorldMatrix () * local : local;
+}
 
-    if (screenWidth != m_lastScreenWidth || screenHeight != m_lastScreenHeight) {
-	// Resolution changed - recalculate transformed origin
-	glm::vec3 origin = m_particle.origin->value->getVec3 ();
-	origin.x -= screenWidth / 2.0f;
-	origin.y = screenHeight / 2.0f - origin.y;
-	m_transformedOrigin = origin;
-
-	// Update world-space control points that aren't mouse-linked
-	for (size_t i = 0; i < m_controlPoints.size (); i++) {
-	    auto& cp = m_controlPoints[i];
-	    if (!cp.linkMouse && cp.worldSpace) {
-		// Recalculate position from offset using new transformed origin
-		cp.position = cp.offset - m_transformedOrigin;
-	    }
-	}
-
-	// Instance override offsets are stored raw in scene coordinates; the centered
-	// values cached in m_controlPoints depend on the screen size, so redo the
-	// scene-to-centered conversion from setup() with the new dimensions
-	for (const auto& [id, offset] : getInstanceOverride ().controlPointOffsets) {
-	    if (id >= 0 && id < PARTICLE_CONTROL_POINT_COUNT) {
-		const glm::vec3 centered {
-		    offset.x - screenWidth / 2.0f,
-		    screenHeight / 2.0f - offset.y,
-		    offset.z,
-		};
-
-		m_controlPoints[id].offset = centered;
-
-		if (!m_controlPoints[id].linkMouse) {
-		    m_controlPoints[id].position = centered - m_transformedOrigin;
-		}
-	    }
-	}
-
-	m_lastScreenWidth = screenWidth;
-	m_lastScreenHeight = screenHeight;
-    }
-
-    // Update control points with mouse position
-    const glm::vec2* mousePos = getScene ().getMousePositionNormalized ();
-    if (mousePos) {
-
-	for (auto& cp : m_controlPoints) {
-	    if (cp.linkMouse) {
-		// Convert mouse position from normalized [0,1] to centered screen space
-		glm::vec3 position;
-		position.x = (mousePos->x * screenWidth) - (screenWidth / 2.0f);
-		position.y = (screenHeight / 2.0f) - (mousePos->y * screenHeight);
-		position.z = 0.0f;
-
-		// Apply control point offset
-		position += cp.offset;
-
-		// Convert to particle local space to prevent double transformation by model matrix
-		// Both world-space and local-space CPs are handled the same way now
-		cp.position = position - m_transformedOrigin;
-	    }
+void CParticle::updateControlPoints () {
+    const glm::mat4 worldToLocal = glm::inverse (particleWorldMatrix ());
+    const glm::vec2* mouse = getScene ().getMousePositionNormalized ();
+    glm::vec3 mouseWorld (0.0f);
+    if (mouse) {
+	if (getScene ().getScene ().camera.projection.isPerspective) {
+	    const auto& camera = getScene ().getCamera ();
+	    const glm::vec4 unprojected = glm::inverse (camera.getProjection () * camera.getLookAt ())
+		* glm::vec4 (mouse->x * 2.0f - 1.0f, mouse->y * 2.0f - 1.0f, 0.0f, 1.0f);
+	    mouseWorld = glm::vec3 (glm::vec2 (unprojected) / unprojected.w, 0.0f);
+	} else {
+	    mouseWorld = { mouse->x * getScene ().getCamera ().getWidth (),
+		mouse->y * getScene ().getCamera ().getHeight (), 0.0f };
 	}
     }
-
-    if (m_particleParent) {
-	const glm::mat4 flipY = glm::scale (glm::mat4 (1.0f), glm::vec3 (1.0f, -1.0f, 1.0f));
-	const glm::mat4 parentToLocal = glm::inverse (flipY * resolveWorldMatrix () * flipY);
-	for (size_t i = 0; i < m_controlPoints.size (); ++i) {
-	    const int source = static_cast<int> (i) + m_controlPointStartIndex;
-	    if (source >= 0 && source < static_cast<int> (m_particleParent->m_controlPoints.size ())) {
-		m_controlPoints[i].position = glm::vec3 (
-		    parentToLocal * glm::vec4 (m_particleParent->m_controlPoints[source].position, 1.0f)
-		);
-	    }
+    const glm::mat4 flipY = glm::scale (glm::mat4 (1.0f), glm::vec3 (1.0f, -1.0f, 1.0f));
+    const glm::mat4 parentToLocal = m_particleParent
+	? flipY * glm::inverse (resolveWorldMatrix ()) * flipY : glm::mat4 (1.0f);
+    for (size_t i = 0; i < m_controlPoints.size (); ++i) {
+	auto& cp = m_controlPoints[i];
+	if ((cp.flags & 1) != 0 && mouse) {
+	    // Native 14022e3e0 replaces the translation with the cursor position;
+	    // neither the definition offset nor an instance override is added to it.
+	    cp.position = resolveParticleControlPoint (mouseWorld, worldToLocal, true);
+	} else if ((cp.flags & 4) != 0 && m_particleParent && cp.parentControlPoint >= 0
+	    && cp.parentControlPoint < static_cast<int> (m_particleParent->m_controlPoints.size ())) {
+	    const auto& source = m_particleParent->m_controlPoints[cp.parentControlPoint];
+	    cp.position = (cp.flags & 8) != 0 ? source.position
+		: glm::vec3 (parentToLocal * glm::vec4 (source.position, 1.0f));
+	} else {
+	    cp.position = resolveParticleControlPoint (cp.offset, worldToLocal, (cp.flags & 2) != 0);
 	}
     }
-
-    if (m_followPosition.has_value ()) {
+    if (m_followPosition.has_value () && (m_controlPoints[0].flags & 5) == 0) {
 	m_controlPoints[0].position = *m_followPosition;
     }
+}
+
+void CParticle::update (float dt) {
+    // Re-evaluate after scripted or parent transforms, not only on a resize.
+    updateControlPoints ();
 
     // Pausing stops new emission; bubbles already released keep moving and aging.
     const uint32_t firstNewParticle = m_particleCount;

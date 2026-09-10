@@ -179,6 +179,7 @@ struct ParticleControlPoint {
     uint32_t flags;
     glm::vec3 offset;
     bool lockToPointer;
+    int parentControlPoint = 0;
 };
 
 /**
@@ -575,7 +576,7 @@ struct ParticleInstanceOverride {
     UserSettingUniquePtr count;
     UserSettingUniquePtr color; // Replaces particle color
     UserSettingUniquePtr colorn; // Multiplies particle color
-    /** Scene-space control point overrides (controlpoint0..7 keys), indexed by id */
+    /** Overrides retain each control point's local/world-space flags. */
     std::map<int, glm::vec3> controlPointOffsets;
 };
 

@@ -992,6 +992,7 @@ ParticleControlPoint ObjectParser::parseParticleControlPoint (const JSON& it) {
 	.flags = it.optional ("flags", 0u),
 	.offset = offset,
 	.lockToPointer = it.optional ("locktopointer", false),
+	.parentControlPoint = it.optional ("parentcontrolpoint", 0),
     };
 }
 
