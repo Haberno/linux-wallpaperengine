@@ -160,6 +160,7 @@ private:
     void addAttribute (const std::string& name, GLint type, GLint elements, const GLuint* value);
     void addUniform (ShaderVariable* value);
     void addUniform (const ShaderVariable* value, const DynamicValue* setting);
+    void addUniform (const ShaderVariable* value, const UserSetting& setting);
     void addUniform (const std::string& name, int value);
     void addUniform (const std::string& name, double value);
     void addUniform (const std::string& name, float value);
@@ -216,6 +217,11 @@ private:
     /** Shader uniforms supplied by authored pass/effect constants. These take precedence over
      *  generic object uniforms with the same GLSL name. */
     std::set<std::string> m_constantUniforms = {};
+    struct AnimatedUniform {
+	const UserSetting* setting;
+	std::unique_ptr<DynamicValue> sampled;
+    };
+    std::map<std::string, AnimatedUniform> m_animatedUniforms;
     BlendingMode m_blendingmode = BlendingMode_Normal;
     DepthtestMode m_depthtestmode = DepthtestMode_Disabled;
     DepthwriteMode m_depthwritemode = DepthwriteMode_Disabled;
