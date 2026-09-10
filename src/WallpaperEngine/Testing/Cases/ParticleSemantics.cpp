@@ -6,12 +6,31 @@
 
 #include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
+#include <glm/gtc/matrix_transform.hpp>
 
 using WallpaperEngine::Render::Objects::calculateParticleEmissionRate;
 using WallpaperEngine::Render::Objects::calculateControlPointAttraction;
 using WallpaperEngine::Render::Objects::calculateParticleSimulationDelta;
 using WallpaperEngine::Render::Objects::calculateRopeTrailVisualValue;
 using WallpaperEngine::Render::Objects::convertParticleRotationForRender;
+using WallpaperEngine::Render::Objects::resolveParticleControlPoint;
+
+TEST_CASE ("control point spaces match native mirrored-layer results", "[particle]") {
+    // Executed the installed wallpaper64.exe's 14022bd40 with Sea's actual
+    // overrides. Native local=(4885.391113,361.117310), world=(-865.697021,-1178.376709).
+    // Our simulation reflects Y once, after resolving the authored space.
+    const glm::mat4 layer = glm::translate (glm::mat4 (1.0f), { 4019.69409f, 1539.49402f, 0.0f })
+	* glm::scale (glm::mat4 (1.0f), { -1.0f, 1.0f, 1.0f });
+    const glm::vec3 offset { 4885.39111f, 361.11731f, 0.0f };
+    const auto local = resolveParticleControlPoint (offset, glm::inverse (layer), false);
+    CHECK (local.x == Catch::Approx (4885.391113f));
+    CHECK (local.y == Catch::Approx (-361.117310f));
+    const auto world = resolveParticleControlPoint (offset, glm::inverse (layer), true);
+    CHECK (world.x == Catch::Approx (-865.697021f));
+    CHECK (world.y == Catch::Approx (1178.376709f));
+    CHECK (world.z == 0.0f);
+    CHECK (resolveParticleControlPoint (offset, glm::inverse (glm::mat4 (0.0f)), true) == glm::vec3 (0.0f));
+}
 
 TEST_CASE ("particle instance rate scales the complete simulation", "[particle]") {
     CHECK (calculateParticleSimulationDelta (1.0f / 60.0f, 0.15f)
