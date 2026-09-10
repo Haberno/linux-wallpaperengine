@@ -2331,6 +2331,27 @@ std::optional<std::string> CImage::getAttachmentName (const size_t requestedInde
     return std::nullopt;
 }
 
+std::optional<glm::vec3> CImage::intersectCursorPlane (
+    const glm::mat4& world, const glm::mat4& viewProjection,
+    const glm::vec2& normalizedPosition, const bool projectionYFlipped
+) {
+    glm::vec2 ndc = normalizedPosition * 2.0f - 1.0f;
+    if (projectionYFlipped) ndc.y = -ndc.y;
+    const glm::mat4 inverse = glm::inverse (viewProjection * world);
+    const glm::vec4 near4 = inverse * glm::vec4 (ndc, -1.0f, 1.0f);
+    const glm::vec4 far4 = inverse * glm::vec4 (ndc, 1.0f, 1.0f);
+    const glm::vec3 near = glm::vec3 (near4) / near4.w;
+    const glm::vec3 ray = glm::vec3 (far4) / far4.w - near;
+    if (!std::isfinite (ray.z) || std::abs (ray.z) <= glm::length (ray) * 1e-6f) {
+	return std::nullopt;
+    }
+    const float distance = -near.z / ray.z;
+    if (!std::isfinite (distance) || distance < 0.0f || distance > 1.0f) return std::nullopt;
+    const glm::vec3 local = near + distance * ray;
+    if (!std::isfinite (local.x) || !std::isfinite (local.y)) return std::nullopt;
+    return glm::vec3 (local.x, local.y, 0.0f);
+}
+
 std::optional<glm::vec3> CImage::cursorLocalPosition (const glm::vec3& worldPosition) const {
     if (!this->m_image.visible->value->getBool () || !this->isVisibleThroughParents ()) {
 	return std::nullopt;
@@ -2338,12 +2359,19 @@ std::optional<glm::vec3> CImage::cursorLocalPosition (const glm::vec3& worldPosi
 
     const glm::mat4 world = this->resolveWorldMatrix ();
     const float determinant = glm::determinant (world);
-    if (!std::isfinite (determinant) || std::abs (determinant) < 1e-8f) {
+    // Small world-space UI plates are valid: Ocarina's note buttons use scales
+    // of only a few thousandths. An absolute determinant threshold rejects them.
+    if (!std::isfinite (determinant) || determinant == 0.0f) {
 	return std::nullopt;
     }
 
-    const glm::vec4 local4 = glm::inverse (world) * glm::vec4 (worldPosition, 1.0f);
-    const glm::vec3 local = glm::vec3 (local4);
+    const auto& camera = getScene ().getCamera ();
+    const auto position = camera.isOrthogonal ()
+	? std::optional<glm::vec3> (glm::vec3 (glm::inverse (world) * glm::vec4 (worldPosition, 1.0f)))
+	: intersectCursorPlane (world, camera.getProjection () * camera.getLookAt (),
+	    *getScene ().getMousePositionNormalized (), camera.isYFlipped ());
+    if (!position) return std::nullopt;
+    const glm::vec3 local = *position;
     const glm::vec2 size = this->getSize ();
 
     float left = -size.x * 0.5f;

@@ -20,6 +20,31 @@ using WallpaperEngine::Render::Camera;
 using WallpaperEngine::Render::Objects::CImage;
 using WallpaperEngine::Render::Wallpapers::CScene;
 
+TEST_CASE ("perspective cursor hits tiny rotated image planes", "[mouse][regression]") {
+    const glm::mat4 view = glm::lookAt (glm::vec3 (10, 0, 0), glm::vec3 (0), glm::vec3 (0, 1, 0));
+    const glm::mat4 world = glm::translate (glm::mat4 (1), glm::vec3 (1, .1f, 0))
+	* glm::rotate (glm::mat4 (1), glm::half_pi<float> (), glm::vec3 (0, 1, 0))
+	* glm::scale (glm::mat4 (1), glm::vec3 (.001f));
+    const glm::vec3 expected (2, -3, 0);
+    for (const bool flipped : { false, true }) {
+	glm::mat4 projection = glm::perspective (glm::radians (50.0f), 16.0f / 9, .1f, 100.0f);
+	if (flipped) projection[1][1] *= -1.0f;
+	const glm::vec4 clip = projection * view * world * glm::vec4 (expected, 1);
+	glm::vec2 ndc = glm::vec2 (clip) / clip.w;
+	if (flipped) ndc.y *= -1.0f;
+	const auto hit = CImage::intersectCursorPlane (world, projection * view, (ndc + 1.0f) * .5f, flipped);
+	REQUIRE (hit.has_value ());
+	CHECK (hit->x == Catch::Approx (expected.x).margin (.002f));
+	CHECK (hit->y == Catch::Approx (expected.y).margin (.002f));
+	CHECK (hit->z == 0.0f);
+    }
+    const glm::mat4 projection = glm::perspective (glm::radians (50.0f), 1.0f, .1f, 100.0f);
+    CHECK_FALSE (CImage::intersectCursorPlane (glm::mat4 (1), projection * view, {.5f, .5f}, false));
+    CHECK_FALSE (CImage::intersectCursorPlane (glm::mat4 (0), projection * view, {.5f, .5f}, false));
+    const glm::mat4 behind = glm::translate (glm::mat4 (1), glm::vec3 (20, 0, 0)) * world;
+    CHECK_FALSE (CImage::intersectCursorPlane (behind, projection * view, {.5f, .5f}, false));
+}
+
 /**
  * Test GLFW to OpenGL coordinate conversion
  * GLFW: Y=0 at top, Y=height at bottom
