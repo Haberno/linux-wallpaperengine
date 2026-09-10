@@ -2,6 +2,7 @@
 #include "LocalStorage.h"
 
 #include "Adapters/ScriptableObjectAdapter.h"
+#include "Adapters/VideoTextureAdapter.h"
 #include "Modules/ColorModule.h"
 #include "Modules/MathModule.h"
 #include "Modules/VectorModule.h"
@@ -344,6 +345,7 @@ ScriptEngine::ScriptEngine (Wallpapers::CScene& scene, Media::MediaSource& media
 	.vec2 = std::unique_ptr<Adapters::VectorAdapter<2>> (new Adapters::VectorAdapter<2> (*this)),
 	.object
 	= std::unique_ptr<Adapters::ScriptableObjectAdapter> (new Adapters::ScriptableObjectAdapter (*this, "ILayer")),
+	.video = std::make_unique<Adapters::VideoTextureAdapter> (*this),
     };
 
     this->m_engineObject = std::make_unique<EngineObject> (*this, scene);
