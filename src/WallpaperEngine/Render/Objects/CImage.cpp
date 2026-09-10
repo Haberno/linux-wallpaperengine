@@ -1435,12 +1435,12 @@ void CImage::setup () {
 		int passIndex = 0;
 		for (const auto& passOverride : cur->passOverrides) {
 		    for (const auto& [constantName, setting] : passOverride->constants) {
-			if (setting->value != nullptr && setting->value->getScriptSource ().has_value ()) {
-			    this->getScene ().getScriptEngine ().queueScript (
-				constantName + "_fx" + std::to_string (cur->id) + "_p" + std::to_string (passIndex)
-				    + "_" + std::to_string (this->getId ()),
-				*setting->value, *this
-			    );
+			if (setting->value != nullptr && (setting->value->getScriptSource ().has_value ()
+			    || setting->animation != nullptr)) {
+			    const auto key = constantName + "_fx" + std::to_string (cur->id) + "_p"
+				+ std::to_string (passIndex);
+			    registerProperty (key, *setting);
+			    if (setting->animation != nullptr) registerAnimation (key, *setting->animation);
 			}
 		    }
 		    ++passIndex;
