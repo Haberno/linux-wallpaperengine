@@ -117,6 +117,7 @@ void ShaderUnit::preprocess () {
 
     this->preprocessIncludes ();
     this->preprocessRequires ();
+    this->preprocessReservedIdentifiers ();
     this->preprocessVariables ();
     this->stripOrphanedEndifs ();
 
@@ -1582,6 +1583,25 @@ std::string ShaderUnit::applyDuplicateMacroCompatibility (std::string source) co
 	sLog.out ("Applied duplicate macro compatibility in ", this->m_file);
     }
     return changed ? output.str () : source;
+}
+
+void ShaderUnit::preprocessReservedIdentifiers () {
+    // The legacy blend effect uses `input` as a local RGBA value. Wallpaper
+    // Engine accepts it, but GLSL reserves input/output even as variable names.
+    // Keep material metadata intact and rename declarations, macros and uses
+    // together before uniform bindings are collected.
+    const std::string code = maskShaderComments (m_preprocessed);
+    static const std::regex reserved (R"(\b(input|output)\b)");
+    std::string result;
+    size_t copied = 0;
+    for (std::sregex_iterator it (code.begin (), code.end (), reserved), end; it != end; ++it) {
+	const size_t position = it->position ();
+	result.append (m_preprocessed, copied, position - copied);
+	result.append ("_lweReserved_").append (it->str ());
+	copied = position + it->length ();
+    }
+    result.append (m_preprocessed, copied);
+    m_preprocessed = std::move (result);
 }
 
 std::string ShaderUnit::applyHeaderMacroCompatibility (std::string source) const {
