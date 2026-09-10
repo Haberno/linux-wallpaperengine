@@ -163,6 +163,12 @@ private:
     /** Stable published result; other layers keep references across glyph rebuilds. */
     std::shared_ptr<CFBO> m_publishedFBO;
     std::shared_ptr<const CFBO> m_effectResult;
+    std::unique_ptr<Effects::CPass> m_colorBlendPass;
+    std::unique_ptr<ImageEffectPassOverride> m_colorBlendOverride;
+    std::shared_ptr<FBOProvider> m_colorBlendProvider;
+    std::shared_ptr<CFBO> m_blendBackground;
+    glm::mat4 m_colorBlendMVP { 1.0f };
+    int m_colorBlendMode = 0;
     GLuint m_ndcPosition = 0;
     GLuint m_passTexCoord = 0;
     GLuint m_compositeVao = 0;
