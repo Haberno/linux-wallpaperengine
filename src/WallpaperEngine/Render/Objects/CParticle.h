@@ -26,6 +26,9 @@ constexpr uint32_t DEFAULT_MAX_PARTICLES = 1000;
 [[nodiscard]] float calculateParticleEmissionRate (float emitterRate, float count);
 [[nodiscard]] glm::vec3 convertParticleRotationForRender (const glm::vec3& rotation);
 [[nodiscard]] float calculateRopeTrailVisualValue (float currentValue, float trailPosition, bool fadeAlongTrail);
+[[nodiscard]] glm::vec3 calculateControlPointAttraction (
+    const glm::vec3& toCenter, float strength, float radius, float deltaTime
+);
 
 /**
  * Runtime particle instance state
