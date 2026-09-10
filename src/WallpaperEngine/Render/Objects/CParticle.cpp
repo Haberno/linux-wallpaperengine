@@ -244,7 +244,7 @@ const ParticleInstanceOverride& CParticle::getInstanceOverride () const {
 
 void CParticle::setupChildren () {
     for (const auto& child : m_particle.children) {
-	if (child.type != "static" || child.particleFile.empty ()) {
+	if ((child.type != "static" && child.type != "eventfollow") || child.particleFile.empty ()) {
 	    continue;
 	}
 	bool recursive = false;
@@ -274,10 +274,26 @@ void CParticle::setupChildren () {
 	    particle->origin->value->update (child.origin, DynamicValue::UpdateSource::Initialization);
 	    particle->angles->value->update (child.angles, DynamicValue::UpdateSource::Initialization);
 	    particle->scale->value->update (child.scale, DynamicValue::UpdateSource::Initialization);
-	    auto renderer = std::make_unique<CParticle> (getScene (), *particle, this);
-	    renderer->m_controlPointStartIndex = child.controlPointStartIndex;
-	    renderer->setup ();
-	    m_children.push_back ({ std::move (definition), std::move (renderer) });
+	    if (child.type == "static") {
+		auto renderer = std::make_unique<CParticle> (getScene (), *particle, this);
+		renderer->m_controlPointStartIndex = child.controlPointStartIndex;
+		renderer->setup ();
+		m_children.push_back ({ std::move (definition), std::move (renderer) });
+	    } else {
+		FollowChildSystem system { .definition = std::move (definition), .settings = &child, .instances = {} };
+		// Prepare a bounded pool on the load worker. Spawning an event child must
+		// never parse assets or compile shaders in the middle of a rendered frame.
+		const auto capacity = std::min (std::max (child.maxCount, 0), static_cast<int> (m_maxParticles));
+		for (int i = 0; i < capacity; ++i) {
+		    if (i > 0 && root->m_childSystemCount++ >= 64) break;
+		    auto renderer = std::make_unique<CParticle> (getScene (), *particle, this);
+		    renderer->m_controlPointStartIndex = child.controlPointStartIndex;
+		    renderer->setup ();
+		    renderer->pause ();
+		    system.instances.push_back ({ .renderer = std::move (renderer) });
+		}
+		m_followChildren.push_back (std::move (system));
+	    }
 	} catch (const std::exception& error) {
 	    sLog.error ("Cannot load child particle system: ", child.particleFile, " - ", error.what ());
 	}
@@ -320,6 +336,9 @@ void CParticle::render () {
     for (auto& child : m_children) {
 	child.renderer->render ();
     }
+    for (auto& child : m_followChildren) {
+	for (auto& instance : child.instances) instance.renderer->render ();
+    }
 }
 
 void CParticle::play () {
@@ -327,12 +346,20 @@ void CParticle::play () {
     for (auto& child : m_children) {
 	child.renderer->play ();
     }
+    for (auto& child : m_followChildren) {
+	for (auto& instance : child.instances) {
+	    if (instance.parentSerial != 0) instance.renderer->play ();
+	}
+    }
 }
 
 void CParticle::pause () {
     m_emitting = false;
     for (auto& child : m_children) {
 	child.renderer->pause ();
+    }
+    for (auto& child : m_followChildren) {
+	for (auto& instance : child.instances) instance.renderer->pause ();
     }
 }
 
@@ -343,6 +370,61 @@ void CParticle::stop () {
     setupEmitters ();
     for (auto& child : m_children) {
 	child.renderer->stop ();
+    }
+    for (auto& child : m_followChildren) {
+	for (auto& instance : child.instances) {
+	    instance.parentSerial = 0;
+	    instance.renderer->stop ();
+	}
+    }
+}
+
+bool CParticle::hasLivingParticles () const {
+    if (m_particleCount != 0) return true;
+    for (const auto& child : m_children) {
+	if (child.renderer->hasLivingParticles ()) return true;
+    }
+    for (const auto& child : m_followChildren) {
+	for (const auto& instance : child.instances) {
+	    if (instance.renderer->hasLivingParticles ()) return true;
+	}
+    }
+    return false;
+}
+
+void CParticle::updateFollowChildren (const uint32_t firstNewParticle) {
+    for (auto& child : m_followChildren) {
+	for (uint32_t i = firstNewParticle; i < m_particleCount; ++i) {
+	    const auto& particle = m_particles[i];
+	    if (!particle.isAlive () || WallpaperEngine::Maths::randomFloat (m_rng, 0.0f, 1.0f)
+		>= child.settings->probability) continue;
+	    const auto slot = std::find_if (child.instances.begin (), child.instances.end (), [] (const auto& instance) {
+		return instance.parentSerial == 0 && !instance.renderer->hasLivingParticles ();
+	    });
+	    if (slot == child.instances.end ()) break;
+	    slot->parentSerial = particle.serial;
+	    slot->renderer->stop ();
+	    slot->renderer->m_simulationTime = 0.0f;
+	    slot->renderer->m_time = g_Time;
+	    slot->renderer->play ();
+	}
+	for (auto& instance : child.instances) {
+	    if (instance.parentSerial == 0) continue;
+	    const auto parent = std::find_if (
+		m_particles.begin (), m_particles.begin () + m_particleCount, [&] (const auto& particle) {
+		    return particle.serial == instance.parentSerial && particle.isAlive ();
+		}
+	    );
+	    if (parent == m_particles.begin () + m_particleCount) {
+		instance.parentSerial = 0;
+		// Released child particles finish their lifetime at their own positions.
+		instance.renderer->pause ();
+	    } else {
+		const glm::mat4 flipY = glm::scale (glm::mat4 (1.0f), glm::vec3 (1.0f, -1.0f, 1.0f));
+		const glm::mat4 parentToLocal = glm::inverse (flipY * instance.renderer->resolveWorldMatrix () * flipY);
+		instance.renderer->m_followPosition = glm::vec3 (parentToLocal * glm::vec4 (parent->position, 1.0f));
+	    }
+	}
     }
 }
 
@@ -425,11 +507,19 @@ void CParticle::update (float dt) {
 	}
     }
 
+    if (m_followPosition.has_value ()) {
+	m_controlPoints[0].position = *m_followPosition;
+    }
+
     // Pausing stops new emission; bubbles already released keep moving and aging.
+    const uint32_t firstNewParticle = m_particleCount;
     if (m_emitting) {
 	for (auto& emitter : m_emitters) {
 	    emitter (m_particles, m_particleCount, dt);
 	}
+    }
+    for (uint32_t i = firstNewParticle; i < m_particleCount; ++i) {
+	m_particles[i].serial = ++m_nextParticleSerial;
     }
 
     // Update particle age
@@ -483,6 +573,7 @@ void CParticle::update (float dt) {
     }
 
     updateRopeTrailHistory (dt);
+    updateFollowChildren (firstNewParticle);
 
     // Remove dead particles with order-preserving compaction.
     // Particles only die from natural lifetime expiry (age >= lifetime).
