@@ -441,7 +441,9 @@ void CParticle::updateFollowChildren (const uint32_t firstNewParticle) {
 		instance.renderer->pause ();
 	    } else {
 		const glm::mat4 flipY = glm::scale (glm::mat4 (1.0f), glm::vec3 (1.0f, -1.0f, 1.0f));
-		const glm::mat4 parentToLocal = glm::inverse (flipY * instance.renderer->resolveWorldMatrix () * flipY);
+		const glm::mat4 parentToLocal = glm::inverse (flipY
+		    * ((m_particle.flags & 1) != 0 ? instance.renderer->particleWorldMatrix ()
+			: instance.renderer->resolveWorldMatrix ()) * flipY);
 		instance.renderer->m_followPosition = glm::vec3 (parentToLocal * glm::vec4 (parent->position, 1.0f));
 	    }
 	}
@@ -523,9 +525,31 @@ void CParticle::update (float dt) {
 	m_particles[i].serial = ++m_nextParticleSerial;
     }
 
+    std::vector<ControlPointData> worldControlPoints;
+    const auto* operatorControlPoints = &m_controlPoints;
+    if ((m_particle.flags & 1) != 0) {
+	// Native 1402378a0/14023b340 transform births and initial velocity into
+	// world space. Size and subsequent forces stay in world units; applying
+	// the emitter model again made scaled meteor trails too wide and steep.
+	const glm::mat4 flipY = glm::scale (glm::mat4 (1.0f), glm::vec3 (1.0f, -1.0f, 1.0f));
+	const glm::mat4 localToWorld = flipY * particleWorldMatrix () * flipY;
+	for (uint32_t i = firstNewParticle; i < m_particleCount; ++i) {
+	    auto& particle = m_particles[i];
+	    particle.position = glm::vec3 (localToWorld * glm::vec4 (particle.position, 1.0f));
+	    particle.velocity = glm::mat3 (localToWorld) * particle.velocity;
+	}
+	// Emitters and child inheritance still need layer-local points. Operators
+	// act in the same space as the already spawned particles.
+	worldControlPoints = m_controlPoints;
+	for (auto& point : worldControlPoints) {
+	    point.position = glm::vec3 (localToWorld * glm::vec4 (point.position, 1.0f));
+	}
+	operatorControlPoints = &worldControlPoints;
+    }
+
     // Apply operators to living particles (including alphafade)
     for (auto& op : m_operators) {
-	op (m_particles, m_particleCount, m_controlPoints, m_simulationTime, dt);
+	op (m_particles, m_particleCount, *operatorControlPoints, m_simulationTime, dt);
     }
 
     // Update animation frames
@@ -2218,18 +2242,19 @@ void CParticle::updateMatrices () {
     const glm::mat4 sceneToParticle
 	= glm::translate (glm::mat4 (1.0f), glm::vec3 (-width * 0.5f, height * 0.5f, 0.0f)) * flipY;
     const bool is3D = getScene ().getScene ().camera.projection.isPerspective;
-    // The simulation reflects authored Y coordinates. In a 3D scene, undo that
-    // reflection before applying the layer/attachment transform; a canvas offset
-    // would put small world-space emitters hundreds of units outside the camera.
+    // Keep the world-to-render transform separate from the emitter transform.
+    // World-space births already include the emitter/attachment transform and
+    // must not follow later layer movement or inherit its size a second time.
     if (m_particleParent) {
 	m_particleParent->updateMatrices ();
-	m_modelMatrix = m_particleParent->m_modelMatrix * flipY * resolveWorldMatrix () * flipY;
+	m_worldModelMatrix = m_particleParent->m_worldModelMatrix;
     } else {
-	m_modelMatrix = (is3D ? glm::mat4 (1.0f) : sceneToParticle) * resolveWorldMatrix () * flipY;
+	m_modelMatrix = (is3D ? glm::mat4 (1.0f) : sceneToParticle) * flipY;
+	if (!is3D) this->applyParallaxToModelMatrix ();
+	m_worldModelMatrix = m_modelMatrix;
     }
-    if (!is3D && !m_particleParent) {
-	this->applyParallaxToModelMatrix ();
-    }
+    m_modelMatrix = (m_particle.flags & 1) != 0 ? m_worldModelMatrix
+	: m_worldModelMatrix * flipY * particleWorldMatrix () * flipY;
     m_modelMatrixInverse = glm::inverse (m_modelMatrix);
 
     this->updateParticleViewProjection ();
