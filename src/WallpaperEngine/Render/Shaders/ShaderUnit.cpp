@@ -172,11 +172,7 @@ void ShaderUnit::preprocessVariables () {
 }
 
 namespace {
-// Keep native GLSL min/max overloads. Only the HLSL literal-first max idiom
-// needs reordering: its literal is known to be scalar, while the other argument
-// may be a vector. Each argument is still evaluated once and constants remain
-// built-in constant expressions. Never infer types from local variable names.
-std::string reorderLiteralMax (std::string source) {
+std::string maskShaderComments (const std::string& source) {
     std::string code = source;
     const auto blank = [&code] (size_t begin, size_t end) {
         for (size_t i = begin; i < end; ++i) {
@@ -202,6 +198,20 @@ std::string reorderLiteralMax (std::string source) {
         if (end > i) { blank (i, end); i = end; }
         else ++i;
     }
+    return code;
+}
+
+// Keep native GLSL min/max overloads. Only the HLSL literal-first max idiom
+// needs reordering: its literal is known to be scalar, while the other argument
+// may be a vector. Each argument is still evaluated once and constants remain
+// built-in constant expressions. Never infer types from local variable names.
+std::string reorderLiteralMax (std::string source) {
+    std::string code = maskShaderComments (source);
+    const auto blank = [&code] (size_t begin, size_t end) {
+	for (size_t i = begin; i < end; ++i) {
+	    if (code[i] != '\n') code[i] = ' ';
+	}
+    };
     // An authored macro/function owns its own argument semantics.
     static const std::regex customMax (
         R"((^|\n)[ \t]*#[ \t]*(?:define|undef)[ \t]+max\b|\b(?:float[234]?|double|int[234]?|uint|[iu]?vec[234])\s+max\s*\()");
@@ -1589,95 +1599,84 @@ std::string ShaderUnit::applyFragmentWritableVaryings (std::string source) const
 	return source;
     }
 
-    // Only apply when the fragment shader actually WRITES to v_TexCoord
-    // (matches v_TexCoord = and v_TexCoord.xy = etc., but not ==).
-    // Shaders that only read v_TexCoord don't need the writable local alias.
-    static const std::regex writePattern (R"(\bv_TexCoord(?:\.[xyzwrgba]+)?\s*[+\-*/]?=[^=])");
-    if (!std::regex_search (source, writePattern)) {
+    const std::string code = maskShaderComments (source);
+    // HLSL fragment inputs are writable copies. GLSL inputs are read-only;
+    // shadow only the inputs assigned by the authored fragment body.
+    static const std::regex writePattern (R"(\b([A-Za-z_]\w*)(?:\.[xyzwrgba]+)?\s*[+\-*/]?=[^=])");
+    std::set<std::string> written;
+    for (std::sregex_iterator it (code.begin (), code.end (), writePattern), end; it != end; ++it) {
+	written.insert ((*it)[1].str ());
+    }
+    if (written.empty ()) {
 	return source;
     }
 
-    // Build an uppercase combo map so we can evaluate #if/#ifdef/#ifndef guards the same way
-    // the GLSL compiler does (combos are emitted as uppercase #defines). Insertion order follows
-    // this unit's own combo precedence: override > material > discovered,
-    // since emplace keeps the first value seen per key.
-    std::map<std::string, int> upperCombos;
-    const auto insertUpper = [&] (const ComboMap& map) {
-	for (const auto& [k, v] : map) {
-	    std::string up;
-	    std::ranges::transform (k, std::back_inserter (up), ::toupper);
-	    upperCombos.emplace (up, v);
-	}
-    };
-    insertUpper (this->m_overrideCombos);
-    insertUpper (this->m_combos);
-    insertUpper (this->m_discoveredCombos);
-
-    // Walk the source line-by-line tracking #if/#else/#endif to find the
-    // varying <type> v_TexCoord declaration in the ACTIVE combo branch.
-    static const std::regex ifRe     (R"(^\s*#if\s+(\w+))");
-    static const std::regex ifdefRe  (R"(^\s*#ifdef\s+(\w+))");
-    static const std::regex ifndefRe (R"(^\s*#ifndef\s+(\w+))");
-    static const std::regex elseRe   (R"(^\s*#else\b)");
-    static const std::regex endifRe  (R"(^\s*#endif\b)");
-    static const std::regex varyDecl (R"(\bvarying\s+(\S+)\s+v_TexCoord\s*;)");
-
-    std::vector<bool> activeStack = {true};
-    std::string foundType;
-    size_t pos = 0;
-
-    while (pos < source.size () && foundType.empty ()) {
-	const size_t lineEnd = source.find ('\n', pos);
-	const size_t end     = (lineEnd == std::string::npos) ? source.size () : lineEnd;
-	const std::string line = source.substr (pos, end - pos);
-	std::smatch m;
-
-	if (std::regex_search (line, m, ifRe)) {
-	    std::string up;
-	    std::ranges::transform (m[1].str (), std::back_inserter (up), ::toupper);
-	    const int val = upperCombos.count (up) ? upperCombos.at (up) : 0;
-	    activeStack.push_back (activeStack.back () && (val != 0));
-	} else if (std::regex_search (line, m, ifdefRe)) {
-	    std::string up;
-	    std::ranges::transform (m[1].str (), std::back_inserter (up), ::toupper);
-	    activeStack.push_back (activeStack.back () && (upperCombos.count (up) > 0));
-	} else if (std::regex_search (line, m, ifndefRe)) {
-	    std::string up;
-	    std::ranges::transform (m[1].str (), std::back_inserter (up), ::toupper);
-	    activeStack.push_back (activeStack.back () && (upperCombos.count (up) == 0));
-	} else if (std::regex_search (line, elseRe)) {
-	    if (activeStack.size () >= 2) {
-		const bool parentActive = activeStack[activeStack.size () - 2];
-		activeStack.back () = parentActive && !activeStack.back ();
+    static const std::regex mainPattern (R"(\bvoid\s+main\s*\([^)]*\)\s*\{)");
+    std::vector<std::pair<size_t, size_t>> mains;
+    for (std::sregex_iterator it (code.begin (), code.end (), mainPattern), end; it != end; ++it) {
+	mains.emplace_back (it->position (), it->position () + it->length ());
+    }
+    // Insert from the end so offsets remain valid when a shader provides
+    // several main() definitions selected by preprocessor conditions.
+    for (auto entry = mains.rbegin (); entry != mains.rend (); ++entry) {
+	const auto [mainPosition, bodyPosition] = *entry;
+	std::set<std::string> mainWritten = written;
+	size_t bodyEnd = bodyPosition;
+	int depth = 1;
+	while (bodyEnd < code.size () && depth > 0) {
+	    if (code[bodyEnd] == '{') {
+		depth++;
+	    } else if (code[bodyEnd] == '}') {
+		depth--;
 	    }
-	} else if (std::regex_search (line, endifRe)) {
-	    if (activeStack.size () > 1) {
-		activeStack.pop_back ();
-	    }
-	} else if (activeStack.back () && std::regex_search (line, m, varyDecl)) {
-	    foundType = m[1].str ();
+	    bodyEnd++;
 	}
-
-	pos = (lineEnd == std::string::npos) ? source.size () : lineEnd + 1;
+	// Preserve explicit local copies within this entry point, including
+	// locals whose type differs from the unused interpolated input.
+	static const std::regex localDeclaration (
+	    R"(\b(?:bool|int|uint|float[234]?|double|[biud]?vec[234]|d?mat[234](?:x[234])?)\s+(\w+)\s*(?:=|;|,))"
+	);
+	for (std::sregex_iterator it (code.begin () + bodyPosition, code.begin () + bodyEnd, localDeclaration), end;
+	     it != end; ++it) {
+	    mainWritten.erase ((*it)[1].str ());
+	}
+	static const std::regex varyDecl (R"(^\s*varying\s+(\w+)\s+(\w+)\s*;)");
+	std::vector<std::string> conditions;
+	std::string aliases;
+	size_t position = 0;
+	while (position < mainPosition) {
+	    const size_t newline = code.find ('\n', position);
+	    const size_t end = std::min (newline, mainPosition);
+	    const std::string line = code.substr (position, end - position);
+	    const auto directive = preprocessorDirective (line);
+	    std::smatch declaration;
+	    if (directive == "if" || directive == "ifdef" || directive == "ifndef") {
+		conditions.push_back (line + '\n');
+	    } else if ((directive == "else" || directive == "elif") && !conditions.empty ()) {
+		conditions.back () += line + '\n';
+	    } else if (directive == "endif" && !conditions.empty ()) {
+		conditions.pop_back ();
+	    } else if (
+		std::regex_search (line, declaration, varyDecl) && mainWritten.contains (declaration[2].str ())
+	    ) {
+		// Preserve the real preprocessor conditions instead of guessing their
+		// truth values. Cached source then works for every combo variant,
+		// including different input widths under #if / #elif / #else.
+		for (const auto& condition : conditions) {
+		    aliases += condition;
+		}
+		const std::string name = declaration[2].str ();
+		aliases += "    " + declaration[1].str () + " " + name + " = " + name + ";\n";
+		for (size_t i = 0; i < conditions.size (); ++i) {
+		    aliases += "#endif\n";
+		}
+	    }
+	    position = end + 1;
+	}
+	if (!aliases.empty ()) {
+	    source.insert (bodyPosition, "\n" + aliases);
+	}
     }
-
-    if (foundType.empty ()) {
-	return source;
-    }
-
-    // Inject a local writable alias at the top of main().
-    // GLSL scoping: the RHS v_TexCoord resolves to the outer-scope (read-only) input
-    // before the local variable enters scope — the local copy is then freely writable.
-    const size_t mainPos = source.find ("void main");
-    if (mainPos == std::string::npos) {
-	return source;
-    }
-    const size_t bracePos = source.find ('{', mainPos);
-    if (bracePos == std::string::npos) {
-	return source;
-    }
-
-    source.insert (bracePos + 1, "\n    " + foundType + " v_TexCoord = v_TexCoord;");
     return source;
 }
 
