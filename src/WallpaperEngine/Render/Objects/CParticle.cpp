@@ -69,10 +69,10 @@ glm::vec3 WallpaperEngine::Render::Objects::resolveParticleControlPoint (
 CParticle::CParticle (Wallpapers::CScene& scene, const Particle& particle, CParticle* parent) :
     CObject (scene, particle), CRenderable (scene, particle, *particle.material->material),
     ScriptableObject (scene, particle), m_particle (particle), m_particleParent (parent) {
-    this->registerProperty ("scale", *particle.scale->value);
-    this->registerProperty ("angles", *particle.angles->value);
-    this->registerProperty ("visible", *particle.visible->value);
-    this->registerProperty ("parallaxDepth", *particle.parallaxDepth->value);
+    this->registerProperty ("scale", *particle.scale);
+    this->registerProperty ("angles", *particle.angles);
+    this->registerProperty ("visible", *particle.visible);
+    this->registerProperty ("parallaxDepth", *particle.parallaxDepth);
 
     this->detectTexture ();
     // Initialize random number generator with time-based seed
