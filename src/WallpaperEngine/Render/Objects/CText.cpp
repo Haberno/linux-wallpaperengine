@@ -905,7 +905,12 @@ void CText::rebuildTextureFrom (const std::string& text) {
 		    if (dstX < 0 || dstX >= width || dstY < 0 || dstY >= height) {
 			continue;
 		    }
-		    pixels[static_cast<size_t> (dstY) * width + dstX] = bmp.buffer[row * bmp.pitch + col];
+		    // Glyph bitmaps overlap when ink extends past the advance (italic text
+		    // and display-clock fonts). Transparent texels in the next glyph must
+		    // not erase the previous one; accumulate coverage as source-over alpha.
+		    auto& coverage = pixels[static_cast<size_t> (dstY) * width + dstX];
+		    const unsigned int incoming = bmp.buffer[row * bmp.pitch + col];
+		    coverage = incoming + (coverage * (255 - incoming) + 127) / 255;
 		}
 	    }
 
