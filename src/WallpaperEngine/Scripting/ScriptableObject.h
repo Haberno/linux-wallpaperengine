@@ -13,6 +13,7 @@ public:
 	std::string key;
 	DynamicValue& value;
 	const UserSetting* setting = nullptr;
+	std::string animationScope;
     };
 
     ScriptableObject (Wallpapers::CScene& scene, const Object& object);
@@ -28,8 +29,10 @@ public:
     virtual void prepareAnimationEvents () { }
 
 protected:
-    void registerProperty (const std::string& name, DynamicValue& value);
-    void registerProperty (const std::string& name, const UserSetting& setting);
+    void registerProperty (const std::string& name, DynamicValue& value, const std::string& animationScope = {});
+    void registerProperty (
+	const std::string& name, const UserSetting& setting, const std::string& animationScope = {}
+    );
     void registerAnimation (const std::string& key, PropertyAnimation& animation) {
 	m_animations.insert_or_assign (key, &animation);
     }

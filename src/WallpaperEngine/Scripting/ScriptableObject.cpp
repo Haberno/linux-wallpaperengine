@@ -76,19 +76,21 @@ const UserSetting* ScriptableObject::getPropertySetting (const std::string& name
     return it != m_properties.end () ? it->second.setting : nullptr;
 }
 
-void ScriptableObject::registerProperty (const std::string& name, const UserSetting& setting) {
-    registerProperty (name, *setting.value);
-    m_properties.at (name).setting = &setting;
+void ScriptableObject::registerProperty (
+    const std::string& name, const UserSetting& setting, const std::string& animationScope
+) {
     if (setting.animation != nullptr && !setting.animation->name.empty ()) {
-	m_animations.insert_or_assign (setting.animation->name, setting.animation.get ());
+	m_animations.insert_or_assign (animationScope + setting.animation->name, setting.animation.get ());
     }
+    registerProperty (name, *setting.value, animationScope);
+    m_properties.at (name).setting = &setting;
     // Resolve after each registration: a child can precede its clock property
     // in both serialized data and a derived renderer's registration order.
     for (const auto& [property, entry] : m_properties) {
 	if (entry.setting == nullptr || entry.setting->animation == nullptr) continue;
 	auto& animation = *entry.setting->animation;
 	if (animation.parentKey.empty ()) continue;
-	const auto* parent = getPropertySetting (animation.parentKey);
+	const auto* parent = getPropertySetting (entry.animationScope + animation.parentKey);
 	if (parent == nullptr || parent->animation == nullptr) continue;
 	auto* clock = parent->animation.get ();
 	bool cycle = false;
@@ -99,7 +101,9 @@ void ScriptableObject::registerProperty (const std::string& name, const UserSett
     }
 }
 
-void ScriptableObject::registerProperty (const std::string& name, DynamicValue& value) {
+void ScriptableObject::registerProperty (
+    const std::string& name, DynamicValue& value, const std::string& animationScope
+) {
     // Derived renderers repeat some common registrations and add their own
     // properties. Both this map and the queued script must refer to the final
     // values consumed by the renderer.
@@ -107,7 +111,9 @@ void ScriptableObject::registerProperty (const std::string& name, DynamicValue& 
     // PropertyEntry holds a reference member (not assignable), so drop any prior registration and
     // re-emplace to let the derived value win.
     this->m_properties.erase (name);
-    const auto [it, inserted] = this->m_properties.emplace (name, PropertyEntry { .key = key, .value = value });
+    const auto [it, inserted] = this->m_properties.emplace (
+	name, PropertyEntry { .key = key, .value = value, .animationScope = animationScope }
+    );
 
     // Re-registering the same value is safe: the keyed module is initialized only
     // once. The constructor must select the final value before its first queue.
