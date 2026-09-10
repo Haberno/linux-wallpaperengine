@@ -475,6 +475,8 @@ void CText::setupEffectChain () {
 		    ? *effectPass->target
 		    : std::optional<std::reference_wrapper<std::string>> (std::nullopt);
 
+	std::shared_ptr<const TextureProvider> effectInput;
+	bool inTargetSequence = false;
 		auto* cpass
 		    = new Effects::CPass (*m_effectHost, fboProvider, *pass, override, effectPass->binds, target);
 
@@ -499,6 +501,10 @@ void CText::setupEffectChain () {
 
 		m_effectPasses.push_back (cpass);
 
+			if (!inTargetSequence) {
+			    effectInput = asInput;
+			    inTargetSequence = true;
+			}
 		if (writesToTarget) {
 		    asInput = drawTo;
 		    drawTo = prevDrawTo;
@@ -508,6 +514,7 @@ void CText::setupEffectChain () {
 		    asInput = drawTo;
 		    drawTo = nextDraw;
 		}
+		cpass->setPreviousInput (inTargetSequence ? effectInput : nullptr);
 	    }
 
 	    if (curOverride != endOverride) {
@@ -522,6 +529,7 @@ void CText::setupEffectChain () {
     }
 
     m_effectResult = std::dynamic_pointer_cast<const CFBO> (asInput);
+		    inTargetSequence = false;
 
     // composite program: same vertex shader, RGBA fragment
     GLuint vs = compileShader (GL_VERTEX_SHADER, kVertexShader);
