@@ -795,6 +795,7 @@ void ScriptEngine::queueScript (const std::string& key, DynamicValue& currentVal
 	    << "    cursorDown: (typeof cursorDown === 'function') ? cursorDown : null,\n"
 	    << "    cursorUp: (typeof cursorUp === 'function') ? cursorUp : null,\n"
 	    << "    cursorClick: (typeof cursorClick === 'function') ? cursorClick : null,\n"
+	    << "    animationEvent: (typeof animationEvent === 'function') ? animationEvent : null,\n"
 	    << "  };\n"
 	    << "})()";
 
@@ -813,6 +814,7 @@ void ScriptEngine::queueScript (const std::string& key, DynamicValue& currentVal
 	    .object = object,
 	    .initialized = false,
 	    .updateEnabled = true,
+	    .animationEvents = body.find ("animationEvent") != std::string::npos,
 	    .cursorEvents = body.find ("cursorEnter") != std::string::npos
 		|| body.find ("cursorLeave") != std::string::npos || body.find ("cursorMove") != std::string::npos
 		|| body.find ("cursorDown") != std::string::npos || body.find ("cursorUp") != std::string::npos
@@ -1001,6 +1003,20 @@ void ScriptEngine::tick () {
     // shared state are visible to property scripts in the same frame.
     this->dispatchCursorEvents ();
 
+    // A layer can have several property scripts. Advance each named timeline once
+    // and deliver its authored markers to all animationEvent hooks on that layer.
+    std::unordered_set<ScriptableObject*> animatedObjects;
+    for (const auto& [key, module] : m_scriptModules) {
+	if (module.initialized && module.object != nullptr) animatedObjects.insert (module.object);
+    }
+    for (auto* object : animatedObjects) {
+	for (const auto& [name, animation] : object->getAnimations ()) {
+	    for (const auto& event : animation->takeEvents (m_scene.getTime ())) {
+		dispatchAnimationEvent (*object, event, name);
+	    }
+	}
+    }
+
     // run all update methods
     for (auto& [key, module] : this->m_scriptModules) {
 	if (!module.initialized || !module.updateEnabled) {
@@ -1027,6 +1043,35 @@ void ScriptEngine::tick () {
 	} else {
 	    jsToDynamicValue (this->m_context, result, module.value);
 	}
+    }
+}
+
+void ScriptEngine::dispatchAnimationEvent (
+    ScriptableObject& object, const PropertyAnimation::Event& event, const std::string& animationName
+) {
+    auto* previousModule = m_runningModule;
+    ScopeGuard restore ([&] { m_runningModule = previousModule; });
+    for (auto& [key, module] : m_scriptModules) {
+	if (!module.initialized || !module.animationEvents || module.object != &object) continue;
+	m_runningModule = &module;
+	JSValue eventValue = JS_NewObject (m_context);
+	JS_SetPropertyStr (m_context, eventValue, "name", JS_NewString (m_context, event.name.c_str ()));
+	JS_SetPropertyStr (m_context, eventValue, "frame", JS_NewFloat64 (m_context, event.frame));
+	JS_SetPropertyStr (m_context, eventValue, "animation", JS_NewString (m_context, animationName.c_str ()));
+	const bool angles = isAnglesProperty (key);
+	JSValue args[] = { eventValue, angles ? anglesToJs (*m_adapters.vec3, module.value) : dynamicToJs (module.value) };
+	JSValue result = call (module.module, 2, args, "animationEvent");
+	if (JS_IsException (result)) {
+	    logJSException (m_context, key.c_str ());
+	    module.animationEvents = false;
+	} else if (angles) {
+	    jsToAngles (m_context, result, args[1], module.value);
+	} else {
+	    jsToDynamicValue (m_context, result, module.value);
+	}
+	JS_FreeValue (m_context, result);
+	JS_FreeValue (m_context, args[1]);
+	JS_FreeValue (m_context, eventValue);
     }
 }
 

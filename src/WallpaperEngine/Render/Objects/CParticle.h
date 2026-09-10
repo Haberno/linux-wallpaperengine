@@ -130,6 +130,10 @@ public:
     void setup () override;
     void render () override;
     void update (float dt);
+    void play () { m_emitting = true; }
+    void pause () { m_emitting = false; }
+    void stop ();
+    [[nodiscard]] bool isPlaying () const { return m_emitting; }
 
     [[nodiscard]] const Particle& getParticle () const;
 
@@ -193,6 +197,7 @@ private:
 
     std::vector<ParticleInstance> m_particles;
     uint32_t m_particleCount { 0 };
+    bool m_emitting = true;
     uint32_t m_maxParticles { DEFAULT_MAX_PARTICLES };
 
     std::vector<EmitterFunc> m_emitters;

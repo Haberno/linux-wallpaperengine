@@ -38,6 +38,15 @@ PropertyAnimationUniquePtr parseAnimation (const json& data) {
     animation->length = options.has_value () ? options->optional ("length", 0.0f) : 0.0f;
     animation->mode = options.has_value () ? options->optional<std::string> ("mode", "loop") : "loop";
     animation->relative = it.optional ("relative", false);
+    if (options.has_value ()) {
+	animation->name = options->optional<std::string> ("name", "");
+	animation->playing = !options->optional ("startpaused", false);
+	if (const auto events = options->optional ("events"); events.has_value () && events->is_array ()) {
+	    for (const auto& event : *events) {
+		animation->events.push_back ({ event.optional ("frame", 0.0f), event.optional<std::string> ("name", "") });
+	    }
+	}
+    }
     const bool wrapLoop = options.has_value () && options->optional ("wraploop", false);
 
     // channels are stored as c0/c1/c2... keys mapping to keyframe arrays

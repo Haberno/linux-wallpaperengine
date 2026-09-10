@@ -15,6 +15,7 @@
 #include "WallpaperEngine/Data/Model/DynamicValue.h"
 #include "WallpaperEngine/Data/Utils/ScopeGuard.h"
 #include "WallpaperEngine/Render/Objects/CImage.h"
+#include "WallpaperEngine/Render/Objects/CParticle.h"
 #include "WallpaperEngine/Render/Objects/CSound.h"
 #include "WallpaperEngine/Scripting/ScriptEngine.h"
 #include "WallpaperEngine/Scripting/ScriptableObject.h"
@@ -41,6 +42,10 @@ enum AnimationCommand {
     AnimationCommand_Pause,
     AnimationCommand_Stop,
     AnimationCommand_IsPlaying,
+    AnimationCommand_GetFrame,
+    AnimationCommand_SetFrame,
+    AnimationCommand_GetRate,
+    AnimationCommand_SetRate,
 };
 
 enum TextureAnimationCommand {
@@ -622,7 +627,74 @@ static JSValue scriptable_animation_controller (
     return result;
 }
 
+static JSValue property_animation_command (
+    JSContext* ctx, JSValueConst thisVal, int argc, JSValueConst* argv, int magic, JSValueConst* functionData
+) {
+    auto* container = scriptable_container (functionData[0]);
+    const char* name = JS_ToCString (ctx, functionData[1]);
+    if (container == nullptr || name == nullptr) {
+	JS_FreeCString (ctx, name);
+	return JS_UNDEFINED;
+    }
+    const auto& animations = container->object.getAnimations ();
+    const auto found = animations.find (name);
+    JS_FreeCString (ctx, name);
+    if (found == animations.end ()) {
+	return JS_UNDEFINED;
+    }
+    auto& animation = *found->second;
+    const float time = container->object.getScene ().getTime ();
+    double value = 0.0;
+    switch (magic) {
+	case AnimationCommand_Play: animation.play (time); break;
+	case AnimationCommand_Pause: animation.pause (time); break;
+	case AnimationCommand_Stop: animation.stop (time); break;
+	case AnimationCommand_IsPlaying: return JS_NewBool (ctx, animation.isPlaying (time));
+	case AnimationCommand_GetFrame: return JS_NewFloat64 (ctx, animation.frameAt (time));
+	case AnimationCommand_GetRate: return JS_NewFloat64 (ctx, animation.rate);
+	case AnimationCommand_SetFrame:
+	case AnimationCommand_SetRate:
+	    if (argc < 1 || JS_ToFloat64 (ctx, &value, argv[0]) < 0 || !std::isfinite (value)) {
+		return JS_ThrowTypeError (ctx, "Animation frame/rate expects a finite number");
+	    }
+	    if (magic == AnimationCommand_SetFrame) animation.setFrame (static_cast<float> (value), time);
+	    else animation.setRate (static_cast<float> (value), time);
+	    break;
+	default: break;
+    }
+    return JS_UNDEFINED;
+}
+
+static JSValue property_animation_controller (JSContext* ctx, JSValueConst layer, JSValueConst name) {
+    JSValue data[] = { layer, name };
+    JSValue result = JS_NewObject (ctx);
+    const auto method = [&] (const char* methodName, const int command, const int length = 0) {
+	JS_SetPropertyStr (ctx, result, methodName,
+	    JS_NewCFunctionData (ctx, property_animation_command, length, command, 2, data));
+    };
+    method ("play", AnimationCommand_Play);
+    method ("pause", AnimationCommand_Pause);
+    method ("stop", AnimationCommand_Stop);
+    method ("isPlaying", AnimationCommand_IsPlaying);
+    method ("getFrame", AnimationCommand_GetFrame);
+    method ("setFrame", AnimationCommand_SetFrame, 1);
+    const JSAtom rate = JS_NewAtom (ctx, "rate");
+    JS_DefinePropertyGetSet (ctx, result, rate,
+	JS_NewCFunctionData (ctx, property_animation_command, 0, AnimationCommand_GetRate, 2, data),
+	JS_NewCFunctionData (ctx, property_animation_command, 1, AnimationCommand_SetRate, 2, data),
+	JS_PROP_ENUMERABLE);
+    JS_FreeAtom (ctx, rate);
+    return result;
+}
+
 static JSValue scriptable_get_animation (JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    if (auto* container = scriptable_container (this_val); container != nullptr && argc > 0 && JS_IsString (argv[0])) {
+	const char* name = JS_ToCString (ctx, argv[0]);
+	if (name == nullptr) return JS_EXCEPTION;
+	const bool found = container->object.getAnimations ().contains (name);
+	JS_FreeCString (ctx, name);
+	if (found) return property_animation_controller (ctx, this_val, argv[0]);
+    }
     auto* image = scriptable_image (this_val);
     if (image == nullptr) {
 	return JS_UNDEFINED;
@@ -653,6 +725,17 @@ static JSValue scriptable_get_animation (JSContext* ctx, JSValueConst this_val, 
 static JSValue
 scriptable_object_animation_command (JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv, int magic) {
     auto* container = scriptable_container (this_val);
+    if (auto* particle = container != nullptr
+	    ? dynamic_cast<WallpaperEngine::Render::Objects::CParticle*> (&container->object) : nullptr) {
+	switch (magic) {
+	    case AnimationCommand_Play: particle->play (); break;
+	    case AnimationCommand_Pause: particle->pause (); break;
+	    case AnimationCommand_Stop: particle->stop (); break;
+	    case AnimationCommand_IsPlaying: return JS_NewBool (ctx, particle->isPlaying ());
+	    default: break;
+	}
+	return JS_UNDEFINED;
+    }
     if (auto* sound = container != nullptr
 	    ? dynamic_cast<WallpaperEngine::Render::Objects::CSound*> (&container->object)
 	    : nullptr) {

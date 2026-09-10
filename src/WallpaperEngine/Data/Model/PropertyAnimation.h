@@ -37,6 +37,28 @@ struct PropertyAnimation {
     std::string mode;
     /** Whether channel values offset the base property value instead of replacing it */
     bool relative;
+    struct Event {
+	float frame;
+	std::string name;
+    };
+    std::string name;
+    std::vector<Event> events;
+    float rate = 1.0f;
+    bool playing = true;
+    float anchorTime = 0.0f;
+    float anchorFrame = 0.0f;
+    float previousEventFrame = -0.0001f;
+
+    [[nodiscard]] float elapsedFrame (float time) const;
+    [[nodiscard]] float frameAt (float time) const;
+    [[nodiscard]] bool isPlaying (float time) const;
+    void play (float time);
+    void pause (float time);
+    void stop (float time);
+    void setFrame (float frame, float time);
+    void setRate (float value, float time);
+    /** Events crossed since the previous tick, including loop and mirror boundaries. */
+    [[nodiscard]] std::vector<Event> takeEvents (float time);
 
     /**
      * Samples one channel at the given time (in seconds), using the authored

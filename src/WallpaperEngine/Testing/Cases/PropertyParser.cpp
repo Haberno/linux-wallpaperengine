@@ -17,6 +17,66 @@ using WallpaperEngine::Data::Model::PropertyKeyframe;
 using WallpaperEngine::Data::Parsers::PropertyParser;
 using WallpaperEngine::Data::Parsers::UserSettingParser;
 
+TEST_CASE ("Named property animations start paused and emit markers once", "[property-animation]") {
+    const auto setting = UserSettingParser::parse (JSON::parse (R"({"value":1,
+        "animation":{"c0":[{"frame":0,"value":0},{"frame":90,"value":0}],"relative":true,
+        "options":{"name":"bubbles","fps":30,"length":90,"mode":"single","startpaused":true,
+        "events":[{"frame":0,"name":"on"},{"frame":30,"name":"off"}]}}})"), {});
+    auto& animation = *setting->animation;
+    CHECK (animation.name == "bubbles");
+    CHECK_FALSE (animation.isPlaying (12.0f));
+    CHECK (animation.takeEvents (12.0f).empty ());
+    animation.play (12.0f);
+    const auto started = animation.takeEvents (12.0f);
+    REQUIRE (started.size () == 1);
+    CHECK (started[0].name == "on");
+    CHECK (animation.takeEvents (12.5f).empty ());
+    const auto stopped = animation.takeEvents (13.1f);
+    REQUIRE (stopped.size () == 1);
+    CHECK (stopped[0].name == "off");
+    CHECK (animation.takeEvents (13.1f).empty ());
+    CHECK_FALSE (animation.isPlaying (16.0f));
+    animation.play (16.0f);
+    REQUIRE (animation.takeEvents (16.0f).size () == 1);
+    CHECK (animation.frameAt (16.0f) == 0.0f);
+}
+
+TEST_CASE ("Property animation pause preserves mirror direction and rate continuity", "[property-animation]") {
+    PropertyAnimation animation { .fps = 10.0f, .length = 10.0f, .mode = "mirror", .relative = false };
+    CHECK (animation.frameAt (1.5f) == Catch::Approx (5.0f));
+    animation.pause (1.5f);
+    CHECK (animation.frameAt (50.0f) == Catch::Approx (5.0f));
+    animation.play (50.0f);
+    CHECK (animation.frameAt (50.2f) == Catch::Approx (3.0f).margin (0.0001f));
+    animation.setRate (2.0f, 50.2f);
+    CHECK (animation.frameAt (50.3f) == Catch::Approx (1.0f).margin (0.0001f));
+    animation.setFrame (4.0f, 51.0f);
+    CHECK (animation.frameAt (51.1f) == Catch::Approx (6.0f).margin (0.0001f));
+    animation.stop (51.1f);
+    CHECK (animation.frameAt (100.0f) == 0.0f);
+    CHECK_FALSE (animation.isPlaying (100.0f));
+}
+
+TEST_CASE ("Property animation events cross loop and mirror boundaries in order", "[property-animation]") {
+    PropertyAnimation animation { .fps = 10.0f, .length = 10.0f, .mode = "loop", .relative = false,
+        .events = {{0.0f, "start"}, {5.0f, "middle"}, {10.0f, "end"}} };
+    const auto initial = animation.takeEvents (0.0f);
+    REQUIRE (initial.size () == 1);
+    CHECK (initial[0].name == "start");
+    const auto loop = animation.takeEvents (1.2f);
+    REQUIRE (loop.size () == 3);
+    CHECK (loop[0].name == "middle");
+    CHECK (loop[1].name == "end");
+    CHECK (loop[2].name == "start");
+    animation.mode = "mirror";
+    animation.setFrame (10.0f, 2.0f);
+    const auto mirror = animation.takeEvents (3.1f);
+    REQUIRE (mirror.size () == 3);
+    CHECK (mirror[0].name == "end");
+    CHECK (mirror[1].name == "middle");
+    CHECK (mirror[2].name == "start");
+}
+
 TEST_CASE ("Bool properties without a value default to false") {
     const JSON propertyData = {
 	{ "type", "bool" },

@@ -265,6 +265,13 @@ void CParticle::render () {
     }
 }
 
+void CParticle::stop () {
+    m_emitting = false;
+    m_particleCount = 0;
+    m_emitters.clear ();
+    setupEmitters ();
+}
+
 void CParticle::update (float dt) {
     // Detect resolution changes and recalculate transformed origin
     float screenWidth = static_cast<float> (getScene ().getWidth ());
@@ -331,9 +338,11 @@ void CParticle::update (float dt) {
 	}
     }
 
-    // Emit particles
-    for (auto& emitter : m_emitters) {
-	emitter (m_particles, m_particleCount, dt);
+    // Pausing stops new emission; bubbles already released keep moving and aging.
+    if (m_emitting) {
+	for (auto& emitter : m_emitters) {
+	    emitter (m_particles, m_particleCount, dt);
+	}
     }
 
     // Update particle age
