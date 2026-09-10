@@ -1559,6 +1559,10 @@ void CImage::setup () {
 	    *this, std::make_shared<FBOProvider> (this), **this->m_materials.colorBlending.material->passes.begin (),
 	    *this->m_materials.colorBlending.override, std::nullopt, std::nullopt
 	));
+	// The base material already applied the layer tint and opacity. Applying
+	// them again here suppresses faint layers such as Godzilla's 13% shadow.
+	static const glm::vec4 neutralColor (1.0f);
+	this->m_passes.back ()->addUniform ("g_Color4", &neutralColor);
     }
 
     // puppet-warped images with effects get a dedicated composite pass: effect shaders can
@@ -1588,6 +1592,9 @@ void CImage::setup () {
 	    **this->m_materials.compatibilityMaterials.back ()->passes.begin (),
 	    *this->m_materials.compatibilityOverrides.back (), std::nullopt, std::nullopt
 	));
+	// This pass only places the effected pixels onto the puppet mesh.
+	static const glm::vec4 neutralColor (1.0f);
+	this->m_passes.back ()->addUniform ("g_Color4", &neutralColor);
     }
 
     // If there is more than one pass, the first pass renders only to an intermediate FBO while the
