@@ -1809,13 +1809,24 @@ void ShaderUnit::parseParameterConfiguration (
 
     Variables::ShaderVariable* parameter = nullptr;
 
+    // Workshop metadata can use a scalar default for a vector (for example
+    // Deformer Simulation's vec2 position defaults to 0). Expand that scalar
+    // across the components, while preserving authored vector strings.
     if (type == "vec4") {
-	parameter
-	    = new Variables::ShaderVariableVector4 (VectorBuilder::parse<glm::vec4> (defvalue->get<std::string> ()));
+	parameter = new Variables::ShaderVariableVector4 (
+	    defvalue->is_number () ? glm::vec4 (defvalue->get<float> ())
+				  : VectorBuilder::parse<glm::vec4> (defvalue->get<std::string> ())
+	);
     } else if (type == "vec3") {
-	parameter = new Variables::ShaderVariableVector3 (VectorBuilder::parse<glm::vec3> (*defvalue));
+	parameter = new Variables::ShaderVariableVector3 (
+	    defvalue->is_number () ? glm::vec3 (defvalue->get<float> ())
+				  : VectorBuilder::parse<glm::vec3> (defvalue->get<std::string> ())
+	);
     } else if (type == "vec2") {
-	parameter = new Variables::ShaderVariableVector2 (VectorBuilder::parse<glm::vec2> (*defvalue));
+	parameter = new Variables::ShaderVariableVector2 (
+	    defvalue->is_number () ? glm::vec2 (defvalue->get<float> ())
+				  : VectorBuilder::parse<glm::vec2> (defvalue->get<std::string> ())
+	);
     } else if (type == "float") {
 	if (defvalue->is_string ()) {
 	    parameter = new Variables::ShaderVariableFloat (std::stoi (defvalue->get<std::string> ()));

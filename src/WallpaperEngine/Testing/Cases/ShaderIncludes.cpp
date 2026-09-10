@@ -55,6 +55,39 @@ compileLinked (const std::string& vertexSource, const std::string& fragmentSourc
 }
 } // namespace
 
+TEST_CASE ("vector shader defaults accept numbers without dropping the layer", "[shader][parameter][regression]") {
+    const auto assets = shaderAssets ("");
+    const ShaderConstantMap constants;
+    const TextureMap textures;
+    const ComboMap combos;
+    for (const std::string value : { "0", "0.375", "-2" }) {
+	CAPTURE (value);
+	// Deformer Simulation on 3761619125 declares a numeric vec2 default
+	// inside an inactive option. Metadata is still read before preprocessing.
+	const std::string source
+	    = "#if 0\nuniform vec2 u_Pos; // {\"material\":\"pos\",\"default\":" + value + "}\n#endif\n"
+	      "uniform vec3 u_Color; // {\"material\":\"color\",\"default\":" + value + "}\n"
+	      "uniform vec4 u_Depth; // {\"material\":\"depth\",\"default\":" + value + "}\n"
+	      "uniform vec4 u_Components; // {\"material\":\"components\",\"default\":\"0.5 1 2 3\"}\n"
+	      "void main() { gl_FragColor = vec4(u_Color, 1.0) * u_Depth * u_Components; }\n";
+	ShaderUnit unit (
+	    GLSLContext::UnitType_Fragment, "vector_defaults.frag", source, *assets, constants, textures, textures,
+	    combos, combos
+	);
+	const auto& parameters = unit.getParameters ();
+	REQUIRE (parameters.size () == 4);
+	CHECK (parameters[0]->getIdentifierName () == "pos");
+	CHECK (parameters[0]->getVec2 () == glm::vec2 (std::stof (value)));
+	CHECK (parameters[1]->getVec3 () == glm::vec3 (std::stof (value)));
+	CHECK (parameters[2]->getVec4 () == glm::vec4 (std::stof (value)));
+	CHECK (parameters[3]->getVec4 () == glm::vec4 (0.5f, 1.0f, 2.0f, 3.0f));
+	const auto translated = GLSLContext::get ().toGlsl (
+	    "#version 330\nvoid main() { gl_Position = vec4(0.0); }\n", unit.compile ()
+	);
+	CHECK_FALSE (translated.second.empty ());
+    }
+}
+
 TEST_CASE ("malformed includes fail at their own line", "[shader][include][regression]") {
     for (const std::string directive : { "#include", "#include test_ordering.h", "#include \"\"",
 					 "#include \"test_ordering.h", "#include \"test_ordering.h\" junk" }) {
