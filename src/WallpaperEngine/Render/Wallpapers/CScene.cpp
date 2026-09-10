@@ -21,7 +21,6 @@
 #include <ranges>
 
 extern float g_Time;
-extern float g_TimeLast;
 
 using namespace WallpaperEngine;
 using namespace WallpaperEngine::Render;
@@ -640,8 +639,7 @@ void CScene::renderFrame (const glm::ivec4& viewport) {
     // Frame callbacks are per-output on Wayland. A 60 Hz scene can therefore render only once
     // while a 165 Hz output advances the application loop several times. Deriving dt only from
     // g_TimeLast loses those skipped intervals and stretches camera shots on the slower output.
-    const float globalDeltaTime = glm::max (0.0f, g_Time - g_TimeLast);
-    this->m_sceneDeltaTime = calculateSceneDeltaTime (g_Time, globalDeltaTime, this->m_previousSceneTime);
+    this->m_sceneDeltaTime = calculateSceneDeltaTime (g_Time, this->m_previousSceneTime);
     this->m_previousSceneTime = g_Time;
     this->m_sceneElapsedTime += this->m_sceneDeltaTime;
 
@@ -960,9 +958,11 @@ float CScene::calculateCameraFadeAlpha (const float elapsedTime, const float dur
 }
 
 float CScene::calculateSceneDeltaTime (
-    const float currentTime, const float globalDeltaTime, const std::optional<float> previousSceneTime
+    const float currentTime, const std::optional<float> previousSceneTime
 ) {
-    return glm::max (0.0f, previousSceneTime.has_value () ? currentTime - *previousSceneTime : globalDeltaTime);
+    // Loading and shader compilation happen before this scene can present its first frame.
+    // Charging that time to a new scene skips one-shot entrances on cold starts and switches.
+    return previousSceneTime.has_value () ? glm::max (0.0f, currentTime - *previousSceneTime) : 0.0f;
 }
 
 float CScene::getSceneFadeAlpha () const {
