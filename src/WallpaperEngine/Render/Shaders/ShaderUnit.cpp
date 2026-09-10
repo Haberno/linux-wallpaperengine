@@ -2150,6 +2150,17 @@ const std::string& ShaderUnit::compile () {
     }
 
     std::string compatResult = this->m_preprocessed;
+    if (m_type == GLSLContext::UnitType_Vertex
+	&& compatResult.find ("in_ParticleTrailLength") != std::string::npos
+	&& compatResult.find ("trailRightStart") != std::string::npos) {
+	// The stock rope's non-GS fallback subtracts a scalar after multiplying
+	// by the width. Native genericropeparticle.geom emits position +/- right;
+	// center the fallback on the same path so child star heads stay attached.
+	static const std::regex offsetRope (
+	    R"(\bposition\s*\+=\s*right\s*\*\s*uvs\.x\s*\*\s*2\.0\s*-\s*1\.0\s*;)"
+	);
+	compatResult = std::regex_replace (compatResult, offsetRope, "position += right * (uvs.x * 2.0 - 1.0);");
+    }
     compatResult = this->applyLinkedVaryingCompatibility (std::move (compatResult));
     compatResult = this->applyMissingFragmentVaryingCompatibility (std::move (compatResult));
     compatResult = this->applyFloatTernaryCompatibility (std::move (compatResult));
