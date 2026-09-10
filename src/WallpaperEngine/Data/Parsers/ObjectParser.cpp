@@ -1011,6 +1011,10 @@ ParticleChild ObjectParser::parseParticleChild (const JSON& it, const Project& p
     if (nameIt != it.end () && nameIt->is_string ()) {
 	name = nameIt->get<std::string> ();
     }
+    // Child definitions use name for the asset path, unlike scene layers.
+    if (particleFile.empty ()) {
+	particleFile = name;
+    }
 
     // Helper lambda to parse vec3 fields that might be strings, arrays, single numbers, or missing
     auto parseVec3 = [&] (const char* fieldName, const glm::vec3& defaultValue) -> glm::vec3 {
