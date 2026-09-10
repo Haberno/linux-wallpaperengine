@@ -37,6 +37,7 @@ find_package(LZ4 REQUIRED)
 find_package(FFMPEG REQUIRED)
 find_package(PulseAudio REQUIRED)
 find_package(Freetype REQUIRED)
+find_package(Fontconfig REQUIRED)
 
 set(ENABLE_OPT OFF)
 set(SPIRV_CROSS_FORCE_PIC ON)
@@ -639,6 +640,7 @@ target_link_libraries (linux-wallpaperengine-lib PUBLIC
     ${MPV_LIBRARY}
     ${PULSEAUDIO_LIBRARY}
     Freetype::Freetype
+    Fontconfig::Fontconfig
     ${WAYLAND_LIBRARIES}
     ${X11_LIBRARIES}
     ${DBUS_LIBRARIES}
@@ -665,6 +667,7 @@ if (BUILD_TESTING)
         ${MPV_LIBRARY}
         ${PULSEAUDIO_LIBRARY}
         Freetype::Freetype
+        Fontconfig::Fontconfig
         ${WAYLAND_LIBRARIES}
         ${X11_LIBRARIES}
         ${DBUS_LIBRARIES}
