@@ -224,6 +224,28 @@ void parseSkeleton (
 	    readString (data, offset, sectionEnd);
 	}
     }
+
+    // Revision 2 adds named control transforms after the bones. Their count
+    // determines the extra MDLA pose streams; they are not ordinary bone tracks
+    // or scalar blend channels (native loader FUN_140261880, 1402625da).
+    if (version != "MDLS0001" && offset < sectionEnd) {
+	const auto controlCount = readValue<uint16_t> (data, offset, sectionEnd);
+	for (uint16_t index = 0; index < controlCount; ++index) {
+	    MdlBoneControl control;
+	    control.name = readString (data, offset, sectionEnd);
+	    control.bone = readValue<uint32_t> (data, offset, sectionEnd);
+	    control.type = readValue<uint32_t> (data, offset, sectionEnd);
+	    if (control.bone >= boneCount) {
+		throw std::runtime_error ("control references a missing bone in " + filename);
+	    }
+	    for (int column = 0; column < 4; ++column) {
+		for (int row = 0; row < 4; ++row) {
+		    control.bindWorld[column][row] = readValue<float> (data, offset, sectionEnd);
+		}
+	    }
+	    result.controls.push_back (std::move (control));
+	}
+    }
 }
 
 void parseAttachments (
@@ -456,6 +478,35 @@ void parseAnimations (
 	    }
 	}
 
+	if (version != "MDLA0001") {
+	    animation.controlFrames.resize (result.controls.size ());
+	    animation.controlFlags.resize (result.controls.size ());
+	    for (size_t control = 0; control < result.controls.size (); ++control) {
+		animation.controlFlags[control] = readValue<uint32_t> (data, offset, sectionEnd);
+		const auto bytes = readValue<uint32_t> (data, offset, sectionEnd);
+		if (bytes != (static_cast<size_t> (animation.frameCount) + 1) * 9 * sizeof (float)) {
+		    throw std::runtime_error ("unexpected control pose track size in " + filename);
+		}
+		if (bytes > sectionEnd - offset) {
+		    throw std::runtime_error ("control pose track ends unexpectedly in " + filename);
+		}
+		auto& frames = animation.controlFrames[control];
+		frames.resize (static_cast<size_t> (animation.frameCount) + 1);
+		for (auto& frame : frames) {
+		    for (int component = 0; component < 3; ++component) {
+			frame.translation[component] = readValue<float> (data, offset, sectionEnd);
+		    }
+		    glm::vec3 eulerRotation;
+		    for (int component = 0; component < 3; ++component) {
+			eulerRotation[component] = readValue<float> (data, offset, sectionEnd);
+		    }
+		    frame.rotation = glm::normalize (glm::quat (eulerRotation));
+		    for (int component = 0; component < 3; ++component) {
+			frame.scale[component] = readValue<float> (data, offset, sectionEnd);
+		    }
+		}
+	    }
+	}
 	readBlendTracks (data, offset, sectionEnd, animation);
 	if (version != "MDLA0001") {
 	    skipBoneScalarTracks (data, offset, sectionEnd, animation);
