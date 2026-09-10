@@ -147,6 +147,16 @@ void Camera::setOrthogonalProjection (const float width, const float height) {
     this->m_height = height;
     this->m_isOrthogonal = true;
     this->m_isYFlipped = false;
+    if (!this->m_hasRuntimeTransform) {
+	// The top-level 2D eye position is the editor's viewport offset. Its
+	// translation is already cancelled when rendering; discard it from the
+	// runtime pose too, so getCameraTransforms()/setCameraTransforms() does
+	// not suddenly pan the wallpaper when a follow script takes control.
+	const glm::vec3 offset (this->m_defaultTransform.eye.x, this->m_defaultTransform.eye.y, 0.0f);
+	this->m_defaultTransform.eye -= offset;
+	this->m_defaultTransform.center -= offset;
+	this->m_transform = this->m_defaultTransform;
+    }
     this->updateMatrices ();
 }
 

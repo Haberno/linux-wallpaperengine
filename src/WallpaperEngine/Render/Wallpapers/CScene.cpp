@@ -1144,6 +1144,13 @@ void CScene::updateCameraObject () {
 	this->m_camera->setDefaultTransform (transform, false);
 	const bool pathActive = this->m_activeCameraPathSource != nullptr
 	    && this->m_activeCameraPathIndex.has_value ();
+	if (!pathActive && this->m_scriptCameraTransform.has_value () && projection.zoom->animation != nullptr) {
+	    // Refresh the animated projection before scripts read the camera. A
+	    // controller that copies eye/center must not pin the zoom to the value
+	    // returned on its first tick (the 2887099508 entrance combines both).
+	    this->m_scriptCameraTransform->zoom = transform.zoom;
+	    this->m_camera->setTransform (*this->m_scriptCameraTransform);
+	}
 	if (!pathActive && !this->m_scriptCameraTransform.has_value ()) {
 	    this->m_camera->resetTransform ();
 	}

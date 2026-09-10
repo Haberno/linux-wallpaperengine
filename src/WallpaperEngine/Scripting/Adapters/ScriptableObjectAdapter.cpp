@@ -1009,6 +1009,39 @@ JSValue scriptableobject_property_get (JSContext* ctx, JSValueConst obj_val, JSA
     try {
 	// find the property inside, otherwise return undefined
 	auto& property = container->object.getProperty (name);
+	const auto* setting = container->object.getPropertySetting (name);
+	if (setting != nullptr && setting->animation != nullptr) {
+	    // A camera-follow script reads the animated layer pose, not the base
+	    // value stored in scene.json. Use owned snapshots so sampling relative
+	    // curves neither mutates their base nor leaves dangling vector adapters.
+	    const float time = container->object.getScene ().getTime ();
+	    auto& adapters = container->adapter.getEngine ().getAdapters ();
+	    switch (property.getType ()) {
+		case DynamicValue::Float:
+		case DynamicValue::Int: return JS_NewFloat64 (ctx, setting->evaluateFloat (time));
+		case DynamicValue::Vec2: {
+		    DynamicValue sampled (glm::vec2 (setting->evaluateVec3 (time)));
+		    return adapters.vec2->instantiate (sampled, true);
+		}
+		case DynamicValue::Vec3: {
+		    glm::vec3 value = setting->evaluateVec3 (time);
+		    if (std::strcmp (name, "angles") == 0) value = glm::degrees (value);
+		    DynamicValue sampled (value);
+		    return adapters.vec3->instantiate (sampled, true);
+		}
+		case DynamicValue::Vec4: {
+		    glm::vec4 value = property.getVec4 ();
+		    for (int i = 0; i < 4; ++i) {
+			value[i] = setting->animation->relative
+			    ? value[i] + setting->animation->evaluateChannel (i, time, 0.0f)
+			    : setting->animation->evaluateChannel (i, time, value[i]);
+		    }
+		    DynamicValue sampled (value);
+		    return adapters.vec4->instantiate (sampled, true);
+		}
+		default: break;
+	    }
+	}
 
 	// SceneScript exposes layer Euler angles in degrees even though scene.json
 	// and the renderer store them in radians.

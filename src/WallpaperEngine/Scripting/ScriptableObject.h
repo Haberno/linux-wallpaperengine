@@ -12,6 +12,7 @@ public:
     struct PropertyEntry {
 	std::string key;
 	DynamicValue& value;
+	const UserSetting* setting = nullptr;
     };
 
     ScriptableObject (Wallpapers::CScene& scene, const Object& object);
@@ -19,6 +20,7 @@ public:
     ~ScriptableObject () override;
 
     DynamicValue& getProperty (const std::string& name);
+    [[nodiscard]] const UserSetting* getPropertySetting (const std::string& name) const;
 
     const std::map<std::string, PropertyEntry>& getProperties () const;
     const std::map<std::string, PropertyAnimation*>& getAnimations () const { return m_animations; }
