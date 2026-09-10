@@ -76,6 +76,7 @@ public:
     bool isReady () const override;
     /** Parsed metadata, including a packed source when the texture has variants. */
     [[nodiscard]] const Texture& getHeader () const;
+    [[nodiscard]] GLPlayer* getVideoPlayer () const { return m_player.get (); }
 
 private:
     /**

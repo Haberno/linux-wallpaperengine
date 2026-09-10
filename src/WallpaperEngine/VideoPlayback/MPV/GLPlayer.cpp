@@ -120,6 +120,72 @@ void GLPlayer::clearPaused () {
     }
 }
 
+void GLPlayer::enableScriptControl () {
+    // Script time is measured in seconds, independent of the render FPS.
+    // Untimed playback would consume one video frame per render invocation.
+    this->m_scriptControlled = true;
+    this->m_untimed = false;
+    if (this->m_handle) {
+	mpv_set_property_string (this->m_handle, "untimed", "no");
+	mpv_set_property_string (this->m_handle, "keep-open", "yes");
+    }
+}
+
+void GLPlayer::resumePlayback () {
+    int ended = 0;
+    if (this->m_handle && mpv_get_property (this->m_handle, "eof-reached", MPV_FORMAT_FLAG, &ended) >= 0 && ended) {
+	this->setCurrentTime (0.0);
+    }
+    this->clearPaused ();
+}
+
+void GLPlayer::stopPlayback () {
+    this->setPaused ();
+    this->setCurrentTime (0.0);
+}
+
+bool GLPlayer::isPlaying () const {
+    if (this->m_paused) return false;
+    int ended = 0;
+    if (this->m_handle) mpv_get_property (this->m_handle, "eof-reached", MPV_FORMAT_FLAG, &ended);
+    return !ended;
+}
+
+double GLPlayer::getDuration () const {
+    double duration = 0.0;
+    if (this->m_handle) mpv_get_property (this->m_handle, "duration", MPV_FORMAT_DOUBLE, &duration);
+    return duration;
+}
+
+double GLPlayer::getCurrentTime () const {
+    if (this->m_pendingSeek.has_value ()) return *this->m_pendingSeek;
+    double time = 0.0;
+    if (this->m_handle) mpv_get_property (this->m_handle, "time-pos", MPV_FORMAT_DOUBLE, &time);
+    return time;
+}
+
+void GLPlayer::setCurrentTime (const double time) {
+    this->m_pendingSeek = time;
+    this->applyPendingSeek ();
+}
+
+void GLPlayer::applyPendingSeek () const {
+    if (!this->m_handle || !this->m_loaded || !this->m_pendingSeek.has_value ()) return;
+    const std::string time = std::to_string (*this->m_pendingSeek);
+    const char* command[] = { "seek", time.c_str (), "absolute+exact", nullptr };
+    if (mpv_command (this->m_handle, command) >= 0) this->m_pendingSeek.reset ();
+}
+
+void GLPlayer::setRate (const double rate) {
+    this->m_rate = rate;
+    if (this->m_handle) mpv_set_property (this->m_handle, "speed", MPV_FORMAT_DOUBLE, &this->m_rate);
+}
+
+void GLPlayer::setLoop (const bool loop) {
+    this->m_loop = loop;
+    if (this->m_handle) mpv_set_property_string (this->m_handle, "loop-file", loop ? "inf" : "no");
+}
+
 void GLPlayer::render () const {
     // rendering should only happen if the texture is in use
     if (this->m_handle == nullptr) {
@@ -132,6 +198,10 @@ void GLPlayer::render () const {
 
 	if (event == nullptr || event->event_id == MPV_EVENT_NONE) {
 	    break;
+	}
+	if (event->event_id == MPV_EVENT_FILE_LOADED) {
+	    this->m_loaded = true;
+	    this->applyPendingSeek ();
 	}
 
 	if (event->event_id != MPV_EVENT_VIDEO_RECONFIG) {
@@ -167,9 +237,11 @@ void GLPlayer::render () const {
 
     // no need to flip as it'll be handled by the wallpaper rendering code
     int flip_y = 0;
+    int block = this->m_scriptControlled ? 0 : 1;
 
     mpv_render_param params[] = { { MPV_RENDER_PARAM_OPENGL_FBO, &fbo },
 				  { MPV_RENDER_PARAM_FLIP_Y, &flip_y },
+				  { MPV_RENDER_PARAM_BLOCK_FOR_TARGET_TIME, &block },
 				  { MPV_RENDER_PARAM_INVALID, nullptr } };
 
     mpv_render_context_render (this->m_renderContext, params);
@@ -229,7 +301,9 @@ void GLPlayer::init () {
 
     // ensure video is muted and plays in a loop
     mpv_set_property_string (this->m_handle, "hwdec", "auto");
-    mpv_set_property_string (this->m_handle, "loop", "inf");
+    mpv_set_property_string (this->m_handle, "loop-file", this->m_loop ? "inf" : "no");
+    mpv_set_property (this->m_handle, "speed", MPV_FORMAT_DOUBLE, &this->m_rate);
+    if (this->m_scriptControlled) mpv_set_property_string (this->m_handle, "keep-open", "yes");
     mpv_set_property (this->m_handle, "volume", MPV_FORMAT_DOUBLE, &this->m_volume);
 
     // initialize gl context for mpv
@@ -283,6 +357,7 @@ void GLPlayer::play () {
 }
 
 void GLPlayer::stop () {
+    this->m_loaded = false;
     // clean up mpv and get it ready to start again at some point
     if (this->m_renderContext) {
 	mpv_render_context_free (this->m_renderContext);

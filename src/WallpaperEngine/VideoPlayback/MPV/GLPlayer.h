@@ -46,6 +46,19 @@ public:
     void setPaused ();
     void clearPaused ();
 
+    /** SceneScript playback controls retain the decoder when stopped. */
+    void enableScriptControl ();
+    void resumePlayback ();
+    void stopPlayback ();
+    [[nodiscard]] bool isPlaying () const;
+    [[nodiscard]] double getDuration () const;
+    [[nodiscard]] double getCurrentTime () const;
+    void setCurrentTime (double time);
+    [[nodiscard]] double getRate () const { return m_rate; }
+    void setRate (double rate);
+    [[nodiscard]] bool getLoop () const { return m_loop; }
+    void setLoop (bool loop);
+
     void render () const;
 
     int getWidth () const;
@@ -58,6 +71,7 @@ private:
     void setSource (MemoryStreamProtocolUniquePtr source);
     void setSource (const std::filesystem::path& file);
     void stop ();
+    void applyPendingSeek () const;
 
 protected:
     bool m_doWeOwnFramebuffer;
@@ -71,6 +85,11 @@ protected:
     bool m_muted = false;
     bool m_untimed = false;
     bool m_paused = false;
+    double m_rate = 1.0;
+    bool m_loop = true;
+    bool m_scriptControlled = false;
+    mutable bool m_loaded = false;
+    mutable std::optional<double> m_pendingSeek;
     std::optional<std::filesystem::path> m_file;
     std::optional<MemoryStreamProtocolUniquePtr> m_stream;
     uint32_t m_usageCount = 0;
