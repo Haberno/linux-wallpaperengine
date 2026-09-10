@@ -311,14 +311,20 @@ ObjectParser::parseImage (const JSON& it, const Project& project, ObjectData bas
 
 	if (instanceTextures.has_value ()) {
 	    const auto parsed = TextureParser::parseTextureMap (*instanceTextures);
-	    firstPass.textures.insert (parsed.begin (), parsed.end ());
+	    // An instance replaces populated slots too: the seaweed source in Deep Sea Dive
+	    // overrides a solid layer's util/white texture with its authored foliage atlas.
+	    for (const auto& [slot, texture] : parsed) {
+		firstPass.textures.insert_or_assign (slot, texture);
+	    }
 	}
 
 	const auto instanceUserTextures = instance->optional ("usertextures");
 
 	if (instanceUserTextures.has_value ()) {
 	    const auto parsed = TextureParser::parseTextureMap (*instanceUserTextures);
-	    firstPass.usertextures.insert (parsed.begin (), parsed.end ());
+	    for (const auto& [slot, property] : parsed) {
+		firstPass.usertextures.insert_or_assign (slot, property);
+	    }
 	}
     }
 
