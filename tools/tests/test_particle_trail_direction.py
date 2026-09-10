@@ -10,6 +10,36 @@ from scene_render import render_scene
 
 @unittest.skipUnless(os.environ.get('LWE_TEST_BINARY'), 'Set LWE_TEST_BINARY for graphics integration tests')
 class ParticleTrailDirection(unittest.TestCase):
+    def test_rope_width_is_centered_on_the_particle_path(self):
+        with tempfile.TemporaryDirectory(prefix='lwe-trail-center-') as directory:
+            root = Path(directory)
+            (root / 'particles').mkdir()
+            (root / 'materials').mkdir()
+            (root / 'materials/probe.json').write_text(json.dumps({'passes': [{
+                'shader': 'genericparticle', 'textures': ['util/white'],
+                'blending': 'normal', 'cullmode': 'nocull',
+                'depthtest': 'disabled', 'depthwrite': 'disabled'}]}))
+            (root / 'particles/probe.json').write_text(json.dumps({
+                'maxcount': 1, 'material': 'materials/probe.json',
+                'emitter': [{'name': 'sphererandom', 'rate': 100,
+                             'distancemin': 0, 'distancemax': 0}],
+                'initializer': [{'name': 'lifetimerandom', 'min': 10, 'max': 10},
+                                {'name': 'sizerandom', 'min': 40, 'max': 40},
+                                {'name': 'velocityrandom', 'min': '100 0 0', 'max': '100 0 0'}],
+                'operator': [{'name': 'movement', 'gravity': '0 0 0', 'drag': 0}],
+                'renderer': [{'name': 'ropetrail', 'length': .5}]}))
+            frame, _ = render_scene(self, root, {
+                'camera': {'eye': '0 0 1', 'center': '0 0 0', 'up': '0 1 0'},
+                'general': {'orthogonalprojection': {'width': 320, 'height': 180},
+                            'clearcolor': '0 0 0', 'bloom': False},
+                'objects': [{'id': 1, 'name': 'Centered trail', 'origin': '70 90 0',
+                             'particle': 'particles/probe.json'}]}, frames=15)
+            box = frame.getbbox()
+            self.assertIsNotNone(box)
+            self.assertAlmostEqual(box[3] - box[1], 40, delta=1)
+            self.assertAlmostEqual((box[1] + box[3]) / 2, 90, delta=1,
+                                   msg='Both edges must straddle the path, as in the native geometry shader')
+
     def test_shaft_trail_keeps_its_bright_head_in_the_direction_of_motion(self):
         from PIL import ImageStat
 
