@@ -116,6 +116,7 @@ std::vector<FBOUniquePtr> EffectParser::parseFBOs (const JSON& it) {
 		.format = cur.optional<std::string> ("format", "rgba8888"),
 		.scale = cur.optional ("scale", 1.0f),
 		.unique = cur.optional ("unique", false),
+		.fit = cur.optional ("fit", 0),
 	    })
 	);
     }

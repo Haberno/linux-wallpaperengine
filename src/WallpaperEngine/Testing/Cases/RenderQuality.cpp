@@ -4,6 +4,14 @@
 
 using WallpaperEngine::Render::FBOProvider;
 
+TEST_CASE ("Effect fit preserves aspect ratio and caps simulation resolution", "[render-quality]") {
+    CHECK (FBOProvider::calculateTargetSize ({3840, 2160}, 1, true, 512) == glm::uvec2 (512, 288));
+    CHECK (FBOProvider::calculateTargetSize ({1080, 1920}, 1, true, 512) == glm::uvec2 (288, 512));
+    CHECK (FBOProvider::calculateTargetSize ({100, 50}, 1, true, 512) == glm::uvec2 (100, 50));
+    CHECK (FBOProvider::calculateTargetSize ({3840, 2160}, 2, true, 512) == glm::uvec2 (512, 288));
+    CHECK (FBOProvider::calculateTargetSize ({8192, 1}, 1, true, 512) == glm::uvec2 (512, 1));
+}
+
 TEST_CASE ("render quality scales scene targets and clamps unsafe factors", "[render][quality]") {
     CHECK (FBOProvider::calculateTargetSize ({ 1920.0f, 1080.0f }, 1.0f) == glm::uvec2 (1920, 1080));
     CHECK (FBOProvider::calculateTargetSize ({ 1920.0f, 1080.0f }, 1.5f) == glm::uvec2 (2880, 1620));

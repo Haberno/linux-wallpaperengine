@@ -17,12 +17,22 @@ bool FBOProvider::isFixedSizeTarget (const std::string_view name) {
     return name == "_rt_shadowAtlas" || name == "_alias_lightCookie";
 }
 
-glm::uvec2 FBOProvider::calculateTargetSize (const glm::vec2 size, const float renderScale, const bool scalable) {
+glm::uvec2 FBOProvider::calculateTargetSize (
+    const glm::vec2 size, const float renderScale, const bool scalable, const int fit
+) {
     const float scale = scalable ? std::clamp (renderScale, 0.5f, 2.0f) : 1.0f;
-    return {
+    glm::uvec2 result {
 	static_cast<uint32_t> (std::max (1.0f, std::round (size.x * scale))),
 	static_cast<uint32_t> (std::max (1.0f, std::round (size.y * scale))),
     };
+    // wallpaper64.exe caps the longer edge without upscaling small sources,
+    // then truncates the proportional shorter edge. Apply after scene scaling:
+    // a fixed-budget simulation must stay capped under supersampling too.
+    const auto longest = std::max (result.x, result.y);
+    if (fit > 0 && static_cast<uint32_t> (fit) < longest) {
+	result = glm::max (glm::uvec2 (glm::vec2 (result) * (static_cast<float> (fit) / longest)), glm::uvec2 (1));
+    }
+    return result;
 }
 
 void FBOProvider::setRenderScale (const float scale) { this->m_renderScale = std::clamp (scale, 0.5f, 2.0f); }
@@ -31,7 +41,7 @@ float FBOProvider::getRenderScale () const { return this->m_renderScale; }
 
 std::shared_ptr<CFBO> FBOProvider::create (const FBO& base, uint32_t flags, const glm::vec2 size) {
     const auto targetSize = calculateTargetSize (
-	size / base.scale, this->m_renderScale, !isFixedSizeTarget (base.name)
+	size / base.scale, this->m_renderScale, !isFixedSizeTarget (base.name), base.fit
     );
     return this->m_fbos[base.name] = std::make_shared<CFBO> (
 	       base.name,

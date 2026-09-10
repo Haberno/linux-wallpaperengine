@@ -29,7 +29,9 @@ public:
 
     /** Pure sizing helpers kept public so quality scaling can be regression-tested without GL. */
     [[nodiscard]] static bool isFixedSizeTarget (std::string_view name);
-    [[nodiscard]] static glm::uvec2 calculateTargetSize (glm::vec2 size, float renderScale, bool scalable = true);
+    [[nodiscard]] static glm::uvec2 calculateTargetSize (
+	glm::vec2 size, float renderScale, bool scalable = true, int fit = 0
+    );
 
 private:
     const FBOProvider* m_parent;
