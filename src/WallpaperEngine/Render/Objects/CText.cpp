@@ -677,14 +677,16 @@ void CText::renderEffectChain (const glm::mat4& mvp, const float brightness, con
     glGetFloatv (GL_COLOR_CLEAR_VALUE, previousClearColor);
     const GLboolean depthWasEnabled = glIsEnabled (GL_DEPTH_TEST);
 
-    // 1. rasterize the colored text into the surface FBO (single quad over a cleared target:
-    //    blending off writes the exact texel data — rgb keeps the text color even where
-    //    coverage is 0, so blurred edges keep their hue)
+    // 1. Rasterize onto transparent black with the font material's alpha blending.
+    // Invisible glyph texels must not leave solid text-color RGB in the effect
+    // input: color-dependent blends such as Shine otherwise brighten the entire
+    // blurred outline, filling counters and obscuring the original sharp glyphs.
     glBindFramebuffer (GL_FRAMEBUFFER, m_fboA->getFramebuffer ());
     glViewport (0, 0, m_fboA->getRealWidth (), m_fboA->getRealHeight ());
     glClearColor (0.0f, 0.0f, 0.0f, 0.0f);
     glClear (GL_COLOR_BUFFER_BIT);
-    glDisable (GL_BLEND);
+    glEnable (GL_BLEND);
+    glBlendFuncSeparate (GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA, GL_ONE, GL_ONE_MINUS_SRC_ALPHA);
     glDisable (GL_DEPTH_TEST);
 
     glUseProgram (m_program);
