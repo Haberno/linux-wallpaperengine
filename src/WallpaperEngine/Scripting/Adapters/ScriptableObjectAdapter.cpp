@@ -15,6 +15,7 @@
 #include "WallpaperEngine/Data/Model/DynamicValue.h"
 #include "WallpaperEngine/Data/Utils/ScopeGuard.h"
 #include "WallpaperEngine/Render/Objects/CImage.h"
+#include "WallpaperEngine/Render/Objects/CModel.h"
 #include "WallpaperEngine/Render/Objects/CParticle.h"
 #include "WallpaperEngine/Render/Objects/CSound.h"
 #include "WallpaperEngine/Scripting/ScriptEngine.h"
@@ -46,6 +47,13 @@ enum AnimationCommand {
     AnimationCommand_SetFrame,
     AnimationCommand_GetRate,
     AnimationCommand_SetRate,
+    AnimationCommand_GetFps,
+    AnimationCommand_GetFrameCount,
+    AnimationCommand_GetDuration,
+    AnimationCommand_GetBlend,
+    AnimationCommand_SetBlend,
+    AnimationCommand_GetVisible,
+    AnimationCommand_SetVisible,
 };
 
 enum TextureAnimationCommand {
@@ -74,6 +82,11 @@ static WallpaperEngine::Render::Objects::CImage* scriptable_image (JSValueConst 
     OpaqueScriptableObjectAdapter* container = scriptable_container (value);
     return container != nullptr ? dynamic_cast<WallpaperEngine::Render::Objects::CImage*> (&container->object)
 				: nullptr;
+}
+
+static WallpaperEngine::Render::Objects::CModel* scriptable_model (JSValueConst value) {
+    auto* container = scriptable_container (value);
+    return container != nullptr ? dynamic_cast<WallpaperEngine::Render::Objects::CModel*> (&container->object) : nullptr;
 }
 
 static WallpaperEngine::Render::Objects::CImage*
@@ -638,6 +651,8 @@ static JSValue property_animation_command (
     }
     const auto& animations = container->object.getAnimations ();
     const auto found = animations.find (name);
+    auto* model = scriptable_model (functionData[0]);
+    auto* modelLayer = model != nullptr ? model->findAnimationLayer (name) : nullptr;
     JS_FreeCString (ctx, name);
     if (found == animations.end ()) {
 	return JS_UNDEFINED;
@@ -652,16 +667,39 @@ static JSValue property_animation_command (
 	case AnimationCommand_IsPlaying: return JS_NewBool (ctx, animation.isPlaying (time));
 	case AnimationCommand_GetFrame: return JS_NewFloat64 (ctx, animation.frameAt (time));
 	case AnimationCommand_GetRate: return JS_NewFloat64 (ctx, animation.rate);
+	case AnimationCommand_GetFps: return JS_NewFloat64 (ctx, animation.fps);
+	case AnimationCommand_GetFrameCount: return JS_NewFloat64 (ctx, animation.length);
+	case AnimationCommand_GetDuration:
+	    return JS_NewFloat64 (ctx, animation.fps > 0.0f ? animation.length / animation.fps : 0.0f);
+	case AnimationCommand_GetBlend:
+	    return modelLayer == nullptr ? JS_UNDEFINED : JS_NewFloat64 (ctx, modelLayer->settings != nullptr
+		? modelLayer->settings->blend->value->getFloat () : modelLayer->blend);
+	case AnimationCommand_GetVisible:
+	    return modelLayer == nullptr ? JS_UNDEFINED : JS_NewBool (ctx, modelLayer->settings != nullptr
+		? modelLayer->settings->visible->value->getBool () : modelLayer->visible);
+	case AnimationCommand_SetVisible:
+	    if (modelLayer == nullptr || argc < 1) return JS_UNDEFINED;
+	    modelLayer->visible = JS_ToBool (ctx, argv[0]) != 0;
+	    if (modelLayer->settings != nullptr) modelLayer->settings->visible->value->update (
+		modelLayer->visible, DynamicValue::UpdateSource::User);
+	    break;
 	case AnimationCommand_SetFrame:
 	case AnimationCommand_SetRate:
+	case AnimationCommand_SetBlend:
 	    if (argc < 1 || JS_ToFloat64 (ctx, &value, argv[0]) < 0 || !std::isfinite (value)) {
 		return JS_ThrowTypeError (ctx, "Animation frame/rate expects a finite number");
 	    }
 	    if (magic == AnimationCommand_SetFrame) animation.setFrame (static_cast<float> (value), time);
-	    else animation.setRate (static_cast<float> (value), time);
+	    else if (magic == AnimationCommand_SetRate) animation.setRate (static_cast<float> (value), time);
+	    else if (modelLayer != nullptr) {
+		modelLayer->blend = std::clamp (static_cast<float> (value), 0.0f, 1.0f);
+		if (modelLayer->settings != nullptr) modelLayer->settings->blend->value->update (
+		    modelLayer->blend, DynamicValue::UpdateSource::User);
+	    }
 	    break;
 	default: break;
     }
+    if (model != nullptr) model->animationControlsChanged (animation);
     return JS_UNDEFINED;
 }
 
@@ -684,10 +722,42 @@ static JSValue property_animation_controller (JSContext* ctx, JSValueConst layer
 	JS_NewCFunctionData (ctx, property_animation_command, 1, AnimationCommand_SetRate, 2, data),
 	JS_PROP_ENUMERABLE);
     JS_FreeAtom (ctx, rate);
+    for (const auto& [field, command] : std::initializer_list<std::pair<const char*, int>> {
+	{ "fps", AnimationCommand_GetFps }, { "frameCount", AnimationCommand_GetFrameCount },
+	{ "duration", AnimationCommand_GetDuration }, { "blend", AnimationCommand_GetBlend },
+	{ "visible", AnimationCommand_GetVisible } }) {
+	const JSAtom atom = JS_NewAtom (ctx, field);
+	const int setter = command == AnimationCommand_GetBlend ? AnimationCommand_SetBlend
+	    : command == AnimationCommand_GetVisible ? AnimationCommand_SetVisible : -1;
+	JS_DefinePropertyGetSet (ctx, result, atom,
+	    JS_NewCFunctionData (ctx, property_animation_command, 0, command, 2, data),
+	    setter >= 0 ? JS_NewCFunctionData (ctx, property_animation_command, 1, setter, 2, data) : JS_UNDEFINED,
+	    JS_PROP_ENUMERABLE);
+	JS_FreeAtom (ctx, atom);
+    }
     return result;
 }
 
 static JSValue scriptable_get_animation (JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    if (auto* model = scriptable_model (this_val); model != nullptr && argc > 0) {
+	WallpaperEngine::Render::Objects::CModel::AnimationLayer* layer = nullptr;
+	if (JS_IsString (argv[0])) {
+	    const char* name = JS_ToCString (ctx, argv[0]);
+	    if (name == nullptr) return JS_EXCEPTION;
+	    layer = model->getAnimationLayer (name);
+	    JS_FreeCString (ctx, name);
+	} else if (JS_IsNumber (argv[0])) {
+	    int32_t index = -1;
+	    if (JS_ToInt32 (ctx, &index, argv[0]) < 0) return JS_EXCEPTION;
+	    if (index >= 0) layer = model->getAnimationLayer (static_cast<size_t> (index));
+	}
+	if (layer != nullptr) {
+	    JSValue key = JS_NewString (ctx, layer->key.c_str ());
+	    JSValue result = property_animation_controller (ctx, this_val, key);
+	    JS_FreeValue (ctx, key);
+	    return result;
+	}
+    }
     if (auto* container = scriptable_container (this_val); container != nullptr && argc > 0 && JS_IsString (argv[0])) {
 	const char* name = JS_ToCString (ctx, argv[0]);
 	if (name == nullptr) return JS_EXCEPTION;
@@ -722,9 +792,55 @@ static JSValue scriptable_get_animation (JSContext* ctx, JSValueConst this_val, 
     return index.has_value () ? scriptable_animation_controller (ctx, *image, index) : JS_UNDEFINED;
 }
 
+static JSValue scriptable_play_single_animation (JSContext* ctx, JSValueConst thisVal, int argc, JSValueConst* argv) {
+    auto* model = scriptable_model (thisVal);
+    if (model == nullptr) return JS_UNDEFINED;
+    if (argc < 1 || !JS_IsString (argv[0])) return JS_ThrowTypeError (ctx, "playSingleAnimation expects an animation name");
+    const char* name = JS_ToCString (ctx, argv[0]);
+    if (name == nullptr) return JS_EXCEPTION;
+    ScopeGuard releaseName ([&] { JS_FreeCString (ctx, name); });
+    WallpaperEngine::Render::Objects::CModel::SingleAnimationConfig config;
+    if (argc >= 2 && JS_IsObject (argv[1])) {
+	for (const auto& [field, target] : std::initializer_list<std::pair<const char*, bool*>> {
+	    { "blendin", &config.blendIn }, { "blendout", &config.blendOut } }) {
+	    JSValue value = JS_GetPropertyStr (ctx, argv[1], field);
+	    if (!JS_IsUndefined (value)) *target = JS_ToBool (ctx, value) != 0;
+	    JS_FreeValue (ctx, value);
+	}
+	JSValue value = JS_GetPropertyStr (ctx, argv[1], "blendtime");
+	double seconds = config.blendTime;
+	const bool valid = JS_IsUndefined (value) || (JS_ToFloat64 (ctx, &seconds, value) == 0 && std::isfinite (seconds));
+	JS_FreeValue (ctx, value);
+	if (!valid) return JS_ThrowTypeError (ctx, "Animation blendtime expects a finite number");
+	config.blendTime = static_cast<float> (seconds);
+    }
+    auto* layer = model->playSingleAnimation (name, config);
+    if (layer == nullptr) return JS_UNDEFINED;
+    JSValue key = JS_NewString (ctx, layer->key.c_str ());
+    JSValue result = property_animation_controller (ctx, thisVal, key);
+    JS_FreeValue (ctx, key);
+    return result;
+}
+
 static JSValue
 scriptable_object_animation_command (JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv, int magic) {
     auto* container = scriptable_container (this_val);
+    if (auto* model = scriptable_model (this_val)) {
+	bool playing = false;
+	const float time = model->getScene ().getTime ();
+	for (size_t i = 0; i < model->getAnimationLayerCount (); ++i) {
+	    auto& animation = model->getAnimationLayer (i)->timeline;
+	    switch (magic) {
+		case AnimationCommand_Play: animation.play (time); break;
+		case AnimationCommand_Pause: animation.pause (time); break;
+		case AnimationCommand_Stop: animation.stop (time); break;
+		case AnimationCommand_IsPlaying: playing |= animation.isPlaying (time); break;
+		default: break;
+	    }
+	    if (magic != AnimationCommand_IsPlaying) model->animationControlsChanged (animation);
+	}
+	return magic == AnimationCommand_IsPlaying ? JS_NewBool (ctx, playing) : JS_UNDEFINED;
+    }
     if (auto* particle = container != nullptr
 	    ? dynamic_cast<WallpaperEngine::Render::Objects::CParticle*> (&container->object) : nullptr) {
 	switch (magic) {
@@ -779,6 +895,7 @@ scriptable_object_animation_command (JSContext* ctx, JSValueConst this_val, int 
 
 static JSValue
 scriptable_get_animation_layer_count (JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    if (const auto* model = scriptable_model (this_val)) return JS_NewInt64 (ctx, model->getAnimationLayerCount ());
     auto* image = scriptable_image (this_val);
     return JS_NewInt64 (ctx, image != nullptr ? static_cast<int64_t> (image->getPuppetAnimationLayerCount ()) : 0);
 }
@@ -866,6 +983,9 @@ JSValue scriptableobject_property_get (JSContext* ctx, JSValueConst obj_val, JSA
     }
     if (std::strcmp (name, "getAnimationLayerCount") == 0) {
 	return JS_NewCFunction (ctx, scriptable_get_animation_layer_count, name, 0);
+    }
+    if (std::strcmp (name, "playSingleAnimation") == 0 && scriptable_model (obj_val) != nullptr) {
+	return JS_NewCFunction (ctx, scriptable_play_single_animation, name, 2);
     }
 
     try {
