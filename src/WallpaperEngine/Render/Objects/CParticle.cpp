@@ -66,6 +66,33 @@ glm::vec3 WallpaperEngine::Render::Objects::resolveParticleControlPoint (
     return { local.x, -local.y, local.z };
 }
 
+glm::mat3 WallpaperEngine::Render::Objects::calculateFixedParticleOrientation (
+    const glm::vec3& axis, const glm::mat3& model, const bool worldSpace
+) {
+    const auto normalize = [] (const glm::vec3& value, const glm::vec3& fallback) {
+	const float lengthSquared = glm::dot (value, value);
+	return std::isfinite (lengthSquared) && lengthSquared > 0.0f
+	    ? value / std::sqrt (lengthSquared) : fallback;
+    };
+    const glm::vec3 forward = normalize (axis, { 0.0f, 1.0f, 0.0f });
+    glm::vec3 up (0.0f, 0.0f, -1.0f);
+    if (forward.x != 0.0f || forward.z != 0.0f) {
+	up = normalize (glm::cross (forward, glm::cross (glm::vec3 (0.0f, 1.0f, 0.0f), forward)), up);
+    }
+
+    // Native 1401c22e0/1402298b0: axis is the plane normal; the default up
+    // tangent is -Z, so depth streaks lie along the scene rather than the screen.
+    // The draw helper applies the model and its transpose before normalizing.
+    // Keep that order for nonuniform scale; renderer flag 1 skips the first step.
+    const glm::mat3 transform = glm::transpose (model) * (worldSpace ? glm::mat3 (1.0f) : model);
+    const glm::vec3 localForward = transform * forward;
+    const glm::vec3 localUp = transform * up;
+    return {
+	normalize (glm::cross (localUp, localForward), { 1.0f, 0.0f, 0.0f }),
+	normalize (localUp, up), normalize (localForward, forward)
+    };
+}
+
 CParticle::CParticle (Wallpapers::CScene& scene, const Particle& particle, CParticle* parent) :
     CObject (scene, particle), CRenderable (scene, particle, *particle.material->material),
     ScriptableObject (scene, particle), m_particle (particle), m_particleParent (parent) {
@@ -2218,6 +2245,23 @@ void CParticle::updateMatrices () {
 	m_orientationForward = glm::normalize (cameraToLocal[2]);
 	m_viewRight = m_orientationRight;
 	m_viewUp = m_orientationUp;
+    }
+
+    if (!m_particle.renderers.empty () && m_particle.renderers[0].orientation == "fixed") {
+	const auto& renderer = m_particle.renderers[0];
+	// Recover the authored layer transform before crossing the simulation's Y
+	// reflection. View tangents remain camera-facing for refraction and lighting.
+	glm::mat3 authoredModel = glm::mat3 (m_modelMatrix * flipY);
+	if (!is3D) {
+	    authoredModel = glm::mat3 (flipY) * authoredModel;
+	}
+	// Orthographic rendering already reflects the world through sceneToParticle;
+	// reflecting its sprite tangents again would reverse asymmetric textures.
+	const glm::mat3 orientation = glm::mat3 (is3D ? flipY : glm::mat4 (1.0f))
+	    * calculateFixedParticleOrientation (renderer.axis, authoredModel, (renderer.flags & 1) != 0);
+	m_orientationRight = orientation[0];
+	m_orientationUp = orientation[1];
+	m_orientationForward = orientation[2];
     }
 
     this->updateParticleRenderVars ();
