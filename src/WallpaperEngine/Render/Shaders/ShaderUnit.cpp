@@ -1180,6 +1180,11 @@ std::string ShaderUnit::applyNumericParameterCallCompatibility (std::string sour
 	    std::smatch parameterMatch;
 	    if (std::regex_match (parameter, parameterMatch, numericParameter)) {
 		signature [index].insert (parameterMatch [1].str ());
+	    } else {
+		// Another conditional signature can use this slot for an out/inout
+		// parameter. Retain a sentinel so a numeric input in a different
+		// branch cannot turn its writable argument into a constructor value.
+		signature [index].insert ("");
 	    }
 
 	    index++;
@@ -1272,7 +1277,7 @@ std::string ShaderUnit::applyNumericParameterCallCompatibility (std::string sour
 	    for (auto entry = typesByIndex.rbegin (); entry != typesByIndex.rend (); ++entry) {
 		const size_t index = entry->first;
 		const std::set<std::string>& types = entry->second;
-		if (index >= arguments.size ()) {
+		if (index >= arguments.size () || types.contains ("")) {
 		    continue;
 		}
 
