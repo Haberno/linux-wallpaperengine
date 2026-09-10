@@ -1065,7 +1065,17 @@ JSValue scriptableobject_property_get (JSContext* ctx, JSValueConst obj_val, JSA
 	    return container->adapter.getEngine ().getAdapters ().vec3->instantiate (degrees, true);
 	}
 
-	return container->adapter.getEngine ().dynamicToJs (property);
+	// Layer vectors are values. Scripts commonly retain an initial origin or
+	// scale and assign offsets from it each frame. A borrowed adapter would
+	// mutate that saved value on every assignment, accumulating the offset
+	// until models such as Sonic's rail (3759507080) leave the camera entirely.
+	auto& adapters = container->adapter.getEngine ().getAdapters ();
+	switch (property.getType ()) {
+	    case DynamicValue::Vec2: return adapters.vec2->instantiate (property, true);
+	    case DynamicValue::Vec3: return adapters.vec3->instantiate (property, true);
+	    case DynamicValue::Vec4: return adapters.vec4->instantiate (property, true);
+	    default: return container->adapter.getEngine ().dynamicToJs (property);
+	}
     } catch (const std::exception& e) {
 	return JS_UNDEFINED;
     }
