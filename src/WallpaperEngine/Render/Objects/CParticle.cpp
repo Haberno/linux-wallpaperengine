@@ -482,6 +482,19 @@ void CParticle::update (float dt) {
     // Re-evaluate after scripted or parent transforms, not only on a resize.
     updateControlPoints ();
 
+    // Reclaim this frame's expired slots before emitting. A full one-particle
+    // glow otherwise rejects its replacement, then disappears for one frame.
+    uint32_t writeIdx = 0;
+    for (uint32_t readIdx = 0; readIdx < m_particleCount; ++readIdx) {
+	auto& particle = m_particles[readIdx];
+	particle.age += dt;
+	if (particle.isAlive ()) {
+	    if (writeIdx != readIdx) m_particles[writeIdx] = std::move (particle);
+	    ++writeIdx;
+	}
+    }
+    m_particleCount = writeIdx;
+
     // Pausing stops new emission; bubbles already released keep moving and aging.
     const uint32_t firstNewParticle = m_particleCount;
     if (m_emitting) {
@@ -495,11 +508,6 @@ void CParticle::update (float dt) {
     }
     for (uint32_t i = firstNewParticle; i < m_particleCount; ++i) {
 	m_particles[i].serial = ++m_nextParticleSerial;
-    }
-
-    // Update particle age
-    for (uint32_t i = 0; i < m_particleCount; i++) {
-	m_particles[i].age += dt;
     }
 
     // Apply operators to living particles (including alphafade)
@@ -550,20 +558,6 @@ void CParticle::update (float dt) {
     updateRopeTrailHistory (dt);
     updateFollowChildren (firstNewParticle);
 
-    // Remove dead particles with order-preserving compaction.
-    // Particles only die from natural lifetime expiry (age >= lifetime).
-    // We never kill based on size — particles may fade in/out with oscillating size.
-    // Compaction preserves spawn order so array index 0 is always the oldest particle.
-    uint32_t writeIdx = 0;
-    for (uint32_t readIdx = 0; readIdx < m_particleCount; readIdx++) {
-	if (m_particles[readIdx].isAlive ()) {
-	    if (writeIdx != readIdx) {
-		m_particles[writeIdx] = m_particles[readIdx];
-	    }
-	    writeIdx++;
-	}
-    }
-    m_particleCount = writeIdx;
 }
 
 void CParticle::updateRopeTrailHistory (float dt) {
