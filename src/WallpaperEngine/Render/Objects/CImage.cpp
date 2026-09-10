@@ -1439,6 +1439,7 @@ void CImage::setup () {
 		continue;
 	    }
 	    const size_t firstEffectPass = m_passes.size ();
+	    const bool deferShaderSetup = !cur->visible->value->getBool ();
 
 	    // Register any script-driven shader constants in this effect's pass overrides so their per-frame
 	    // scripts actually run. The script source is parsed onto the constant's DynamicValue, but unlike
@@ -1511,7 +1512,8 @@ void CImage::setup () {
 
 		    // build a pass for a copy shader
 		    this->m_passes.push_back (new CPass (
-			*this, fboProvider, config, std::nullopt, std::nullopt, (*curEffect)->target.value ()
+			*this, fboProvider, config, std::nullopt, std::nullopt, (*curEffect)->target.value (),
+			{}, deferShaderSetup
 		    ));
 		} else {
 		    for (auto& pass : (*curEffect)->material.value ()->passes) {
@@ -1523,7 +1525,7 @@ void CImage::setup () {
 			    : std::optional<std::reference_wrapper<std::string>> (std::nullopt);
 
 			this->m_passes.push_back (
-			    new CPass (*this, fboProvider, *pass, override, (*curEffect)->binds, target)
+			    new CPass (*this, fboProvider, *pass, override, (*curEffect)->binds, target, {}, deferShaderSetup)
 			);
 		    }
 
@@ -1656,7 +1658,8 @@ void CImage::setup () {
 void CImage::updateEffectVisibility () {
     const auto enabled = [&] (Effects::CPass* pass) {
 	const auto entry = m_passVisibility.find (pass);
-	return entry == m_passVisibility.end () || entry->second->value->getBool ();
+	return entry == m_passVisibility.end ()
+	    || (entry->second->value->getBool () && !m_failedEffects.contains (entry->second));
     };
     size_t active = 0;
     bool changed = false;
@@ -1666,6 +1669,20 @@ void CImage::updateEffectVisibility () {
 	++active;
     }
     if (!changed && active == m_activePasses.size ()) return;
+    // Disabled optional shaders must not prevent their owning image from loading.
+    // On first activation, prepare the whole effect before routing any of its
+    // passes. If compilation fails, bypass that entire effect without retry spam.
+    for (auto* pass : m_passes) {
+	if (!enabled (pass)) continue;
+	try {
+	    pass->initialize ();
+	} catch (const std::exception& error) {
+	    const auto entry = m_passVisibility.find (pass);
+	    if (entry == m_passVisibility.end ()) throw;
+	    m_failedEffects.insert (entry->second);
+	    sLog.error ("Disabling effect on object ", getId (), " after shader setup failed: ", error.what ());
+	}
+    }
     m_activePasses.clear ();
     for (auto* pass : m_passes) {
 	if (enabled (pass)) m_activePasses.push_back (pass);
