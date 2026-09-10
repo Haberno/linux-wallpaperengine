@@ -88,6 +88,22 @@ TEST_CASE ("vector shader defaults accept numbers without dropping the layer", "
     }
 }
 
+TEST_CASE ("legacy shaders can use GLSL reserved input and output identifiers", "[shader][regression]") {
+    const auto fragment = compileFragment (
+	"", "// input and output in comments stay intact\n"
+	"uniform float output; // {\"material\":\"input\",\"default\":0.5}\n"
+	"#define COLOR(input) ((input) * output)\n"
+	"vec4 blend(vec4 input) { return COLOR(input); }\n"
+	"void main() { vec4 input = vec4(1.0); gl_FragColor = blend(input); }\n"
+    );
+    CHECK (fragment.find ("// input and output in comments stay intact") != std::string::npos);
+    CHECK (fragment.find ("\"material\":\"input\"") != std::string::npos);
+    const auto translated = GLSLContext::get ().toGlsl (
+	"#version 330\nvoid main() { gl_Position = vec4(0.0); }\n", fragment
+    );
+    CHECK_FALSE (translated.second.empty ());
+}
+
 TEST_CASE ("continued shader lines are joined before metadata and GLSL parsing", "[shader][continuation]") {
     for (const std::string newline : { "\n", "\r\n" }) {
 	const std::string continued = "\\" + newline;
