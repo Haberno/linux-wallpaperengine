@@ -1079,7 +1079,14 @@ std::vector<CScene::FrameRenderEntry> CScene::buildFrameRenderOrder () const {
 	const bool sortable = entry.modelClass.has_value () || object->getObject ().is<Particle> ();
 	float cameraDepth = 0.0f;
 	if (sortable) {
-	    cameraDepth = (view * object->resolveWorldMatrix () * glm::vec4 (0.0f, 0.0f, 0.0f, 1.0f)).z;
+	    // Native 1401865c0 sorts model layers by their origin property, before
+	    // the parent transform. Using the world origin moves Sonic's parented
+	    // boost shell ahead of its additive skybox, so its invisible surface
+	    // writes depth and cuts a black hole in the background (3759507080).
+	    const glm::vec4 origin = entry.modelClass.has_value ()
+		? glm::vec4 (object->getObject ().origin->evaluateVec3 (this->getTime ()), 1.0f)
+		: object->resolveWorldMatrix () * glm::vec4 (0.0f, 0.0f, 0.0f, 1.0f);
+	    cameraDepth = (view * origin).z;
 	}
 	keys.push_back (TransparentSortKey {
 	    .sortable = sortable,
