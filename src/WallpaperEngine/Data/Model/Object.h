@@ -469,6 +469,7 @@ public:
 	threshold (std::move (threshold)) { }
     int controlPoint;
     UserSettingUniquePtr origin;
+    // Missing values are resolved against the scene projection when instantiated.
     UserSettingUniquePtr scale;
     UserSettingUniquePtr threshold;
 };
