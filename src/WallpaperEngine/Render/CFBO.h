@@ -29,6 +29,8 @@ public:
      * _rt_MipMappedFrameBuffer target (a no-op for ordinary layer composites).
      */
     void generateMipmaps () const;
+    /** Resize storage on the render thread while preserving references and GL handles. */
+    void resize (uint32_t width, uint32_t height);
     [[nodiscard]] GLuint getTextureID (uint32_t imageIndex) const override;
     [[nodiscard]] uint32_t getTextureWidth (uint32_t imageIndex) const override;
     [[nodiscard]] uint32_t getTextureHeight (uint32_t imageIndex) const override;
