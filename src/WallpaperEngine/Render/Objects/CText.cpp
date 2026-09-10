@@ -8,6 +8,7 @@
 
 #include <ft2build.h>
 #include FT_FREETYPE_H
+#include <fontconfig/fontconfig.h>
 
 #include <glm/gtc/matrix_transform.hpp>
 #include <glm/gtc/type_ptr.hpp>
@@ -807,6 +808,29 @@ bool CText::loadEmbeddedFont () {
 }
 
 bool CText::loadSystemFont () {
+    // systemfont_* stores an authored family, not a request for our default
+    // sans-serif face. Fontconfig also honors installed Windows fonts and the
+    // user's substitutions when that family is unavailable on Linux.
+    if (m_text.font.starts_with ("systemfont_")) {
+	std::string family = m_text.font.substr (11);
+	std::ranges::replace (family, '_', ' ');
+	if (auto* pattern = FcNameParse (reinterpret_cast<const FcChar8*> (family.c_str ()))) {
+	    FcConfigSubstitute (nullptr, pattern, FcMatchPattern);
+	    FcDefaultSubstitute (pattern);
+	    FcResult result;
+	    auto* match = FcFontMatch (nullptr, pattern, &result);
+	    FcPatternDestroy (pattern);
+	    if (match != nullptr) {
+		FcChar8* file = nullptr;
+		int faceIndex = 0;
+		FcPatternGetInteger (match, FC_INDEX, 0, &faceIndex);
+		const bool loaded = FcPatternGetString (match, FC_FILE, 0, &file) == FcResultMatch
+		    && FT_New_Face (m_ftLibrary, reinterpret_cast<const char*> (file), faceIndex, &m_ftFace) == 0;
+		FcPatternDestroy (match);
+		if (loaded) return true;
+	    }
+	}
+    }
     std::string fontPath;
     for (const auto& candidate : kFontCandidates) {
 	if (std::filesystem::exists (candidate)) {
