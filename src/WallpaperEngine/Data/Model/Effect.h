@@ -13,6 +13,8 @@ struct FBO {
     std::string format;
     float scale;
     bool unique;
+    /** Optional maximum edge length for aspect-preserving simulation targets. */
+    int fit = 0;
 };
 
 struct EffectPass {
