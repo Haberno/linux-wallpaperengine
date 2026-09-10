@@ -244,7 +244,12 @@ private:
     void updateCameraObject ();
     void updateCameraPath (float deltaTime);
     [[nodiscard]] const CameraPathSource* findActiveCameraPathSource () const;
-    [[nodiscard]] std::vector<CObject*> buildFrameRenderOrder () const;
+    struct FrameRenderEntry {
+	CObject* object;
+	/** Only automatically sorted models split their opaque and blended passes. */
+	std::optional<RenderSortClass> modelClass = std::nullopt;
+    };
+    [[nodiscard]] std::vector<FrameRenderEntry> buildFrameRenderOrder () const;
 
     std::unique_ptr<Scripting::ScriptEngine> m_scriptEngine;
     std::unique_ptr<Camera> m_camera;

@@ -752,7 +752,7 @@ void CScene::renderFrame (const glm::ivec4& viewport) {
     const GLbitfield colorClear = this->getScene ().clearEnabled->value->getBool () ? GL_COLOR_BUFFER_BIT : 0;
     glClear (colorClear | GL_DEPTH_BUFFER_BIT);
 
-    const std::vector<CObject*> renderOrder = this->buildFrameRenderOrder ();
+    const std::vector<FrameRenderEntry> renderOrder = this->buildFrameRenderOrder ();
     const auto& debug = this->getContext ().getApp ().getContext ().settings.render.debug;
     const auto enabledByDebug = [this, &debug] (const CObject* object) {
 	if (object == this->m_bloomObject && !this->getScene ().camera.bloom.enabled->value->getBool ()) {
@@ -762,6 +762,16 @@ void CScene::renderFrame (const glm::ivec4& viewport) {
 	    return false;
 	}
 	return std::ranges::find (debug.skipObjects, object->getId ()) == debug.skipObjects.end ();
+    };
+    const auto renderEntry = [&enabledByDebug] (const FrameRenderEntry& entry) {
+	if (!enabledByDebug (entry.object)) {
+	    return;
+	}
+	if (entry.modelClass.has_value ()) {
+	    dynamic_cast<Objects::CModel*> (entry.object)->render (*entry.modelClass);
+	} else {
+	    entry.object->render ();
+	}
     };
 
     // Wallpaper Engine renders a composition layer's child subtree into the
@@ -784,13 +794,13 @@ void CScene::renderFrame (const glm::ivec4& viewport) {
 	return nullptr;
     };
 
-    std::set<int> submitted;
+    std::set<int> submittedCompositions;
     std::function<void (Objects::CImage*)> renderComposition;
     renderComposition = [&] (Objects::CImage* composition) {
-	if (composition == nullptr || submitted.contains (composition->getId ())) {
+	if (composition == nullptr || submittedCompositions.contains (composition->getId ())) {
 	    return;
 	}
-	submitted.insert (composition->getId ());
+	submittedCompositions.insert (composition->getId ());
 
 	const auto target = composition->getCompositionFBO ();
 	if (target == nullptr) {
@@ -824,18 +834,16 @@ void CScene::renderFrame (const glm::ivec4& viewport) {
 	}
 
 	this->m_compositionRenderTarget = target;
-	for (CObject* child : renderOrder) {
-	    if (submitted.contains (child->getId ()) || compositionAncestor (child) != composition) {
+	for (const FrameRenderEntry& entry : renderOrder) {
+	    CObject* child = entry.object;
+	    if (compositionAncestor (child) != composition) {
 		continue;
 	    }
 	    if (auto* nested = dynamic_cast<Objects::CImage*> (child);
 		nested != nullptr && nested->isCompositionLayer ()) {
 		renderComposition (nested);
 	    } else {
-		submitted.insert (child->getId ());
-		if (enabledByDebug (child)) {
-		    child->render ();
-		}
+		renderEntry (entry);
 	    }
 	}
 	this->m_compositionRenderTarget = previousTarget;
@@ -847,8 +855,9 @@ void CScene::renderFrame (const glm::ivec4& viewport) {
 	}
     };
 
-    for (const auto& cur : renderOrder) {
-	if (submitted.contains (cur->getId ()) || compositionAncestor (cur) != nullptr) {
+    for (const FrameRenderEntry& entry : renderOrder) {
+	CObject* cur = entry.object;
+	if (compositionAncestor (cur) != nullptr) {
 	    continue;
 	}
 	if (auto* composition = dynamic_cast<Objects::CImage*> (cur);
@@ -856,10 +865,7 @@ void CScene::renderFrame (const glm::ivec4& viewport) {
 	    renderComposition (composition);
 	    continue;
 	}
-	submitted.insert (cur->getId ());
-	if (enabledByDebug (cur)) {
-	    cur->render ();
-	}
+	renderEntry (entry);
     }
 }
 
@@ -1031,35 +1037,52 @@ CScene::calculateTransparentSortPermutation (const std::vector<TransparentSortKe
     return permutation;
 }
 
-std::vector<CObject*> CScene::buildFrameRenderOrder () const {
-    if (!this->getScene ().camera.projection.isPerspective || !this->getScene ().transparentSorting
-	|| this->getScene ().customSortOrder) {
-	return this->m_objectsByRenderOrder;
+std::vector<CScene::FrameRenderEntry> CScene::buildFrameRenderOrder () const {
+    const bool automaticSorting = this->getScene ().camera.projection.isPerspective
+	&& this->getScene ().transparentSorting && !this->getScene ().customSortOrder;
+    std::vector<FrameRenderEntry> entries;
+    entries.reserve (this->m_objectsByRenderOrder.size ());
+    for (CObject* object : this->m_objectsByRenderOrder) {
+	if (auto* model = dynamic_cast<Objects::CModel*> (object); automaticSorting && model != nullptr) {
+	    // A background model may combine opaque walls and transparent windows.
+	    // Sort each class separately so its walls cannot paint over particles
+	    // when its transparent passes are submitted later in the frame.
+	    for (const RenderSortClass renderClass : model->getRenderSortClasses ()) {
+		entries.push_back ({ .object = object, .modelClass = renderClass });
+	    }
+	} else {
+	    entries.push_back ({ .object = object });
+	}
+    }
+    if (!automaticSorting) {
+	return entries;
     }
 
     std::vector<TransparentSortKey> keys;
-    keys.reserve (this->m_objectsByRenderOrder.size ());
+    keys.reserve (entries.size ());
     const glm::mat4& view = this->m_camera->getLookAt ();
-    for (const CObject* object : this->m_objectsByRenderOrder) {
+    for (const FrameRenderEntry& entry : entries) {
+	const CObject* object = entry.object;
 	// Blended particles must follow opaque geometry too. Leaving an emitter in
 	// its authored slot lets later scenery paint over bubbles in open water,
 	// preserving them only where an earlier character already wrote depth.
-	const bool sortable = object->getObject ().is<Model3D> () || object->getObject ().is<Particle> ();
+	const bool sortable = entry.modelClass.has_value () || object->getObject ().is<Particle> ();
 	float cameraDepth = 0.0f;
 	if (sortable) {
 	    cameraDepth = (view * object->resolveWorldMatrix () * glm::vec4 (0.0f, 0.0f, 0.0f, 1.0f)).z;
 	}
 	keys.push_back (TransparentSortKey {
 	    .sortable = sortable,
-	    .renderClass = sortable ? object->getRenderSortClass () : RenderSortClass::Opaque,
+	    .renderClass = entry.modelClass.has_value () ? *entry.modelClass
+		: sortable ? object->getRenderSortClass () : RenderSortClass::Opaque,
 	    .cameraDepth = cameraDepth,
 	});
     }
 
     const std::vector<size_t> permutation = calculateTransparentSortPermutation (keys);
-    std::vector<CObject*> result = this->m_objectsByRenderOrder;
+    std::vector<FrameRenderEntry> result = entries;
     for (size_t index = 0; index < permutation.size (); index++) {
-	result[index] = this->m_objectsByRenderOrder[permutation[index]];
+	result[index] = entries[permutation[index]];
     }
     return result;
 }

@@ -24,6 +24,9 @@ public:
 
     void setup () override;
     void render () override;
+    /** Submit one material class when a perspective scene sorts model passes. */
+    void render (RenderSortClass renderClass);
+    [[nodiscard]] const std::vector<RenderSortClass>& getRenderSortClasses () const;
     /** Draw opaque mesh depth from a spotlight into the scene shadow atlas. */
     void renderShadow (const glm::mat4& lightViewProjection);
 
@@ -55,6 +58,7 @@ private:
 
     void setupGeometryCallback (Effects::CPass* pass, size_t submeshIndex);
     void setupShadowProgram ();
+    void renderPasses (std::optional<RenderSortClass> renderClass);
     void updateAnimationPose () const;
     [[nodiscard]] glm::mat4 resolveModelMatrix () const;
     void updateMatrices ();
@@ -79,6 +83,7 @@ private:
     glm::vec3 m_eyePosition = glm::vec3 (0.0f);
 
     std::vector<Effects::CPass*> m_passes = {};
+    std::vector<RenderSortClass> m_renderSortClasses = {};
     GLuint m_shadowProgram = GL_NONE;
     GLuint m_shadowVao = GL_NONE;
     GLint m_shadowLightViewProjection = -1;
