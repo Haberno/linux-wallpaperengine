@@ -163,6 +163,91 @@ std::optional<size_t> findNextAnimationRecord (
     return std::nullopt;
 }
 
+void parseControlChains (
+    const std::vector<char>& data, size_t& offset, const size_t end, const std::string& version,
+    MdlAnimationData& result
+) {
+    const auto boneIndex = [&] {
+	const auto index = readValue<uint32_t> (data, offset, end);
+	if (index >= result.bones.size ()) throw std::runtime_error ("invalid IK bone index");
+	return index;
+    };
+    // Optional alternate reference transforms precede the scalar dependencies
+    // and the baked IK lengths, reference directions and chain topology.
+    if (readValue<uint8_t> (data, offset, end)) {
+	for (size_t bone = 0; bone < result.bones.size (); ++bone) {
+	    for (int component = 0; component < 16; ++component) readValue<float> (data, offset, end);
+	}
+	for (auto& control : result.controls) {
+	    glm::mat4 reference;
+	    for (int column = 0; column < 4; ++column)
+		for (int row = 0; row < 4; ++row)
+		    reference[column][row] = readValue<float> (data, offset, end);
+	    control.referenceWorld = reference;
+	}
+    }
+    const auto dependencies = readValue<uint32_t> (data, offset, end);
+    for (uint32_t row = 0; row < dependencies; ++row) {
+	boneIndex ();
+	readValue<uint32_t> (data, offset, end);
+	boneIndex ();
+	const auto flags = version == "MDLS0004" ? readValue<uint32_t> (data, offset, end) : 0;
+	if (flags & 2) {
+	    readValue<float> (data, offset, end);
+	    readValue<float> (data, offset, end);
+	}
+    }
+    const auto lengths = readValue<uint16_t> (data, offset, end);
+    if (lengths > result.bones.size ()) throw std::runtime_error ("too many IK bone lengths");
+    for (uint16_t bone = 0; bone < lengths; ++bone) {
+	const auto length = readValue<float> (data, offset, end);
+	if (!std::isfinite (length) || length < 0.0f) throw std::runtime_error ("invalid IK bone length");
+	result.boneLengths.push_back (length);
+    }
+    result.boneDirections.resize (lengths);
+    for (auto& directions : result.boneDirections) {
+	const auto count = readValue<uint16_t> (data, offset, end);
+	for (uint16_t index = 0; index < count; ++index) {
+	    const auto child = boneIndex ();
+	    glm::vec3 direction;
+	    for (int component = 0; component < 3; ++component)
+		direction[component] = readValue<float> (data, offset, end);
+	    directions[child] = direction;
+	}
+    }
+    const auto groups = readValue<uint16_t> (data, offset, end);
+    for (uint16_t groupIndex = 0; groupIndex < groups; ++groupIndex) {
+	MdlIkGroup group;
+	group.root = boneIndex ();
+	group.hasDependencies = dependencies != 0;
+	const auto controlDependencies = readValue<uint32_t> (data, offset, end);
+	for (uint32_t index = 0; index < controlDependencies; ++index) {
+	    if (readValue<uint32_t> (data, offset, end) >= result.controls.size ())
+		throw std::runtime_error ("invalid IK control dependency");
+	}
+	const auto nodes = readValue<uint16_t> (data, offset, end);
+	for (uint16_t nodeIndex = 0; nodeIndex < nodes; ++nodeIndex) {
+	    MdlIkNode node;
+	    node.root = boneIndex ();
+	    const auto branches = readValue<uint16_t> (data, offset, end);
+	    for (uint16_t branch = 0; branch < branches; ++branch) {
+		const auto tip = boneIndex ();
+		MdlIkChain chain;
+		chain.flags = readValue<uint32_t> (data, offset, end);
+		chain.maxLength = readValue<float> (data, offset, end);
+		chain.minLength = readValue<float> (data, offset, end);
+		const auto count = readValue<uint16_t> (data, offset, end);
+		for (uint16_t index = 0; index < count; ++index) chain.bones.push_back (boneIndex ());
+		if (chain.bones.empty () || chain.bones.front () != node.root || chain.bones.back () != tip)
+		    throw std::runtime_error ("invalid IK chain endpoints");
+		node.branches.push_back (std::move (chain));
+	    }
+	    group.nodes.push_back (std::move (node));
+	}
+	result.ikGroups.push_back (std::move (group));
+    }
+}
+
 void parseSkeleton (
     const std::vector<char>& data, const size_t sectionOffset, const std::string& filename, MdlAnimationData& result
 ) {
@@ -221,7 +306,21 @@ void parseSkeleton (
 	if (nameAfterTransform) {
 	    result.bones.back ().name = readString (data, offset, sectionEnd);
 	} else {
-	    readString (data, offset, sectionEnd);
+	    const auto metadata = readString (data, offset, sectionEnd);
+	    const auto constraints = nlohmann::json::parse (metadata, nullptr, false);
+	    if (constraints.is_object ()) {
+		auto& parsed = result.bones.back ();
+		const auto enabled = [&] (const char* key) {
+		    const auto value = constraints.find (key);
+		    return value != constraints.end () && value->is_boolean () && value->get<bool> ();
+		};
+		parsed.ikFollowEnd = enabled ("ikfe");
+		parsed.ikAimToTarget = enabled ("ikr");
+		const auto distance = constraints.find ("ikrd");
+		if (distance != constraints.end () && distance->is_number ())
+		    parsed.ikAimDistance = std::max (distance->get<float> (), 1e-5f);
+		parsed.ikAngleLimits = enabled ("ikce");
+	    }
 	}
     }
 
@@ -244,6 +343,9 @@ void parseSkeleton (
 		}
 	    }
 	    result.controls.push_back (std::move (control));
+	}
+	if (!result.controls.empty () && offset < sectionEnd) {
+	    parseControlChains (data, offset, sectionEnd, version, result);
 	}
     }
 }
