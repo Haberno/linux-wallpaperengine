@@ -31,6 +31,8 @@ public:
      */
     void loadSettingsFromArgv ();
 
+    enum class PostProcessing { Disabled, Enabled, Ultra };
+
     enum WINDOW_MODE {
 	/** Default window mode */
 	NORMAL_WINDOW = 0,
@@ -117,6 +119,7 @@ public:
 	    float renderScale;
 	    /** Scene geometry multisample count (1 = off) */
 	    uint32_t msaaSamples;
+	    PostProcessing postProcessing;
 	    /** Final-output color grading (1.0 = neutral) */
 	    float contrast;
 	    float saturation;
@@ -214,6 +217,7 @@ public:
             .maximumFPS = 30,
 	    .renderScale = 1.0f,
 	    .msaaSamples = 2,
+	    .postProcessing = PostProcessing::Enabled,
 	    .contrast = 1.0f,
 	    .saturation = 1.0f,
             .pauseOnFullscreen = true,
