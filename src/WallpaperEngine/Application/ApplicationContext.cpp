@@ -505,6 +505,18 @@ void ApplicationContext::loadSettingsFromArgv () {
 	.default_value (1.0f)
 	.store_into (this->settings.render.renderScale);
 
+    performanceGroup.add_argument ("--msaa")
+	.help (
+	    "Scene geometry multisampling before post-processing: off, 2, 4, or 8 samples. Default: 2. "
+	    "Independent from --render-scale."
+	)
+	.choices ("off", "2", "4", "8")
+	.default_value (std::string ("2"))
+	.nargs (1)
+	.action ([this] (const std::string& value) -> void {
+	    this->settings.render.msaaSamples = value == "off" ? 1 : static_cast<uint32_t> (std::stoul (value));
+	});
+
     performanceGroup.add_argument ("--contrast")
 	.help ("Final-output contrast multiplier (1.0 = neutral). Clamped to 0.0-4.0.")
 	.scan<'g', float> ()

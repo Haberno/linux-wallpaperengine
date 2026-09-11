@@ -2074,11 +2074,9 @@ void CParticle::setupPass () {
     // black reads on NVIDIA. By placing a copy FBO with the same name in our FBOProvider,
     // CPass resolves g_Texture3 to the copy instead. We blit the scene content before each render.
     if (m_hasRefract) {
-	auto sceneFBO = getScene ().getActiveRenderTarget ();
-	float w = static_cast<float> (sceneFBO->getRealWidth ());
-	float h = static_cast<float> (sceneFBO->getRealHeight ());
+	const glm::vec2 size = getScene ().getOutputSize ();
 	m_refractFBO = m_passFBOProvider->create (
-	    "_rt_FullFrameBuffer", TextureFormat_ARGB8888, TextureFlags_ClampUVs, 1.0f, { w, h }, { w, h }
+	    "_rt_FullFrameBuffer", TextureFormat_ARGB8888, TextureFlags_ClampUVs, 1.0f, size, size
 	);
     }
 
@@ -2361,6 +2359,9 @@ void CParticle::updateParticleViewProjection () {
 	float farz = getScene ().getCamera ().getFarZ ();
 
 	glm::mat4 perspectiveProj = glm::perspective (fov, aspect, nearz, farz);
+	const glm::vec2 framing = getScene ().getCamera ().getViewportScale ();
+	perspectiveProj[0][0] *= framing.x;
+	perspectiveProj[1][1] *= framing.y;
 	glm::mat4 perspectiveView
 	    = glm::lookAt (glm::vec3 (0.0f, 0.0f, 1000.0f), glm::vec3 (0.0f, 0.0f, 0.0f), glm::vec3 (0.0f, 1.0f, 0.0f));
 
@@ -2544,6 +2545,7 @@ void CParticle::renderSprites () {
 	auto sceneFBO = getScene ().getActiveRenderTarget ();
 	GLint w = static_cast<GLint> (sceneFBO->getRealWidth ());
 	GLint h = static_cast<GLint> (sceneFBO->getRealHeight ());
+	m_refractFBO->resize (w, h);
 	glBindFramebuffer (GL_READ_FRAMEBUFFER, sceneFBO->getFramebuffer ());
 	glBindFramebuffer (GL_DRAW_FRAMEBUFFER, m_refractFBO->getFramebuffer ());
 	glBlitFramebuffer (0, 0, w, h, 0, 0, w, h, GL_COLOR_BUFFER_BIT, GL_NEAREST);
@@ -2761,6 +2763,7 @@ void CParticle::renderRopeTrail () {
 	auto sceneFBO = getScene ().getActiveRenderTarget ();
 	const GLint width = static_cast<GLint> (sceneFBO->getRealWidth ());
 	const GLint height = static_cast<GLint> (sceneFBO->getRealHeight ());
+	m_refractFBO->resize (width, height);
 	glBindFramebuffer (GL_READ_FRAMEBUFFER, sceneFBO->getFramebuffer ());
 	glBindFramebuffer (GL_DRAW_FRAMEBUFFER, m_refractFBO->getFramebuffer ());
 	glBlitFramebuffer (0, 0, width, height, 0, 0, width, height, GL_COLOR_BUFFER_BIT, GL_NEAREST);
@@ -2985,6 +2988,7 @@ void CParticle::renderRope () {
 	auto sceneFBO = getScene ().getActiveRenderTarget ();
 	GLint w = static_cast<GLint> (sceneFBO->getRealWidth ());
 	GLint h = static_cast<GLint> (sceneFBO->getRealHeight ());
+	m_refractFBO->resize (w, h);
 	glBindFramebuffer (GL_READ_FRAMEBUFFER, sceneFBO->getFramebuffer ());
 	glBindFramebuffer (GL_DRAW_FRAMEBUFFER, m_refractFBO->getFramebuffer ());
 	glBlitFramebuffer (0, 0, w, h, 0, 0, w, h, GL_COLOR_BUFFER_BIT, GL_NEAREST);

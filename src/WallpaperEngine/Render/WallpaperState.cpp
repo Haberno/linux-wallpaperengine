@@ -34,7 +34,7 @@ void WallpaperState::resetUVs () {
 void WallpaperState::updateUs (const int& projectionWidth, const int& projectionHeight) {
     const float viewportWidth = this->getViewportWidth ();
     const float viewportHeight = this->getViewportHeight ();
-    const int newWidth = viewportHeight / projectionHeight * projectionWidth;
+    const float newWidth = viewportHeight / projectionHeight * projectionWidth;
     const float newCenter = newWidth / 2.0f;
     const float viewportCenter = viewportWidth / 2.0;
 
@@ -49,7 +49,7 @@ void WallpaperState::updateUs (const int& projectionWidth, const int& projection
 void WallpaperState::updateVs (const int& projectionWidth, const int& projectionHeight) {
     const float viewportWidth = this->getViewportWidth ();
     const float viewportHeight = this->getViewportHeight ();
-    const int newHeight = viewportWidth / projectionWidth * projectionHeight;
+    const float newHeight = viewportWidth / projectionWidth * projectionHeight;
     const float newCenter = newHeight / 2.0f;
     const float viewportCenter = viewportHeight / 2.0;
 
@@ -74,18 +74,14 @@ template <> void WallpaperState::updateTextureUVs<WallpaperState::TextureUVsScal
 
     const int viewportWidth = this->getViewportWidth ();
     const int viewportHeight = this->getViewportHeight ();
-    int projectionWidth = this->getProjectionWidth ();
-    int projectionHeight = this->getProjectionHeight ();
+    const int projectionWidth = this->getProjectionWidth ();
+    const int projectionHeight = this->getProjectionHeight ();
 
     const float m1 = static_cast<float> (viewportWidth) / projectionWidth;
     const float m2 = static_cast<float> (viewportHeight) / projectionHeight;
-    const float m = std::max (m1, m2);
-    projectionWidth *= m;
-    projectionHeight *= m;
-
-    if (projectionWidth != viewportWidth) {
+    if (m2 > m1) {
 	this->updateUs (projectionWidth, projectionHeight);
-    } else if (projectionHeight != viewportHeight) {
+    } else {
 	this->updateVs (projectionWidth, projectionHeight);
     }
 }
@@ -95,18 +91,14 @@ template <> void WallpaperState::updateTextureUVs<WallpaperState::TextureUVsScal
 
     const int viewportWidth = this->getViewportWidth ();
     const int viewportHeight = this->getViewportHeight ();
-    int projectionWidth = this->getProjectionWidth ();
-    int projectionHeight = this->getProjectionHeight ();
+    const int projectionWidth = this->getProjectionWidth ();
+    const int projectionHeight = this->getProjectionHeight ();
 
     const float m1 = static_cast<float> (viewportWidth) / projectionWidth;
     const float m2 = static_cast<float> (viewportHeight) / projectionHeight;
-    const float m = std::min (m1, m2);
-    projectionWidth *= m;
-    projectionHeight *= m;
-
-    if (projectionWidth != viewportWidth) {
+    if (m1 > m2) {
 	this->updateUs (projectionWidth, projectionHeight);
-    } else if (projectionHeight != viewportHeight) {
+    } else {
 	this->updateVs (projectionWidth, projectionHeight);
     }
 }

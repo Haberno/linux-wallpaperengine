@@ -126,6 +126,9 @@ std::shared_ptr<const TextureProvider> CPass::resolveTexture (
 
 std::shared_ptr<const CFBO> CPass::resolveFBO (const std::string& name) const {
     auto fbo = this->m_fboProvider->find (name);
+    if (fbo == nullptr && name == "_rt_MipMappedFrameBuffer") {
+	fbo = this->m_renderable.getScene ().getMipMappedFramebuffer ();
+    }
 
     if (fbo == nullptr) {
 	sLog.exception ("Tried to resolve and FBO without any luck: ", name);
@@ -136,7 +139,7 @@ std::shared_ptr<const CFBO> CPass::resolveFBO (const std::string& name) const {
 
 void CPass::setupRenderFramebuffer (const std::shared_ptr<const CFBO>& drawTo) const {
     // set the framebuffer we're drawing to
-    glBindFramebuffer (GL_FRAMEBUFFER, drawTo->getFramebuffer ());
+    glBindFramebuffer (GL_FRAMEBUFFER, drawTo->getDrawFramebuffer ());
 
     // set proper viewport based on what we're drawing to
     glViewport (0, 0, drawTo->getRealWidth (), drawTo->getRealHeight ());
@@ -221,6 +224,7 @@ void CPass::setupRenderTexture () {
     auto texture0 = this->resolveTexture0 ();
     const auto animation = this->resolveTextureAnimationState (texture0);
 
+    this->m_textureMipMapCounts.fill (1.0f);
     this->bindTextureUnit (0, texture0, animation.currentTexture);
     this->bindTextureOverrides (animation.currentTexture, texture0);
 
@@ -310,16 +314,24 @@ CPass::resolveTextureAnimationState (const std::shared_ptr<const TextureProvider
     return state;
 }
 
-void CPass::bindTextureUnit (int index, const std::shared_ptr<const TextureProvider>& texture, uint32_t frame) const {
+void CPass::bindTextureUnit (int index, const std::shared_ptr<const TextureProvider>& texture, uint32_t frame) {
     if (texture == nullptr) {
 	return;
     }
 
     glActiveTexture (GL_TEXTURE0 + index);
     glBindTexture (GL_TEXTURE_2D, texture->getTextureID (frame));
+    if (index >= 0 && index < static_cast<int> (this->m_textureMipMapCounts.size ())) {
+	this->m_textureMipMapCounts[index] = static_cast<float> (texture->getMipMapCount (frame));
+    }
+    if (const auto texel = this->m_textureTexels.find (index); texel != this->m_textureTexels.end ()) {
+	const glm::vec2 size (glm::max (texture->getTextureWidth (frame), 1u),
+	    glm::max (texture->getTextureHeight (frame), 1u));
+	texel->second = glm::vec4 (1.0f / size, size);
+    }
 }
 
-void CPass::bindTextureOverrides (uint32_t currentTexture, std::shared_ptr<const TextureProvider>& texture0) const {
+void CPass::bindTextureOverrides (uint32_t currentTexture, std::shared_ptr<const TextureProvider>& texture0) {
     for (auto [index, chain] : this->m_textures) {
 	// find the expected texture
 	auto expectedTexture = chain->texture;
@@ -579,6 +591,10 @@ void CPass::render () {
     // per-output delta so a slower monitor receives all elapsed time instead of only the
     // most recent application-loop interval.
     this->m_frameTime = this->m_renderable.getScene ().getDeltaTime ();
+    this->m_sceneTexelSize = 1.0f / glm::vec2 (this->m_renderable.getScene ().getFramebufferSize ());
+    this->m_sceneTexelSizeHalf = this->m_sceneTexelSize * 0.5f;
+    const glm::vec2 outputSize = this->m_renderable.getScene ().getOutputSize ();
+    this->m_screen = glm::vec3 (outputSize, outputSize.x / outputSize.y);
     this->setupRenderUniforms ();
     this->setupRenderReferenceUniforms ();
     this->setupRenderAttributes ();
@@ -890,6 +906,12 @@ void CPass::setupTextureUniforms () {
     // but for now just set first vertex's textures
     // and then try with fragment's and override any existing
     for (const auto& [index, textureName] : this->m_shader->getVertex ().getTextures ()) {
+	// Shader metadata includes disabled #if branches. They must not request a
+	// reflection snapshot when the compiled material has no reflection sampler.
+	if (textureName == "_rt_MipMappedFrameBuffer"
+	    && glGetUniformLocation (this->m_programID, ("g_Texture" + std::to_string (index)).c_str ()) < 0) {
+	    continue;
+	}
 	try {
 	    auto texture = textureName.find ("_rt_") == 0 || textureName.find ("_alias_") == 0
 		? this->resolveFBO (textureName)
@@ -906,6 +928,10 @@ void CPass::setupTextureUniforms () {
     }
 
     for (const auto& [index, textureName] : this->m_shader->getFragment ().getTextures ()) {
+	if (textureName == "_rt_MipMappedFrameBuffer"
+	    && glGetUniformLocation (this->m_programID, ("g_Texture" + std::to_string (index)).c_str ()) < 0) {
+	    continue;
+	}
 	try {
 	    auto texture = textureName.find ("_rt_") == 0 || textureName.find ("_alias_") == 0
 		? this->resolveFBO (textureName)
@@ -1035,6 +1061,7 @@ void CPass::setupTextureUniforms () {
     this->addUniform ("g_Texture6", 6);
     this->addUniform ("g_Texture7", 7);
     this->addUniform ("g_Texture8", 8);
+    this->addUniform ("g_Texture9", 9);
     this->addUniform ("g_TextureReductionScale", 1.0f);
 
     // Wallpaper Engine initializes resolution uniforms even when the matching texture
@@ -1044,8 +1071,9 @@ void CPass::setupTextureUniforms () {
     // OpenGL's zero default turns the ratio below into 0/0 and makes the mask sample
     // undefined. Identity dimensions preserve the authored UVs; resolved textures
     // overwrite their own slots below.
-    for (int index = 0; index < 9; index++) {
+    for (int index = 0; index < 10; index++) {
 	this->addUniform ("g_Texture" + std::to_string (index) + "Resolution", glm::vec4 (1.0f));
+	this->addUniform ("g_Texture" + std::to_string (index) + "MipMapInfo", &this->m_textureMipMapCounts[index]);
     }
 
     this->m_texture0Resolution = *texture->getResolution ();
@@ -1215,8 +1243,9 @@ void CPass::setupUniforms () {
     this->addUniform ("g_ParallaxPosition", scene.getParallaxPosition ());
     this->addUniform ("g_EffectTextureProjectionMatrix", &this->m_effectTextureProjectionMatrix);
     this->addUniform ("g_EffectTextureProjectionMatrixInverse", &this->m_effectTextureProjectionMatrixInverse);
-    this->addUniform ("g_TexelSize", glm::vec2 (1.0 / scene.getWidth (), 1.0 / scene.getHeight ()));
-    this->addUniform ("g_TexelSizeHalf", glm::vec2 (0.5 / scene.getWidth (), 0.5 / scene.getHeight ()));
+    this->addUniform ("g_TexelSize", &this->m_sceneTexelSize);
+    this->addUniform ("g_TexelSizeHalf", &this->m_sceneTexelSizeHalf);
+    this->addUniform ("g_Screen", &this->m_screen);
     this->addUniform ("g_AudioSpectrum16Left", recorder.audio16Left, 16);
     this->addUniform ("g_AudioSpectrum16Right", recorder.audio16Right, 16);
     this->addUniform ("g_AudioSpectrum32Left", recorder.audio32Left, 32);

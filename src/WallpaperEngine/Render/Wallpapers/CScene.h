@@ -53,6 +53,11 @@ public:
 
     [[nodiscard]] int getWidth () const override;
     [[nodiscard]] int getHeight () const override;
+    [[nodiscard]] const glm::vec2& getOutputSize () const;
+    /** Previous completed scene, before bloom; allocated only when a material requests it. */
+    [[nodiscard]] std::shared_ptr<CFBO> getMipMappedFramebuffer ();
+    [[nodiscard]] glm::ivec2 getFramebufferSize () const override;
+    [[nodiscard]] WallpaperState::TextureUVs getPresentationUVs () const override;
 
     // Scene-local time accessors used by property, model, and script animations.
     // A newly loaded wallpaper starts at zero even when the engine process stays alive.
@@ -257,6 +262,9 @@ private:
 
     std::unique_ptr<Scripting::ScriptEngine> m_scriptEngine;
     std::unique_ptr<Camera> m_camera;
+    glm::vec2 m_outputSize = { 1, 1 };
+    std::shared_ptr<CFBO> m_mipMappedFramebuffer;
+    void updateOutputSize (const glm::ivec4& viewport);
     ObjectUniquePtr m_bloomObjectData;
     CObject* m_bloomObject = nullptr;
     bool m_bloomSetupAttempted = false;

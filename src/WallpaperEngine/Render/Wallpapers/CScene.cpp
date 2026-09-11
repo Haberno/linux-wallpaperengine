@@ -32,10 +32,7 @@ CScene::CScene (
     const Wallpaper& wallpaper, RenderContext& context, AudioContext& audioContext,
     const WallpaperState::TextureUVsScaling& scalingMode, const uint32_t& clampMode, const std::string& screenName
 ) : CWallpaper (wallpaper, context, audioContext, scalingMode, clampMode) {
-    // Wallpaper Engine exposes MSAA separately from its post-processing quality.
-    // Until the multisampled resolve path is implemented, scale the complete scene
-    // effect tree and downsample in CWallpaper's final composite. This provides
-    // deterministic edge antialiasing without changing authored camera coordinates.
+    // Optional supersampling is independent from scene MSAA and post-processing quality.
     this->setRenderScale (context.getApp ().getContext ().settings.render.renderScale);
 
     // caller should check this, if not a std::bad_cast is good to throw
@@ -58,20 +55,21 @@ CScene::CScene (
     float height = scene->camera.projection.height;
     const bool isPerspective = scene->camera.projection.isPerspective;
 
-    // 3D scenes have no authored projection size. Each independent wallpaper must
-    // use its own monitor: a desktop-wide target is cropped by fill scaling and
-    // loses screen-space overlays at the edges (for example, a clock).
-    if (isPerspective) {
+    // Raster resolution belongs to the output. Orthographic canvas dimensions
+    // remain authored units, while perspective cameras use the output aspect.
+    {
 	const auto& output = this->getContext ().getOutput ();
 	const auto viewport = output.getViewports ().find (screenName);
 	if (viewport != output.getViewports ().end ()) {
-	    width = viewport->second->viewport.z;
-	    height = viewport->second->viewport.w;
+	    this->m_outputSize = { viewport->second->viewport.z, viewport->second->viewport.w };
 	} else {
 	    // Shared span groups have no single named viewport.
-	    width = output.getFullWidth ();
-	    height = output.getFullHeight ();
+	    this->m_outputSize = { output.getFullWidth (), output.getFullHeight () };
 	}
+    }
+    if (isPerspective) {
+	width = this->m_outputSize.x;
+	height = this->m_outputSize.y;
     }
 
     // detect size if the orthogonal project is auto
@@ -115,10 +113,13 @@ CScene::CScene (
 	this->m_camera->setPerspectiveProjection (
 	    width, height, this->getContext ().getOutput ().renderVFlip ()
 	);
-
     } else {
 	this->m_camera->setOrthogonalProjection (width, height);
     }
+    this->updateUVs ({ 0, 0, this->m_outputSize.x, this->m_outputSize.y }, context.getOutput ().renderVFlip ());
+    const auto framing = this->getState ().getTextureUVs ();
+    this->m_camera->setViewportScale ({ 1.0f / (framing.uend - framing.ustart),
+	1.0f / std::abs (framing.vend - framing.vstart) });
 
     {
 	// Orthographic scenes can contain lit images and models too. Compile every
@@ -327,7 +328,9 @@ CScene::CScene (
 	    break;
 	}
     }
-    this->setupFramebuffers (isPerspective || hasModels);
+    const auto samples = context.getApp ().getContext ().settings.render.msaaSamples;
+    this->setupFramebuffers (isPerspective || hasModels || samples > 1, this->m_outputSize, samples);
+    sLog.out ("Scene MSAA: requested=", samples, " actual=", this->m_sceneFBO->getSamples ());
 
     const uint32_t sceneWidth = this->m_camera->getWidth ();
     const uint32_t sceneHeight = this->m_camera->getHeight ();
@@ -370,19 +373,17 @@ CScene::CScene (
     // complete before allowing those hooks to cache their targets.
     this->m_scriptEngine->initializeQueuedScripts ();
 
-    // create extra framebuffers for the bloom effect
-    this->_rt_4FrameBuffer = this->create (
-	"_rt_4FrameBuffer", TextureFormat_ARGB8888, TextureFlags_ClampUVs, 1.0, { sceneWidth / 4, sceneHeight / 4 },
-	{ sceneWidth / 4, sceneHeight / 4 }
-    );
-    this->_rt_8FrameBuffer = this->create (
-	"_rt_8FrameBuffer", TextureFormat_ARGB8888, TextureFlags_ClampUVs, 1.0, { sceneWidth / 8, sceneHeight / 8 },
-	{ sceneWidth / 8, sceneHeight / 8 }
-    );
-    this->_rt_Bloom = this->create (
-	"_rt_Bloom", TextureFormat_ARGB8888, TextureFlags_ClampUVs, 1.0, { sceneWidth / 8, sceneHeight / 8 },
-	{ sceneWidth / 8, sceneHeight / 8 }
-    );
+    // Native bloom truncates divided raster dimensions, with a two-pixel minimum.
+    // The main target already includes render scale; don't scale these twice.
+    const auto createBloomTarget = [this] (const char* name, uint32_t divisor) {
+	const auto size = glm::max (glm::uvec2 (this->getFramebufferSize ()) / divisor, glm::uvec2 (2));
+	return this->alias (name, std::make_shared<CFBO> (
+	    name, TextureFormat_ARGB8888, TextureFlags_ClampUVs, 1.0f, size.x, size.y, size.x, size.y
+	));
+    };
+    this->_rt_4FrameBuffer = createBloomTarget ("_rt_4FrameBuffer", 4);
+    this->_rt_8FrameBuffer = createBloomTarget ("_rt_8FrameBuffer", 8);
+    this->_rt_Bloom = createBloomTarget ("_rt_Bloom", 8);
 
     this->updateBloomState ();
 
@@ -648,7 +649,71 @@ void CScene::setScriptCameraTransform (const CameraTransform& transform) {
 
 const CScene::SceneFog& CScene::getFog () const { return this->m_fog; }
 
+const glm::vec2& CScene::getOutputSize () const { return this->m_outputSize; }
+
+std::shared_ptr<CFBO> CScene::getMipMappedFramebuffer () {
+    if (this->m_mipMappedFramebuffer == nullptr) {
+	this->m_mipMappedFramebuffer = this->create (
+	    "_rt_MipMappedFrameBuffer", TextureFormat_ARGB8888, TextureFlags_ClampUVs, 1.0f,
+	    this->m_outputSize, this->m_outputSize
+	);
+    }
+    return this->m_mipMappedFramebuffer;
+}
+
+glm::ivec2 CScene::getFramebufferSize () const {
+    return { this->m_sceneFBO->getRealWidth (), this->m_sceneFBO->getRealHeight () };
+}
+
+WallpaperState::TextureUVs CScene::getPresentationUVs () const {
+    const auto framing = this->getState ().getTextureUVs ();
+    return framing.vstart < framing.vend ? WallpaperState::TextureUVs { 0, 1, 0, 1 }
+	: WallpaperState::TextureUVs { 0, 1, 1, 0 };
+}
+
+void CScene::updateOutputSize (const glm::ivec4& viewport) {
+    glm::vec2 size (glm::max (glm::ivec2 (viewport.z, viewport.w), glm::ivec2 (1)));
+    if (this->getSpanInfo () != nullptr) {
+	// Span bounds and pointer positions are logical desktop units. Rasterize at
+	// the highest participating output density so no monitor enlarges its slice.
+	float pixelScale = 1.0f;
+	const auto& wallpapers = this->getContext ().getWallpapers ();
+	for (const auto& [name, output] : this->getContext ().getOutput ().getViewports ()) {
+	    const auto wallpaper = wallpapers.find (name);
+	    if (wallpaper != wallpapers.end () && wallpaper->second.get () == this) {
+		pixelScale = std::max ({ pixelScale,
+		    float (output->viewport.z) / std::max (output->logicalSize.x, 1),
+		    float (output->viewport.w) / std::max (output->logicalSize.y, 1) });
+	    }
+	}
+	size = glm::round (size * pixelScale);
+    }
+    if (size != this->m_outputSize) {
+	this->m_outputSize = size;
+	const auto sceneSize = glm::max (calculateTargetSize (size, this->getRenderScale ()),
+            glm::uvec2 (1));
+	this->find ("_rt_FullFrameBuffer")->resize (sceneSize.x, sceneSize.y);
+	for (const auto& [name, divisor] : std::array<std::pair<const char*, uint32_t>, 3> {
+	    { { "_rt_4FrameBuffer", 4 }, { "_rt_8FrameBuffer", 8 }, { "_rt_Bloom", 8 } } }) {
+	    const auto target = glm::max (sceneSize / divisor, glm::uvec2 (2));
+	    this->find (name)->resize (target.x, target.y);
+	}
+	if (this->m_mipMappedFramebuffer != nullptr) {
+	    this->m_mipMappedFramebuffer->resize (sceneSize.x, sceneSize.y);
+	}
+	if (!this->m_camera->isOrthogonal ()) {
+	    this->m_camera->setPerspectiveProjection (size.x, size.y, this->m_camera->isYFlipped ());
+	    const auto uv = this->getPresentationUVs ();
+	    this->updateUVs (viewport, uv.vstart < uv.vend);
+	}
+    }
+    const auto framing = this->getState ().getTextureUVs ();
+    this->m_camera->setViewportScale ({ 1.0f / (framing.uend - framing.ustart),
+	1.0f / std::abs (framing.vend - framing.vstart) });
+}
+
 void CScene::renderFrame (const glm::ivec4& viewport) {
+    this->updateOutputSize (viewport);
     // Frame callbacks are per-output on Wayland. A 60 Hz scene can therefore render only once
     // while a 165 Hz output advances the application loop several times. Deriving dt only from
     // g_TimeLast loses those skipped intervals and stretches camera shots on the slower output.
@@ -749,8 +814,12 @@ void CScene::renderFrame (const glm::ivec4& viewport) {
 
     // bind the vertex array
     glBindVertexArray (this->m_vaoBuffer);
-    // use the scene's framebuffer by default
-    glBindFramebuffer (GL_FRAMEBUFFER, this->getWallpaperFramebuffer ());
+    // Keep ordinary scene geometry multisampled, including after intermediate
+    // scene-color reads. Post-processing uses the resolved single-sample target.
+    const auto sceneTarget = this->find ("_rt_FullFrameBuffer");
+    sceneTarget->setMultisampleRendering (true);
+    glEnable (GL_MULTISAMPLE);
+    glBindFramebuffer (GL_FRAMEBUFFER, sceneTarget->getDrawFramebuffer ());
     // ensure we render over the whole framebuffer
     glViewport (0, 0, this->m_sceneFBO->getRealWidth (), this->m_sceneFBO->getRealHeight ());
 
@@ -870,7 +939,7 @@ void CScene::renderFrame (const glm::ivec4& viewport) {
 
     for (const FrameRenderEntry& entry : renderOrder) {
 	CObject* cur = entry.object;
-	if (compositionAncestor (cur) != nullptr) {
+	if (cur == this->m_bloomObject || compositionAncestor (cur) != nullptr) {
 	    continue;
 	}
 	if (auto* composition = dynamic_cast<Objects::CImage*> (cur);
@@ -879,6 +948,35 @@ void CScene::renderFrame (const glm::ivec4& viewport) {
 	    continue;
 	}
 	renderEntry (entry);
+    }
+
+    sceneTarget->setMultisampleRendering (false);
+
+    // Native materials sample the previous completed scene. Refresh a separate
+    // texture after ordinary draws and before bloom, avoiding framebuffer feedback
+    // and keeping bloom out of the reflection used by the following frame.
+    if (this->m_mipMappedFramebuffer != nullptr) {
+	const auto& target = this->m_mipMappedFramebuffer;
+	const GLuint sourceFramebuffer = this->m_sceneFBO->getFramebuffer ();
+	const GLuint targetFramebuffer = target->getFramebuffer ();
+	GLint previousRead = GL_NONE, previousDraw = GL_NONE;
+	glGetIntegerv (GL_READ_FRAMEBUFFER_BINDING, &previousRead);
+	glGetIntegerv (GL_DRAW_FRAMEBUFFER_BINDING, &previousDraw);
+	const GLboolean scissor = glIsEnabled (GL_SCISSOR_TEST);
+	glDisable (GL_SCISSOR_TEST);
+	glBindFramebuffer (GL_READ_FRAMEBUFFER, sourceFramebuffer);
+	glBindFramebuffer (GL_DRAW_FRAMEBUFFER, targetFramebuffer);
+	glBlitFramebuffer (
+	    0, 0, this->m_sceneFBO->getRealWidth (), this->m_sceneFBO->getRealHeight (),
+	    0, 0, target->getRealWidth (), target->getRealHeight (), GL_COLOR_BUFFER_BIT, GL_NEAREST
+	);
+	target->generateMipmaps ();
+	glBindFramebuffer (GL_READ_FRAMEBUFFER, previousRead);
+	glBindFramebuffer (GL_DRAW_FRAMEBUFFER, previousDraw);
+	if (scissor) glEnable (GL_SCISSOR_TEST);
+    }
+    if (this->m_bloomObject != nullptr && enabledByDebug (this->m_bloomObject)) {
+	this->m_bloomObject->render ();
     }
 }
 
@@ -1299,8 +1397,8 @@ void CScene::updateMouse (const glm::ivec4& viewport) {
     // Particle code expects this convention: 0=bottom results in negative Y (down), 1=top results in positive Y (up)
     double normalizedMouseY = glm::clamp ((position.y - viewport.y) / viewport.w, 0.0, 1.0);
 
-    // Account for UV cropping when using fill/fit scaling modes
-    // The scene may be rendered larger than viewport and cropped via UVs
+    // This is the authored canvas rectangle visible through the framed camera.
+    // Presentation uses full UVs because the framing is already rasterized.
     const auto uvs = this->getState ().getTextureUVs ();
 
     // Map mouse position from viewport space to scene UV space

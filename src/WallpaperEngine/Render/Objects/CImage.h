@@ -153,6 +153,7 @@ private:
 	const glm::mat4* inverseProjection, bool samplesSourceTexture
     );
     void renderPuppetClipping ();
+    void updateSceneTargets () const;
     ResolvedTransform updateGeometryBuffers ();
     [[nodiscard]] glm::vec2 resolveGeometrySize (float sceneWidth, float sceneHeight, glm::vec3& origin) const;
     void updateScenePosition (
@@ -215,7 +216,7 @@ private:
     std::vector<PuppetClippingRenderCommand> m_puppetClippingCommands = {};
     std::vector<std::unique_ptr<TextureMap>> m_puppetClippingBinds = {};
     std::vector<std::unique_ptr<glm::vec4>> m_puppetClippingRenderVars = {};
-    std::shared_ptr<const CFBO> m_puppetClippingFBO = nullptr;
+    std::shared_ptr<CFBO> m_puppetClippingFBO = nullptr;
     bool m_hasPuppetClipping = false;
 
     glm::mat4 m_modelViewProjectionScreen = {};
@@ -239,12 +240,17 @@ private:
     glm::mat4 m_effectTextureProjectionMatrix = glm::mat4 (1.0f);
     glm::mat4 m_effectTextureProjectionMatrixInverse = glm::mat4 (1.0f);
 
-    std::shared_ptr<const CFBO> m_mainFBO = nullptr;
-    std::shared_ptr<const CFBO> m_subFBO = nullptr;
+    std::shared_ptr<CFBO> m_mainFBO = nullptr;
+    std::shared_ptr<CFBO> m_subFBO = nullptr;
     std::shared_ptr<const CFBO> m_currentMainFBO = nullptr;
     std::shared_ptr<const CFBO> m_currentSubFBO = nullptr;
     /** Isolated child surface used by models/util/composelayer.json. */
     std::shared_ptr<CFBO> m_compositionFBO = nullptr;
+    struct SceneEffectTarget {
+	std::shared_ptr<CFBO> target;
+	const FBO* definition;
+    };
+    std::vector<SceneEffectTarget> m_sceneEffectTargets = {};
 
     const Image& m_image;
     // Stable storage is required because effect-pass uniforms keep pointers to

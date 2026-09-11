@@ -215,6 +215,44 @@ TEST_CASE ("perspective scenes retain depth precision when the near plane is omi
     CHECK (parsedNear (R"({"orthogonalprojection":{"width":1920,"height":1080}})") == 0.0f);
 }
 
+TEST_CASE ("scene bloom defaults match native LDR settings without replacing authored values", "[scene-defaults][bloom]") {
+    struct BloomCase {
+	const char* general;
+	bool enabled;
+	float strength;
+	float threshold;
+	glm::vec3 tint;
+    };
+    const BloomCase cases[] = {
+	{ R"({})", false, 2.0f, 0.65f, glm::vec3 (1.0f) },
+	{ R"({"bloom":true})", true, 2.0f, 0.65f, glm::vec3 (1.0f) },
+	{ R"({"bloom":false})", false, 2.0f, 0.65f, glm::vec3 (1.0f) },
+	{ R"({"bloom":true,"bloomstrength":0,"bloomthreshold":0})", true, 0.0f, 0.0f, glm::vec3 (1.0f) },
+	{ R"({"bloom":true,"bloomstrength":1.25,"bloomthreshold":0.4,"bloomtint":"0.25 0.5 0.75"})",
+	    true, 1.25f, 0.4f, { 0.25f, 0.5f, 0.75f } },
+	{ R"({"bloom":false,"bloomstrength":3.5,"bloomthreshold":0.8,"bloomtint":"0 0 0"})",
+	    false, 3.5f, 0.8f, glm::vec3 (0.0f) },
+    };
+    for (const auto& [general, enabled, strength, threshold, tint] : cases) {
+	CAPTURE (general);
+	auto filesystem = std::make_unique<Container> ();
+	filesystem->getVFS ().add (
+	    "scene.json", std::string ("{\"camera\":{\"center\":\"0 0 -1\",\"eye\":\"0 0 0\",\"up\":\"0 1 0\"},"
+		"\"general\":") + general + ",\"objects\":[]}"
+	);
+	Project project {};
+	project.type = Project::Type_Scene;
+	project.assetLocator = std::make_unique<WallpaperEngine::Assets::AssetLocator> (std::move (filesystem));
+	const auto wallpaper = WallpaperParser::parse (JSON ("scene.json"), project);
+	REQUIRE (wallpaper->is<Scene> ());
+	const auto& bloom = wallpaper->as<Scene> ()->camera.bloom;
+	CHECK (bloom.enabled->value->getBool () == enabled);
+	CHECK (bloom.strength->evaluateFloat (0.0f) == Catch::Approx (strength));
+	CHECK (bloom.threshold->evaluateFloat (0.0f) == Catch::Approx (threshold));
+	CHECK (bloom.tint->value->getVec3 () == tint);
+    }
+}
+
 TEST_CASE ("missing image effects are skipped without discarding neighboring effects") {
     auto filesystem = std::make_unique<Container> ();
     filesystem->getVFS ().add ("effects/before.json", R"({"name":"before","passes":[]})");

@@ -21,6 +21,13 @@ public:
 	StretchUVs,
     };
 
+    struct TextureUVs {
+	float ustart;
+	float uend;
+	float vstart;
+	float vend;
+    };
+
     WallpaperState (const TextureUVsScaling& textureUVsMode, const uint32_t& clampMode);
 
     /**
@@ -110,12 +117,7 @@ public:
 
 private:
     // Cached UVs value for texture coordinates. No need to recalculate if viewport and projection haven't changed.
-    struct {
-	float ustart;
-	float uend;
-	float vstart;
-	float vend;
-    } m_UVs {};
+    TextureUVs m_UVs {};
 
     // Viewport for which UVs were calculated
     struct {

@@ -184,8 +184,8 @@ SceneUniquePtr WallpaperParser::parseScene (const JSON& file, Project& project) 
 		.objectProjections = std::move (cameraObjectProjections),
                 .bloom = {
                     .enabled = general.user ("bloom", properties, false),
-                    .strength = general.user ("bloomstrength", properties, 0.0f),
-                    .threshold = general.user ("bloomthreshold", properties, 0.0f),
+                    .strength = general.user ("bloomstrength", properties, 2.0f),
+                    .threshold = general.user ("bloomthreshold", properties, 0.65f),
                     .tint = general.user ("bloomtint", properties, glm::vec3 (1.0f)),
                 },
                 .parallax = {

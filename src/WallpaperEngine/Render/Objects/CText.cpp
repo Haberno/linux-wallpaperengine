@@ -737,7 +737,7 @@ void CText::renderEffectChain (const glm::mat4& mvp, const float brightness, con
 
     // Visibility controls the scene draw, not the offscreen layer used by others.
     const auto sceneTarget = this->getScene ().getActiveRenderTarget ();
-    glBindFramebuffer (GL_FRAMEBUFFER, sceneTarget->getFramebuffer ());
+    glBindFramebuffer (GL_FRAMEBUFFER, sceneTarget->getDrawFramebuffer ());
     glViewport (0, 0, sceneTarget->getRealWidth (), sceneTarget->getRealHeight ());
     if (drawToScene && m_colorBlendPass) {
 	const auto width = sceneTarget->getRealWidth ();
@@ -1201,7 +1201,7 @@ void CText::render () {
     // A preceding hidden image can leave its composite FBO and viewport bound.
     // Direct text draws must select the active scene/composition target themselves.
     const auto sceneTarget = this->getScene ().getActiveRenderTarget ();
-    glBindFramebuffer (GL_FRAMEBUFFER, sceneTarget->getFramebuffer ());
+    glBindFramebuffer (GL_FRAMEBUFFER, sceneTarget->getDrawFramebuffer ());
     glViewport (0, 0, sceneTarget->getRealWidth (), sceneTarget->getRealHeight ());
     // Glyph plates are double-sided, including the mirrored 2D path and the
     // initial raster pass of an effect chain. Never inherit image-material culling.
