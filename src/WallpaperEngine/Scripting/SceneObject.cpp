@@ -427,12 +427,28 @@ JSValue scene_get_layer_index (JSContext* ctx, JSValueConst this_val, int argc, 
 // thisScene.createLayer(modelPath) -> instantiate a new image layer at runtime and return its
 // handle. Generative scripts (audio visualizers, particle-ish bar systems) build their layers here.
 JSValue scene_create_layer (JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
-    if (argc < 1 || !JS_IsString (argv[0])) {
+    if (argc < 1) {
 	return JS_UNDEFINED;
     }
 
     auto* container = get_opaque (this_val);
-    const char* path = JS_ToCString (ctx, argv[0]);
+    // createLayer takes "String|Object|IAssetHandle" - the handle engine.registerAsset() hands back
+    // carries the path on .file, and a plain configuration object spells it the same way.
+    JSValue source = JS_DupValue (ctx, argv[0]);
+
+    if (JS_IsObject (source)) {
+	JSValue file = JS_GetPropertyStr (ctx, source, "file");
+	JS_FreeValue (ctx, source);
+	source = file;
+    }
+
+    if (!JS_IsString (source)) {
+	JS_FreeValue (ctx, source);
+	return JS_UNDEFINED;
+    }
+
+    const char* path = JS_ToCString (ctx, source);
+    JS_FreeValue (ctx, source);
 
     if (path == nullptr) {
 	return JS_UNDEFINED;

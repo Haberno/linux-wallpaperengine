@@ -6,6 +6,8 @@
 
 #include "WallpaperEngine/Data/Model/Effect.h"
 #include "WallpaperEngine/Data/Model/Material.h"
+// usertextures name user properties, so the pass needs the full Property definition to read them
+#include "WallpaperEngine/Data/Model/Property.h"
 
 #include "WallpaperEngine/Render/CFBO.h"
 #include "WallpaperEngine/Render/Objects/CImage.h"
@@ -930,7 +932,22 @@ void CPass::setupTextureUniforms () {
 	}
     }
 
-    for (const auto& [index, textureName] : this->m_pass.usertextures) {
+    for (const auto& [index, entry] : this->m_pass.usertextures) {
+	// A usertextures entry names a user property, not a file: the texture is whatever that
+	// property currently holds. System entries ($mediaThumbnail and friends) are their own
+	// name. An unset property - a "scenetexture" the user never picked, which is the shipped
+	// default - overrides nothing, leaving the material's own texture in place. Treating the
+	// property name as a path instead leaves the slot empty and the layer renders black.
+	std::string textureName = entry;
+	const auto& properties = this->m_renderable.getScene ().getScene ().project.properties;
+	if (const auto property = properties.find (entry); property != properties.end ()) {
+	    textureName = property->second->getString ();
+
+	    if (textureName.empty ()) {
+		continue;
+	    }
+	}
+
 	try {
 	    auto texture = textureName.find ("_rt_") == 0 || textureName.find ("_alias_") == 0
 		? this->resolveFBO (textureName)
