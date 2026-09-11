@@ -73,6 +73,7 @@ struct MdlAnimationClip {
     uint32_t frameCount = 0;
     uint32_t flags = 0;
     std::vector<PropertyAnimation::Event> events;
+    /** Bit zero disables the track, preserving the pose from earlier layers. */
     std::vector<uint32_t> boneFlags = {};
     /** boneFrames[bone][frame], commonly frameCount + 1 entries for loop interpolation. */
     std::vector<std::vector<MdlBoneFrame>> boneFrames = {};

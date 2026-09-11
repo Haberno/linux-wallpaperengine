@@ -120,6 +120,8 @@ void applyBoneControls (
 	for (const auto& layer : layers) {
 	    if (!layer.animation || layer.weight <= 0.0f || index >= layer.animation->controlFrames.size ())
 		continue;
+	    if (index < layer.animation->controlFlags.size () && (layer.animation->controlFlags[index] & 1))
+		continue;
 	    const auto& frames = layer.animation->controlFrames[index];
 	    if (!frames.empty ()) composeLayer (value, reference, samplePose (layer, frames), layer);
 	}
@@ -261,6 +263,11 @@ MdlPose MdlAnimationEvaluator::evaluate (
 	for (size_t layerIndex = 0; layerIndex < activeAnimations.size (); layerIndex++) {
 	    const auto& layer = activeAnimations[layerIndex];
 	    if (layer.animation == nullptr || bone >= layer.animation->boneFrames.size ()) {
+		continue;
+	    }
+	    // MDLA bit zero masks this track out of the layer. Blink-only clips
+	    // retain static bone samples which must not overwrite the moving body.
+	    if (bone < layer.animation->boneFlags.size () && (layer.animation->boneFlags[bone] & 1)) {
 		continue;
 	    }
 	    const auto& frames = layer.animation->boneFrames[bone];

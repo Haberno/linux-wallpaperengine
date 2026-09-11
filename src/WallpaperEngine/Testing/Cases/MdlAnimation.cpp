@@ -253,25 +253,25 @@ TEST_CASE ("MDL bone controls retain their extra animation pose tracks", "[mdl][
     CHECK_THROWS (MdlAnimationParser::parse (data, "invalid-control.mdl"));
 }
 
-TEST_CASE ("Legacy MDLS0003 metadata is not a puppet control table", "[mdl][animation]") {
+TEST_CASE ("MDLS0003 imports retain named bones and skip legacy metadata", "[mdl][animation]") {
     std::vector<char> data;
     appendMarker (data, "MDLS0003");
     const auto endOffset = data.size ();
     appendValue<uint32_t> (data, 0);
     appendValue<uint32_t> (data, 1);
-    appendValue<uint8_t> (data, 0);
+    appendString (data, "RootNode");
     appendValue<uint32_t> (data, 1);
     appendValue<int32_t> (data, -1);
     appendValue<uint32_t> (data, 64);
     appendMatrix (data, glm::mat4 (1));
-    appendString (data, "root");
+    appendString (data, "");
     // This optional legacy tail starts with a byte flag, not a u16 control count.
     appendValue<uint8_t> (data, 1);
     appendMatrix (data, glm::mat4 (1));
     patchU32 (data, endOffset, data.size ());
     const auto parsed = MdlAnimationParser::parse (data, "legacy-3d.mdl");
     REQUIRE (parsed.bones.size () == 1);
-    CHECK (parsed.bones.front ().name == "root");
+    CHECK (parsed.bones.front ().name == "RootNode");
     CHECK (parsed.controls.empty ());
     CHECK (parsed.ikGroups.empty ());
 }
@@ -476,6 +476,9 @@ TEST_CASE ("Authored IK end controls move rigid chains and their attachments", "
     checkPosition (additive.worldBones[1], {4, 8, 0});
     const auto half = MdlAnimationEvaluator::evaluate (data, {{.animation = &data.animations[0], .weight = 0.5f}});
     checkPosition (half.worldBones[1], {2, 9, 0});
+    data.animations[0].controlFlags = { 1 };
+    const auto masked = MdlAnimationEvaluator::evaluate (data, {{.animation = &data.animations[0]}});
+    checkPosition (masked.worldBones[1], {0, 10, 0});
 
     data = makeRig (true, false);
     const auto pinned = MdlAnimationEvaluator::evaluate (data, {{.animation = &data.animations[0]}});
@@ -677,4 +680,34 @@ TEST_CASE ("an idle additive clip preserves parts positioned by a base animation
 	const auto rest = MdlAnimationEvaluator::evaluate (data, {});
 	CHECK (rest.worldBones[0][3].x == Catch::Approx (1000));
     }
+}
+
+TEST_CASE ("masked blink bone tracks preserve motion from earlier layers", "[mdl][animation]") {
+    MdlAnimationData data;
+    data.bones.resize (2);
+    const MdlAnimationClip motion {
+	.mode = "single", .fps = 1, .frameCount = 1,
+	.boneFrames = { { {} }, { { .translation = { 10, 0, 0 } } } },
+    };
+    MdlAnimationClip blink {
+	.mode = "single", .fps = 1, .frameCount = 1,
+	.boneFlags = { 0, 1 },
+	.boneFrames = { { { .translation = { 0, 3, 0 } } }, { { .translation = { 40, 0, 0 } } } },
+	.blendTracks = { { 0, 1 } },
+    };
+    for (const bool additive : { false, true }) {
+	const auto pose = MdlAnimationEvaluator::evaluate (data, {
+	    { .animation = &motion, .time = 0.5f },
+	    { .animation = &blink, .time = 0.5f, .additive = additive },
+	});
+	CHECK (pose.worldBones[0][3].y == Catch::Approx (3));
+	CHECK (pose.worldBones[1][3].x == Catch::Approx (10));
+	REQUIRE (pose.blendWeights.size () == 1);
+	CHECK (pose.blendWeights[0] == Catch::Approx (0.5f));
+    }
+    blink.boneFlags[1] = 2; // Only bit zero disables a track.
+    const auto unmasked = MdlAnimationEvaluator::evaluate (data, {
+	{ .animation = &motion }, { .animation = &blink },
+    });
+    CHECK (unmasked.worldBones[1][3].x == Catch::Approx (40));
 }
