@@ -115,6 +115,8 @@ public:
 	    int maximumFPS;
 	    /** Scene render-target scale (1.0 = native, >1.0 = supersampling) */
 	    float renderScale;
+	    /** Scene geometry multisample count (1 = off) */
+	    uint32_t msaaSamples;
 	    /** Final-output color grading (1.0 = neutral) */
 	    float contrast;
 	    float saturation;
@@ -211,6 +213,7 @@ public:
             .mode = NORMAL_WINDOW,
             .maximumFPS = 30,
 	    .renderScale = 1.0f,
+	    .msaaSamples = 2,
 	    .contrast = 1.0f,
 	    .saturation = 1.0f,
             .pauseOnFullscreen = true,

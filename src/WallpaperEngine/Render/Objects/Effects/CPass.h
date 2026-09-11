@@ -1,6 +1,7 @@
 #pragma once
 
 #include <functional>
+#include <array>
 #include <glm/gtc/type_ptr.hpp>
 #include <set>
 #include <utility>
@@ -192,8 +193,8 @@ private:
     [[nodiscard]] std::shared_ptr<const TextureProvider> resolveTexture0 ();
     [[nodiscard]] TextureAnimationState
     resolveTextureAnimationState (const std::shared_ptr<const TextureProvider>& texture) const;
-    void bindTextureUnit (int index, const std::shared_ptr<const TextureProvider>& texture, uint32_t frame) const;
-    void bindTextureOverrides (uint32_t currentTexture, std::shared_ptr<const TextureProvider>& texture0) const;
+    void bindTextureUnit (int index, const std::shared_ptr<const TextureProvider>& texture, uint32_t frame);
+    void bindTextureOverrides (uint32_t currentTexture, std::shared_ptr<const TextureProvider>& texture0);
     void setupRenderUniforms ();
     void setupRenderReferenceUniforms ();
     void setupRenderAttributes () const;
@@ -266,9 +267,13 @@ private:
     std::shared_ptr<const TextureProvider> m_input = nullptr;
     std::shared_ptr<const TextureProvider> m_previousInput = nullptr;
     glm::vec4 m_texture0Resolution = {};
+    std::array<float, 10> m_textureMipMapCounts = {};
+    glm::vec3 m_screen = { 1, 1, 1 };
     /** Wallpaper Engine's g_Frametime global. Refresh this from the scene-local clock before
      * every draw so feedback effects advance correctly on independently paced outputs. */
     float m_frameTime = 0.0f;
+    glm::vec2 m_sceneTexelSize = { 1, 1 };
+    glm::vec2 m_sceneTexelSizeHalf = { 0.5f, 0.5f };
     /**
      * Effective object tint uploaded to shaders that use the newer g_Color4 convention.
      * Those shaders fold opacity into the tint alpha instead of declaring g_UserAlpha,
