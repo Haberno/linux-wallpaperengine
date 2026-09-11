@@ -116,8 +116,13 @@ CScene::CScene (
 	    width, height, this->getContext ().getOutput ().renderVFlip ()
 	);
 
-	// fixed light counts let passes compile LightingV1 with matching uniform arrays
-	// before any object is created
+    } else {
+	this->m_camera->setOrthogonalProjection (width, height);
+    }
+
+    {
+	// Orthographic scenes can contain lit images and models too. Compile every
+	// scene's LightingV1 modules with its authored lights before creating passes.
 	for (const auto& object : scene->objects) {
 	    if (!object->is<Data::Model::Light> ()) {
 		continue;
@@ -127,7 +132,8 @@ CScene::CScene (
 	    switch (light->type) {
 		case LightData::Type_Directional:
 		    this->m_lights.directionalCount++;
-		    if (light->castShadow) {
+		    // Directional cascades currently use a perspective camera frustum.
+		    if (light->castShadow && isPerspective) {
 			this->m_lights.directionalShadowCount++;
 		    }
 		    break;
@@ -188,7 +194,7 @@ CScene::CScene (
 
 	    const auto* light = object->as<Data::Model::Light> ();
 	    if (light->type == LightData::Type_Directional) {
-		if (light->castShadow) {
+		if (light->castShadow && isPerspective) {
 		    this->m_lights.directionalShadowFeatures[directional]
 			= glm::ivec3 (directionalFeature, directionalFeature + 1, directionalFeature + 2);
 		    directionalFeature += 3;
@@ -306,9 +312,6 @@ CScene::CScene (
 		);
 	    }
 	}
-    } else {
-	// TODO: CONVERSION
-	this->m_camera->setOrthogonalProjection (width, height);
     }
 
     // setup framebuffers here as they're required for the scene setup;
@@ -1326,7 +1329,8 @@ void CScene::updateLightState () {
 	if (data.type == LightData::Type_Directional && directional < this->m_lights.directionalCount) {
 	    // the shader expects the direction towards the light
 	    this->m_lights.directionalDirections[directional] = glm::vec4 (-light->getWorldDirection (), 0.0f);
-	    this->m_lights.directionalColors[directional] = glm::vec4 (light->getPremultipliedColor (), 0.0f);
+	    // The legacy versioned shaders multiply radiance by this neutral radius squared.
+	    this->m_lights.directionalColors[directional] = glm::vec4 (light->getPremultipliedColor (), 1.0f);
 	    this->m_lights.directionalShadowEnabled[directional] = 0.0f;
 
 	    const glm::ivec3 features = this->m_lights.directionalShadowFeatures[directional];
@@ -1403,6 +1407,17 @@ void CScene::updateLightState () {
 		= glm::vec4 (light->getPremultipliedColor (), data.radius->value->getFloat ());
 	    tube++;
 	}
+    }
+    this->m_lights.updateLegacyPointLights ();
+}
+
+void CScene::SceneLights::updateLegacyPointLights () {
+    this->legacyPositions.fill (glm::vec3 (0.0f));
+    // Legacy shaders divide by radius even for unused lights.
+    this->legacyColors.fill (glm::vec4 (0.0f, 0.0f, 0.0f, 1.0f));
+    for (int index = 0; index < std::min (this->pointCount, 4); ++index) {
+	this->legacyPositions[index] = glm::vec3 (this->pointOrigins[index]);
+	this->legacyColors[index] = this->pointColors[index];
     }
 }
 

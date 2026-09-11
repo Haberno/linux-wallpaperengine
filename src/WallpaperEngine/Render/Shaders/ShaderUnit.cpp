@@ -2148,7 +2148,10 @@ const std::string& ShaderUnit::compile () {
 	}
     }
 
-    std::string compatResult = this->m_preprocessed;
+    // Native shader loading seeds revision 69 before evaluating source conditionals,
+    // independently of scene/project versions. Authored source definitions may
+    // replace it; the duplicate-macro pass below preserves that behavior in GLSL.
+    std::string compatResult = "#undef SHADERVERSION\n#define SHADERVERSION 69\n" + this->m_preprocessed;
     if (m_type == GLSLContext::UnitType_Vertex
 	&& compatResult.find ("in_ParticleTrailLength") != std::string::npos
 	&& compatResult.find ("trailRightStart") != std::string::npos) {

@@ -230,6 +230,8 @@ private:
     glm::mat4 m_sceneModelMatrix = glm::mat4 (1.0f);
     glm::mat4 m_sceneViewProjectionMatrix = glm::mat4 (1.0f);
     glm::mat3 m_sceneNormalModelMatrix = glm::mat3 (1.0f);
+    Effects::CPass* m_prelightingPass = nullptr;
+    glm::mat4 m_prelightingModelMatrix = glm::mat4 (1.0f);
 
     /** rotation-only local->world matrix (and its inverse) fed to effect passes as
      * g_EffectTextureProjectionMatrix so depthparallax-style shaders can rotate the

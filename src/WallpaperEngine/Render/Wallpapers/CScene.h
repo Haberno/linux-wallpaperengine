@@ -165,6 +165,10 @@ public:
 	std::vector<glm::vec4> pointOrigins = {};
 	/** rgb = color premultiplied by intensity, w = radius */
 	std::vector<glm::vec4> pointColors = {};
+	/** Fixed four-light interface used by older generic model shaders. */
+	std::array<glm::vec3, 4> legacyPositions = {};
+	std::array<glm::vec4, 4> legacyColors = {};
+	void updateLegacyPointLights ();
 	/** Native compact projection and 2x3 atlas block data, indexed like point arrays. */
 	std::vector<glm::vec4> pointShadowProjections = {};
 	std::vector<glm::vec4> pointShadowTransforms = {};

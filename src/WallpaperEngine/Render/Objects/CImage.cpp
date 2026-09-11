@@ -1239,11 +1239,9 @@ bool CImage::setupPuppetClippingPasses (
 	    pass.setEffectTextureProjectionMatrix (
 		&this->m_effectTextureProjectionMatrix, &this->m_effectTextureProjectionMatrixInverse
 	    );
-	    if (this->getScene ().getScene ().camera.projection.isPerspective) {
-		pass.setModelMatrix (&this->m_sceneModelMatrix);
-		pass.setViewProjectionMatrix (&this->m_sceneViewProjectionMatrix);
-		pass.addUniform ("g_NormalModelMatrix", &this->m_sceneNormalModelMatrix);
-	    }
+	    pass.setModelMatrix (&this->m_sceneModelMatrix);
+	    pass.setViewProjectionMatrix (&this->m_sceneViewProjectionMatrix);
+	    pass.addUniform ("g_NormalModelMatrix", &this->m_sceneNormalModelMatrix);
 	};
 
 	for (const auto& mask : plan.masks) {
@@ -1413,9 +1411,29 @@ void CImage::setup () {
 
     // copy pass to the composite layer
     for (const auto& cur : this->getImage ().model->material->passes) {
-	this->m_passes.push_back (
-	    new CPass (*this, std::make_shared<FBOProvider> (this), *cur, baseOverride, std::nullopt, std::nullopt)
+	const auto comboEnabled = [&cur] (const char* name) {
+	    const auto combo = cur->combos.find (name);
+	    return combo != cur->combos.end () && combo->second != 0;
+	};
+	const bool prelighting = this->m_passes.empty () && cur->shader == "genericimage4"
+	    && (comboEnabled ("LIGHTING") || comboEnabled ("REFLECTION"))
+	    && !this->getScene ().getScene ().camera.projection.isPerspective
+	    && !this->m_hasPuppetMesh && !this->m_image.model->passthrough && !debug.baseOnly
+	    && (!this->m_image.effects.empty () || this->m_image.colorBlendMode->value->getInt () > 0
+		|| this->m_image.model->material->passes.size () > 1);
+	auto* pass = new CPass (
+	    *this, std::make_shared<FBOProvider> (this), *cur, baseOverride, std::nullopt, std::nullopt,
+	    prelighting ? ComboMap { { "PRELIGHTING", 1 } } : ComboMap {}
 	);
+	this->m_passes.push_back (pass);
+	if (prelighting) {
+	    // Stock prelighting separates world-space illumination from the offscreen
+	    // MVP, preserving the image/effect matrices used to populate the texture.
+	    this->m_prelightingPass = pass;
+	    pass->addUniform ("g_AltModelMatrix", &this->m_prelightingModelMatrix);
+	    pass->addUniform ("g_AltNormalModelMatrix", &this->m_sceneNormalModelMatrix);
+	    pass->addUniform ("g_AltViewProjectionMatrix", &this->m_sceneViewProjectionMatrix);
+	}
     }
 
     // prepare the passes list
@@ -1811,12 +1829,10 @@ void CImage::updateFinalPassVisibility () {
 	pass->setPosition (this->getSceneSpacePosition ());
 	projection = &this->m_modelViewProjectionScreen;
 	inverseProjection = &this->m_modelViewProjectionScreenInverse;
-	if (this->getScene ().getScene ().camera.projection.isPerspective) {
-	    // Lit image shaders consume model/view matrices separately from the MVP.
-	    pass->setModelMatrix (&this->m_sceneModelMatrix);
-	    pass->setViewProjectionMatrix (&this->m_sceneViewProjectionMatrix);
-	    pass->addUniform ("g_NormalModelMatrix", &this->m_sceneNormalModelMatrix);
-	}
+	// Lit image shaders consume model/view matrices separately from the MVP.
+	pass->setModelMatrix (&this->m_sceneModelMatrix);
+	pass->setViewProjectionMatrix (&this->m_sceneViewProjectionMatrix);
+	pass->addUniform ("g_NormalModelMatrix", &this->m_sceneNormalModelMatrix);
     }
     pass->setDestination (destination);
     pass->setModelViewProjectionMatrix (projection);
@@ -2316,12 +2332,14 @@ void CImage::updateScreenSpacePosition () {
 	this->m_effectTextureProjectionMatrixInverse = glm::mat4 (1.0f);
     }
 
-    glm::mat4 mvp = this->getScene ().getCamera ().getProjection () * this->getScene ().getCamera ().getLookAt ();
+    this->m_sceneViewProjectionMatrix
+	= this->getScene ().getCamera ().getProjection () * this->getScene ().getCamera ().getLookAt ();
+    glm::mat4 model (1.0f);
 
     // The 2D geometry buffer stores authoring-space X/Y only. Preserve the
     // resolved Z origin in the model transform so tilted image layers remain at
     // their authored depth instead of being forced onto the camera plane.
-    mvp = glm::translate (mvp, { 0.0f, 0.0f, transform.origin.z });
+    model = glm::translate (model, { 0.0f, 0.0f, transform.origin.z });
 
     // Apply parallax displacement if enabled — folded into the matrix before the rotation,
     // so the offset stays in scene space instead of being rotated with the object (PR #479)
@@ -2330,10 +2348,29 @@ void CImage::updateScreenSpacePosition () {
     // 3135984503 author every layer locked with real parallax depths; layers that shouldn't
     // move simply have parallaxDepth 0 (e.g. the background in 2665939987)
     if (!this->getImage ().model->fullscreen) {
-	mvp = glm::translate (mvp, glm::vec3 (this->resolveParallaxOffset (), 0.0f));
+	model = glm::translate (model, glm::vec3 (this->resolveParallaxOffset (), 0.0f));
     }
 
-    mvp *= rotModel;
+    this->m_sceneModelMatrix = model * rotModel;
+    this->m_sceneNormalModelMatrix = glm::mat3 (rotModel);
+    if (this->m_prelightingPass != nullptr) {
+	this->m_prelightingModelMatrix = this->m_sceneModelMatrix;
+	const bool drawsToScene = this->m_finalPassDrawsToScene && this->m_finalPassRouting.has_value ()
+	    && this->m_finalPassRouting->pass == this->m_prelightingPass;
+	if (!drawsToScene) {
+	    // Match each copy-space corner (0..size) to its authored scene-space
+	    // corner before applying rotation, depth and parallax.
+	    this->m_prelightingModelMatrix = glm::translate (
+		this->m_prelightingModelMatrix, glm::vec3 (this->m_pos.x, this->m_pos.w, 0.0f)
+	    );
+	    this->m_prelightingModelMatrix = glm::scale (
+		this->m_prelightingModelMatrix,
+		glm::vec3 ((this->m_pos.z - this->m_pos.x) / this->m_size.x,
+		    (this->m_pos.y - this->m_pos.w) / this->m_size.y, 1.0f)
+	    );
+	}
+    }
+    const glm::mat4 mvp = this->m_sceneViewProjectionMatrix * this->m_sceneModelMatrix;
 
     this->m_modelViewProjectionScreen = mvp;
     this->m_modelViewProjectionScreenInverse = glm::inverse (mvp);

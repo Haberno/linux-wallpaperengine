@@ -51,6 +51,7 @@ public:
     calculateTubeEndPosition (const glm::mat4& worldMatrix, const glm::vec3& controlPoint);
 
 private:
+    [[nodiscard]] glm::mat4 resolveLightMatrix () const;
     const Light& m_light;
 };
 } // namespace WallpaperEngine::Render::Objects
