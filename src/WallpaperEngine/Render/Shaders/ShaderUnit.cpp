@@ -138,7 +138,7 @@ void ShaderUnit::preprocessVariables () {
 	// Extract a line from the string
 	std::string line = this->m_preprocessed.substr (start, end - start);
 	const size_t combo = line.find ("// [COMBO] ");
-	const size_t uniform = line.find ("uniform ");
+	const size_t uniform = line.find ("uniform");
 	const size_t comment = line.find ("// ");
 	const size_t semicolon = line.find (';');
 
@@ -148,21 +148,20 @@ void ShaderUnit::preprocessVariables () {
 	    uniform != std::string::npos && comment != std::string::npos && semicolon != std::string::npos &&
 	    // this check ensures that the comment is after the semicolon (so it's not a commented-out line)
 	    // this needs further refining as it's not taking into account block comments
-	    semicolon < comment
+	    uniform < semicolon && semicolon < comment
 	) {
-	    // uniforms with comments should never have a value assigned, use this fact to detect the required parts
-	    const size_t last_space = line.find_last_of (' ', semicolon);
-
-	    if (last_space != std::string::npos) {
-		const size_t previous_space = line.find_last_of (' ', last_space - 1);
-
-		if (previous_space != std::string::npos) {
-		    // extract type and name
-		    std::string type = line.substr (previous_space + 1, last_space - previous_space - 1);
-		    std::string name = line.substr (last_space + 1, semicolon - last_space - 1);
-		    std::string json = line.substr (comment + 2);
-
-		    this->parseParameterConfiguration (type, name, json);
+	    // The final two declaration tokens are the type and name, regardless of
+	    // alignment whitespace or a preceding precision qualifier.
+	    std::istringstream declaration (line.substr (uniform, semicolon - uniform));
+	    std::string keyword, type, name, token;
+	    declaration >> keyword;
+	    if (keyword == "uniform") {
+		while (declaration >> token) {
+		    type = std::move (name);
+		    name = std::move (token);
+		}
+		if (!type.empty ()) {
+		    this->parseParameterConfiguration (type, name, line.substr (comment + 2));
 		}
 	    }
 	}
