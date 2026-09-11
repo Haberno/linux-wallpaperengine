@@ -256,8 +256,9 @@ void parseSkeleton (
     const std::vector<char>& data, const size_t sectionOffset, const std::string& filename, MdlAnimationData& result
 ) {
     const std::string version (data.data () + sectionOffset, std::strlen ("MDLS0004"));
-    const bool nameBeforeTransform = version == "MDLS0002" || version == "MDLS0004";
-    const bool nameAfterTransform = version == "MDLS0001" || version == "MDLS0003";
+    const bool puppetControls = version == "MDLS0002" || version == "MDLS0004";
+    const bool nameBeforeTransform = puppetControls || version == "MDLS0003";
+    const bool nameAfterTransform = version == "MDLS0001";
     if (!nameBeforeTransform && !nameAfterTransform) {
 	throw std::runtime_error ("unsupported skeleton header " + version + " in " + filename);
     }
@@ -332,7 +333,7 @@ void parseSkeleton (
     // separate legacy MDLS0003 layout has a different tail. Their count
     // determines the extra MDLA pose streams; they are not ordinary bone tracks
     // or scalar blend channels (native loader FUN_140261880, 1402625da).
-    if (nameBeforeTransform && offset < sectionEnd) {
+    if (puppetControls && offset < sectionEnd) {
 	const auto controlCount = readValue<uint16_t> (data, offset, sectionEnd);
 	for (uint16_t index = 0; index < controlCount; ++index) {
 	    MdlBoneControl control;
