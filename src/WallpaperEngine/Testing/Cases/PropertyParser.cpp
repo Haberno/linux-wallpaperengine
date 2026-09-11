@@ -300,6 +300,27 @@ TEST_CASE ("Property curve handles depend on the segment span rather than the pl
     CHECK (animation.evaluateFloat (0, 0.125f) < 0.25f); // A single enabled handle still shapes the curve.
 }
 
+TEST_CASE ("Short property rotations interpolate whole-frame curve samples") {
+    // Bunk (2134765860), Fan auto 238: the native samples at 0, pi, 2*pi
+    // produce uniform rotation even though the two-key curve has easing handles.
+    const auto setting = UserSettingParser::parse (JSON::parse (R"({
+        "value":"0 0 0", "animation":{
+            "c2":[
+                {"frame":0,"value":0,"front":{"enabled":true,"x":1,"y":0}},
+                {"frame":2,"value":6.2831855,"back":{"enabled":true,"x":-1,"y":0}}
+            ],"options":{"fps":4,"length":2,"mode":"loop"},"relative":true
+        }
+    })"), {});
+    for (int tick = 0; tick < 32; ++tick) {
+        const float expected = static_cast<float> (tick % 16) / 16.0f * 6.2831855f;
+        CHECK (setting->evaluateVec3 (static_cast<float> (tick) / 32.0f).z
+            == Catch::Approx (expected).margin (0.00001f));
+    }
+    setting->animation->mode = "single";
+    CHECK (setting->evaluateVec3 (0.5f).z == Catch::Approx (6.2831855f));
+    CHECK (setting->evaluateVec3 (1.0f).z == Catch::Approx (6.2831855f));
+}
+
 TEST_CASE ("Scripted values retain their last finite result") {
     DynamicValue intensity (2.1f);
     intensity.update (std::numeric_limits<float>::quiet_NaN (), DynamicValue::UpdateSource::Script);

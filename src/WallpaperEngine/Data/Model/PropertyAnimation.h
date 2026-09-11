@@ -84,5 +84,8 @@ struct PropertyAnimation {
      * either as an offset (relative) or a replacement per animated channel.
      */
     [[nodiscard]] glm::vec3 evaluateVec3 (const glm::vec3& base, float time) const;
+
+private:
+    [[nodiscard]] float evaluateFrame (int channel, float frame, float fallback) const;
 };
 } // namespace WallpaperEngine::Data::Model

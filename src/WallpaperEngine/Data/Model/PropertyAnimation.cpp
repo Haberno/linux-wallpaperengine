@@ -127,6 +127,17 @@ std::vector<PropertyAnimation::Event> PropertyAnimation::takeEvents (const float
 }
 
 float PropertyAnimation::evaluateChannel (int channel, float time, float fallback) const {
+    // The native property sampler blends whole-frame curve samples. Evaluating
+    // the Bezier directly at fractional frames changes short authored loops.
+    const float frame = frameAt (time);
+    const float lower = std::floor (frame);
+    const float value = evaluateFrame (channel, lower, fallback);
+    const float blend = frame - lower;
+    return blend == 0.0f ? value
+	: value * (1.0f - blend) + evaluateFrame (channel, lower + 1.0f, fallback) * blend;
+}
+
+float PropertyAnimation::evaluateFrame (int channel, float frame, float fallback) const {
     const auto it = this->channels.find (channel);
 
     if (it == this->channels.end () || it->second.empty ()) {
@@ -134,8 +145,6 @@ float PropertyAnimation::evaluateChannel (int channel, float time, float fallbac
     }
 
     const auto& keyframes = it->second;
-    const float frame = frameAt (time);
-
     if (frame <= keyframes.front ().frame) {
 	return keyframes.front ().value;
     }
