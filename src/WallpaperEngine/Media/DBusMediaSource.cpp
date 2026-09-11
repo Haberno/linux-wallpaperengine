@@ -65,8 +65,13 @@ DBusHandlerResult DBusMediaSource::handleMessage (DBusMessage* message) {
 	dbus_message_iter_next (&entry);
 	dbus_message_iter_recurse (&entry, &value);
 
-	if (keyStr == "Metadata" && selected) {
-	    this->parseMetadata (value);
+	if (keyStr == "Metadata") {
+	    // Loading or clearing a paused track can change player eligibility without
+	    // changing PlaybackStatus, including on a player we previously ignored.
+	    this->m_playerListChanged = true;
+	    if (selected) {
+		this->parseMetadata (value);
+	    }
 	} else if (keyStr == "PlaybackStatus") {
 	    // A different player may have started, or the selected player may have
 	    // paused. Re-evaluate after dispatch, without borrowing its metadata/state.
@@ -322,6 +327,33 @@ void DBusMediaSource::detectPlayer () {
 	const PlaybackState state = std::string_view (status) == "Playing" ? PlaybackState::Playing
 	    : std::string_view (status) == "Paused"                        ? PlaybackState::Paused
 									   : PlaybackState::Stopped;
+	if (state != PlaybackState::Playing) {
+	    // Idle controllers can advertise Paused/Stopped with no current track.
+	    // Keep real paused tracks, and allow playing streams without metadata.
+	    DBusMessage* metadataReply = this->dbusMessage (
+		player.c_str (), "/org/mpris/MediaPlayer2", "org.freedesktop.DBus.Properties", "Get",
+		"org.mpris.MediaPlayer2.Player", "Metadata"
+	    );
+	    if (metadataReply == nullptr) {
+		continue;
+	    }
+	    Data::Utils::ScopeGuard metadataGuard ([metadataReply] { dbus_message_unref (metadataReply); });
+	    DBusMessageIter metadataOuter;
+	    if (!dbus_message_iter_init (metadataReply, &metadataOuter)
+		|| dbus_message_iter_get_arg_type (&metadataOuter) != DBUS_TYPE_VARIANT) {
+		continue;
+	    }
+	    DBusMessageIter metadata;
+	    dbus_message_iter_recurse (&metadataOuter, &metadata);
+	    if (dbus_message_iter_get_arg_type (&metadata) != DBUS_TYPE_ARRAY) {
+		continue;
+	    }
+	    DBusMessageIter fields;
+	    dbus_message_iter_recurse (&metadata, &fields);
+	    if (dbus_message_iter_get_arg_type (&fields) != DBUS_TYPE_DICT_ENTRY) {
+		continue;
+	    }
+	}
 	const int priority = state == PlaybackState::Playing ? 2 : state == PlaybackState::Paused ? 1 : 0;
 	// Replies and signals carry the unique bus owner, whereas ListNames returns
 	// well-known MPRIS names. Keep one identity for both polling and filtering.
