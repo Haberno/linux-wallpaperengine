@@ -1,0 +1,291 @@
+"""Reflection input regressions using real textures and GPU draws; requires Pillow/desktop.
+
+flock /tmp/lwe-render-fix-build.lock python3 \
+    src/WallpaperEngine/Testing/test_scene_reflections.py build-release/output/linux-wallpaperengine
+Use --artifacts /tmp/name to retain input scenes, captures, fbostats and logs.
+"""
+import argparse
+import json
+import os
+from pathlib import Path
+import re
+import signal
+import socket
+import struct
+import subprocess
+import tempfile
+import time
+
+from PIL import Image
+
+from test_scene_resolution import VERTEX, write_json
+
+
+GREEN = (0, 255, 0)
+
+
+def texture(path, colors):
+    """TEXB0001 RGBA8 with deliberately distinct authored mip levels."""
+    width = 1 << (len(colors) - 1)
+    payload = (b"TEXV0005\0TEXI0001\0" + struct.pack("<7I", 0, 2, width, width, width, width, 0)
+               + b"TEXB0001\0" + struct.pack("<2I", 1, len(colors)))
+    for level, color in enumerate(colors):
+        size = width >> level
+        pixels = bytes((*color, 255)) * (size * size)
+        payload += struct.pack("<3I", size, size, len(pixels)) + pixels
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(payload)
+
+
+def prepare(root, fragment):
+    root.mkdir(parents=True)
+    (root / "shaders").mkdir()
+    (root / "shaders/probe.vert").write_text(VERTEX)
+    (root / "shaders/probe.frag").write_text(fragment)
+    write_json(root / "project.json", {"title": "Reflection input regression", "type": "scene",
+                                       "file": "scene.json"})
+    texture(root / "materials/four.tex", [(255, 0, 0), (255, 255, 0), (0, 255, 255), (0, 0, 255)])
+    texture(root / "materials/three.tex", [(255, 0, 0), (0, 0, 255), (0, 255, 0)])
+    texture(root / "materials/single.tex", [(255, 255, 255)])
+    write_json(root / "models/probe.json", {"material": "materials/probe.json", "width": 8, "height": 8})
+    scene = {
+        "camera": {"eye": "0 0 1", "center": "0 0 0", "up": "0 1 0"},
+        "general": {"orthogonalprojection": {"width": 64, "height": 40},
+                    "clearcolor": "0 0 0", "clearenabled": True, "bloom": False},
+        "objects": [{"id": 1, "name": "probe", "image": "models/probe.json",
+                     "origin": "32 20 0", "size": "64 40"}],
+    }
+    return scene
+
+
+def material(shader, textures=None):
+    result = {"shader": shader, "blending": "normal", "cullmode": "nocull",
+              "depthtest": "disabled", "depthwrite": "disabled"}
+    if textures is not None:
+        result["textures"] = textures
+    return {"passes": [result]}
+
+
+def capture(engine, root, scene, extra_args=()):
+    write_json(root / "scene.json", scene)
+    picture, control = root / "result.png", root / "control.sock"
+    env = dict(os.environ, WPE_LOG_FILE=str(root / "engine.log"), WPE_CONTROL_SOCKET=str(control))
+    with (root / "output.log").open("w") as log:
+        process = subprocess.Popen([
+            str(engine), "--window", "100x100x320x180", "--scaling", "stretch", "--fps", "15",
+            "--volume", "0", "--screenshot", str(picture), "--screenshot-delay", "30", *extra_args, str(root)],
+            env=env, stdout=log, stderr=subprocess.STDOUT, start_new_session=True)
+        try:
+            deadline = time.monotonic() + 30
+            while not picture.exists() and process.poll() is None and time.monotonic() < deadline:
+                time.sleep(0.1)
+            assert picture.exists(), (root / "output.log").read_text()
+            with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as client:
+                client.settimeout(3)
+                client.connect(str(control))
+                client.sendall(b"fbostats\n")
+                chunks = []
+                while chunk := client.recv(65536):
+                    chunks.append(chunk)
+            stats = b"".join(chunks).decode()
+            (root / "fbostats.txt").write_text(stats)
+            with Image.open(picture) as image:
+                result = image.convert("RGB")
+        finally:
+            if process.poll() is None:
+                os.killpg(process.pid, signal.SIGINT)
+                try:
+                    process.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    os.killpg(process.pid, signal.SIGKILL)
+                    process.wait()
+    return result, stats
+
+
+def run(engine, root, uniforms_only=False):
+    results = []
+
+    def check(name, actual, expected):
+        passed = actual == expected
+        results.append({"name": name, "actual": actual, "expected": expected, "passed": passed})
+        print(f"{'PASS' if passed else 'FAIL'} {name}: {actual!r} (expected {expected!r})", flush=True)
+
+    probe = root / "authored-levels"
+    scene = prepare(probe, """
+uniform sampler2D g_Texture0;
+uniform float g_Texture0MipMapInfo;
+uniform float g_Texture1MipMapInfo;
+uniform float g_Texture9MipMapInfo;
+#if 0
+uniform sampler2D g_Texture3; // {"hidden":true,"default":"_rt_MipMappedFrameBuffer"}
+#endif
+varying vec2 v_TexCoord;
+void main() {
+    float tile = floor(v_TexCoord.x * 4.0);
+    bool valid;
+    if (tile < 1.0) {
+        valid = all(equal(texSample2DLod(g_Texture0, vec2(0.5), 0.0).rgb, vec3(1, 0, 0)))
+            && all(equal(texSample2DLod(g_Texture0, vec2(0.5), 3.0).rgb, vec3(0, 0, 1)));
+    } else if (tile < 2.0) valid = g_Texture0MipMapInfo == 4.0;
+    else if (tile < 3.0) valid = g_Texture1MipMapInfo == 1.0;
+    else valid = g_Texture9MipMapInfo == 1.0;
+    gl_FragColor = vec4(valid ? vec3(0, 1, 0) : vec3(1, 0, 0), 1);
+}
+""")
+    write_json(probe / "materials/probe.json", material("probe", ["four", "single"]))
+    image, stats = capture(engine, probe, scene)
+    check("compiled-out reflection sampler does not allocate a snapshot",
+          "_rt_MipMappedFrameBuffer@" in stats, False)
+    for x, name in zip((40, 120, 200, 280), (
+        "authored mip payload reaches explicit LOD0 and LOD3",
+        "four-level texture reports count4 rather than maxLOD3",
+        "single-level bound texture reports count1", "absent slot9 reports fallback1")):
+        check(name, image.getpixel((x, 90)), GREEN)
+
+    if not uniforms_only:
+        # Sample an unchanged checkerboard region, far from this probe. After
+        # warmup the answer is independent of previous-frame vs intra-frame
+        # snapshot timing; this test deliberately makes no ordering assertion.
+        probe = root / "snapshot-roughness"
+        scene = prepare(probe, """
+void main() {
+    float value = 1.0 - mod(floor(gl_FragCoord.x) + floor(gl_FragCoord.y), 2.0);
+    gl_FragColor = vec4(vec3(value), 1);
+}
+""")
+        write_json(probe / "materials/probe.json", material("probe", ["four"]))
+        (probe / "shaders/reflection.vert").write_text(VERTEX)
+        (probe / "shaders/reflection.frag").write_text("""
+uniform sampler2D g_Texture3; // {"hidden":true,"default":"_rt_MipMappedFrameBuffer"}
+uniform float g_Texture3MipMapInfo;
+varying vec2 v_TexCoord;
+void main() {
+    float tile = floor(v_TexCoord.x * 3.0);
+    if (tile > 1.5) {
+        gl_FragColor = vec4(g_Texture3MipMapInfo == 5.0 ? vec3(0, 1, 0) : vec3(1, 0, 0), 1);
+    } else {
+        float roughness = tile;
+        vec2 sampleUV = vec2(64.5/320.0, 90.5/180.0);
+        gl_FragColor = texSample2DLod(g_Texture3, sampleUV, roughness * g_Texture3MipMapInfo);
+    }
+}
+""")
+        reflection_material = material("reflection", ["four", None, None, "_rt_MipMappedFrameBuffer"])
+        reflection_material["passes"][0]["combos"] = {"REFLECTION": 1}
+        write_json(probe / "materials/reflection.json", reflection_material)
+        write_json(probe / "models/reflection.json", {
+            "material": "materials/reflection.json", "width": 8, "height": 8})
+        scene["objects"].append({"id": 2, "name": "reflection probe", "image": "models/reflection.json",
+                                 "origin": "48 20 0", "size": "24 16"})
+        image, stats = capture(engine, probe, scene)
+        match = re.search(r"(?:^|[ ;])_rt_MipMappedFrameBuffer@(\d+)x(\d+)x", stats)
+        check("snapshot has a dedicated output-sized target rather than the main-FBO alias",
+              tuple(map(int, match.groups())) if match else None, (320, 180))
+        check("reflection roughness0 samples sharp checker detail", image.getpixel((200, 90)), (255, 255, 255))
+        rough = image.getpixel((240, 90))
+        check(f"reflection roughness1 averages checker detail (sample {rough})",
+              all(abs(channel - 128) <= 2 for channel in rough), True)
+        check("320x180 reflection target exposes native shortened mip count5",
+              image.getpixel((280, 90)), GREEN)
+
+        # Alternate a channel each update so current-frame, stale and previous-frame
+        # inputs are distinguishable. The fixed blue channel detects snapshots
+        # taken after synthetic bloom. Neither assertion depends on initial contents.
+        probe = root / "snapshot-timing"
+        scene = prepare(probe, """
+uniform vec3 g_Color;
+void main() { gl_FragColor = vec4(g_Color.x, 0, 0.25, 1); }
+""")
+        toggle = """let frame = 0;
+export function update(value) {
+    frame++;
+    return new Vec3((frame % 2) * 0.5, 0, 0);
+}"""
+        scene["general"].update(bloom=True, bloomstrength=1, bloomthreshold=0)
+        scene["objects"][0]["color"] = {"value": "0 0 0", "script": toggle}
+        write_json(probe / "materials/probe.json", material("probe", ["four"]))
+        (probe / "shaders/reflection.vert").write_text(VERTEX)
+        (probe / "shaders/reflection.frag").write_text("""
+uniform sampler2D g_Texture3; // {"hidden":true,"default":"_rt_MipMappedFrameBuffer"}
+uniform vec3 g_Color;
+varying vec2 v_TexCoord;
+void main() {
+    vec3 previous = texSample2DLod(g_Texture3, vec2(0.15, 0.5), 0.0).rgb;
+    bool valid = v_TexCoord.x < 0.5
+        ? abs(previous.r - (0.5 - g_Color.x)) < 0.01
+        : abs(previous.b - 0.25) < 0.01;
+    gl_FragColor = vec4(valid ? vec3(0, 1, 0) : vec3(1, 0, 0), 1);
+}
+""")
+        write_json(probe / "materials/reflection.json", reflection_material)
+        write_json(probe / "models/reflection.json", {
+            "material": "materials/reflection.json", "width": 8, "height": 8})
+        scene["objects"].append({"id": 2, "name": "reflection timing probe",
+                                 "image": "models/reflection.json", "origin": "48 20 0",
+                                 "size": "24 16", "color": {"value": "0 0 0", "script": toggle}})
+        image, _ = capture(engine, probe, scene)
+        for x, name in ((210, "reflection reads the previous completed scene"),
+                        (270, "reflection snapshot excludes synthetic bloom")):
+            pixel = image.getpixel((x, 90))
+            check(f"{name} (sample {pixel})", pixel[1] > 240 and pixel[0] < 64, True)
+        pixel = image.getpixel((48, 90))
+        check(f"bloom exclusion fixture actually brightens blue (sample {pixel})", pixel[2] > 90, True)
+
+    probe = root / "effect-bindings"
+    scene = prepare(probe, """
+uniform sampler2D g_Texture0;
+varying vec2 v_TexCoord;
+void main() { gl_FragColor = texSample2DLod(g_Texture0, v_TexCoord, 0.0); }
+""")
+    write_json(probe / "materials/probe.json", material("probe", ["four"]))
+    (probe / "shaders/effect.vert").write_text(VERTEX)
+    (probe / "shaders/effect.frag").write_text("""
+uniform vec3 g_Screen;
+uniform sampler2D g_Texture1;
+uniform sampler2D g_Texture2;
+uniform vec4 g_Texture0Resolution;
+uniform float g_Texture0MipMapInfo;
+uniform float g_Texture1MipMapInfo;
+uniform float g_Texture2MipMapInfo;
+varying vec2 v_TexCoord;
+void main() {
+    float tile = floor(v_TexCoord.x * 4.0);
+    bool valid;
+    if (tile < 1.0) valid = all(lessThan(abs(g_Screen - vec3(320, 180, 320.0/180.0)), vec3(0.0001)));
+    else if (tile < 2.0) valid = g_Texture0MipMapInfo == 1.0
+        && all(equal(g_Texture0Resolution, vec4(8)));
+    else if (tile < 3.0) valid = g_Texture1MipMapInfo == 3.0
+        && all(equal(texSample2DLod(g_Texture1, vec2(0.5), 2.0).rgb, vec3(0, 1, 0)));
+    else valid = g_Texture2MipMapInfo == 1.0
+        && all(equal(texSample2DLod(g_Texture2, vec2(0.5), 0.0).rgb, vec3(1, 0, 0)));
+    gl_FragColor = vec4(valid ? vec3(0, 1, 0) : vec3(1, 0, 0), 1);
+}
+""")
+    write_json(probe / "materials/effect.json", material("effect", [None, "single", "four"]))
+    write_json(probe / "effects/probe/effect.json", {"passes": [{
+        "material": "materials/effect.json", "bind": [{"index": 2, "name": "previous"}]}]})
+    scene["objects"][0]["effects"] = [{"id": 2, "file": "effects/probe/effect.json",
+                                      "passes": [{"id": 3, "textures": [None, "three"]}]}]
+    image, _ = capture(engine, probe, scene)
+    for x, name in zip((40, 120, 200, 280), (
+        "8x8 effect receives output-sized g_Screen320x180",
+        "effect input uses actual one-level FBO rather than original four-level source",
+        "texture override reports its actual three-level chain", "previous bind reports actual one-level input")):
+        check(name, image.getpixel((x, 90)), GREEN)
+
+    (root / "checks.json").write_text(json.dumps(results, indent=2))
+    failed = [result["name"] for result in results if not result["passed"]]
+    assert not failed, f"{len(failed)} reflection regressions failed: {', '.join(failed)}"
+
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("engine", type=Path)
+    parser.add_argument("--artifacts", type=Path)
+    parser.add_argument("--uniforms-only", action="store_true")
+    args = parser.parse_args()
+    if args.artifacts:
+        run(args.engine.resolve(), args.artifacts.resolve(), args.uniforms_only)
+    else:
+        with tempfile.TemporaryDirectory(prefix="lwe-reflections-") as directory:
+            run(args.engine.resolve(), Path(directory), args.uniforms_only)
