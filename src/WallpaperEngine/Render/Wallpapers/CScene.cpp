@@ -1420,7 +1420,7 @@ void CScene::renderShadowAtlas () {
     glColorMask (false, false, false, false);
     glDisable (GL_BLEND);
     glEnable (GL_DEPTH_TEST);
-    glDepthFunc (GL_LEQUAL);
+    glDepthFunc (GL_LESS);
     glDepthMask (true);
     glClearDepth (1.0);
     glClear (GL_DEPTH_BUFFER_BIT);

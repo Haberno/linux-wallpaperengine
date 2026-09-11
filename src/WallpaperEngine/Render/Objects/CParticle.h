@@ -24,7 +24,7 @@ constexpr uint32_t DEFAULT_MAX_PARTICLES = 1000;
 
 [[nodiscard]] float calculateParticleSimulationDelta (float elapsed, float rate);
 [[nodiscard]] float calculateParticleEmissionRate (float emitterRate, float count);
-[[nodiscard]] glm::vec3 convertParticleRotationForRender (const glm::vec3& rotation);
+[[nodiscard]] glm::vec3 convertParticleRotationForRender (const glm::vec3& rotation, bool perspectiveBillboard = false);
 [[nodiscard]] float calculateRopeTrailVisualValue (float currentValue, float trailPosition, bool fadeAlongTrail);
 [[nodiscard]] glm::vec3 calculateControlPointAttraction (
     const glm::vec3& toCenter, float strength, float radius, float deltaTime
@@ -34,6 +34,9 @@ constexpr uint32_t DEFAULT_MAX_PARTICLES = 1000;
 );
 [[nodiscard]] glm::mat3 calculateFixedParticleOrientation (
     const glm::vec3& axis, const glm::mat3& model, bool worldSpace
+);
+[[nodiscard]] glm::mat3 calculateBillboardParticleOrientation (
+    const glm::mat4& modelInverse, const glm::mat4& cameraWorld, float roll
 );
 
 /**

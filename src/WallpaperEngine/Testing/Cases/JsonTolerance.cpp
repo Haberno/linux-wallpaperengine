@@ -194,6 +194,27 @@ TEST_CASE ("Scene zoom honors general settings in both 2D and 3D wallpapers") {
     CHECK (parsedZoom (R"({"orthogonalprojection":null,"zoom":1.4})", ",\"zoom\":2") == Catch::Approx (1.4f));
 }
 
+TEST_CASE ("perspective scenes retain depth precision when the near plane is omitted", "[scene-defaults]") {
+    const auto parsedNear = [] (const std::string& general) {
+	auto filesystem = std::make_unique<Container> ();
+	filesystem->getVFS ().add (
+	    "scene.json", "{\"camera\":{\"center\":\"0 0 -1\",\"eye\":\"0 0 0\",\"up\":\"0 1 0\"},"
+		"\"general\":" + general + ",\"objects\":[]}"
+	);
+	Project project {};
+	project.type = Project::Type_Scene;
+	project.assetLocator = std::make_unique<WallpaperEngine::Assets::AssetLocator> (std::move (filesystem));
+	const auto wallpaper = WallpaperParser::parse (JSON ("scene.json"), project);
+	return wallpaper->as<Scene> ()->camera.projection.nearz->evaluateFloat (0.0f);
+    };
+    // A zero default was clamped to 0.0001 by Camera, collapsing depth precision
+    // on older scenes that omit projection parameters entirely.
+    CHECK (parsedNear (R"({})") == Catch::Approx (0.1f));
+    CHECK (parsedNear (R"({"orthogonalprojection":null})") == Catch::Approx (0.1f));
+    CHECK (parsedNear (R"({"nearz":0.025})") == Catch::Approx (0.025f));
+    CHECK (parsedNear (R"({"orthogonalprojection":{"width":1920,"height":1080}})") == 0.0f);
+}
+
 TEST_CASE ("missing image effects are skipped without discarding neighboring effects") {
     auto filesystem = std::make_unique<Container> ();
     filesystem->getVFS ().add ("effects/before.json", R"({"name":"before","passes":[]})");
@@ -298,6 +319,18 @@ TEST_CASE ("omitted depth state uses 3D model defaults only in model context") {
     const auto overrideMaterial = MaterialParser::parse (explicitDisabled, "model.json", project, true);
     REQUIRE (overrideMaterial->passes.front ()->depthtest == DepthtestMode_Disabled);
     REQUIRE (overrideMaterial->passes.front ()->depthwrite == DepthwriteMode_Disabled);
+}
+
+TEST_CASE ("omitted culling rejects model backfaces without changing overlay materials", "[scene-defaults]") {
+    const auto omitted = JSON::parse (R"({"passes":[{"shader":"generic"}]})");
+    const auto explicitDisabled = JSON::parse (R"({"passes":[{"shader":"generic","cullmode":"nocull"}]})");
+    const Project project {};
+    const auto model = MaterialParser::parse (omitted, "model.json", project, true);
+    const auto image = MaterialParser::parse (omitted, "image.json", project);
+    const auto doubleSided = MaterialParser::parse (explicitDisabled, "model.json", project, true);
+    CHECK (model->passes.front ()->cullmode == CullingMode_Normal);
+    CHECK (image->passes.front ()->cullmode == CullingMode_Disable);
+    CHECK (doubleSided->passes.front ()->cullmode == CullingMode_Disable);
 }
 
 TEST_CASE ("Wallpaper Engine JSON comments and trailing commas are accepted narrowly") {

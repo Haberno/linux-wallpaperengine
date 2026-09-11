@@ -174,7 +174,10 @@ void CPass::setupRenderFramebuffer (const std::shared_ptr<const CFBO>& drawTo) c
     switch (this->m_depthtestmode) {
 	case DepthtestMode_Enabled:
 	    glEnable (GL_DEPTH_TEST);
-	    glDepthFunc (GL_LEQUAL);
+	    // Native uses strict GREATER with reversed depth. In our conventional
+	    // depth buffer the equivalent is LESS: coplanar additive surfaces must
+	    // not brighten an opaque surface that already wrote the same depth.
+	    glDepthFunc (GL_LESS);
 	    break;
 	case DepthtestMode_Disabled:
 	default:
@@ -195,7 +198,13 @@ void CPass::setupRenderFramebuffer (const std::shared_ptr<const CFBO>& drawTo) c
 
     switch (this->m_depthwritemode) {
 	case DepthwriteMode_Enabled:
-	    glDepthMask (true);
+	    // Native material "enabled" preserves the blend mode's depth policy:
+	    // translucent/additive passes never write depth, even with this setting.
+	    // Otherwise invisible flare pixels and atmosphere shells hide later models.
+	    glDepthMask (
+		this->getBlendingMode () == BlendingMode_Normal
+		|| this->getBlendingMode () == BlendingMode_AlphaToCoverage
+	    );
 	    break;
 
 	case DepthwriteMode_Disabled:

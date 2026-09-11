@@ -6,6 +6,7 @@
 
 #include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
+#include <cmath>
 #include <glm/gtc/matrix_transform.hpp>
 
 using WallpaperEngine::Render::Objects::calculateParticleEmissionRate;
@@ -15,6 +16,33 @@ using WallpaperEngine::Render::Objects::calculateRopeTrailVisualValue;
 using WallpaperEngine::Render::Objects::convertParticleRotationForRender;
 using WallpaperEngine::Render::Objects::resolveParticleControlPoint;
 using WallpaperEngine::Render::Objects::calculateFixedParticleOrientation;
+using WallpaperEngine::Render::Objects::calculateBillboardParticleOrientation;
+
+TEST_CASE ("billboard particles preserve layer roll in the camera plane", "[particle]") {
+    // A tree with a half-turn must point down even under a yawed parent. The
+    // negative scale also exercises the simulation's Y reflection.
+    const glm::mat4 model = glm::rotate (glm::mat4 (1.0f), 0.7f, { 0.0f, 1.0f, 0.0f })
+	* glm::scale (glm::mat4 (1.0f), { 2.0f, -3.0f, 4.0f });
+    const glm::mat4 cameraWorld = glm::inverse (glm::lookAt (
+	glm::vec3 (7.0f, 3.0f, 5.0f), glm::vec3 (0.0f), glm::vec3 (0.0f, 1.0f, 0.0f)
+    ));
+    const glm::vec2 expectedRight[] { { 1, 0 }, { 0, 1 }, { -1, 0 } };
+    const glm::vec2 expectedUp[] { { 0, 1 }, { -1, 0 }, { 0, -1 } };
+    for (int quarterTurns = 0; quarterTurns < 3; ++quarterTurns) {
+	const auto local = calculateBillboardParticleOrientation (
+	    glm::inverse (model), cameraWorld, glm::radians (90.0f * quarterTurns)
+	);
+	const glm::mat3 viewModel = glm::mat3 (glm::inverse (cameraWorld) * model);
+	const glm::vec3 right = glm::normalize (viewModel * local[0]);
+	const glm::vec3 up = glm::normalize (viewModel * local[1]);
+	CHECK (right.x == Catch::Approx (expectedRight[quarterTurns].x).margin (0.000001f));
+	CHECK (right.y == Catch::Approx (expectedRight[quarterTurns].y).margin (0.000001f));
+	CHECK (right.z == Catch::Approx (0.0f).margin (0.000001f));
+	CHECK (up.x == Catch::Approx (expectedUp[quarterTurns].x).margin (0.000001f));
+	CHECK (up.y == Catch::Approx (expectedUp[quarterTurns].y).margin (0.000001f));
+	CHECK (up.z == Catch::Approx (0.0f).margin (0.000001f));
+    }
+}
 
 TEST_CASE ("fixed particle orientation matches native draw helper vectors", "[particle]") {
     // Captured by executing wallpaper64.exe's 1402298b0 with the same inputs.
@@ -77,6 +105,25 @@ TEST_CASE ("particle instance count scales emission independently", "[particle]"
 
 TEST_CASE ("particle rotations cross the Y-down scene boundary", "[particle]") {
     CHECK (convertParticleRotationForRender ({ 1.0f, 2.0f, 3.0f }) == glm::vec3 (-1.0f, 2.0f, -3.0f));
+}
+
+TEST_CASE ("perspective billboard spin follows the native screen direction", "[particle]") {
+    const glm::mat4 model = glm::rotate (glm::mat4 (1.0f), 0.7f, { 0.0f, 1.0f, 0.0f })
+	* glm::scale (glm::mat4 (1.0f), { 2.0f, -2.0f, 2.0f });
+    const glm::mat4 cameraWorld = glm::inverse (glm::lookAt (
+	glm::vec3 (7.0f, 3.0f, 5.0f), glm::vec3 (0.0f), glm::vec3 (0.0f, 1.0f, 0.0f)
+    ));
+    const auto orientation = calculateBillboardParticleOrientation (glm::inverse (model), cameraWorld, 0.0f);
+    for (const float angle : { glm::radians (45.0f), glm::radians (-45.0f) }) {
+	const auto rotation = convertParticleRotationForRender ({ 0.0f, 0.0f, angle }, true);
+	// common_particles.h rotates the UV-right tangent toward -Up for positive
+	// Z. Native uploads that angle unchanged: its marker moves down on screen.
+	const auto tangent = orientation * glm::vec3 (std::cos (rotation.z), -std::sin (rotation.z), 0.0f);
+	const auto viewRight = glm::normalize (glm::mat3 (glm::inverse (cameraWorld) * model) * tangent);
+	CHECK (viewRight.x == Catch::Approx (0.70710678f).margin (0.000001f));
+	CHECK (viewRight.y == Catch::Approx (angle > 0.0f ? -0.70710678f : 0.70710678f).margin (0.000001f));
+	CHECK (viewRight.z == Catch::Approx (0.0f).margin (0.000001f));
+    }
 }
 
 TEST_CASE ("rope trails use the live particle visual state", "[particle]") {

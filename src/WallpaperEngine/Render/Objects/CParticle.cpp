@@ -27,10 +27,14 @@ float WallpaperEngine::Render::Objects::calculateParticleEmissionRate (const flo
 }
 
 glm::vec3
-WallpaperEngine::Render::Objects::convertParticleRotationForRender (const glm::vec3& rotation) {
+WallpaperEngine::Render::Objects::convertParticleRotationForRender (
+    const glm::vec3& rotation, const bool perspectiveBillboard
+) {
     // Particle definitions use Wallpaper Engine's Y-down scene space. Reflection across
     // Y changes the handedness of axial rotation vectors, so X and Z change sign.
-    return { -rotation.x, rotation.y, -rotation.z };
+    // Perspective billboards already cancel that reflection in their camera
+    // basis. Preserve native Z spin (1402308a0 uploads it unchanged).
+    return { -rotation.x, rotation.y, perspectiveBillboard ? rotation.z : -rotation.z };
 }
 
 float WallpaperEngine::Render::Objects::calculateRopeTrailVisualValue (
@@ -90,6 +94,19 @@ glm::mat3 WallpaperEngine::Render::Objects::calculateFixedParticleOrientation (
     return {
 	normalize (glm::cross (localUp, localForward), { 1.0f, 0.0f, 0.0f }),
 	normalize (localUp, up), normalize (localForward, forward)
+    };
+}
+
+glm::mat3 WallpaperEngine::Render::Objects::calculateBillboardParticleOrientation (
+    const glm::mat4& modelInverse, const glm::mat4& cameraWorld, const float roll
+) {
+    // Keep the layer's authored roll in the camera plane. Cancelling the entire
+    // model rotation makes deliberately upside-down billboards stand upright.
+    // Rotate before converting to local space so nonuniform scales do not shear
+    // the camera-facing directions when the model matrix is applied again.
+    const glm::mat3 cameraToLocal (modelInverse * glm::rotate (cameraWorld, roll, { 0.0f, 0.0f, 1.0f }));
+    return {
+	glm::normalize (cameraToLocal[0]), glm::normalize (cameraToLocal[1]), glm::normalize (cameraToLocal[2])
     };
 }
 
@@ -2282,14 +2299,19 @@ void CParticle::updateMatrices () {
 
     if (is3D) {
 	// Sprite corners are expanded in particle-local space. Express the camera's
-	// basis there, removing parent rotation while retaining the authored size.
-	const glm::mat3 cameraToLocal
-	    = glm::mat3 (m_modelMatrixInverse * glm::inverse (getScene ().getCamera ().getLookAt ()));
-	m_orientationRight = glm::normalize (cameraToLocal[0]);
-	m_orientationUp = glm::normalize (cameraToLocal[1]);
-	m_orientationForward = glm::normalize (cameraToLocal[2]);
-	m_viewRight = m_orientationRight;
-	m_viewUp = m_orientationUp;
+	// basis there while preserving the layer's in-plane roll and authored size.
+	const glm::mat4 cameraWorld = glm::inverse (getScene ().getCamera ().getLookAt ());
+	const glm::mat3 viewToLocal = calculateBillboardParticleOrientation (m_modelMatrixInverse, cameraWorld, 0.0f);
+	const float roll = (m_particle.flags & 1) != 0 ? 0.0f
+	    : m_particle.angles->evaluateVec3 (getScene ().getTime ()).z;
+	const glm::mat3 cameraToLocal = calculateBillboardParticleOrientation (
+	    m_modelMatrixInverse, cameraWorld, roll
+	);
+	m_orientationRight = cameraToLocal[0];
+	m_orientationUp = cameraToLocal[1];
+	m_orientationForward = cameraToLocal[2];
+	m_viewRight = viewToLocal[0];
+	m_viewUp = viewToLocal[1];
     }
 
     if (!m_particle.renderers.empty () && m_particle.renderers[0].orientation == "fixed") {
@@ -2416,6 +2438,8 @@ void CParticle::renderSprites () {
     //   + a_TexCoordVec4C1(vel.x, vel.y, vel.z, lifetime)(4) + a_TexCoordC2(rotX, rotY)(2) = 17 floats
     uint32_t vertexIndex = 0;
     uint32_t indexOffset = 0;
+    const bool perspectiveBillboard = getScene ().getScene ().camera.projection.isPerspective
+	&& (m_particle.renderers.empty () || m_particle.renderers[0].orientation != "fixed");
 
     for (uint32_t i = 0; i < m_particleCount; i++) {
 	const auto& p = m_particles[i];
@@ -2423,7 +2447,7 @@ void CParticle::renderSprites () {
 	    continue;
 	}
 
-	const glm::vec3 renderRotation = convertParticleRotationForRender (p.rotation);
+	const glm::vec3 renderRotation = convertParticleRotationForRender (p.rotation, perspectiveBillboard);
 
 	// Skip particles with invalid values
 	if (!std::isfinite (p.position.x) || !std::isfinite (p.position.y) || !std::isfinite (p.position.z)

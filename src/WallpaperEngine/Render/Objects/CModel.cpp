@@ -217,7 +217,7 @@ void CModel::setup () {
     this->m_passes = std::move (orderedPasses);
     for (const auto* pass : this->m_passes) {
 	const RenderSortClass renderClass = passRenderClass (pass->getBlendingMode ());
-	if (this->m_renderSortClasses.empty () || this->m_renderSortClasses.back () != renderClass) {
+	if (std::ranges::find (this->m_renderSortClasses, renderClass) == this->m_renderSortClasses.end ()) {
 	    this->m_renderSortClasses.push_back (renderClass);
 	}
     }
@@ -232,8 +232,12 @@ void CModel::setup () {
 std::vector<size_t> CModel::calculatePassRenderPermutation (const std::vector<BlendingMode>& modes) {
     std::vector<size_t> permutation (modes.size ());
     std::iota (permutation.begin (), permutation.end (), 0);
+    // Native model sorting puts opaque/coverage surfaces first, but treats
+    // translucent and additive surfaces as peers. The glass over Sly's roof
+    // lamps must therefore remain after the earlier additive lamp surface.
     std::stable_sort (permutation.begin (), permutation.end (), [&modes] (const size_t left, const size_t right) {
-	return passRenderClass (modes[left]) < passRenderClass (modes[right]);
+	return (passRenderClass (modes[left]) != RenderSortClass::Opaque)
+	    < (passRenderClass (modes[right]) != RenderSortClass::Opaque);
     });
     return permutation;
 }
@@ -626,9 +630,10 @@ void CModel::renderShadow (const glm::mat4& lightViewProjection) {
 	} else {
 	    glDisable (GL_CULL_FACE);
 	}
-	// The shadow projection is not output-flipped, so it keeps the MDLV mesh's
-	// counter-clockwise front-face convention too.
-	glFrontFace (GL_CCW);
+	// Shadows have no output flip, but mirrored model transforms still reverse
+	// the MDLV mesh's counter-clockwise front faces.
+	const bool modelMirrored = glm::determinant (glm::mat3 (this->m_modelMatrix)) < 0.0f;
+	glFrontFace (modelMirrored ? GL_CW : GL_CCW);
 
 	glBindBuffer (GL_ARRAY_BUFFER, this->m_submeshes[submeshIndex].vertexBuffer);
 	glEnableVertexAttribArray (0);
@@ -659,6 +664,7 @@ void CModel::renderShadow (const glm::mat4& lightViewProjection) {
 	glDisableVertexAttribArray (1);
 	glDisableVertexAttribArray (2);
     }
+    glFrontFace (GL_CCW);
 }
 
 const Model3D& CModel::getModel () const { return this->m_model; }

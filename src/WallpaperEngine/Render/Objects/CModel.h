@@ -67,9 +67,8 @@ public:
     [[nodiscard]] const glm::vec3& getCompositeColor () const override;
 
     /**
-     * Keep authored order inside each render class, but submit opaque/alpha-to-coverage
-     * passes before translucent and additive passes so blended depth writers cannot
-     * occlude opaque submeshes that have not drawn yet.
+     * Submit opaque/alpha-to-coverage passes first, preserving authored order
+     * across the shared translucent/additive group.
      */
     [[nodiscard]] static std::vector<size_t> calculatePassRenderPermutation (const std::vector<BlendingMode>& modes);
 
