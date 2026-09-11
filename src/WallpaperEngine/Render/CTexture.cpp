@@ -318,6 +318,15 @@ uint32_t CTexture::getTextureHeight (const uint32_t imageIndex) const {
     return (*this->m_header->images[imageIndex].begin ())->height;
 }
 
+uint32_t CTexture::getMipMapCount (const uint32_t imageIndex) const {
+    if (this->m_player != nullptr) {
+	return 1;
+    }
+    // Match getTextureID's fallback for a static texture bound alongside animation.
+    const uint32_t index = imageIndex < this->m_header->imageCount ? imageIndex : 0;
+    return this->m_header->images.at (index).size ();
+}
+
 uint32_t CTexture::getRealWidth () const {
     return this->isAnimated () ? this->getHeader ().gifWidth : this->getHeader ().width;
 }

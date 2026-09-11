@@ -2,6 +2,7 @@
 #include "WallpaperEngine/Logging/Log.h"
 
 #include <algorithm>
+#include <bit>
 #include <map>
 #include <mutex>
 #include <ranges>
@@ -24,12 +25,64 @@ struct LiveFBOInfo {
 
 std::mutex s_liveFBOsMutex;
 std::map<const CFBO*, LiveFBOInfo> s_liveFBOs;
+
+GLenum colorInternalFormat (const TextureFormat format) {
+    return format == TextureFormat_RGBA16161616f ? GL_RGBA16F : GL_RGBA8;
+}
+
+GLenum colorUploadType (const TextureFormat format) {
+    return format == TextureFormat_RGBA16161616f ? GL_FLOAT : GL_UNSIGNED_BYTE;
+}
+
+size_t colorPixelBytes (const TextureFormat format) {
+    return format == TextureFormat_RGBA16161616f ? 8 : 4;
+}
+
+uint32_t supportedSampleCount (const uint32_t requested, const bool withDepth, const GLenum colorFormat) {
+    if (requested <= 1) return 1;
+
+    GLint maxSamples = 0;
+    glGetIntegerv (GL_MAX_SAMPLES, &maxSamples);
+    if (requested > static_cast<uint32_t> (std::max (maxSamples, 0))) return 1;
+
+    // GL 4.2 exposes exact per-format counts. Require the requested count for both
+    // attachments instead of allowing the driver to round it to another quality.
+    if (GLEW_VERSION_4_2 || GLEW_ARB_internalformat_query) {
+	auto supports = [requested] (const GLenum format) {
+	    GLint count = 0;
+	    glGetInternalformativ (GL_RENDERBUFFER, format, GL_NUM_SAMPLE_COUNTS, 1, &count);
+	    if (count <= 0) return false;
+	    std::vector<GLint> samples (count);
+	    glGetInternalformativ (GL_RENDERBUFFER, format, GL_SAMPLES, count, samples.data ());
+	    return std::ranges::find (samples, static_cast<GLint> (requested)) != samples.end ();
+	};
+	if (!supports (colorFormat) || (withDepth && !supports (GL_DEPTH_COMPONENT32F))) return 1;
+	return requested;
+    }
+
+    // GL 3.3 fallback: allocate disposable storage and accept it only when the
+    // driver reports the exact requested count for every needed format.
+    const auto probe = [requested] (const GLenum format) {
+	GLuint renderbuffer = GL_NONE;
+	glGenRenderbuffers (1, &renderbuffer);
+	glBindRenderbuffer (GL_RENDERBUFFER, renderbuffer);
+	glRenderbufferStorageMultisample (GL_RENDERBUFFER, requested, format, 1, 1);
+	const GLenum error = glGetError ();
+	GLint actual = 0;
+	if (error == GL_NO_ERROR) glGetRenderbufferParameteriv (GL_RENDERBUFFER, GL_RENDERBUFFER_SAMPLES, &actual);
+	glDeleteRenderbuffers (1, &renderbuffer);
+	return error == GL_NO_ERROR && actual == static_cast<GLint> (requested);
+    };
+    return probe (colorFormat) && (!withDepth || probe (GL_DEPTH_COMPONENT32F)) ? requested : 1;
+}
 }
 
 CFBO::CFBO (
     std::string name, const TextureFormat format, const uint32_t flags, const float scale, uint32_t realWidth,
-    uint32_t realHeight, uint32_t textureWidth, uint32_t textureHeight, bool withDepthBuffer, bool depthTexture
-) : m_depthTexture (depthTexture), m_scale (scale), m_name (std::move (name)), m_format (format), m_flags (flags) {
+    uint32_t realHeight, uint32_t textureWidth, uint32_t textureHeight, bool withDepthBuffer, bool depthTexture,
+    uint32_t requestedSamples
+) : m_depthTexture (depthTexture), m_withDepthBuffer (withDepthBuffer), m_scale (scale), m_name (std::move (name)),
+    m_format (format), m_flags (flags) {
     // Hidden effect inputs can have an authored zero dimension (for example a
     // 64x0 audio buffer). Keep their logical size, but allocate complete GL storage.
     textureWidth = std::max (textureWidth, 1u);
@@ -39,13 +92,15 @@ CFBO::CFBO (
     // ensureFramebuffer): FBOs are not shared between GL contexts, so when this
     // constructor runs on the async switch worker only the shared objects
     // (texture, renderbuffer) can be created here
+    this->m_samples = this->m_depthTexture
+	? 1
+	: supportedSampleCount (requestedSamples, withDepthBuffer, colorInternalFormat (this->m_format));
+    this->m_multisampleRendering = this->m_samples > 1;
+
     // create the main texture
     glGenTextures (1, &this->m_texture);
     // bind the new texture to set settings on it
     glBindTexture (GL_TEXTURE_2D, this->m_texture);
-    // Wallpaper Engine declares these render targets as ARGB8888. Keeping them at
-    // eight bits per channel halves their color-storage footprint compared with
-    // RGBA16F and avoids paying the HDR cost for every intermediate effect surface.
     if (this->m_depthTexture) {
 	glTexImage2D (
 	    GL_TEXTURE_2D, 0, GL_DEPTH_COMPONENT24, textureWidth, textureHeight, 0, GL_DEPTH_COMPONENT,
@@ -58,8 +113,12 @@ CFBO::CFBO (
 	const GLfloat borderDepth[] = { 1.0f, 1.0f, 1.0f, 1.0f };
 	glTexParameterfv (GL_TEXTURE_2D, GL_TEXTURE_BORDER_COLOR, borderDepth);
     } else {
-	glTexImage2D (GL_TEXTURE_2D, 0, GL_RGBA8, textureWidth, textureHeight, 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
+	glTexImage2D (
+	    GL_TEXTURE_2D, 0, colorInternalFormat (this->m_format), textureWidth, textureHeight, 0, GL_RGBA,
+	    colorUploadType (this->m_format), nullptr
+	);
     }
+    this->configureMipmaps (textureWidth, textureHeight);
     // label stuff for debugging
 #if !NDEBUG
     glObjectLabel (GL_TEXTURE, this->m_texture, -1, this->m_name.c_str ());
@@ -93,19 +152,56 @@ CFBO::CFBO (
 	);
     }
 
-    glTexParameterf (GL_TEXTURE_2D, GL_TEXTURE_MAX_ANISOTROPY, 8.0f);
+    glTexParameterf (GL_TEXTURE_2D, GL_TEXTURE_MAX_ANISOTROPY, 1.0f);
 
     // 3D scenes depth-test their models, so the scene framebuffer needs a depth attachment
     // (renderbuffers are shared objects, so this is safe on the worker context too)
-    if (withDepthBuffer && !this->m_depthTexture) {
+    if (withDepthBuffer && !this->m_depthTexture && this->m_samples == 1) {
 	glGenRenderbuffers (1, &this->m_depthbuffer);
 	glBindRenderbuffer (GL_RENDERBUFFER, this->m_depthbuffer);
 	glRenderbufferStorage (GL_RENDERBUFFER, GL_DEPTH_COMPONENT24, textureWidth, textureHeight);
     }
+    if (this->m_samples > 1) {
+	glGenRenderbuffers (1, &this->m_multisampleColor);
+	glBindRenderbuffer (GL_RENDERBUFFER, this->m_multisampleColor);
+	glRenderbufferStorageMultisample (
+	    GL_RENDERBUFFER, this->m_samples, colorInternalFormat (this->m_format), textureWidth, textureHeight
+	);
+	GLint colorSamples = 0;
+	glGetRenderbufferParameteriv (GL_RENDERBUFFER, GL_RENDERBUFFER_SAMPLES, &colorSamples);
+	bool allocated = glGetError () == GL_NO_ERROR && colorSamples == static_cast<GLint> (this->m_samples);
+	if (withDepthBuffer) {
+	    glGenRenderbuffers (1, &this->m_multisampleDepth);
+	    glBindRenderbuffer (GL_RENDERBUFFER, this->m_multisampleDepth);
+	    glRenderbufferStorageMultisample (
+		GL_RENDERBUFFER, this->m_samples, GL_DEPTH_COMPONENT32F, textureWidth, textureHeight
+	    );
+	    GLint depthSamples = 0;
+	    glGetRenderbufferParameteriv (GL_RENDERBUFFER, GL_RENDERBUFFER_SAMPLES, &depthSamples);
+	    allocated = allocated && glGetError () == GL_NO_ERROR
+		&& depthSamples == static_cast<GLint> (this->m_samples);
+	}
+	if (!allocated) {
+	    glDeleteRenderbuffers (1, &this->m_multisampleColor);
+	    glDeleteRenderbuffers (1, &this->m_multisampleDepth);
+	    this->m_multisampleColor = this->m_multisampleDepth = GL_NONE;
+	    this->m_samples = 1;
+	    this->m_multisampleRendering = false;
+	    if (withDepthBuffer) {
+		glGenRenderbuffers (1, &this->m_depthbuffer);
+		glBindRenderbuffer (GL_RENDERBUFFER, this->m_depthbuffer);
+		glRenderbufferStorage (GL_RENDERBUFFER, GL_DEPTH_COMPONENT24, textureWidth, textureHeight);
+	    }
+	}
+    }
+    if (this->hasMipmaps ()) {
+	// Reflection textures can be copied or sampled before their context-local
+	// framebuffer is first requested. Initialize the shared storage now.
+	this->clearTextureStorage ();
+    }
 
     this->m_resolution = { textureWidth, textureHeight, realWidth, realHeight };
-    const size_t pixels = static_cast<size_t> (textureWidth) * textureHeight;
-    this->m_approximateGpuBytes = pixels * 4 + (withDepthBuffer && !depthTexture ? pixels * 4 : 0);
+    this->m_approximateGpuBytes = this->calculateStorageBytes (textureWidth, textureHeight);
     s_liveCount.fetch_add (1, std::memory_order_relaxed);
     s_liveGpuBytes.fetch_add (this->m_approximateGpuBytes, std::memory_order_relaxed);
     {
@@ -144,18 +240,89 @@ void CFBO::resize (uint32_t width, uint32_t height) {
     }
     glBindTexture (GL_TEXTURE_2D, m_texture);
     glTexImage2D (
-	GL_TEXTURE_2D, 0, m_depthTexture ? GL_DEPTH_COMPONENT24 : GL_RGBA8, width, height, 0,
-	m_depthTexture ? GL_DEPTH_COMPONENT : GL_RGBA, m_depthTexture ? GL_UNSIGNED_INT : GL_UNSIGNED_BYTE, nullptr
+	GL_TEXTURE_2D, 0, m_depthTexture ? GL_DEPTH_COMPONENT24 : colorInternalFormat (m_format), width, height, 0,
+	m_depthTexture ? GL_DEPTH_COMPONENT : GL_RGBA, m_depthTexture ? GL_UNSIGNED_INT : colorUploadType (m_format),
+	nullptr
     );
+    this->configureMipmaps (width, height);
     if (m_depthbuffer != GL_NONE) {
 	glBindRenderbuffer (GL_RENDERBUFFER, m_depthbuffer);
 	glRenderbufferStorage (GL_RENDERBUFFER, GL_DEPTH_COMPONENT24, width, height);
+    }
+    if (m_multisampleColor != GL_NONE) {
+	glBindRenderbuffer (GL_RENDERBUFFER, m_multisampleColor);
+	glRenderbufferStorageMultisample (
+	    GL_RENDERBUFFER, m_samples, colorInternalFormat (m_format), width, height
+	);
+    }
+    if (m_multisampleDepth != GL_NONE) {
+	glBindRenderbuffer (GL_RENDERBUFFER, m_multisampleDepth);
+	glRenderbufferStorageMultisample (GL_RENDERBUFFER, m_samples, GL_DEPTH_COMPONENT32F, width, height);
+    }
+    if (m_samples > 1) {
+	GLint colorSamples = 0, depthSamples = static_cast<GLint> (m_samples);
+	glBindRenderbuffer (GL_RENDERBUFFER, m_multisampleColor);
+	glGetRenderbufferParameteriv (GL_RENDERBUFFER, GL_RENDERBUFFER_SAMPLES, &colorSamples);
+	bool allocated = glGetError () == GL_NO_ERROR && colorSamples == static_cast<GLint> (m_samples);
+	if (m_multisampleDepth != GL_NONE) {
+	    glBindRenderbuffer (GL_RENDERBUFFER, m_multisampleDepth);
+	    glGetRenderbufferParameteriv (GL_RENDERBUFFER, GL_RENDERBUFFER_SAMPLES, &depthSamples);
+	    allocated = allocated && glGetError () == GL_NO_ERROR && depthSamples == static_cast<GLint> (m_samples);
+	}
+	if (!allocated) {
+	    glDeleteFramebuffers (1, &m_multisampleFramebuffer);
+	    glDeleteRenderbuffers (1, &m_multisampleColor);
+	    glDeleteRenderbuffers (1, &m_multisampleDepth);
+	    m_multisampleFramebuffer = m_multisampleColor = m_multisampleDepth = GL_NONE;
+	    m_samples = 1;
+	    m_multisampleRendering = false;
+	    if (m_withDepthBuffer) {
+		glGenRenderbuffers (1, &m_depthbuffer);
+		glBindRenderbuffer (GL_RENDERBUFFER, m_depthbuffer);
+		glRenderbufferStorage (GL_RENDERBUFFER, GL_DEPTH_COMPONENT24, width, height);
+		if (m_framebuffer != GL_NONE) {
+		    GLint previousDraw = GL_NONE, previousRead = GL_NONE;
+		    glGetIntegerv (GL_DRAW_FRAMEBUFFER_BINDING, &previousDraw);
+		    glGetIntegerv (GL_READ_FRAMEBUFFER_BINDING, &previousRead);
+		    glBindFramebuffer (GL_FRAMEBUFFER, m_framebuffer);
+		    glFramebufferRenderbuffer (GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_RENDERBUFFER, m_depthbuffer);
+		    if (glCheckFramebufferStatus (GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE)
+			sLog.exception ("Single-sample fallback framebuffer is not properly set");
+		    glBindFramebuffer (GL_DRAW_FRAMEBUFFER, previousDraw);
+		    glBindFramebuffer (GL_READ_FRAMEBUFFER, previousRead);
+		}
+	    }
+	}
+    }
+    this->clearTextureStorage ();
+    if (this->m_samples > 1) {
+	this->ensureMultisampleFramebuffer ();
+	GLint previousDraw = GL_NONE, previousRead = GL_NONE;
+	GLboolean colorMask[4], depthMask;
+	glGetIntegerv (GL_DRAW_FRAMEBUFFER_BINDING, &previousDraw);
+	glGetIntegerv (GL_READ_FRAMEBUFFER_BINDING, &previousRead);
+	glGetBooleanv (GL_COLOR_WRITEMASK, colorMask);
+	glGetBooleanv (GL_DEPTH_WRITEMASK, &depthMask);
+	const GLboolean scissor = glIsEnabled (GL_SCISSOR_TEST);
+	glBindFramebuffer (GL_FRAMEBUFFER, this->m_multisampleFramebuffer);
+	glDisable (GL_SCISSOR_TEST);
+	glColorMask (GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
+	glDepthMask (GL_TRUE);
+	const GLfloat zero[4] = {};
+	const GLfloat farDepth = 1.0f;
+	glClearBufferfv (GL_COLOR, 0, zero);
+	if (this->m_multisampleDepth != GL_NONE) glClearBufferfv (GL_DEPTH, 0, &farDepth);
+	glColorMask (colorMask[0], colorMask[1], colorMask[2], colorMask[3]);
+	glDepthMask (depthMask);
+	if (scissor) glEnable (GL_SCISSOR_TEST);
+	glBindFramebuffer (GL_DRAW_FRAMEBUFFER, previousDraw);
+	glBindFramebuffer (GL_READ_FRAMEBUFFER, previousRead);
     }
     m_resolution = { width, height, width, height };
     m_frames.front ()->width1 = m_frames.front ()->width2 = width;
     m_frames.front ()->height1 = m_frames.front ()->height2 = height;
     s_liveGpuBytes.fetch_sub (m_approximateGpuBytes, std::memory_order_relaxed);
-    m_approximateGpuBytes = static_cast<size_t> (width) * height * (m_depthbuffer != GL_NONE ? 8 : 4);
+    m_approximateGpuBytes = this->calculateStorageBytes (width, height);
     s_liveGpuBytes.fetch_add (m_approximateGpuBytes, std::memory_order_relaxed);
     {
 	std::lock_guard lock (s_liveFBOsMutex);
@@ -166,14 +333,91 @@ void CFBO::resize (uint32_t width, uint32_t height) {
     }
 }
 
+void CFBO::configureMipmaps (const uint32_t width, const uint32_t height) {
+    const uint32_t previousCount = this->m_mipMapCount;
+    const uint32_t exponent = std::bit_width (std::min (width, height) - 1);
+    this->m_mipMapCount = this->hasMipmaps () && exponent > 3 ? exponent - 3 : 1;
+    glTexParameteri (GL_TEXTURE_2D, GL_TEXTURE_MAX_LEVEL, this->m_mipMapCount - 1);
+    glTexParameterf (GL_TEXTURE_2D, GL_TEXTURE_MAX_LOD, this->m_mipMapCount - 1);
+    // Shrinking a mutable texture leaves old mip storage allocated unless it is
+    // explicitly released. The new chain is populated after clearing level zero.
+    for (uint32_t level = this->m_mipMapCount; level < previousCount; ++level) {
+	glTexImage2D (
+	    GL_TEXTURE_2D, level, colorInternalFormat (this->m_format), 0, 0, 0, GL_RGBA,
+	    colorUploadType (this->m_format), nullptr
+	);
+    }
+}
+
+size_t CFBO::calculateStorageBytes (uint32_t width, uint32_t height) const {
+    const size_t levelZeroPixels = static_cast<size_t> (width) * height;
+    const size_t texturePixelBytes = this->m_depthTexture ? 4 : colorPixelBytes (this->m_format);
+    size_t bytes = this->m_depthbuffer != GL_NONE ? static_cast<size_t> (width) * height * 4 : 0;
+    for (uint32_t level = 0; level < this->m_mipMapCount; ++level) {
+	bytes += static_cast<size_t> (width) * height * texturePixelBytes;
+	width = std::max (width / 2, 1u);
+	height = std::max (height / 2, 1u);
+    }
+    if (this->m_samples > 1) {
+	bytes += levelZeroPixels * colorPixelBytes (this->m_format) * this->m_samples;
+	if (this->m_multisampleDepth != GL_NONE)
+	    bytes += levelZeroPixels * 4 * this->m_samples;
+    }
+    return bytes;
+}
+
+void CFBO::clearTextureStorage () const {
+    GLint previousDraw = GL_NONE, previousRead = GL_NONE;
+    GLboolean colorMask[4], depthMask;
+    glGetIntegerv (GL_DRAW_FRAMEBUFFER_BINDING, &previousDraw);
+    glGetIntegerv (GL_READ_FRAMEBUFFER_BINDING, &previousRead);
+    glGetBooleanv (GL_COLOR_WRITEMASK, colorMask);
+    glGetBooleanv (GL_DEPTH_WRITEMASK, &depthMask);
+    const GLboolean scissor = glIsEnabled (GL_SCISSOR_TEST);
+
+    // Use a temporary container in the current context: construction can run on
+    // the shared-context worker, while the permanent framebuffer stays lazy.
+    GLuint framebuffer = GL_NONE;
+    glGenFramebuffers (1, &framebuffer);
+    glBindFramebuffer (GL_FRAMEBUFFER, framebuffer);
+    if (this->m_depthTexture) {
+	glFramebufferTexture2D (GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_TEXTURE_2D, this->m_texture, 0);
+	glDrawBuffer (GL_NONE);
+	glReadBuffer (GL_NONE);
+    } else {
+	glFramebufferTexture2D (GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, this->m_texture, 0);
+    }
+    if (this->m_depthbuffer != GL_NONE) {
+	glFramebufferRenderbuffer (GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_RENDERBUFFER, this->m_depthbuffer);
+    }
+    glDisable (GL_SCISSOR_TEST);
+    glColorMask (GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
+    glDepthMask (GL_TRUE);
+    const GLfloat zero[4] = {};
+    const GLfloat farDepth = 1.0f;
+    if (!this->m_depthTexture) glClearBufferfv (GL_COLOR, 0, zero);
+    if (this->m_depthTexture || this->m_depthbuffer != GL_NONE) glClearBufferfv (GL_DEPTH, 0, &farDepth);
+    glColorMask (colorMask[0], colorMask[1], colorMask[2], colorMask[3]);
+    glDepthMask (depthMask);
+    if (scissor) glEnable (GL_SCISSOR_TEST);
+    glBindFramebuffer (GL_DRAW_FRAMEBUFFER, previousDraw);
+    glBindFramebuffer (GL_READ_FRAMEBUFFER, previousRead);
+    glDeleteFramebuffers (1, &framebuffer);
+
+    if (this->m_mipMapCount > 1) glGenerateMipmap (GL_TEXTURE_2D);
+}
+
 CFBO::~CFBO () {
     // free opengl texture and framebuffer
     glDeleteTextures (1, &this->m_texture);
     glDeleteFramebuffers (1, &this->m_framebuffer);
+    glDeleteFramebuffers (1, &this->m_multisampleFramebuffer);
 
     if (this->m_depthbuffer != GL_NONE) {
 	glDeleteRenderbuffers (1, &this->m_depthbuffer);
     }
+    if (this->m_multisampleColor != GL_NONE) glDeleteRenderbuffers (1, &this->m_multisampleColor);
+    if (this->m_multisampleDepth != GL_NONE) glDeleteRenderbuffers (1, &this->m_multisampleDepth);
 
     {
 	std::lock_guard lock (s_liveFBOsMutex);
@@ -264,7 +508,7 @@ void CFBO::ensureFramebuffer () const {
 	// Unrendered atlas texels represent the far plane and therefore compare as lit.
 	glClearDepth (1.0);
 	glClear (GL_DEPTH_BUFFER_BIT);
-    } else {
+    } else if (!this->hasMipmaps ()) {
 	// Layer framebuffers must start transparent. The scene clear color is often opaque,
 	// and using it here makes empty layer areas render as solid rectangles.
 	GLfloat previousClearColor[4] = {};
@@ -272,18 +516,63 @@ void CFBO::ensureFramebuffer () const {
 	glClearColor (0.0f, 0.0f, 0.0f, 0.0f);
 	glClear (GL_COLOR_BUFFER_BIT);
 	glClearColor (previousClearColor[0], previousClearColor[1], previousClearColor[2], previousClearColor[3]);
-
-	// A mipmapped min-filter is incomplete until the chain exists, so seed it from the
-	// transparent level 0 now; per-frame renders refresh it via generateMipmaps().
-	if (this->hasMipmaps ()) {
-	    glBindTexture (GL_TEXTURE_2D, this->m_texture);
-	    glGenerateMipmap (GL_TEXTURE_2D);
-	    glBindTexture (GL_TEXTURE_2D, 0);
-	}
     }
 
     glBindFramebuffer (GL_DRAW_FRAMEBUFFER, static_cast<GLuint> (previousDraw));
     glBindFramebuffer (GL_READ_FRAMEBUFFER, static_cast<GLuint> (previousRead));
+}
+
+void CFBO::ensureMultisampleFramebuffer () const {
+    if (this->m_samples == 1 || this->m_multisampleFramebuffer != GL_NONE) return;
+    GLint previousDraw = GL_NONE, previousRead = GL_NONE;
+    glGetIntegerv (GL_DRAW_FRAMEBUFFER_BINDING, &previousDraw);
+    glGetIntegerv (GL_READ_FRAMEBUFFER_BINDING, &previousRead);
+    glGenFramebuffers (1, &this->m_multisampleFramebuffer);
+    glBindFramebuffer (GL_FRAMEBUFFER, this->m_multisampleFramebuffer);
+    glFramebufferRenderbuffer (GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_RENDERBUFFER, this->m_multisampleColor);
+    if (this->m_multisampleDepth != GL_NONE)
+	glFramebufferRenderbuffer (GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_RENDERBUFFER, this->m_multisampleDepth);
+    constexpr GLenum drawBuffers[] = { GL_COLOR_ATTACHMENT0 };
+    glDrawBuffers (1, drawBuffers);
+    if (glCheckFramebufferStatus (GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE)
+	sLog.exception ("Multisample framebuffer is not properly set");
+
+    GLboolean colorMask[4], depthMask;
+    glGetBooleanv (GL_COLOR_WRITEMASK, colorMask);
+    glGetBooleanv (GL_DEPTH_WRITEMASK, &depthMask);
+    const GLboolean scissor = glIsEnabled (GL_SCISSOR_TEST);
+    glDisable (GL_SCISSOR_TEST);
+    glColorMask (GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
+    glDepthMask (GL_TRUE);
+    const GLfloat zero[4] = {};
+    const GLfloat farDepth = 1.0f;
+    glClearBufferfv (GL_COLOR, 0, zero);
+    if (this->m_multisampleDepth != GL_NONE) glClearBufferfv (GL_DEPTH, 0, &farDepth);
+    glColorMask (colorMask[0], colorMask[1], colorMask[2], colorMask[3]);
+    glDepthMask (depthMask);
+    if (scissor) glEnable (GL_SCISSOR_TEST);
+    glBindFramebuffer (GL_DRAW_FRAMEBUFFER, previousDraw);
+    glBindFramebuffer (GL_READ_FRAMEBUFFER, previousRead);
+}
+
+void CFBO::resolveMultisample () const {
+    if (this->m_samples == 1 || !this->m_multisampleRendering) return;
+    this->ensureFramebuffer ();
+    this->ensureMultisampleFramebuffer ();
+    GLint previousDraw = GL_NONE, previousRead = GL_NONE;
+    glGetIntegerv (GL_DRAW_FRAMEBUFFER_BINDING, &previousDraw);
+    glGetIntegerv (GL_READ_FRAMEBUFFER_BINDING, &previousRead);
+    const GLboolean scissor = glIsEnabled (GL_SCISSOR_TEST);
+    glDisable (GL_SCISSOR_TEST);
+    glBindFramebuffer (GL_READ_FRAMEBUFFER, this->m_multisampleFramebuffer);
+    glBindFramebuffer (GL_DRAW_FRAMEBUFFER, this->m_framebuffer);
+    glBlitFramebuffer (
+	0, 0, this->m_resolution.x, this->m_resolution.y, 0, 0, this->m_resolution.x, this->m_resolution.y,
+	GL_COLOR_BUFFER_BIT, GL_NEAREST
+    );
+    if (scissor) glEnable (GL_SCISSOR_TEST);
+    glBindFramebuffer (GL_DRAW_FRAMEBUFFER, previousDraw);
+    glBindFramebuffer (GL_READ_FRAMEBUFFER, previousRead);
 }
 
 bool CFBO::hasMipmaps () const {
@@ -312,21 +601,43 @@ uint32_t CFBO::getFlags () const { return this->m_flags; }
 
 GLuint CFBO::getFramebuffer () const {
     this->ensureFramebuffer ();
+    this->resolveMultisample ();
     return this->m_framebuffer;
 }
 
-GLuint CFBO::getDepthbuffer () const { return this->m_depthbuffer; }
+GLuint CFBO::getDrawFramebuffer () const {
+    if (this->m_multisampleRendering) {
+	this->ensureMultisampleFramebuffer ();
+	return this->m_multisampleFramebuffer;
+    }
+    this->ensureFramebuffer ();
+    return this->m_framebuffer;
+}
+
+GLuint CFBO::getDepthbuffer () const {
+    return this->m_samples > 1 ? this->m_multisampleDepth : this->m_depthbuffer;
+}
+
+uint32_t CFBO::getSamples () const { return this->m_samples; }
+
+void CFBO::setMultisampleRendering (const bool enabled) {
+    if (!enabled) this->resolveMultisample ();
+    this->m_multisampleRendering = enabled && this->m_samples > 1;
+}
 
 GLuint CFBO::getTextureID (uint32_t imageIndex) const {
     // ensure the FBO exists (and its initial transparent clear ran) before anything
     // samples from this texture, otherwise the first frame reads undefined memory
     this->ensureFramebuffer ();
+    this->resolveMultisample ();
     return this->m_texture;
 }
 
 uint32_t CFBO::getTextureWidth (uint32_t imageIndex) const { return this->m_resolution.x; }
 
 uint32_t CFBO::getTextureHeight (uint32_t imageIndex) const { return this->m_resolution.y; }
+
+uint32_t CFBO::getMipMapCount (uint32_t imageIndex) const { return this->m_mipMapCount; }
 
 uint32_t CFBO::getRealWidth () const { return this->m_resolution.z; }
 
