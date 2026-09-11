@@ -2107,15 +2107,19 @@ void CParticle::setupVao () {
     glGetIntegerv (GL_VERTEX_ARRAY_BINDING, &prevVAO);
     glGetIntegerv (GL_ARRAY_BUFFER_BINDING, &prevArrayBuffer);
 
+    // A scene fog toggle can change the linked attribute locations. Rebuild only
+    // the VAO, retaining the particle geometry already uploaded to these buffers.
+    if (m_vao != 0) glDeleteVertexArrays (1, &m_vao);
     glGenVertexArrays (1, &m_vao);
-    glGenBuffers (1, &m_vbo);
-    glGenBuffers (1, &m_ebo);
+    if (m_vbo == 0) glGenBuffers (1, &m_vbo);
+    if (m_ebo == 0) glGenBuffers (1, &m_ebo);
 
     glBindVertexArray (m_vao);
     glBindBuffer (GL_ARRAY_BUFFER, m_vbo);
     glBindBuffer (GL_ELEMENT_ARRAY_BUFFER, m_ebo);
 
     const GLuint program = m_pass->getProgramID ();
+    m_vaoShaderRevision = m_pass->getShaderRevision ();
 
     if (m_useRopeRenderer) {
 	// Rope vertex layout: 7 attributes, 26 floats/vertex, stride=104 bytes
@@ -2226,7 +2230,7 @@ void CParticle::setupGeometryCallbacks () {
 	// Setup attribs: save current VAO, bind particle VAO
 	[this] () {
 	    // created lazily: VAOs are not shared between GL contexts (async builds)
-	    if (m_vao == 0) {
+	    if (m_vao == 0 || m_vaoShaderRevision != m_pass->getShaderRevision ()) {
 		setupVao ();
 	    }
 	    glGetIntegerv (GL_VERTEX_ARRAY_BINDING, &m_prevVAO);
