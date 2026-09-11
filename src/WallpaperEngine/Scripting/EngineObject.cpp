@@ -57,6 +57,25 @@ JSValue engine_get_daytime (JSContext* ctx, JSValueConst this_val, int argc, JSV
     return JS_NewFloat64 (ctx, g_Daytime);
 }
 
+// engine.registerAsset(file, precache) -> IAssetHandle, per Wallpaper Engine's own SceneScript
+// declarations (ui/dist/monaco/autocomplete/lib.sceneScript.d.ts): "Load an asset to be used in a
+// SceneScript-based layer creation. This function MUST be called at the root global level of the
+// script." The handle is interchangeable with a path wherever createLayer takes a configuration.
+//
+// Scripts call this at module scope for every font/material they might use, so a missing binding
+// throws "not a function" while the module is still evaluating and takes the whole layer with it.
+// `precache` is accepted and ignored: this engine resolves assets from the container on first use,
+// so there is nothing to warm up.
+JSValue engine_register_asset (JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    if (argc < 1 || !JS_IsString (argv[0])) {
+	return JS_UNDEFINED;
+    }
+
+    JSValue handle = JS_NewObject (ctx);
+    JS_SetPropertyStr (ctx, handle, "file", JS_DupValue (ctx, argv[0]));
+    return handle;
+}
+
 // Layer scripts inherit from the native engine object via Object.create(). Their
 // receiver has no native opaque pointer; bind getters to the owning instance.
 static EngineObject* engineForGetter (JSContext* ctx, JSValueConst* data) {
@@ -376,6 +395,11 @@ EngineObject::EngineObject (ScriptEngine& engine, Render::Wallpapers::CScene& sc
 	    this->m_engine.getContext (), engine_set_timeout, "setTimeout", 2, JS_CFUNC_generic_magic,
 	    this->m_instanceId
 	),
+	JS_PROP_ENUMERABLE
+    );
+    JS_DefinePropertyValueStr (
+	this->m_engine.getContext (), this->m_instance, "registerAsset",
+	JS_NewCFunction (this->m_engine.getContext (), engine_register_asset, "registerAsset", 2),
 	JS_PROP_ENUMERABLE
     );
     JS_DefinePropertyValueStr (

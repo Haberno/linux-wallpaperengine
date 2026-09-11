@@ -100,6 +100,19 @@ CParticle::CParticle (Wallpapers::CScene& scene, const Particle& particle, CPart
     this->registerProperty ("angles", *particle.angles);
     this->registerProperty ("visible", *particle.visible);
     this->registerProperty ("parallaxDepth", *particle.parallaxDepth);
+    if (parent == nullptr) {
+	// Child systems consume the root's live overrides. Queue their property
+	// scripts once on that root, with the same values used by the simulation.
+	const auto& settings = particle.instanceOverride;
+	for (const auto& [name, value] : std::initializer_list<std::pair<const char*, const UserSetting*>> {
+	    { "enabled", settings.enabled.get () }, { "alpha", settings.alpha.get () },
+	    { "size", settings.size.get () }, { "lifetime", settings.lifetime.get () },
+	    { "rate", settings.rate.get () }, { "speed", settings.speed.get () },
+	    { "count", settings.count.get () }, { "color", settings.color.get () },
+	    { "colorn", settings.colorn.get () } }) {
+	    this->registerProperty (name, *value);
+	}
+    }
 
     this->detectTexture ();
     // Initialize random number generator with time-based seed
