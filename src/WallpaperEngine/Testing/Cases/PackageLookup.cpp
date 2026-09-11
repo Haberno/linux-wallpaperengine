@@ -1,8 +1,11 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include "WallpaperEngine/FileSystem/Adapters/Package.h"
+#include "WallpaperEngine/FileSystem/Adapters/Directory.h"
 #include "WallpaperEngine/Assets/AssetLoadException.h"
 #include "WallpaperEngine/Assets/AssetLocator.h"
+#include <fstream>
+#include <unistd.h>
 
 using namespace WallpaperEngine::Data::Assets;
 using WallpaperEngine::FileSystem::Adapters::PackageAdapter;
@@ -32,6 +35,40 @@ TEST_CASE ("package lookups ignore case") {
 
     REQUIRE_FALSE (adapter.exists ("sounds/missing.mp3"));
     REQUIRE_FALSE (adapter.exists ("rayman.json"));
+}
+
+TEST_CASE ("loose assets resolve Windows casing while preserving exact matches", "[assets][directory]") {
+    char pattern[] = "/tmp/lwe-directory-test-XXXXXX";
+    const auto* temporary = mkdtemp (pattern);
+    REQUIRE (temporary != nullptr);
+    const std::filesystem::path root = temporary;
+    struct Cleanup {
+	std::filesystem::path path;
+	~Cleanup () { std::filesystem::remove_all (path); }
+    } cleanup { root };
+    std::filesystem::create_directories (root / "wallpaper/js");
+    std::filesystem::create_directories (root / "wallpaper-neighbor");
+    std::ofstream (root / "wallpaper/js/threePatcher.js") << "corrected reference";
+    std::ofstream (root / "wallpaper/js/Exact.js") << "upper";
+    std::ofstream (root / "wallpaper/js/exact.js") << "lower";
+    std::ofstream (root / "wallpaper-neighbor/outside.js") << "outside";
+    std::filesystem::create_directory_symlink (root / "wallpaper-neighbor", root / "wallpaper/link");
+    const WallpaperEngine::FileSystem::Adapters::DirectoryAdapter adapter (root / "wallpaper");
+
+    REQUIRE (adapter.exists ("JS/ThreePatcher.js"));
+    CHECK (adapter.physicalPath ("JS/ThreePatcher.js") == root / "wallpaper/js/threePatcher.js");
+    std::string contents;
+    std::getline (*adapter.open ("JS/ThreePatcher.js"), contents);
+    CHECK (contents == "corrected reference");
+    std::getline (*adapter.open ("js/Exact.js"), contents);
+    CHECK (contents == "upper");
+    std::getline (*adapter.open ("js/exact.js"), contents);
+    CHECK (contents == "lower");
+    CHECK_FALSE (adapter.exists ("js/missing.js"));
+    CHECK_FALSE (adapter.exists ("../wallpaper-neighbor/outside.js"));
+    CHECK_FALSE (adapter.exists ("LINK/OUTSIDE.JS"));
+    CHECK_THROWS (adapter.open ("../wallpaper-neighbor/outside.js"));
+    CHECK_THROWS (adapter.physicalPath ("LINK/OUTSIDE.JS"));
 }
 
 TEST_CASE ("short workshop shader paths fail normally and valid overrides still resolve", "[assets]") {
