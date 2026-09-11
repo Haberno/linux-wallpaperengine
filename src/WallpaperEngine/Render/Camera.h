@@ -21,6 +21,9 @@ public:
 
     void setOrthogonalProjection (const float width, const float height);
     void setPerspectiveProjection (const float width, const float height, const bool flipY);
+    /** Output framing changes the projection, not authored canvas coordinates. */
+    void setViewportScale (glm::vec2 scale);
+    [[nodiscard]] const glm::vec2& getViewportScale () const;
 
     [[nodiscard]] const glm::vec3& getCenter () const;
     [[nodiscard]] const glm::vec3& getEye () const;
@@ -62,6 +65,7 @@ public:
 private:
     float m_width;
     float m_height;
+    glm::vec2 m_viewportScale = { 1.0f, 1.0f };
     bool m_isOrthogonal = false;
     bool m_isYFlipped = false;
     glm::mat4 m_projection = {};

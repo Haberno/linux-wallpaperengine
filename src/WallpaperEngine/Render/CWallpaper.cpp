@@ -351,6 +351,8 @@ void CWallpaper::render (
     const glm::ivec4 sceneViewport = this->m_spanInfo.has_value ()
 	? glm::ivec4 { 0, 0, this->m_spanInfo->totalBounds.z, this->m_spanInfo->totalBounds.w }
 	: viewport;
+    // Input and camera framing must agree from the first frame after a resize.
+    this->updateUVs (sceneViewport, vflip);
 
 #if !NDEBUG
     glPushDebugGroup (GL_DEBUG_SOURCE_APPLICATION, 0, -1, "Rendering scene");
@@ -377,7 +379,7 @@ void CWallpaper::render (
 
 	// Compute base UVs for the wallpaper scaled to the bounding box
 	this->updateUVs (span.totalBounds, vflip);
-	auto [baseUstart, baseUend, baseVstart, baseVend] = this->m_state.getTextureUVs ();
+	auto [baseUstart, baseUend, baseVstart, baseVend] = this->getPresentationUVs ();
 
 	// This viewport's relative position within the bounding box [0..1]
 	// Use logicalSize (same coordinate space as globalPosition and totalBounds)
@@ -408,7 +410,7 @@ void CWallpaper::render (
     } else {
 	// Normal mode: compute UVs based on viewport dimensions and wallpaper resolution
 	updateUVs (viewport, vflip);
-	auto uvs = this->m_state.getTextureUVs ();
+	auto uvs = this->getPresentationUVs ();
 	ustart = uvs.ustart;
 	uend = uvs.uend;
 	vstart = uvs.vstart;
@@ -479,18 +481,18 @@ void CWallpaper::setPause (bool newState) { }
 
 float CWallpaper::getSceneFadeAlpha () const { return 0.0f; }
 
-void CWallpaper::setupFramebuffers (bool sceneDepthBuffer) {
-    const uint32_t width = this->getWidth ();
-    const uint32_t height = this->getHeight ();
+void CWallpaper::setupFramebuffers (bool sceneDepthBuffer, glm::vec2 size, uint32_t samples, TextureFormat format) {
+    if (size.x <= 0 || size.y <= 0) {
+	size = { this->getWidth (), this->getHeight () };
+    }
     const uint32_t clamp = this->m_state.getClampingMode ();
 
     // create framebuffer for the scene
     this->m_sceneFBO = this->create (
-	"_rt_FullFrameBuffer", TextureFormat_ARGB8888, clamp, 1.0, { width, height }, { width, height },
-	sceneDepthBuffer
+	"_rt_FullFrameBuffer", format, clamp, 1.0, size, size,
+	sceneDepthBuffer, false, samples
     );
 
-    this->alias ("_rt_MipMappedFrameBuffer", "_rt_FullFrameBuffer");
 }
 
 AudioContext& CWallpaper::getAudioContext () const { return this->m_audioContext; }
@@ -508,6 +510,12 @@ std::shared_ptr<const CFBO> CWallpaper::findFBO (const std::string& name) const 
 }
 
 std::shared_ptr<const CFBO> CWallpaper::getFBO () const { return this->m_sceneFBO; }
+
+glm::ivec2 CWallpaper::getFramebufferSize () const {
+    return calculateTargetSize ({ this->getWidth (), this->getHeight () }, this->getRenderScale ());
+}
+
+WallpaperState::TextureUVs CWallpaper::getPresentationUVs () const { return this->m_state.getTextureUVs (); }
 
 std::unique_ptr<CWallpaper> CWallpaper::fromWallpaper (
     const Wallpaper& wallpaper, RenderContext& context, AudioContext& audioContext,

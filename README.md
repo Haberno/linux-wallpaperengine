@@ -180,6 +180,7 @@ If you're one of those developers, feel free to open an issue to get your projec
 | `--noautomute` | Don't mute when other apps play audio |
 | `--no-audio-processing` | Disable audio reactive features |
 | `--fps <val>` | Limit frame rate |
+| `--msaa <off\|2\|4\|8>` | Multisample scene geometry before post-processing (default: 2; independent from `--render-scale`) |
 | `--window <XxYxWxH>` | Run in windowed mode with custom size/position |
 | `--screen-root <screen>` | Set as background for specific screen |
 | `--screen-span <screen-1>,<screen-2>,...` | Stretch a single wallpaper across multiple screens |

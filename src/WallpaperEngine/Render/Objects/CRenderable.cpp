@@ -25,6 +25,9 @@ void CRenderable::detectTexture () {
 	    // to make their stock composelayer material sample the isolated child surface
 	    // instead of feeding the completed scene back through their effects.
 	    this->m_texture = this->find (textureName);
+	    if (this->m_texture == nullptr && textureName == "_rt_MipMappedFrameBuffer") {
+		this->m_texture = this->getScene ().getMipMappedFramebuffer ();
+	    }
 	} else {
 	    this->m_texture = this->getScene ().resolveTexture (textureName);
 	}

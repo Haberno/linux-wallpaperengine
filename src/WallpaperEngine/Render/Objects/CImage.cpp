@@ -207,9 +207,7 @@ CImage::CImage (Wallpapers::CScene& scene, const Image& image) :
     // effect and must keep sampling the shared _rt_FullFrameBuffer. Unconditionally
     // shadowing that target leaves childless water/ripple layers with an empty input.
     if (this->isCompositionLayer () && scene.hasAuthoredChildren (image.id)) {
-	const glm::vec2 compositionSize = {
-	    static_cast<float> (scene.getWidth ()), static_cast<float> (scene.getHeight ())
-	};
+	const glm::vec2 compositionSize = scene.getOutputSize ();
 	this->m_compositionFBO = scene.create (
 	    "_rt_compositionLayer_" + std::to_string (image.id), TextureFormat_ARGB8888,
 	    TextureFlags_ClampUVs, 1.0f, compositionSize, compositionSize, true
@@ -239,8 +237,16 @@ CImage::CImage (Wallpapers::CScene& scene, const Image& image) :
 
     // If the wallpaper doesn't specify a size, fall back to the texture or model dimensions
     if ((size.x == 0.0f || size.y == 0.0f) && this->m_texture != nullptr) {
-	size.x = static_cast<float> (this->m_texture->getRealWidth ());
-	size.y = static_cast<float> (this->m_texture->getRealHeight ());
+	const auto* sourceTarget = dynamic_cast<const CFBO*> (this->m_texture.get ());
+	if (sourceTarget != nullptr && (sourceTarget->getName () == "_rt_FullFrameBuffer"
+	    || sourceTarget->getName ().starts_with ("_rt_compositionLayer_"))) {
+	    // Scene storage follows output pixels; an implicit layer quad still spans
+	    // the authored canvas, independently of that storage resolution.
+	    size = { scene_width, scene_height };
+	} else {
+	    size.x = static_cast<float> (this->m_texture->getRealWidth ());
+	    size.y = static_cast<float> (this->m_texture->getRealHeight ());
+	}
     } else if (
 	(size.x == 0.0f || size.y == 0.0f) && this->getImage ().model->width.has_value ()
 	&& this->getImage ().model->height.has_value ()
@@ -261,7 +267,7 @@ CImage::CImage (Wallpapers::CScene& scene, const Image& image) :
     // Effects use source-image pixels even when the layer stretches that image
     // to a different geometric size. Using the quad size here shrinks overlays
     // and misplaces pixel offsets (for example, notes on Ocarina's staff).
-    // Procedural solids and scene-sized targets retain their authored extent.
+    // Procedural solids and local passthrough targets retain their authored extent.
     m_effectSize = size;
     if (!image.model->fullscreen && !image.model->passthrough && !isCompositionLayer ()
 	&& !m_material.passes.empty ()) {
@@ -271,6 +277,9 @@ CImage::CImage (Wallpapers::CScene& scene, const Image& image) :
 	    && !(image.model->solidlayer && source->second == "util/white")) {
 	    m_effectSize = { m_texture->getRealWidth (), m_texture->getRealHeight () };
 	}
+    }
+    if (image.model->fullscreen || isCompositionLayer ()) {
+	m_effectSize = scene.getOutputSize ();
     }
 
     glm::vec2 scaledSize = size * glm::vec2 (scale);
@@ -1215,7 +1224,7 @@ bool CImage::setupPuppetClippingPasses (
 	    return false;
 	}
 
-	const auto sceneSize = glm::vec2 (this->getScene ().getWidth (), this->getScene ().getHeight ());
+	const auto sceneSize = this->getScene ().getOutputSize ();
 	const std::string maskName = "_rt_puppetClipping_" + std::to_string (this->getId ());
 	this->m_puppetClippingFBO = this->create (
 	    maskName, TextureFormat_ARGB8888, TextureFlags_ClampUVs, 1.0f, sceneSize, sceneSize
@@ -1484,7 +1493,10 @@ void CImage::setup () {
 
 	    // create all the fbos for this effect
 	    for (const auto& fbo : cur->effect->fbos) {
-		fboProvider->create (*fbo, this->m_texture->getFlags (), m_effectSize);
+		auto target = fboProvider->create (*fbo, this->m_texture->getFlags (), m_effectSize);
+		if (this->m_image.model->fullscreen || this->isCompositionLayer ()) {
+		    this->m_sceneEffectTargets.push_back ({ std::move (target), fbo.get () });
+		}
 	    }
 
 	    // TODO: MAKE USE OF ZIP OPERATOR IN BOOST? WAY OVERKILL JUST FOR THIS...
@@ -1900,6 +1912,32 @@ void CImage::pinpongFramebuffer (std::shared_ptr<const CFBO>* drawTo, std::share
     this->m_currentSubFBO = currentMainFBO;
 }
 
+void CImage::updateSceneTargets () const {
+    const bool sceneSized = this->m_image.model->fullscreen || this->isCompositionLayer ();
+    if (!sceneSized && this->m_puppetClippingFBO == nullptr) {
+	return;
+    }
+    const auto& outputSize = this->getScene ().getOutputSize ();
+    const auto targetSize = FBOProvider::calculateTargetSize (outputSize, this->getRenderScale ());
+    if (this->m_compositionFBO != nullptr) {
+	this->m_compositionFBO->resize (targetSize.x, targetSize.y);
+    }
+    if (this->m_puppetClippingFBO != nullptr) {
+	this->m_puppetClippingFBO->resize (targetSize.x, targetSize.y);
+    }
+    if (sceneSized) {
+	this->m_mainFBO->resize (targetSize.x, targetSize.y);
+	this->m_subFBO->resize (targetSize.x, targetSize.y);
+	for (const auto& [target, definition] : this->m_sceneEffectTargets) {
+	    const auto effectSize = FBOProvider::calculateTargetSize (
+		outputSize / definition->scale, this->getRenderScale (),
+		!FBOProvider::isFixedSizeTarget (definition->name), definition->fit
+	    );
+	    target->resize (effectSize.x, effectSize.y);
+	}
+    }
+}
+
 void CImage::render () {
     // do not try to render something that did not initialize successfully
     if (!this->m_initialized) {
@@ -1911,6 +1949,7 @@ void CImage::render () {
     // still update their composite textures for model faces and effect inputs;
     // the dress in 3761619125 samples sources inside a hidden parent group.
     this->updateFinalPassVisibility ();
+    this->updateSceneTargets ();
 
     // Image opacity can be keyframed independently of its texture animation.
     // Keep the evaluated value in stable member storage because CPass uniforms
@@ -2399,7 +2438,11 @@ bool CImage::isCompositionLayer () const {
 
 bool CImage::copiesCompositionBackground () const { return this->m_image.copyBackground; }
 
-std::shared_ptr<const CFBO> CImage::getCompositionFBO () const { return this->m_compositionFBO; }
+std::shared_ptr<const CFBO> CImage::getCompositionFBO () const {
+    // Composition children draw before the parent image's render() call.
+    this->updateSceneTargets ();
+    return this->m_compositionFBO;
+}
 
 glm::vec2 CImage::getSize () const {
     if (this->m_size.x > 0.0f && this->m_size.y > 0.0f) {

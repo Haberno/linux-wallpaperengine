@@ -235,7 +235,11 @@ AssetLocatorUniquePtr WallpaperApplication::setupAssetLocator (const std::string
 	  } }
     );
 
-    vfs.add ("models/wpenginelinux.json", { { "material", "materials/wpenginelinux.json" } });
+    // Bloom combines the completed scene at output resolution, independently
+    // of the authored canvas size, and must follow output resizes.
+    vfs.add (
+	"models/wpenginelinux.json", { { "material", "materials/wpenginelinux.json" }, { "fullscreen", true } }
+    );
 
     vfs.add (
 	"materials/wpenginelinux.json",
@@ -1287,12 +1291,10 @@ void WallpaperApplication::takeScreenshot (const std::filesystem::path& filename
 	glFinish ();
 
 	// make room for storing the pixel of this viewport
-	// The scene target can be supersampled. Video/web targets resize their GL
-	// allocation independently, so derive the capture size from the wallpaper's
-	// live dimensions and the scene-only render scale.
-	const float renderScale = wallpaper->getRenderScale ();
-	const int readWidth = static_cast<int> (std::lround (wallpaper->getWidth () * renderScale));
-	const int readHeight = static_cast<int> (std::lround (wallpaper->getHeight () * renderScale));
+	// Scenes rasterize at output resolution; their authored canvas can be tiny.
+	const auto readSize = wallpaper->getFramebufferSize ();
+	const int readWidth = readSize.x;
+	const int readHeight = readSize.y;
 	const auto bufferSize = readWidth * readHeight * 3;
 	auto* buffer = new uint8_t[bufferSize];
 
@@ -1325,7 +1327,7 @@ void WallpaperApplication::takeScreenshot (const std::filesystem::path& filename
 	}
 
 	// Get the UV coordinates which define the visible portion based on scaling mode
-	const auto [ustart, uend, vstart, vend] = wallpaper->getState ().getTextureUVs ();
+	const auto [ustart, uend, vstart, vend] = wallpaper->getPresentationUVs ();
 
 	captures.push_back (
 	    { buffer, readWidth, readHeight, vpWidth, vpHeight, currentXOffset, ustart, uend, vstart, vend }
@@ -1347,11 +1349,12 @@ void WallpaperApplication::takeScreenshot (const std::filesystem::path& filename
 	    // copy pixels to bitmap, sampling from the UV-defined region
 	    for (int y = 0; y < capture.vpHeight; y++) {
 		for (int x = 0; x < capture.vpWidth; x++) {
-		    // interpolate within the UV range to get source coordinates
+		    // Sample pixel centers. Sampling edges duplicates the first row when
+		    // V is reversed and shifts the rest of an otherwise 1:1 capture.
 		    const float u
-			= capture.ustart + (static_cast<float> (x) / capture.vpWidth) * (capture.uend - capture.ustart);
+			= capture.ustart + ((static_cast<float> (x) + 0.5f) / capture.vpWidth) * (capture.uend - capture.ustart);
 		    const float v = capture.vstart
-			+ (static_cast<float> (y) / capture.vpHeight) * (capture.vend - capture.vstart);
+			+ ((static_cast<float> (y) + 0.5f) / capture.vpHeight) * (capture.vend - capture.vstart);
 
 		    // convert UV to pixel coordinates in the source buffer
 		    const int srcX = std::clamp (static_cast<int> (u * capture.readWidth), 0, capture.readWidth - 1);

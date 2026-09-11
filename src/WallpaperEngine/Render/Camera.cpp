@@ -170,6 +170,15 @@ void Camera::setPerspectiveProjection (const float width, const float height, co
 
 bool Camera::isYFlipped () const { return this->m_isYFlipped; }
 
+void Camera::setViewportScale (const glm::vec2 scale) {
+    if (this->m_viewportScale != scale) {
+	this->m_viewportScale = scale;
+	this->updateMatrices ();
+    }
+}
+
+const glm::vec2& Camera::getViewportScale () const { return this->m_viewportScale; }
+
 void Camera::updateMatrices () {
     this->m_lookat = glm::lookAt (this->getEye (), this->getCenter (), this->getUp ());
 
@@ -186,8 +195,8 @@ void Camera::updateMatrices () {
 	const float farz = this->m_camera.projection.farz->value->getFloat ();
 	const float depth = glm::max (glm::abs (nearz), glm::abs (farz));
 	const float zoom = glm::max (this->getZoom (), 0.0001f);
-	const float halfWidth = this->m_width / (2.0f * zoom);
-	const float halfHeight = this->m_height / (2.0f * zoom);
+	const float halfWidth = this->m_width / (2.0f * zoom * this->m_viewportScale.x);
+	const float halfHeight = this->m_height / (2.0f * zoom * this->m_viewportScale.y);
 	this->m_projection = glm::ortho<float> (-halfWidth, halfWidth, -halfHeight, halfHeight, -depth, depth);
 	if (!this->m_hasRuntimeTransform) {
 	    // The top-level 2D camera is only the editor viewport. Cancel its

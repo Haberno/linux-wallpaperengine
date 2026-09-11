@@ -98,6 +98,10 @@ public:
      * @return The main FBO of this wallpaper
      */
     [[nodiscard]] std::shared_ptr<const CFBO> getFBO () const;
+    /** Actual readback dimensions; video/web can resize GL storage independently. */
+    [[nodiscard]] virtual glm::ivec2 getFramebufferSize () const;
+    /** Scene framing is already rasterized; video/web still scale during presentation. */
+    [[nodiscard]] virtual WallpaperState::TextureUVs getPresentationUVs () const;
 
     /**
      * Updates the UVs coordinates if window/screen/vflip/projection has changed
@@ -168,7 +172,8 @@ protected:
     /**
      * Setups OpenGL's framebuffers for ping-pong and scene rendering
      */
-    void setupFramebuffers (bool sceneDepthBuffer = false);
+    void setupFramebuffers (bool sceneDepthBuffer = false, glm::vec2 size = { 0, 0 }, uint32_t samples = 1,
+	TextureFormat format = TextureFormat_ARGB8888);
 
     const Wallpaper& m_wallpaperData;
 

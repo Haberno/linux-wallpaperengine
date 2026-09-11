@@ -1,8 +1,31 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include "WallpaperEngine/Render/FBOProvider.h"
+#include "WallpaperEngine/Render/WallpaperState.h"
+#include <catch2/catch_approx.hpp>
 
 using WallpaperEngine::Render::FBOProvider;
+using WallpaperEngine::Render::WallpaperState;
+
+TEST_CASE ("Scene framing retains fractional canvas bounds at odd output sizes", "[render-quality]") {
+    using Scaling = WallpaperState::TextureUVsScaling;
+    for (const bool flip : { false, true }) {
+	WallpaperState fill (Scaling::ZoomFillUVs, 0);
+	fill.updateState ({ 0, 0, 321, 181 }, flip, 64, 40);
+	const auto uv = fill.getTextureUVs ();
+	CHECK (uv.ustart == Catch::Approx (0));
+	CHECK (uv.uend == Catch::Approx (1));
+	CHECK ((uv.vstart + uv.vend) / 2 == Catch::Approx (0.5));
+	CHECK (std::abs (uv.vend - uv.vstart) == Catch::Approx (181.0 * 64 / (321 * 40)));
+
+	WallpaperState fit (Scaling::ZoomFitUVs, 0);
+	fit.updateState ({ 0, 0, 321, 181 }, flip, 64, 40);
+	const auto fitted = fit.getTextureUVs ();
+	CHECK ((fitted.ustart + fitted.uend) / 2 == Catch::Approx (0.5));
+	CHECK (fitted.uend - fitted.ustart == Catch::Approx (321.0 * 40 / (181 * 64)));
+	CHECK (std::abs (fitted.vend - fitted.vstart) == Catch::Approx (1));
+    }
+}
 
 TEST_CASE ("Effect fit preserves aspect ratio and caps simulation resolution", "[render-quality]") {
     CHECK (FBOProvider::calculateTargetSize ({3840, 2160}, 1, true, 512) == glm::uvec2 (512, 288));
