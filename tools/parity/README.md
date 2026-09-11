@@ -82,6 +82,11 @@ not interpolate frames. Raw acquisition timestamps remain in `*-ffmpeg.log`
 These are capture sample times, **not simulation ticks or presentation fences**.
 Readiness means an owned correctly sized drawable (plus fork control socket),
 not proven scene completion. Warmup is seconds after that boundary.
+Loaded renderer/driver identities are sampled after warmup and checked again
+after recording. Native can create its window before loading graphics libraries;
+window-readiness snapshots alone cannot bind the libraries used by a capture.
+Older recordings without the closing identity snapshot remain diagnostic and
+need fresh captures before repeat verification can qualify them.
 
 Only FPS, output dimensions, MSAA off, render scale 1, and the selected
 post-processing mode have explicit paired intent. Native residual quality
