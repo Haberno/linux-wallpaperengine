@@ -40,8 +40,17 @@ void SubprocessApp::OnContextCreated (
   window.__wpMediaPlayback=function(d){fire(PB,d);};
   window.__wpMediaThumb=function(d){fire(TH,d);};
   window.__wpMediaTimeline=function(d){fire(TL,d);};
-  window.__wpApplyProps=function(p){var l=window.wallpaperPropertyListener;if(l&&l.applyUserProperties){try{l.applyUserProperties(p);}catch(e){}}};
-  window.__wpApplyGeneral=function(p){var l=window.wallpaperPropertyListener;if(l&&l.applyGeneralProperties){try{l.applyGeneralProperties(p);}catch(e){}}};
+  var pendingProps=null,pendingGeneral=null,propertyTimer=null;
+  function flushProperties(){
+    var l=window.wallpaperPropertyListener;
+    if(!l){if(propertyTimer===null)propertyTimer=setInterval(flushProperties,50);return;}
+    if(propertyTimer!==null){clearInterval(propertyTimer);propertyTimer=null;}
+    var general=pendingGeneral,props=pendingProps;pendingGeneral=null;pendingProps=null;
+    if(general&&typeof l.applyGeneralProperties==='function'){try{l.applyGeneralProperties(general);}catch(e){console.error(e);}}
+    if(props&&typeof l.applyUserProperties==='function'){try{l.applyUserProperties(props);}catch(e){console.error(e);}}
+  }
+  window.__wpApplyProps=function(p){pendingProps=p;flushProperties();};
+  window.__wpApplyGeneral=function(p){pendingGeneral=p;flushProperties();};
 })();
 )JS";
     frame->ExecuteJavaScript (shim, frame->GetURL (), 0);
