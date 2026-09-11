@@ -55,6 +55,36 @@ compileLinked (const std::string& vertexSource, const std::string& fragmentSourc
 }
 } // namespace
 
+TEST_CASE ("shader parameter declarations accept aligned whitespace", "[shader][parameter][regression]") {
+    const auto assets = shaderAssets ("");
+    const ShaderConstantMap constants;
+    const TextureMap textures;
+    const ComboMap combos;
+    for (const std::string declaration : { "uniform vec3 u_Color", "uniform vec3  u_Color",
+					  "uniform vec3\tu_Color", "uniform\tvec3\tu_Color",
+					  "\tuniform \tvec3 \t u_Color \t ", "uniform highp vec3 u_Color" }) {
+	DYNAMIC_SECTION (declaration) {
+	    // Misty Sea aligns its six color declarations with two spaces after vec3.
+	    const std::string source
+		= declaration + "; // {\"material\":\"color\",\"default\":\"0.25 0.5 0.75\"}\n"
+		  "void main() { gl_FragColor = vec4(u_Color, 1.0); }\n";
+	    ShaderUnit unit (
+		GLSLContext::UnitType_Fragment, "aligned_parameters.frag", source, *assets, constants, textures,
+		textures, combos, combos
+	    );
+	    const auto& parameters = unit.getParameters ();
+	    REQUIRE (parameters.size () == 1);
+	    CHECK (parameters[0]->getName () == "u_Color");
+	    CHECK (parameters[0]->getIdentifierName () == "color");
+	    CHECK (parameters[0]->getVec3 () == glm::vec3 (0.25f, 0.5f, 0.75f));
+	    const auto translated = GLSLContext::get ().toGlsl (
+		"#version 330\nvoid main() { gl_Position = vec4(0.0); }\n", unit.compile ()
+	    );
+	    CHECK_FALSE (translated.second.empty ());
+	}
+    }
+}
+
 TEST_CASE ("vector shader defaults accept numbers without dropping the layer", "[shader][parameter][regression]") {
     const auto assets = shaderAssets ("");
     const ShaderConstantMap constants;
