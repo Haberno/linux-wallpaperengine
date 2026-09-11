@@ -20,5 +20,5 @@ TEST_CASE ("Model passes render opaque before blended while preserving authored 
 	WallpaperEngine::Data::Model::BlendingMode_Normal,
     };
 
-    CHECK (CModel::calculatePassRenderPermutation (modes) == std::vector<size_t> { 1, 3, 5, 0, 4, 2 });
+    CHECK (CModel::calculatePassRenderPermutation (modes) == std::vector<size_t> { 1, 3, 5, 0, 2, 4 });
 }
