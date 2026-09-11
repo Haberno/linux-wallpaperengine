@@ -749,6 +749,11 @@ void ScriptEngine::queueSceneScript (const std::string& key, DynamicValue& curre
 void ScriptEngine::queueScript (const std::string& key, DynamicValue& currentValue, ScriptableObject* object) {
     const auto source = currentValue.getScriptSource ();
 
+    static const bool traceScripts = std::getenv ("WPE_SCRIPT_TRACE") != nullptr;
+    if (traceScripts) {
+	sLog.out ("queueScript ", key, source.has_value () ? " HAS source" : " no source");
+    }
+
     if (!source.has_value ()) {
 	return;
     }
