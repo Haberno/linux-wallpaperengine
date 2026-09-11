@@ -210,7 +210,7 @@ SceneUniquePtr WallpaperParser::parseScene (const JSON& file, Project& project) 
                     .height = isPerspective || projection.optional ("auto", false) ? 0 : projection.require <int> ("height", "Projection must have a height"),
                     .isAuto = !isPerspective && projection.optional ("auto", false),
                     .isPerspective = isPerspective,
-                    .nearz = projectionSource.user ("nearz", properties, 0.0f),
+                    .nearz = projectionSource.user ("nearz", properties, isPerspective ? 0.1f : 0.0f),
                     .farz = projectionSource.user ("farz", properties, 1000.0f),
 		    .fov = projectionSource.user ("fov", properties, 50.0f),
 		    .zoom = zoomSource.user ("zoom", properties, 1.0f)

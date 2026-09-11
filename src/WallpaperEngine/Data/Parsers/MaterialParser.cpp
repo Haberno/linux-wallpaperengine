@@ -63,7 +63,7 @@ MaterialParser::parsePass (const JSON& it, const Project& project, const bool mo
     return std::make_unique<MaterialPass> (MaterialPass {
 	// TODO: REMOVE THIS UGLY STD::STRING CREATION
 	.blending = parseBlendMode (it.optional ("blending", std::string ("normal"))),
-	.cullmode = parseCullMode (it.optional ("cullmode", std::string ("nocull"))),
+	.cullmode = parseCullMode (it.optional ("cullmode", std::string (modelDepthDefaults ? "normal" : "nocull"))),
 	.depthtest = parseDepthtestMode (it.optional ("depthtest", depthDefault)),
 	.depthwrite = parseDepthwriteMode (it.optional ("depthwrite", depthDefault)),
 	.shader = it.require<std::string> ("shader", "Material pass must have a shader"),
