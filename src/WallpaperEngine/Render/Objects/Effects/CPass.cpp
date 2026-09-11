@@ -424,12 +424,12 @@ void CPass::setupRenderUniforms () {
 	    case Integer:
 		glUniform1iv (value->id, value->count, static_cast<const int*> (value->value));
 		break;
-	    // TODO: VEC2/VEC3 MIGHT NEED SPECIAL TREATMENT? IDK ONLY SUPPORT 1 FOR NOW
+	    // Vector arrays share the same tightly packed storage as scalar uniforms.
 	    case Vector4:
 		glUniform4fv (value->id, value->count, glm::value_ptr (*static_cast<const glm::vec4*> (value->value)));
 		break;
 	    case Vector3:
-		glUniform3fv (value->id, 1, glm::value_ptr (*static_cast<const glm::vec3*> (value->value)));
+		glUniform3fv (value->id, value->count, glm::value_ptr (*static_cast<const glm::vec3*> (value->value)));
 		break;
 	    case Vector2:
 		glUniform2fv (value->id, 1, glm::value_ptr (*static_cast<const glm::vec2*> (value->value)));
@@ -1107,8 +1107,8 @@ void CPass::setupUniforms () {
     const auto& recorder = this->m_renderable.getScene ().getAudioContext ().getRecorder ();
 
     // lighting variables
-    this->addUniform ("g_LightAmbientColor", sceneData.colors.ambient->value->getVec3 ());
-    this->addUniform ("g_LightSkylightColor", sceneData.colors.skylight->value->getVec3 ());
+    this->addUniform ("g_LightAmbientColor", &sceneData.colors.ambient->value->getVec3 ());
+    this->addUniform ("g_LightSkylightColor", &sceneData.colors.skylight->value->getVec3 ());
     this->addUniform ("g_EyePosition", &scene.getCamera ().getEye ());
 
     const auto& fog = scene.getFog ();
@@ -1119,6 +1119,9 @@ void CPass::setupUniforms () {
 
     // dynamic light state, refreshed by CScene::updateLightState every frame
     const auto& lights = scene.getLights ();
+
+    this->addUniform ("g_LightsPosition", UniformType::Vector3, lights.legacyPositions.data (), 4);
+    this->addUniform ("g_LightsColorRadius", lights.legacyColors.data (), 4);
 
     if (lights.directionalCount > 0) {
 	this->addUniform ("g_LDirectional_Direction", lights.directionalDirections.data (), lights.directionalCount);

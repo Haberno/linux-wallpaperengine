@@ -14,6 +14,31 @@
 
 using WallpaperEngine::Data::Model::LightData;
 using WallpaperEngine::Render::Objects::CLight;
+using WallpaperEngine::Render::Wallpapers::CScene;
+
+TEST_CASE ("Legacy point lights retain positions and clear unused slots", "[lighting]") {
+    CScene::SceneLights lights;
+    lights.pointCount = 5;
+    lights.pointOrigins = {
+	{ 1, 2, 3, 99 }, { 4, 5, 6, 99 }, { 7, 8, 9, 99 }, { 10, 11, 12, 99 }, { 13, 14, 15, 99 }
+    };
+    lights.pointColors = {
+	{ 0.2f, 0.4f, 0.6f, 2.5f }, { 1, 0, 0, 3 }, { 0, 1, 0, 4 }, { 0, 0, 1, 5 }, { 1, 1, 1, 6 }
+    };
+    lights.updateLegacyPointLights ();
+    CHECK (lights.legacyPositions[0] == glm::vec3 (1, 2, 3));
+    CHECK (lights.legacyColors[0] == glm::vec4 (0.2f, 0.4f, 0.6f, 2.5f));
+    CHECK (lights.legacyPositions[3] == glm::vec3 (10, 11, 12));
+    CHECK (lights.legacyColors[3] == glm::vec4 (0, 0, 1, 5));
+
+    lights.pointCount = 1;
+    lights.updateLegacyPointLights ();
+    CHECK (lights.legacyColors[0] == glm::vec4 (0.2f, 0.4f, 0.6f, 2.5f));
+    for (int index = 1; index < 4; ++index) {
+	CHECK (lights.legacyPositions[index] == glm::vec3 (0));
+	CHECK (lights.legacyColors[index] == glm::vec4 (0, 0, 0, 1));
+    }
+}
 
 TEST_CASE ("Light type IDs match Wallpaper Engine") {
     CHECK (LightData::Type_Point == 0);
