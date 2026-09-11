@@ -101,6 +101,13 @@ struct SceneData {
 	    UserSettingUniquePtr threshold;
 	    /** Bloom's color tint to pass onto the shader */
 	    UserSettingUniquePtr tint;
+	    struct {
+		UserSettingUniquePtr strength;
+		UserSettingUniquePtr threshold;
+		UserSettingUniquePtr feather;
+		UserSettingUniquePtr scatter;
+		UserSettingUniquePtr iterations;
+	    } hdr;
 	} bloom;
 	/**
 	 * Parallax effect configuration

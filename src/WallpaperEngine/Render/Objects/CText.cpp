@@ -426,18 +426,18 @@ void CText::setupEffectChain () {
     // Keep working surfaces private. Consumers need the completed result, not
     // whichever ping-pong surface happens to contain it this frame.
     m_fboA = std::make_shared<CFBO> (
-        "_text_raster_" + std::to_string (getId ()), TextureFormat_ARGB8888,
+        "_text_raster_" + std::to_string (getId ()), getScene ().getColorFormat (),
         TextureFlags_ClampUVs, 1, surface.x, surface.y, surface.x, surface.y
     );
     m_fboB = std::make_shared<CFBO> (
-        "_text_pingpong_" + std::to_string (getId ()), TextureFormat_ARGB8888,
+        "_text_pingpong_" + std::to_string (getId ()), getScene ().getColorFormat (),
         TextureFlags_ClampUVs, 1, surface.x, surface.y, surface.x, surface.y
     );
     const auto targetSize = FBOProvider::calculateTargetSize (surface, getScene ().getRenderScale ());
     if (m_publishedFBO == nullptr) {
         const std::string base = "_rt_imageLayerComposite_" + std::to_string (getId ());
         m_publishedFBO = getScene ().create (
-            base + "_a", TextureFormat_ARGB8888, TextureFlags_ClampUVs, 1, surface, surface
+            base + "_a", getScene ().getColorFormat (), TextureFlags_ClampUVs, 1, surface, surface
         );
         getScene ().alias (base + "_b", m_publishedFBO);
     } else {
@@ -608,7 +608,7 @@ void CText::setupEffectChain () {
 	    const auto target = getScene ().getFBO ();
 	    const glm::vec2 size (target->getRealWidth (), target->getRealHeight ());
 	    m_blendBackground = getScene ().create (
-		"_rt_TextBlendBackground", TextureFormat_ARGB8888, TextureFlags_ClampUVs, 1.0f, size, size
+		"_rt_TextBlendBackground", getScene ().getColorFormat (), TextureFlags_ClampUVs, 1.0f, size, size
 	    );
 	}
 	m_colorBlendProvider->alias ("_rt_FullFrameBuffer", m_blendBackground);
@@ -1194,8 +1194,7 @@ void CText::render () {
     const float alpha = m_text.alpha->value->getFloat ();
     // Native text draws (140257d70 / 140258050) multiply RGB by brightness
     // only with the HDR bloom flag (0x2000). LDR projects may save zero here.
-    const auto& scene = getScene ().getScene ();
-    const float brightness = scene.hdr && scene.camera.bloom.enabled->value->getBool ()
+    const float brightness = getScene ().isHdr ()
 	? m_text.brightness->evaluateFloat (getScene ().getTime ()) : 1.0f;
 
     // A preceding hidden image can leave its composite FBO and viewport bound.

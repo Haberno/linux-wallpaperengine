@@ -517,6 +517,16 @@ void ApplicationContext::loadSettingsFromArgv () {
 	    this->settings.render.msaaSamples = value == "off" ? 1 : static_cast<uint32_t> (std::stoul (value));
 	});
 
+    performanceGroup.add_argument ("--post-processing")
+	.help ("Scene post-processing: disabled, enabled (ordinary bloom), or ultra (authored HDR bloom). Default: enabled.")
+	.choices ("disabled", "enabled", "ultra")
+	.default_value (std::string ("enabled"))
+	.nargs (1)
+	.action ([this] (const std::string& value) -> void {
+	    this->settings.render.postProcessing = value == "disabled" ? PostProcessing::Disabled
+		: value == "ultra" ? PostProcessing::Ultra : PostProcessing::Enabled;
+	});
+
     performanceGroup.add_argument ("--contrast")
 	.help ("Final-output contrast multiplier (1.0 = neutral). Clamped to 0.0-4.0.")
 	.scan<'g', float> ()

@@ -253,6 +253,29 @@ TEST_CASE ("scene bloom defaults match native LDR settings without replacing aut
     }
 }
 
+TEST_CASE ("HDR bloom keeps native defaults and authored zero values", "[scene-defaults][hdr]") {
+    for (const bool authored : { false, true }) {
+        auto filesystem = std::make_unique<Container> ();
+        const std::string general = authored
+            ? R"({"hdr":true,"bloom":true,"bloomhdrstrength":0,"bloomhdrthreshold":0,"bloomhdrfeather":0,"bloomhdrscatter":0,"bloomhdriterations":1,"bloomtint":"0 0 0"})"
+            : "{}";
+        filesystem->getVFS ().add ("scene.json",
+            R"({"camera":{"center":"0 0 -1","eye":"0 0 0","up":"0 1 0"},"general":)"
+            + general + R"(,"objects":[]})");
+        Project project {};
+        project.type = Project::Type_Scene;
+        project.assetLocator = std::make_unique<WallpaperEngine::Assets::AssetLocator> (std::move (filesystem));
+        const auto wallpaper = WallpaperParser::parse (JSON ("scene.json"), project);
+        const auto& bloom = wallpaper->as<Scene> ()->camera.bloom.hdr;
+        CHECK (bloom.strength->evaluateFloat (0) == Catch::Approx (authored ? 0 : 2));
+        CHECK (bloom.threshold->evaluateFloat (0) == Catch::Approx (authored ? 0 : 1));
+        CHECK (bloom.feather->evaluateFloat (0) == Catch::Approx (authored ? 0 : 0.1f));
+        CHECK (bloom.scatter->evaluateFloat (0) == Catch::Approx (authored ? 0 : 1.619f));
+        CHECK (bloom.iterations->evaluateFloat (0) == Catch::Approx (authored ? 1 : 8));
+        CHECK (wallpaper->as<Scene> ()->camera.bloom.tint->evaluateVec3 (0) == glm::vec3 (authored ? 0 : 1));
+    }
+}
+
 TEST_CASE ("missing image effects are skipped without discarding neighboring effects") {
     auto filesystem = std::make_unique<Container> ();
     filesystem->getVFS ().add ("effects/before.json", R"({"name":"before","passes":[]})");

@@ -209,7 +209,7 @@ CImage::CImage (Wallpapers::CScene& scene, const Image& image) :
     if (this->isCompositionLayer () && scene.hasAuthoredChildren (image.id)) {
 	const glm::vec2 compositionSize = scene.getOutputSize ();
 	this->m_compositionFBO = scene.create (
-	    "_rt_compositionLayer_" + std::to_string (image.id), TextureFormat_ARGB8888,
+	    "_rt_compositionLayer_" + std::to_string (image.id), scene.getColorFormat (),
 	    TextureFlags_ClampUVs, 1.0f, compositionSize, compositionSize, true
 	);
 	// Every pass created for this image receives an FBOProvider parented to the
@@ -320,10 +320,10 @@ CImage::CImage (Wallpapers::CScene& scene, const Image& image) :
     nameB << "_rt_imageLayerComposite_" << this->getImage ().id << "_b";
 
     this->m_currentMainFBO = this->m_mainFBO = scene.create (
-	nameA.str (), TextureFormat_ARGB8888, this->m_texture->getFlags (), 1, m_effectSize, m_effectSize
+	nameA.str (), scene.getColorFormat (), this->m_texture->getFlags (), 1, m_effectSize, m_effectSize
     );
     this->m_currentSubFBO = this->m_subFBO = scene.create (
-	nameB.str (), TextureFormat_ARGB8888, this->m_texture->getFlags (), 1, m_effectSize, m_effectSize
+	nameB.str (), scene.getColorFormat (), this->m_texture->getFlags (), 1, m_effectSize, m_effectSize
     );
 
     // build a list of vertices, these might need some change later (or maybe invert the camera)
@@ -943,7 +943,7 @@ void CImage::setupPuppetAlbedoPasses () {
 	    = this->m_materials.compatibilityMaterials.emplace_back (std::move (overlayMaterial)).get ();
 
 	this->m_puppetAlbedoFBO = this->create (
-	    albedoName, TextureFormat_ARGB8888, this->getTexture ()->getFlags (), 1.0f, this->m_size, this->m_size
+	    albedoName, this->getScene ().getColorFormat (), this->getTexture ()->getFlags (), 1.0f, this->m_size, this->m_size
 	);
 
 	auto copyOverride = std::make_unique<ImageEffectPassOverride> (ImageEffectPassOverride {
@@ -2049,6 +2049,10 @@ const glm::vec4& CImage::getColor4 () const {
     // Explicit RGBA colors retain their alpha; layer opacity is applied by CPass.
     if (color.getType () == DynamicValue::UnderlyingType::Vec3) {
 	this->m_resolvedColor4.a = 1.0f;
+    }
+    if (this->getScene ().isHdr ()) {
+        const float brightness = this->m_image.brightness->evaluateFloat (this->getScene ().getTime ());
+        this->m_resolvedColor4 *= glm::vec4 (brightness, brightness, brightness, 1.0f);
     }
     return this->m_resolvedColor4;
 }

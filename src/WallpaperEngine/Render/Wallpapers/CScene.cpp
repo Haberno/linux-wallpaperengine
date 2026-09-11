@@ -8,6 +8,7 @@
 #include "WallpaperEngine/Render/WallpaperState.h"
 
 #include "CScene.h"
+#include "HdrBloom.h"
 #include "WallpaperEngine/Logging/Log.h"
 
 #include "WallpaperEngine/Data/Model/Wallpaper.h"
@@ -37,6 +38,9 @@ CScene::CScene (
 
     // caller should check this, if not a std::bad_cast is good to throw
     auto scene = wallpaper.as<Scene> ();
+    this->m_hdrEnabled = context.getApp ().getContext ().settings.render.postProcessing
+        == Application::ApplicationContext::PostProcessing::Ultra
+        && scene->hdr && scene->camera.bloom.enabled->value->getBool ();
 
     // CScene still owns render objects as raw pointers. Its destructor is not called
     // when construction throws, so clean any objects created before the failure here.
@@ -329,7 +333,11 @@ CScene::CScene (
 	}
     }
     const auto samples = context.getApp ().getContext ().settings.render.msaaSamples;
-    this->setupFramebuffers (isPerspective || hasModels || samples > 1, this->m_outputSize, samples);
+    this->setupFramebuffers (isPerspective || hasModels || samples > 1, this->m_outputSize, samples, this->getColorFormat ());
+    if (this->m_hdrEnabled) {
+        const auto size = glm::max (glm::uvec2 (this->getFramebufferSize ()), glm::uvec2 (2));
+        this->find ("_rt_FullFrameBuffer")->resize (size.x, size.y);
+    }
     sLog.out ("Scene MSAA: requested=", samples, " actual=", this->m_sceneFBO->getSamples ());
 
     const uint32_t sceneWidth = this->m_camera->getWidth ();
@@ -385,7 +393,9 @@ CScene::CScene (
     this->_rt_8FrameBuffer = createBloomTarget ("_rt_8FrameBuffer", 8);
     this->_rt_Bloom = createBloomTarget ("_rt_Bloom", 8);
 
+    if (this->m_hdrEnabled) this->m_hdrBloom = std::make_unique<HdrBloom> (*this);
     this->updateBloomState ();
+    sLog.out ("Scene post-processing: hdr=", this->m_hdrEnabled ? 1 : 0);
 
     constructionGuard.cancel ();
 }
@@ -442,6 +452,8 @@ void CScene::initializeBloom () {
 
 void CScene::updateBloomState () {
     const auto& bloom = this->getScene ().camera.bloom;
+    if (this->m_hdrEnabled || this->getContext ().getApp ().getContext ().settings.render.postProcessing
+        == Application::ApplicationContext::PostProcessing::Disabled) return;
     if (!bloom.enabled->value->getBool ()) {
 	return;
     }
@@ -654,11 +666,19 @@ const glm::vec2& CScene::getOutputSize () const { return this->m_outputSize; }
 std::shared_ptr<CFBO> CScene::getMipMappedFramebuffer () {
     if (this->m_mipMappedFramebuffer == nullptr) {
 	this->m_mipMappedFramebuffer = this->create (
-	    "_rt_MipMappedFrameBuffer", TextureFormat_ARGB8888, TextureFlags_ClampUVs, 1.0f,
+	    "_rt_MipMappedFrameBuffer", this->getColorFormat (), TextureFlags_ClampUVs, 1.0f,
 	    this->m_outputSize, this->m_outputSize
 	);
     }
     return this->m_mipMappedFramebuffer;
+}
+
+GLuint CScene::getWallpaperFramebuffer () const {
+    return this->m_hdrBloom ? this->m_hdrBloom->output ().getFramebuffer () : CWallpaper::getWallpaperFramebuffer ();
+}
+
+GLuint CScene::getWallpaperTexture () const {
+    return this->m_hdrBloom ? this->m_hdrBloom->output ().getTextureID (0) : CWallpaper::getWallpaperTexture ();
 }
 
 glm::ivec2 CScene::getFramebufferSize () const {
@@ -691,7 +711,7 @@ void CScene::updateOutputSize (const glm::ivec4& viewport) {
     if (size != this->m_outputSize) {
 	this->m_outputSize = size;
 	const auto sceneSize = glm::max (calculateTargetSize (size, this->getRenderScale ()),
-            glm::uvec2 (1));
+            glm::uvec2 (this->m_hdrEnabled ? 2 : 1));
 	this->find ("_rt_FullFrameBuffer")->resize (sceneSize.x, sceneSize.y);
 	for (const auto& [name, divisor] : std::array<std::pair<const char*, uint32_t>, 3> {
 	    { { "_rt_4FrameBuffer", 4 }, { "_rt_8FrameBuffer", 8 }, { "_rt_Bloom", 8 } } }) {
@@ -975,7 +995,12 @@ void CScene::renderFrame (const glm::ivec4& viewport) {
 	glBindFramebuffer (GL_DRAW_FRAMEBUFFER, previousDraw);
 	if (scissor) glEnable (GL_SCISSOR_TEST);
     }
-    if (this->m_bloomObject != nullptr && enabledByDebug (this->m_bloomObject)) {
+    if (this->m_hdrBloom != nullptr) {
+        this->m_hdrBloom->render (!renderOrder.empty ()
+            && this->getScene ().camera.bloom.enabled->value->getBool ()
+            && (!debug.objectFilter.has_value () || debug.objectFilter.value () == -1)
+            && std::ranges::find (debug.skipObjects, -1) == debug.skipObjects.end ());
+    } else if (this->m_bloomObject != nullptr && enabledByDebug (this->m_bloomObject)) {
 	this->m_bloomObject->render ();
     }
 }
@@ -1028,6 +1053,11 @@ void CScene::registerFogScripts () {
     queue ("bloomstrength", scene.camera.bloom.strength);
     queue ("bloomthreshold", scene.camera.bloom.threshold);
     queue ("bloomtint", scene.camera.bloom.tint);
+    queue ("bloomhdrstrength", scene.camera.bloom.hdr.strength);
+    queue ("bloomhdrthreshold", scene.camera.bloom.hdr.threshold);
+    queue ("bloomhdrfeather", scene.camera.bloom.hdr.feather);
+    queue ("bloomhdrscatter", scene.camera.bloom.hdr.scatter);
+    queue ("bloomhdriterations", scene.camera.bloom.hdr.iterations);
     queue ("cameraparallax", scene.camera.parallax.enabled);
     queue ("cameraparallaxamount", scene.camera.parallax.amount);
     queue ("cameraparallaxdelay", scene.camera.parallax.delay);
