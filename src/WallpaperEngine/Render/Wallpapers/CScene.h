@@ -29,6 +29,8 @@ class CImage;
 namespace WallpaperEngine::Render::Wallpapers {
 using namespace WallpaperEngine::Data::Model;
 
+class HdrBloom;
+
 class CScene final : public CWallpaper {
 public:
     CScene (
@@ -48,6 +50,12 @@ public:
     void setScriptCameraTransform (const CameraTransform& transform);
 
     [[nodiscard]] const Scene& getScene () const;
+    [[nodiscard]] bool isHdr () const { return m_hdrEnabled; }
+    [[nodiscard]] TextureFormat getColorFormat () const {
+        return m_hdrEnabled ? TextureFormat_RGBA16161616f : TextureFormat_ARGB8888;
+    }
+    [[nodiscard]] GLuint getWallpaperFramebuffer () const override;
+    [[nodiscard]] GLuint getWallpaperTexture () const override;
     /** Authored textures resolve against this scene's assets and user properties. */
     [[nodiscard]] std::shared_ptr<const TextureProvider> resolveTexture (const std::string& name) const;
 
@@ -265,6 +273,8 @@ private:
     glm::vec2 m_outputSize = { 1, 1 };
     std::shared_ptr<CFBO> m_mipMappedFramebuffer;
     void updateOutputSize (const glm::ivec4& viewport);
+    bool m_hdrEnabled = false;
+    std::unique_ptr<HdrBloom> m_hdrBloom;
     ObjectUniquePtr m_bloomObjectData;
     CObject* m_bloomObject = nullptr;
     bool m_bloomSetupAttempted = false;

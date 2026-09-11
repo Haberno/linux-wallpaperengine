@@ -2076,7 +2076,7 @@ void CParticle::setupPass () {
     if (m_hasRefract) {
 	const glm::vec2 size = getScene ().getOutputSize ();
 	m_refractFBO = m_passFBOProvider->create (
-	    "_rt_FullFrameBuffer", TextureFormat_ARGB8888, TextureFlags_ClampUVs, 1.0f, size, size
+	    "_rt_FullFrameBuffer", this->getScene ().getColorFormat (), TextureFlags_ClampUVs, 1.0f, size, size
 	);
     }
 
