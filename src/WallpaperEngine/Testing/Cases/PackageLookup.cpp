@@ -4,7 +4,9 @@
 #include "WallpaperEngine/FileSystem/Adapters/Directory.h"
 #include "WallpaperEngine/Assets/AssetLoadException.h"
 #include "WallpaperEngine/Assets/AssetLocator.h"
+#include "WallpaperEngine/WebBrowser/CEF/ResourceRange.h"
 #include <fstream>
+#include <tuple>
 #include <unistd.h>
 
 using namespace WallpaperEngine::Data::Assets;
@@ -69,6 +71,27 @@ TEST_CASE ("loose assets resolve Windows casing while preserving exact matches",
     CHECK_FALSE (adapter.exists ("LINK/OUTSIDE.JS"));
     CHECK_THROWS (adapter.open ("../wallpaper-neighbor/outside.js"));
     CHECK_THROWS (adapter.physicalPath ("LINK/OUTSIDE.JS"));
+}
+
+TEST_CASE ("web media byte ranges bound seek responses", "[web][range]") {
+    using WallpaperEngine::WebBrowser::CEF::parseResourceRange;
+    for (const auto& [header, offset, length] : {
+	     std::tuple { "", 0, 10 }, { "bytes=0-", 0, 10 }, { "bytes=4-", 4, 6 },
+	     { "bytes=2-5", 2, 4 }, { "bytes=8-99", 8, 2 }, { "bytes=-3", 7, 3 }, { "bytes=-20", 0, 10 }
+	 }) {
+	INFO (header);
+	const auto range = parseResourceRange (header, 10);
+	REQUIRE (range.has_value ());
+	CHECK (range->offset == offset);
+	CHECK (range->length == length);
+    }
+    for (const auto* header : { "bytes=10-", "bytes=5-3", "bytes=-0", "bytes=a-3", "bytes=0-1,4-5", "items=0-2" }) {
+	INFO (header);
+	CHECK_FALSE (parseResourceRange (header, 10).has_value ());
+    }
+    CHECK_FALSE (parseResourceRange ("bytes=0-", 0).has_value ());
+    REQUIRE (parseResourceRange ("", 0).has_value ());
+    CHECK (parseResourceRange ("", 0)->length == 0);
 }
 
 TEST_CASE ("short workshop shader paths fail normally and valid overrides still resolve", "[assets]") {

@@ -51,7 +51,7 @@ private:
     // the wallpaper's properties, by calling the page's __wp* entry points.
     void pushBridgeData ();
     std::string m_lastArtSent;
-    bool m_propertiesSent = false;
+    uint64_t m_propertiesGeneration = 0;
     uint64_t m_frame = 0;
 
 private:

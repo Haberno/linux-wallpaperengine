@@ -52,6 +52,9 @@ void BrowserApp::OnBeforeCommandLineProcessing (const CefString& process_type, C
     const bool hasWaylandDisplay = waylandDisplay != nullptr && waylandDisplay[0] != '\0';
 
     if (sessionIsWayland || hasWaylandDisplay) {
+	// Software-decoded video frames cannot reliably map NVIDIA DMA-BUFs in CEF OSR.
+	// Keep normal GPU/WebGL rendering, but upload video frames without that buffer pool.
+	command_line->AppendSwitch ("--disable-gpu-memory-buffer-video-frames");
 	// Overridable for testing which backend gives stable GPU compositing
 	// (needed for CSS backdrop-filter). Defaults match the previous behaviour.
 	const char* ozEnv = std::getenv ("WPE_CEF_OZONE");
