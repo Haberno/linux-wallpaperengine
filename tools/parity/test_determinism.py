@@ -108,6 +108,7 @@ class DeterminismTests(unittest.TestCase):
                         input=np.full((4, 8, 10, 3), 96, np.uint8).tobytes(), check=True)
                     determinism.write_json(folder / f'{role}.json', {'status': 'captured',
                         'video': {'sha256': determinism.sha256(video)}, 'mapped_artifacts': [{'path': role, 'sha256': role}],
+                        'mapped_artifacts_after_capture': [{'path': role, 'sha256': role}],
                         'launch_monotonic_ns': 1 if run == 'first' else 2,
                         'acquisition_launch_monotonic_ns': 3 if run == 'first' else 4,
                         'scenario_sha256': controls['scenario_sha256'], 'config_sha256': 'configuration',
@@ -115,6 +116,16 @@ class DeterminismTests(unittest.TestCase):
             result = determinism.verify_repeats(controls, root / 'first', root / 'second')
             self.assertEqual(result['status'], 'repeatable_for_tested_scenario_window')
             self.assertTrue(result['determinism_verified'])
+            changed_driver = root / 'second/reference.json'
+            original_driver = changed_driver.read_text()
+            metadata = json.loads(original_driver)
+            metadata['mapped_artifacts_after_capture'] = [{'path': 'driver', 'sha256': 'changed'}]
+            determinism.write_json(changed_driver, metadata)
+            self.assertEqual(determinism.verify_repeats(controls, root / 'first', root / 'second')['status'], 'blocked')
+            metadata.pop('mapped_artifacts_after_capture')
+            determinism.write_json(changed_driver, metadata)
+            self.assertEqual(determinism.verify_repeats(controls, root / 'first', root / 'second')['status'], 'blocked')
+            changed_driver.write_text(original_driver)
             reused = determinism.verify_repeats(controls, root / 'first', root / 'first')
             self.assertEqual(reused['status'], 'blocked')
             first_meta = root / 'first/reference.json'

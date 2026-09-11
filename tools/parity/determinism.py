@@ -162,6 +162,8 @@ def verify_repeats(controls, first, second):
                     blockers.append(f'{role} {label}: capture status/video artifact binding invalid')
                 if not info.get('mapped_artifacts'):
                     blockers.append(f'{role} {label}: loaded renderer/driver artifact identity missing')
+                if info.get('mapped_artifacts_after_capture') != info.get('mapped_artifacts'):
+                    blockers.append(f'{role} {label}: loaded renderer/driver capture boundary identity missing or changed')
                 if (info.get('scenario_sha256') != sha256(run / 'scenario.json') or
                         not scenario.get('config_sha256') or info.get('config_sha256') != scenario['config_sha256'] or
                         info.get('input_asset_digest') != asset_digest(scenario.get('captured_files', [])) or

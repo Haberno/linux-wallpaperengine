@@ -283,10 +283,12 @@ def worker(args, scenario):
             else:
                 raise TimeoutError(f'{role} readiness timeout; no owned full-size drawable')
             result.update(xid=found[0], pid=found[1], window_ready_monotonic_ns=time.monotonic_ns())
-            result['mapped_artifacts'] = mapped_identity(found[1], role)
             time.sleep(args.warmup)
             if owned_window(x11, root, role, proc) != found or x11.size(found[0]) != [width, height]:
                 raise RuntimeError('Owned window changed before capture')
+            # Native creates its window before loading the graphics driver.
+            # Bind the recording after warmup, then verify its closing boundary.
+            result['mapped_artifacts'] = mapped_identity(found[1], role)
             output = out / f'{role}.mkv'
             frames = round(args.duration * fps)
             recording = video_command(env['DISPLAY'], found[0], width, height, fps, frames, output)
@@ -302,6 +304,9 @@ def worker(args, scenario):
                 raise RuntimeError('Encoded video geometry/frame count differs from requested capture')
             if owned_window(x11, root, role, proc) != found or x11.size(found[0]) != [width, height]:
                 raise RuntimeError('Owned window changed during capture')
+            result['mapped_artifacts_after_capture'] = mapped_identity(found[1], role)
+            if result['mapped_artifacts_after_capture'] != result['mapped_artifacts']:
+                raise RuntimeError('Loaded renderer/driver artifacts changed during capture')
             result['generated_shader_cache'] = check_input_boundary(root / 'item', scenario['captured_files'])
             result['inputs_unchanged_after_capture'] = True
             if role == 'reference' and native_log.exists():
