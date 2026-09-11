@@ -3,6 +3,7 @@
 #include <string>
 
 #include "WallpaperEngine/Assets/AssetLocator.h"
+#include "ResourceRange.h"
 
 #include "include/cef_resource_handler.h"
 #include "include/wrapper/cef_helpers.h"
@@ -30,6 +31,8 @@ public:
 
     void Cancel () override;
 
+    bool Skip (int64_t bytes_to_skip, int64_t& bytes_skipped, CefRefPtr<CefResourceSkipCallback> callback) override;
+
     bool
     Read (void* data_out, int bytes_to_read, int& bytes_read, CefRefPtr<CefResourceReadCallback> callback) override;
 
@@ -39,6 +42,10 @@ private:
     const AssetLocator& m_assetLoader;
     ReadStreamSharedPtr m_contents = nullptr;
     std::string m_mimeType;
+    int64_t m_length = 0;
+    int64_t m_position = 0;
+    std::optional<ResourceRange> m_range;
+    bool m_partialResponse = false;
 
     IMPLEMENT_REFCOUNTING (WPSchemeHandler);
     DISALLOW_COPY_AND_ASSIGN (WPSchemeHandler);

@@ -244,10 +244,15 @@ void CWeb::pushBridgeData () {
     audio += "])";
     frame->ExecuteJavaScript (audio, url, 0);
 
-    // Properties: deliver the wallpaper's typed property values once (the page may wait for
-    // applyUserProperties before initialising).
-    if (!this->m_propertiesSent) {
-	this->m_propertiesSent = true;
+    // Deliver settings after each main document loads, including reloads. The bridge queues
+    // them if the page installs its listener asynchronously after the load event.
+    if (this->m_client->getLoadGeneration () != this->m_propertiesGeneration) {
+	this->m_propertiesGeneration = this->m_client->getLoadGeneration ();
+	frame->ExecuteJavaScript (
+	    "window.__wpApplyGeneral&&window.__wpApplyGeneral({fps:"
+		+ std::to_string (this->getContext ().getApp ().getContext ().settings.render.maximumFPS) + "})",
+	    url, 0
+	);
 	std::string props = "{";
 	bool first = true;
 	for (const auto& [name, prop] : this->getWeb ().project.properties) {

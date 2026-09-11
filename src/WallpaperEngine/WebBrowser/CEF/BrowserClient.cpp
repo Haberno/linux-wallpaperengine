@@ -12,6 +12,15 @@ CefRefPtr<CefRenderHandler> BrowserClient::GetRenderHandler () { return m_render
 
 CefRefPtr<CefLifeSpanHandler> BrowserClient::GetLifeSpanHandler () { return this; }
 
+CefRefPtr<CefLoadHandler> BrowserClient::GetLoadHandler () { return this; }
+
+void BrowserClient::OnLoadEnd (CefRefPtr<CefBrowser> browser, CefRefPtr<CefFrame> frame, int httpStatusCode) {
+    CEF_REQUIRE_UI_THREAD ();
+    if (frame->IsMain ()) {
+	++m_loadGeneration;
+    }
+}
+
 void BrowserClient::OnAfterCreated (CefRefPtr<CefBrowser> browser) {
     CEF_REQUIRE_UI_THREAD ();
     this->m_browserContext.onBrowserCreated (browser);
