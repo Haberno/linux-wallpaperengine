@@ -34,6 +34,8 @@ public:
      * @return The texture's height
      */
     [[nodiscard]] virtual uint32_t getTextureHeight (uint32_t imageIndex) const = 0;
+    /** Allocated mip-level count for the bound image, not the highest LOD index. */
+    [[nodiscard]] virtual uint32_t getMipMapCount (uint32_t imageIndex) const { return 1; }
     /**
      * @return The textures real width
      */

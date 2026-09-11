@@ -45,21 +45,21 @@ std::shared_ptr<CFBO> FBOProvider::create (const FBO& base, uint32_t flags, cons
     );
     return this->m_fbos[base.name] = std::make_shared<CFBO> (
 	       base.name,
-	       // TODO: PROPERLY DETERMINE FBO FORMAT BASED ON THE STRING
-	       TextureFormat_ARGB8888, flags, base.scale, targetSize.x, targetSize.y, targetSize.x, targetSize.y
+	       (base.format == "rgba16161616f" || base.format == "rgba16f")
+		   ? TextureFormat_RGBA16161616f : TextureFormat_ARGB8888, flags, base.scale, targetSize.x, targetSize.y, targetSize.x, targetSize.y
 	   );
 }
 
 std::shared_ptr<CFBO> FBOProvider::create (
     const std::string& name, TextureFormat format, uint32_t flags, float scale, glm::vec2 realSize,
-    glm::vec2 textureSize, bool withDepthBuffer, bool depthTexture
+    glm::vec2 textureSize, bool withDepthBuffer, bool depthTexture, uint32_t samples
 ) {
     const bool scalable = !isFixedSizeTarget (name);
     const auto scaledRealSize = calculateTargetSize (realSize, this->m_renderScale, scalable);
     const auto scaledTextureSize = calculateTargetSize (textureSize, this->m_renderScale, scalable);
     return this->m_fbos[name] = std::make_shared<CFBO> (
-	       name, TextureFormat_ARGB8888, flags, scale, scaledRealSize.x, scaledRealSize.y, scaledTextureSize.x,
-	       scaledTextureSize.y, withDepthBuffer, depthTexture
+	       name, format, flags, scale, scaledRealSize.x, scaledRealSize.y, scaledTextureSize.x,
+	       scaledTextureSize.y, withDepthBuffer, depthTexture, samples
 	   );
 }
 
