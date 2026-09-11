@@ -2,6 +2,7 @@
 
 #include <functional>
 #include <array>
+#include <cstdint>
 #include <glm/gtc/type_ptr.hpp>
 #include <set>
 #include <utility>
@@ -67,6 +68,7 @@ public:
     [[nodiscard]] std::optional<std::reference_wrapper<std::string>> getTarget () const;
     [[nodiscard]] Render::Shaders::Shader* getShader () const;
     [[nodiscard]] GLuint getProgramID () const;
+    [[nodiscard]] uint64_t getShaderRevision () const;
 
     // Custom geometry rendering support (for particles, etc.)
     using GeometryCallback = std::function<void ()>;
@@ -155,6 +157,9 @@ private:
     };
 
     void setupShaders ();
+    void releaseShaders ();
+    void updateFogShader ();
+    [[nodiscard]] glm::ivec2 fogCombos () const;
     void setupProgramSharing ();
     void leaveProgramSharing ();
     void setupShaderVariables ();
@@ -218,6 +223,14 @@ private:
     std::vector<std::unique_ptr<AttribEntry>> m_attribs = {};
     std::map<std::string, std::unique_ptr<UniformEntry>> m_uniforms = {};
     std::map<std::string, std::unique_ptr<ReferenceUniformEntry>> m_referenceUniforms = {};
+    struct ExternalUniform {
+	UniformType type;
+	const void* value;
+	int count;
+    };
+    /** Owner bindings (bones, particle basis, etc.) survive scene shader changes,
+     *  including uniforms absent from the initially compiled variant. */
+    std::map<std::string, ExternalUniform> m_externalUniforms;
     /** Shader uniforms supplied by authored pass/effect constants. These take precedence over
      *  generic object uniforms with the same GLSL name. */
     std::set<std::string> m_constantUniforms = {};
@@ -262,6 +275,8 @@ private:
      */
     std::unique_ptr<Render::Shaders::Shader> m_shader = nullptr;
     bool m_shaderInitialized = false;
+    uint64_t m_shaderRevision = 0;
+    glm::ivec2 m_fogCombos = {};
 
     std::shared_ptr<const CFBO> m_drawTo = nullptr;
     std::shared_ptr<const TextureProvider> m_input = nullptr;

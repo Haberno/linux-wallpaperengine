@@ -278,6 +278,7 @@ private:
 
     // OpenGL buffers
     GLuint m_vao { 0 };
+    uint64_t m_vaoShaderRevision { 0 };
     GLuint m_vbo { 0 };
     GLuint m_ebo { 0 };
     GLint m_prevVAO { 0 };

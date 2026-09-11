@@ -66,15 +66,24 @@ void CPass::initialize () {
     if (m_shaderInitialized) return;
     setupShaders ();
     m_shaderInitialized = true;
+    ++m_shaderRevision;
 }
 
 CPass::~CPass () {
+    this->releaseShaders ();
+
+    glDeleteVertexArrays (1, &m_vao);
+    this->m_vao = GL_NONE;
+}
+
+void CPass::releaseShaders () {
     // release the usage counts taken in setupTextureUniforms so videos that are no
     // longer referenced by any pass can stop decoding
     this->adjustTextureUsageCounts (false);
 
-    glDeleteVertexArrays (1, &m_vao);
-    this->m_vao = GL_NONE;
+    this->m_sharedProgram.reset ();
+    this->m_programSharingGroup.reset ();
+    this->m_programSharingChecked = false;
 
     // destroy shader programs
     if (!glIsProgram (this->m_programID)) {
@@ -520,6 +529,7 @@ void CPass::cleanupRenderSetup () {
 }
 
 void CPass::render () {
+    this->updateFogShader ();
     // created lazily on the render thread: VAOs are not shared between GL contexts,
     // so an async-built wallpaper cannot create it on the worker's context
     if (this->m_vao == GL_NONE) {
@@ -668,6 +678,8 @@ Render::Shaders::Shader* CPass::getShader () const { return this->m_shader.get (
 
 GLuint CPass::getProgramID () const { return this->m_programID; }
 
+uint64_t CPass::getShaderRevision () const { return this->m_shaderRevision; }
+
 void CPass::setGeometryCallback (
     GeometryCallback setupAttribs, GeometryCallback drawGeometry, GeometryCallback cleanupAttribs
 ) {
@@ -705,15 +717,13 @@ void CPass::setupShaders () {
     // genericimage shaders gate fog with FOG_COMPUTED, but generic4 selects its fog
     // branches directly with FOG_DIST/FOG_HEIGHT. Respect an explicit FOG=0 in both
     // paths, or additive details acquire colored rectangles from the scene fog.
-    const auto& fog = this->m_renderable.getScene ().getFog ();
     const auto fogOverride = this->m_override.combos.find ("FOG");
     const auto fogMaterial = this->m_pass.combos.find ("FOG");
     const bool materialFogEnabled = fogOverride != this->m_override.combos.end () ? fogOverride->second != 0
 	: fogMaterial != this->m_pass.combos.end () && fogMaterial->second != 0;
-    const bool materialFogDisabled = fogOverride != this->m_override.combos.end () ? fogOverride->second == 0
-	: fogMaterial != this->m_pass.combos.end () && fogMaterial->second == 0;
-    this->m_combos.insert_or_assign ("FOG_DIST", fog.distanceEnabled && !materialFogDisabled ? 1 : 0);
-    this->m_combos.insert_or_assign ("FOG_HEIGHT", fog.heightEnabled && !materialFogDisabled ? 1 : 0);
+    this->m_fogCombos = this->fogCombos ();
+    this->m_combos.insert_or_assign ("FOG_DIST", this->m_fogCombos.x);
+    this->m_combos.insert_or_assign ("FOG_HEIGHT", this->m_fogCombos.y);
     this->m_combos.insert_or_assign ("FOG_COMPUTED", materialFogEnabled ? 1 : 0);
 
     // scenes with lights need LightingV1 modules compiled with matching uniform array sizes;
@@ -828,6 +838,15 @@ void CPass::setupShaders () {
 	overrideTextures, this->m_override.constants
     );
 
+    // Stock image materials opt into fog in shader metadata when the material
+    // omits FOG. That default is discovered only after loading the shader.
+    if (fogOverride == this->m_override.combos.end () && fogMaterial == this->m_pass.combos.end ()) {
+	const auto& defaults = this->m_shader->getFragment ().getDiscoveredCombos ();
+	if (const auto it = defaults.find ("FOG"); it != defaults.end ()) {
+	    this->m_combos.insert_or_assign ("FOG_COMPUTED", it->second != 0 ? 1 : 0);
+	}
+    }
+
     // Samplers the shader declares itself (the "formatcombo":true defaults, like generic4's
     // toon shading gradient) are only discovered while the units preprocess, which happens in
     // the constructor above. ShaderUnit keeps m_combos by reference and only emits the #define
@@ -856,6 +875,43 @@ void CPass::setupShaders () {
     // support three textures for now
     this->g_Texture0Rotation = glGetUniformLocation (this->m_programID, "g_Texture0Rotation");
     this->g_Texture0Translation = glGetUniformLocation (this->m_programID, "g_Texture0Translation");
+}
+
+glm::ivec2 CPass::fogCombos () const {
+    const auto fogOverride = this->m_override.combos.find ("FOG");
+    const auto fogMaterial = this->m_pass.combos.find ("FOG");
+    const bool disabled = fogOverride != this->m_override.combos.end () ? fogOverride->second == 0
+	: fogMaterial != this->m_pass.combos.end () && fogMaterial->second == 0;
+    const auto& fog = this->m_renderable.getScene ().getFog ();
+    return { fog.distanceEnabled && !disabled, fog.heightEnabled && !disabled };
+}
+
+void CPass::updateFogShader () {
+    if (this->m_fogCombos == this->fogCombos ()) return;
+
+    // Scene scripts update these flags after construction. Re-select the actual
+    // shader branches; zeroing density alone would leave authored #if behavior
+    // and newly active uniforms wrong. GLSL/program caches reuse prior variants.
+    this->releaseShaders ();
+    this->m_shaderInitialized = false;
+    this->m_uniforms.clear ();
+    this->m_referenceUniforms.clear ();
+    this->m_animatedUniforms.clear ();
+    this->m_constantUniforms.clear ();
+    this->m_attribs.clear ();
+    this->m_textures.clear ();
+    this->m_textureTexels.clear ();
+    this->m_combos.clear ();
+    this->initialize ();
+
+    for (const auto& [name, binding] : this->m_externalUniforms) {
+	const GLint id = glGetUniformLocation (this->m_programID, name.c_str ());
+	if (id < 0) continue;
+	this->m_referenceUniforms.erase (name);
+	this->m_uniforms.insert_or_assign (
+	    name, std::make_unique<UniformEntry> (id, name, binding.type, binding.value, binding.count)
+	);
+    }
 }
 
 void CPass::setupAttributes () {
@@ -1286,6 +1342,9 @@ template <typename T> void CPass::addUniform (const std::string& name, UniformTy
 }
 
 template <typename T> void CPass::addUniform (const std::string& name, UniformType type, T* value, int count) {
+    if (this->m_shaderInitialized) {
+	this->m_externalUniforms.insert_or_assign (name, ExternalUniform { type, value, count });
+    }
     // this version is used to reference to system variables so things like g_Time works fine
     GLint id = glGetUniformLocation (this->m_programID, name.c_str ());
 
