@@ -10,6 +10,38 @@ from scene_render import render_scene
 
 @unittest.skipUnless(os.environ.get('LWE_TEST_BINARY'), 'Set LWE_TEST_BINARY for graphics tests')
 class DynamicLayers(unittest.TestCase):
+    def test_config_vectors_and_nested_script_properties(self):
+        script = """
+export function init() {
+    const config = {
+        image: 'models/util/solidlayer.json', name: 'vector clone',
+        origin: { value: new Vec3(160, 90, 0),
+            script: 'export var scriptProperties = createScriptProperties(); export function init(value) { if (scriptProperties.probe.w !== 4 || Math.abs(scriptProperties.probe.x - 1e-8) > 1e-14) throw Error("nested vector lost"); return value; }',
+            scriptproperties: { probe: new Vec4(1e-8, 2, 3, 4) } },
+        size: new Vec2(40, 30), scale: new Vec3(1, 1, 1),
+        angles: new Vec3(0, 0, Math.PI / 2), color: new Vec3(1, 0, 0)
+    };
+    const clone = thisScene.createLayer(config);
+    if (!clone || clone.origin.x !== 160 || clone.origin.y !== 90 ||
+        clone.scale.x !== 1 || Math.abs(clone.angles.z - 90) > .01)
+        throw Error('layer vector configuration lost');
+    if (!(config.origin.value instanceof Vec3) || config.origin.value.x !== 160 ||
+        !(config.origin.scriptproperties.probe instanceof Vec4))
+        throw Error('caller configuration mutated');
+    console.log('CONFIG_VECTORS_OK');
+}
+"""
+        scene = {
+            'camera': {'eye': '0 0 500', 'center': '0 0 0', 'up': '0 1 0'},
+            'general': {'orthogonalprojection': {'width': 320, 'height': 180},
+                        'clearcolor': '0 0 0', 'camerafade': False},
+            'objects': [{'id': 1, 'name': 'controller', 'solid': True,
+                         'visible': {'value': True, 'script': script}}]}
+        with tempfile.TemporaryDirectory(prefix='lwe-config-vectors-') as directory:
+            frame, output = render_scene(self, Path(directory), scene)
+        self.assertIn('CONFIG_VECTORS_OK', output)
+        self.assertEqual(frame.getpixel((160, 90)), (255, 0, 0))
+
     def test_saved_vectors_expire_after_layer_destruction(self):
         script = """
 let origin, snapshot, copy, savedCopy, savedLength, checked = false;
