@@ -118,6 +118,32 @@ TEST_CASE ("vector shader defaults accept numbers without dropping the layer", "
     }
 }
 
+TEST_CASE ("shader vector defaults accept comma separated components", "[shader][parameter][regression]") {
+    const auto assets = shaderAssets ("");
+    const ShaderConstantMap constants;
+    const TextureMap textures;
+    const ComboMap combos;
+    // Rain Drop on Glass (3755078205) uses comma-separated color defaults.
+    // Metadata must load even when the effect supplies its own color values.
+    ShaderUnit unit (
+	GLSLContext::UnitType_Fragment, "rain_defaults.frag",
+	"uniform vec2 u_Pos; // {\"material\":\"pos\",\"default\":\"0.10, 0.11\"}\n"
+	"uniform vec3 u_Color; // {\"material\":\"color\",\"default\":\"0.10,0.11,0.12\"}\n"
+	"uniform vec4 u_Depth; // {\"material\":\"depth\",\"default\":\"0.10 , 0.11 ,0.12, 0.13\"}\n"
+	"void main() { gl_FragColor = vec4(u_Pos, u_Color.x, 1.0) * u_Depth; }\n",
+	*assets, constants, textures, textures, combos, combos
+    );
+    const auto& parameters = unit.getParameters ();
+    REQUIRE (parameters.size () == 3);
+    CHECK (parameters[0]->getVec2 () == glm::vec2 (0.10f, 0.11f));
+    CHECK (parameters[1]->getVec3 () == glm::vec3 (0.10f, 0.11f, 0.12f));
+    CHECK (parameters[2]->getVec4 () == glm::vec4 (0.10f, 0.11f, 0.12f, 0.13f));
+    const auto translated = GLSLContext::get ().toGlsl (
+	"#version 330\nvoid main() { gl_Position = vec4(0.0); }\n", unit.compile ()
+    );
+    CHECK_FALSE (translated.second.empty ());
+}
+
 TEST_CASE ("legacy shaders can use GLSL reserved input and output identifiers", "[shader][regression]") {
     const auto fragment = compileFragment (
 	"", "// input and output in comments stay intact\n"
@@ -191,6 +217,35 @@ TEST_CASE ("authored local copies of fragment inputs are left intact", "[shader]
 	"varying vec4 timer;\nvarying vec4 rValue;\n"
 	"void main() { float timer = 0.25; vec4 rValue = vec4(0.5);\n"
 	"timer += 0.25; rValue.xy *= timer; gl_FragColor = rValue; }\n", {}
+    );
+    const auto translated = GLSLContext::get ().toGlsl (vertex, fragment);
+    CHECK_FALSE (translated.first.empty ());
+    CHECK_FALSE (translated.second.empty ());
+}
+
+TEST_CASE ("writable vertex inputs preserve their incoming values and conditional types", "[shader][attribute]") {
+    for (const int wide : { 0, 1, 0 }) {
+	const auto [vertex, fragment] = compileLinked (
+	    "#if WIDE\nattribute vec4 a_TexCoord;\n#else\nattribute vec2 a_TexCoord;\n#endif\n"
+	    "attribute vec3 a_Position;\nvarying vec2 v_TexCoord;\n"
+	    "void main() { a_TexCoord *= 0.5; a_TexCoord += 0.25;\n"
+	    "v_TexCoord = a_TexCoord.xy; gl_Position = vec4(a_Position, 1.0); }\n",
+	    "varying vec2 v_TexCoord;\nvoid main() { gl_FragColor = vec4(v_TexCoord, 0.0, 1.0); }\n",
+	    { { "WIDE", wide } }
+	);
+	const auto translated = GLSLContext::get ().toGlsl (vertex, fragment);
+	CHECK_FALSE (translated.first.empty ());
+	CHECK_FALSE (translated.second.empty ());
+	CHECK (vertex.find ("a_Position = a_Position;") == std::string::npos);
+    }
+}
+
+TEST_CASE ("authored local copies of vertex inputs are left intact", "[shader][attribute]") {
+    const auto [vertex, fragment] = compileLinked (
+	"attribute vec2 a_TexCoord;\nvarying vec2 v_TexCoord;\n"
+	"void main() { vec2 a_TexCoord = a_TexCoord; a_TexCoord *= 0.5;\n"
+	"v_TexCoord = a_TexCoord; gl_Position = vec4(0.0); }\n",
+	"varying vec2 v_TexCoord;\nvoid main() { gl_FragColor = vec4(v_TexCoord, 0.0, 1.0); }\n", {}
     );
     const auto translated = GLSLContext::get ().toGlsl (vertex, fragment);
     CHECK_FALSE (translated.first.empty ());
