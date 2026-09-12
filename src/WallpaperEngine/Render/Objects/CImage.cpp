@@ -278,7 +278,7 @@ CImage::CImage (Wallpapers::CScene& scene, const Image& image) :
 	    m_effectSize = { m_texture->getRealWidth (), m_texture->getRealHeight () };
 	}
     }
-    if (image.model->fullscreen || isCompositionLayer ()) {
+    if (image.model->fullscreen || this->m_compositionFBO != nullptr) {
 	m_effectSize = scene.getOutputSize ();
     }
 
@@ -1386,7 +1386,7 @@ void CImage::setup () {
     }
 
     // TODO: SUPPORT PASSTHROUGH (IT'S A SHADER)
-    if (this->m_image.model->passthrough) {
+    if (this->m_image.model->passthrough && !this->isCompositionLayer ()) {
 	// passthrough images without effects are bad, do not draw them
 	if (this->m_image.effects.empty ()) {
 	    return;
@@ -1424,15 +1424,24 @@ void CImage::setup () {
 	    const auto combo = cur->combos.find (name);
 	    return combo != cur->combos.end () && combo->second != 0;
 	};
-	const bool prelighting = this->m_passes.empty () && cur->shader == "genericimage4"
+	const bool prelighting = this->m_passes.empty ()
+	    && (cur->shader == "genericimage4" || cur->shader == "genericimage3" || cur->shader == "genericimage2")
 	    && (comboEnabled ("LIGHTING") || comboEnabled ("REFLECTION"))
-	    && !this->getScene ().getScene ().camera.projection.isPerspective
 	    && !this->m_hasPuppetMesh && !this->m_image.model->passthrough && !debug.baseOnly
 	    && (!this->m_image.effects.empty () || this->m_image.colorBlendMode->value->getInt () > 0
 		|| this->m_image.model->material->passes.size () > 1);
+	ComboMap baseCombos;
+	if (prelighting) baseCombos.emplace ("PRELIGHTING", 1);
+	// Childless composition layers still publish the cropped background RGB
+	// for clipping consumers. With background copying disabled, the stock
+	// clear-alpha shader keeps that RGB while effects start with zero coverage.
+	if (this->isCompositionLayer () && this->m_compositionFBO == nullptr
+	    && !this->m_image.copyBackground) {
+	    baseCombos.emplace ("CLEARALPHA", 1);
+	}
 	auto* pass = new CPass (
 	    *this, std::make_shared<FBOProvider> (this), *cur, baseOverride, std::nullopt, std::nullopt,
-	    prelighting ? ComboMap { { "PRELIGHTING", 1 } } : ComboMap {}
+	    baseCombos
 	);
 	this->m_passes.push_back (pass);
 	if (prelighting) {
@@ -1494,7 +1503,7 @@ void CImage::setup () {
 	    // create all the fbos for this effect
 	    for (const auto& fbo : cur->effect->fbos) {
 		auto target = fboProvider->create (*fbo, this->m_texture->getFlags (), m_effectSize);
-		if (this->m_image.model->fullscreen || this->isCompositionLayer ()) {
+		if (this->m_image.model->fullscreen || this->m_compositionFBO != nullptr) {
 		    this->m_sceneEffectTargets.push_back ({ std::move (target), fbo.get () });
 		}
 	    }
@@ -1601,8 +1610,11 @@ void CImage::setup () {
 
     // extra render pass if there's any blending to be done
     if (!debug.baseOnly && this->m_image.colorBlendMode->value->getInt () > 0) {
+        const bool hasClipping = this->getImage ().model->puppetMesh.has_value ()
+            && !this->getImage ().model->puppetMesh->clippingDescriptors.empty ();
 	this->m_materials.colorBlending.material
-	    = MaterialParser::load (this->getScene ().getScene ().project, "materials/util/effectpassthrough.json");
+	    = MaterialParser::load (this->getScene ().getScene ().project,
+                hasClipping ? "materials/util/effectpassthrough_4.json" : "materials/util/effectpassthrough.json");
 	this->m_materials.colorBlending.override = std::make_unique<ImageEffectPassOverride> (ImageEffectPassOverride {
             .id = -1,
             .combos = {
@@ -1628,7 +1640,12 @@ void CImage::setup () {
     // a passthrough pass is position-neutral and safe to warp
     // A stable final pass also lets scripted effects switch without moving scene
     // geometry or depth/blend state onto a different effect shader.
-    if ((this->m_hasPuppetMesh || !m_passVisibility.empty ()) && this->m_passes.size () > 1) {
+    // The color-blending pass already provides stable final geometry. It must
+    // sample the background in scene coordinates, not fill a local image target
+    // with a miniature copy of the entire scene.
+    if ((debug.baseOnly || this->m_image.colorBlendMode->value->getInt () <= 0)
+        && (this->isCompositionLayer ()
+	    || ((this->m_hasPuppetMesh || !m_passVisibility.empty ()) && this->m_passes.size () > 1))) {
 	const bool hasClipping = this->getImage ().model->puppetMesh.has_value ()
 	    && !this->getImage ().model->puppetMesh->clippingDescriptors.empty ();
 	this->m_materials.compatibilityMaterials.emplace_back (
@@ -1767,6 +1784,7 @@ void CImage::setupPasses () {
 		.offscreenProjection = projection,
 		.offscreenProjectionInverse = inverseProjection,
 		.samplesSourceTexture = isFirstPass && this->m_puppetAlbedoFBO == nullptr,
+		.sceneBlending = this->m_material.passes.front ()->blending,
 	    };
 	}
 
@@ -1778,7 +1796,7 @@ void CImage::setupPasses () {
 	pass->setModelViewProjectionMatrix (projection);
 	pass->setModelViewProjectionMatrixInverse (inverseProjection);
 	if (this->m_finalPassRouting.has_value () && this->m_finalPassRouting->pass == pass) {
-	    this->updateFinalPassVisibility ();
+	    this->updateFinalPassVisibility (true);
 	}
 
 	texcoord = this->getTexCoordPass ();
@@ -1804,18 +1822,24 @@ bool CImage::shouldRenderFinalPass (bool isLastPass) const {
     return !(debug.noSolidFinal && this->getImage ().model->solidlayer);
 }
 
-void CImage::updateFinalPassVisibility () {
+void CImage::updateFinalPassVisibility (const bool force) {
     if (!this->m_finalPassRouting.has_value ()) {
 	return;
     }
-    const bool visible = this->getImage ().visible->value->getBool () && this->isVisibleThroughParents ();
-    if (visible == this->m_finalPassDrawsToScene) {
+    const bool emptyGeometry = this->m_image.sizeSpecified && !this->m_image.model->fullscreen
+	&& (this->m_image.size.x == 0.0f || this->m_image.size.y == 0.0f);
+    const bool visible = !emptyGeometry && this->getImage ().visible->value->getBool ()
+	&& this->isVisibleThroughParents ();
+    if (!force && visible == this->m_finalPassDrawsToScene) {
 	return;
     }
 
     const auto& route = *this->m_finalPassRouting;
     Effects::CPass* pass = route.pass;
     this->m_finalPassDrawsToScene = visible;
+    // A hidden layer publishes RGBA, including transparent pixels. Blending
+    // against an earlier ping-pong result resurrects keyed-out backgrounds.
+    pass->setBlendingMode (visible ? route.sceneBlending : BlendingMode_Normal);
     if (!visible) {
 	pass->setDestination (route.offscreenTarget);
 	pass->setPosition (route.offscreenPosition);
@@ -1913,8 +1937,8 @@ void CImage::pinpongFramebuffer (std::shared_ptr<const CFBO>* drawTo, std::share
 }
 
 void CImage::updateSceneTargets () const {
-    const bool sceneSized = this->m_image.model->fullscreen || this->isCompositionLayer ();
-    if (!sceneSized && this->m_puppetClippingFBO == nullptr) {
+    const bool sceneSized = this->m_image.model->fullscreen || this->m_compositionFBO != nullptr;
+    if (!sceneSized && this->m_puppetClippingFBO == nullptr && this->m_compositionFBO == nullptr) {
 	return;
     }
     const auto& outputSize = this->getScene ().getOutputSize ();
@@ -2337,6 +2361,19 @@ void CImage::updateScreenSpacePosition () {
 	this->m_sceneNormalModelMatrix = matrices.normalModel;
 	this->m_modelViewProjectionScreen = matrices.modelViewProjection;
 	this->m_modelViewProjectionScreenInverse = glm::inverse (this->m_modelViewProjectionScreen);
+	if (this->m_prelightingPass != nullptr) {
+	    // The first effect input is drawn in 0..size texture coordinates.
+	    // Lighting and reflections still need the quad's centered, aligned
+	    // coordinates transformed through the real 3D layer hierarchy.
+	    this->m_prelightingModelMatrix = glm::translate (
+		this->m_sceneModelMatrix, glm::vec3 (this->m_pos.x, this->m_pos.w, 0.0f)
+	    );
+	    this->m_prelightingModelMatrix = glm::scale (
+		this->m_prelightingModelMatrix,
+		glm::vec3 ((this->m_pos.z - this->m_pos.x) / this->m_size.x,
+		    (this->m_pos.y - this->m_pos.w) / this->m_size.y, 1.0f)
+	    );
+	}
 
 	if (this->getImage ().model->passthrough) {
 	    this->m_modelViewProjectionCopy = this->m_modelViewProjectionScreen;
@@ -2437,7 +2474,8 @@ const Image& CImage::getImage () const { return this->m_image; }
 
 bool CImage::isCompositionLayer () const {
     return this->m_image.model != nullptr
-	&& this->m_image.model->filename == "models/util/composelayer.json";
+	&& (this->m_image.model->filename == "models/util/composelayer.json"
+	    || this->m_image.model->filename == "models/util/composelayer_depthtest.json");
 }
 
 bool CImage::copiesCompositionBackground () const { return this->m_image.copyBackground; }
@@ -2449,6 +2487,10 @@ std::shared_ptr<const CFBO> CImage::getCompositionFBO () const {
 }
 
 glm::vec2 CImage::getSize () const {
+    if (this->m_image.sizeSpecified && !this->m_image.model->fullscreen
+	&& (this->m_image.size.x == 0.0f || this->m_image.size.y == 0.0f)) {
+	return this->m_image.size;
+    }
     if (this->m_size.x > 0.0f && this->m_size.y > 0.0f) {
 	return this->m_size;
     }

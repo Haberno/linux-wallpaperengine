@@ -161,7 +161,7 @@ private:
     );
     void uploadGeometryBuffers (const glm::vec2& size);
     [[nodiscard]] bool shouldRenderFinalPass (bool isLastPass) const;
-    void updateFinalPassVisibility ();
+    void updateFinalPassVisibility (bool force = false);
     bool configurePassTarget (
 	Effects::CPass* pass, std::shared_ptr<const CFBO>& drawTo,
 	const std::shared_ptr<const TextureProvider>& asInput, std::shared_ptr<const TextureProvider>& effectInput,
@@ -283,6 +283,7 @@ private:
 	const glm::mat4* offscreenProjection;
 	const glm::mat4* offscreenProjectionInverse;
 	bool samplesSourceTexture;
+	BlendingMode sceneBlending;
     };
     std::optional<FinalPassRouting> m_finalPassRouting;
     bool m_puppetFinalPassConfigured = false;

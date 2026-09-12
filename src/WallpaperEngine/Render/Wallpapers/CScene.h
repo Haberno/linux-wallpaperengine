@@ -181,6 +181,8 @@ public:
 	/** Fixed four-light interface used by older generic model shaders. */
 	std::array<glm::vec3, 4> legacyPositions = {};
 	std::array<glm::vec4, 4> legacyColors = {};
+	/** Four PBR light colors packed into three vec4s; the fourth RGB occupies w. */
+	std::array<glm::vec4, 3> legacyPremultipliedColors = {};
 	void updateLegacyPointLights ();
 	/** Native compact projection and 2x3 atlas block data, indexed like point arrays. */
 	std::vector<glm::vec4> pointShadowProjections = {};

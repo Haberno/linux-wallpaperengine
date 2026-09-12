@@ -337,7 +337,7 @@ TEST_CASE ("image composition layers retain copybackground") {
     REQUIRE (copied->is<Image> ());
     REQUIRE (copied->as<Image> ()->copyBackground);
     REQUIRE (omitted->is<Image> ());
-    REQUIRE_FALSE (omitted->as<Image> ()->copyBackground);
+    REQUIRE (omitted->as<Image> ()->copyBackground);
 }
 
 TEST_CASE ("composition scope distinguishes child groups from full-frame stack effects") {

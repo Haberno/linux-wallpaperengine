@@ -1543,9 +1543,19 @@ void CScene::SceneLights::updateLegacyPointLights () {
     this->legacyPositions.fill (glm::vec3 (0.0f));
     // Legacy shaders divide by radius even for unused lights.
     this->legacyColors.fill (glm::vec4 (0.0f, 0.0f, 0.0f, 1.0f));
+    this->legacyPremultipliedColors.fill (glm::vec4 (0.0f));
     for (int index = 0; index < std::min (this->pointCount, 4); ++index) {
 	this->legacyPositions[index] = glm::vec3 (this->pointOrigins[index]);
 	this->legacyColors[index] = this->pointColors[index];
+	const auto& color = this->pointColors[index];
+	const glm::vec3 radiance = glm::vec3 (color) * color.w * color.w;
+	if (index < 3) {
+	    this->legacyPremultipliedColors[index] = glm::vec4 (radiance, 0.0f);
+	} else {
+	    for (int channel = 0; channel < 3; ++channel) {
+		this->legacyPremultipliedColors[channel].w = radiance[channel];
+	    }
+	}
     }
 }
 
