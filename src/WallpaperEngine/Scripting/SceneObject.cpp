@@ -424,6 +424,30 @@ JSValue scene_get_layer_index (JSContext* ctx, JSValueConst this_val, int argc, 
     return JS_NewInt32 (ctx, container->getScene ().getScriptableLayerIndex (layer));
 }
 
+static JSValue layer_config_replacer (
+    JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv, int magic, JSValue* data
+) {
+    if (argc < 2) return JS_UNDEFINED;
+    const auto& adapters = get_opaque (data[0])->getEngine ().getAdapters ();
+    const int components = adapters.vec2->isInstance (argv[1]) ? 2
+	: adapters.vec3->isInstance (argv[1]) ? 3 : adapters.vec4->isInstance (argv[1]) ? 4 : 0;
+    if (components == 0) return JS_DupValue (ctx, argv[1]);
+
+    constexpr const char* names[] = { "x", "y", "z", "w" };
+    std::string text;
+    for (int i = 0; i < components; ++i) {
+	JSValue component = JS_GetPropertyStr (ctx, argv[1], names[i]);
+	if (JS_IsException (component)) return component;
+	const char* value = JS_ToCString (ctx, component);
+	JS_FreeValue (ctx, component);
+	if (value == nullptr) return JS_EXCEPTION;
+	if (i != 0) text += ' ';
+	text += value;
+	JS_FreeCString (ctx, value);
+    }
+    return JS_NewString (ctx, text.c_str ());
+}
+
 // Assets and full layer configurations share the native object parser.
 JSValue scene_create_layer (JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
     if (argc < 1) {
@@ -439,7 +463,13 @@ JSValue scene_create_layer (JSContext* ctx, JSValueConst this_val, int argc, JSV
 	JSValue file = JS_GetPropertyStr (ctx, source, "file");
 	if (!JS_IsString (file)) {
 	    JS_FreeValue (ctx, file);
-	    JSValue json = JS_JSONStringify (ctx, source, JS_UNDEFINED, JS_UNDEFINED);
+	    // Native vectors expose components through exotic accessors, so JSON's
+	    // ordinary own-property enumeration loses them. Convert just this layer
+	    // configuration, including nested property settings, without mutating it.
+	    JSValue functionData[] = { this_val };
+	    JSValue replacer = JS_NewCFunctionData (ctx, layer_config_replacer, 2, 0, 1, functionData);
+	    JSValue json = JS_JSONStringify (ctx, source, replacer, JS_UNDEFINED);
+	    JS_FreeValue (ctx, replacer);
 	    JS_FreeValue (ctx, source);
 	    if (JS_IsException (json)) return json;
 	    const char* data = JS_ToCString (ctx, json);
