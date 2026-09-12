@@ -9,6 +9,7 @@
 
 #include <chrono>
 #include <future>
+#include <list>
 #include <map>
 #include <memory>
 #include <optional>
@@ -208,6 +209,9 @@ private:
 
     std::map<std::string, std::unique_ptr<Modules::ScriptModule>> m_modules = {};
     std::map<std::string, LoadedModule> m_scriptModules = {};
+    // Map entries remain stable; the list preserves authored registration order
+    // even when a callback creates another layer and appends its scripts.
+    std::list<std::pair<const std::string*, LoadedModule*>> m_scriptModuleOrder;
 
     LoadedModule* m_runningModule = nullptr;
     bool m_sceneLayersReady = false;
