@@ -1613,14 +1613,10 @@ std::string ShaderUnit::applyHeaderMacroCompatibility (std::string source) const
     return source;
 }
 
-std::string ShaderUnit::applyFragmentWritableVaryings (std::string source) const {
-    if (this->m_type != GLSLContext::UnitType_Fragment) {
-	return source;
-    }
-
+std::string ShaderUnit::applyWritableInputs (std::string source) const {
     const std::string code = maskShaderComments (source);
-    // HLSL fragment inputs are writable copies. GLSL inputs are read-only;
-    // shadow only the inputs assigned by the authored fragment body.
+    // HLSL shader inputs are writable copies. GLSL inputs are read-only;
+    // shadow only the inputs assigned by the authored shader body.
     static const std::regex writePattern (R"(\b([A-Za-z_]\w*)(?:\.[xyzwrgba]+)?\s*[+\-*/]?=[^=])");
     std::set<std::string> written;
     for (std::sregex_iterator it (code.begin (), code.end (), writePattern), end; it != end; ++it) {
@@ -1659,7 +1655,9 @@ std::string ShaderUnit::applyFragmentWritableVaryings (std::string source) const
 	     it != end; ++it) {
 	    mainWritten.erase ((*it)[1].str ());
 	}
-	static const std::regex varyDecl (R"(^\s*varying\s+(\w+)\s+(\w+)\s*;)");
+	static const std::regex varyingDecl (R"(^\s*varying\s+(\w+)\s+(\w+)\s*;)");
+	static const std::regex attributeDecl (R"(^\s*attribute\s+(\w+)\s+(\w+)\s*;)");
+	const auto& inputDecl = m_type == GLSLContext::UnitType_Fragment ? varyingDecl : attributeDecl;
 	std::vector<std::string> conditions;
 	std::string aliases;
 	size_t position = 0;
@@ -1676,7 +1674,7 @@ std::string ShaderUnit::applyFragmentWritableVaryings (std::string source) const
 	    } else if (directive == "endif" && !conditions.empty ()) {
 		conditions.pop_back ();
 	    } else if (
-		std::regex_search (line, declaration, varyDecl) && mainWritten.contains (declaration[2].str ())
+		std::regex_search (line, declaration, inputDecl) && mainWritten.contains (declaration[2].str ())
 	    ) {
 		// Preserve the real preprocessor conditions instead of guessing their
 		// truth values. Cached source then works for every combo variant,
@@ -1798,23 +1796,31 @@ void ShaderUnit::parseParameterConfiguration (
 
     Variables::ShaderVariable* parameter = nullptr;
 
+    // Some workshop shader defaults use commas between vector components.
+    // Normalize metadata here without changing scene vector parsing.
+    std::string vectorDefault;
+    if ((type == "vec2" || type == "vec3" || type == "vec4") && defvalue->is_string ()) {
+	static const std::regex commaSeparator (R"(\s*,\s*)");
+	vectorDefault = std::regex_replace (defvalue->get<std::string> (), commaSeparator, " ");
+    }
+
     // Workshop metadata can use a scalar default for a vector (for example
     // Deformer Simulation's vec2 position defaults to 0). Expand that scalar
     // across the components, while preserving authored vector strings.
     if (type == "vec4") {
 	parameter = new Variables::ShaderVariableVector4 (
 	    defvalue->is_number () ? glm::vec4 (defvalue->get<float> ())
-				  : VectorBuilder::parse<glm::vec4> (defvalue->get<std::string> ())
+				  : VectorBuilder::parse<glm::vec4> (vectorDefault)
 	);
     } else if (type == "vec3") {
 	parameter = new Variables::ShaderVariableVector3 (
 	    defvalue->is_number () ? glm::vec3 (defvalue->get<float> ())
-				  : VectorBuilder::parse<glm::vec3> (defvalue->get<std::string> ())
+				  : VectorBuilder::parse<glm::vec3> (vectorDefault)
 	);
     } else if (type == "vec2") {
 	parameter = new Variables::ShaderVariableVector2 (
 	    defvalue->is_number () ? glm::vec2 (defvalue->get<float> ())
-				  : VectorBuilder::parse<glm::vec2> (defvalue->get<std::string> ())
+				  : VectorBuilder::parse<glm::vec2> (vectorDefault)
 	);
     } else if (type == "float") {
 	if (defvalue->is_string ()) {
@@ -2167,7 +2173,7 @@ const std::string& ShaderUnit::compile () {
     compatResult = this->applyMissingFragmentVaryingCompatibility (std::move (compatResult));
     compatResult = this->applyFloatTernaryCompatibility (std::move (compatResult));
     compatResult = this->applyBooleanArithmeticCompatibility (std::move (compatResult));
-    compatResult = this->applyFragmentWritableVaryings (std::move (compatResult));
+    compatResult = this->applyWritableInputs (std::move (compatResult));
     compatResult = this->applyFragmentTexCoordCompatibility (std::move (compatResult));
     compatResult = this->applyVectorBuiltinCompatibility (std::move (compatResult));
     compatResult = this->applyNumericParameterCallCompatibility (std::move (compatResult));

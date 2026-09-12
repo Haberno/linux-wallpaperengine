@@ -124,10 +124,10 @@ private:
      */
     [[nodiscard]] std::string applyHeaderMacroCompatibility (std::string source) const;
     /**
-     * Makes assigned fragment inputs writable with local copies at the start of main(),
+     * Makes assigned shader inputs writable with local copies at the start of main(),
      * preserving the preprocessor conditions of their declarations.
      */
-    [[nodiscard]] std::string applyFragmentWritableVaryings (std::string source) const;
+    [[nodiscard]] std::string applyWritableInputs (std::string source) const;
     /**
      * HLSL allows float/int values as ternary conditions; GLSL 330 requires bool.
      * Wraps bare-identifier ternary conditions in bool() in assignment and argument contexts.
