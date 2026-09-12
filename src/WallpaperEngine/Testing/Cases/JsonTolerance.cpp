@@ -11,8 +11,10 @@
 
 #include "WallpaperEngine/Data/JSON.h"
 #include "WallpaperEngine/Data/Model/Project.h"
+#include "WallpaperEngine/Data/Model/Property.h"
 #include "WallpaperEngine/Data/Model/Wallpaper.h"
 #include "WallpaperEngine/Data/Parsers/MaterialParser.h"
+#include "WallpaperEngine/Data/Parsers/PropertyParser.h"
 #include "WallpaperEngine/Data/Parsers/DynamicValueParser.h"
 #include "WallpaperEngine/Data/Parsers/ObjectParser.h"
 #include "WallpaperEngine/Data/Parsers/WallpaperParser.h"
@@ -413,4 +415,19 @@ TEST_CASE ("Wallpaper Engine JSON comments and trailing commas are accepted narr
     REQUIRE (data["literal"] == ",] // not a comment /* either */");
     REQUIRE_THROWS_AS (parseCompatible (R"({"still":"broken",oops})"), JSON::parse_error);
     REQUIRE_THROWS_AS (parseCompatible (R"({"unterminated": true /* comment})"), JSON::parse_error);
+}
+
+TEST_CASE ("legacy material user shader values bind live project properties", "[material-users]") {
+    Project project {};
+    project.properties.emplace ("scheme", WallpaperEngine::Data::Parsers::PropertyParser::parse (
+        JSON::parse (R"({"type":"color","value":"0 0.4 0.7"})"), "scheme"));
+    const auto material = MaterialParser::parse (JSON::parse (R"({"passes":[{
+        "shader":"generic", "constantshadervalues":{"tint":"1 1 1","opacity":0.75},
+        "usershadervalues":{"scheme":"tint","missing":"opacity"}
+    }]})"), "legacy.json", project);
+    const auto& values = material->passes.front ()->constants;
+    REQUIRE (values.at ("tint")->value->getVec3 () == glm::vec3 (0, 0.4f, 0.7f));
+    REQUIRE (values.at ("opacity")->value->getFloat () == 0.75f);
+    project.properties.at ("scheme")->update (glm::vec3 (0.2f, 0.6f, 0.1f), DynamicValue::UpdateSource::Script);
+    REQUIRE (values.at ("tint")->value->getVec3 () == glm::vec3 (0.2f, 0.6f, 0.1f));
 }
