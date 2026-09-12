@@ -32,11 +32,13 @@ ShaderConstantMap ShaderConstantParser::parse (const JSON& it, const Project& pr
 		if (components.eof () && count >= 2 && count <= 4) {
 		    std::istringstream words (text);
 		    std::string word, normalized;
+		    int wordCount = 0;
 		    while (words >> word) {
+			++wordCount;
 			if (!normalized.empty ()) normalized += ' ';
 			normalized += word;
 		    }
-		    *value = std::move (normalized);
+		    if (wordCount == count) *value = std::move (normalized);
 		}
 	    }
 	}
