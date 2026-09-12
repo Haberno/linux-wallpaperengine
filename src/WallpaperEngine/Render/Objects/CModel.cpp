@@ -335,11 +335,10 @@ void CModel::setupGeometryCallback (Effects::CPass* pass, size_t submeshIndex) {
 	    }
 	},
 	[this, submeshIndex] () {
-	    // A perspective output flip and a mirrored model transform each reverse
-	    // winding. Account for both so orthographic scene-space conversion and
-	    // authored negative scales do not cull the model's front faces.
-	    const bool modelMirrored = glm::determinant (glm::mat3 (this->m_modelMatrix)) < 0.0f;
-	    const bool windingReversed = this->getScene ().getCamera ().isYFlipped () != modelMirrored;
+	    // Compensate only the renderer's output/orthographic Y conversions.
+	    // Authored negative scales can intentionally turn a skybox inside out.
+	    const auto& camera = this->getScene ().getCamera ();
+	    const bool windingReversed = camera.isYFlipped () != camera.isOrthogonal ();
 	    glFrontFace (windingReversed ? GL_CW : GL_CCW);
 	    glBindBuffer (GL_ELEMENT_ARRAY_BUFFER, this->m_submeshes[submeshIndex].indexBuffer);
 	    glDrawElements (GL_TRIANGLES, this->m_submeshes[submeshIndex].indexCount, GL_UNSIGNED_INT, nullptr);
@@ -630,10 +629,8 @@ void CModel::renderShadow (const glm::mat4& lightViewProjection) {
 	} else {
 	    glDisable (GL_CULL_FACE);
 	}
-	// Shadows have no output flip, but mirrored model transforms still reverse
-	// the MDLV mesh's counter-clockwise front faces.
-	const bool modelMirrored = glm::determinant (glm::mat3 (this->m_modelMatrix)) < 0.0f;
-	glFrontFace (modelMirrored ? GL_CW : GL_CCW);
+	// Shadows have no output flip; retain authored winding changes here too.
+	glFrontFace (this->getScene ().getCamera ().isOrthogonal () ? GL_CW : GL_CCW);
 
 	glBindBuffer (GL_ARRAY_BUFFER, this->m_submeshes[submeshIndex].vertexBuffer);
 	glEnableVertexAttribArray (0);
