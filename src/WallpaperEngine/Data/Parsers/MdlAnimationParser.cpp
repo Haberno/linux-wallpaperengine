@@ -481,7 +481,7 @@ bool skipBoneScalarTracks (
 
 void readAnimationEvents (
     const std::vector<char>& data, size_t offset, const size_t recordEnd, const int version,
-    const size_t skeletonBoneCount, MdlAnimationClip& animation
+    const size_t skeletonBoneCount, const std::vector<MdlAnimationClip>& previousClips, MdlAnimationClip& animation
 ) {
     // Native MDLA loader: version-4 constraints, version-5 bounds, version-6
     // scalar tracks, optional clip range (flags bit 0), then timed JSON markers.
@@ -507,8 +507,32 @@ void readAnimationEvents (
 	}
 	if (version >= 6 && !skipBoneScalarTracks (data, offset, recordEnd, animation)) return;
 	if ((animation.flags & 1) != 0) {
-	    readValue<uint16_t> (data, offset, recordEnd);
-	    for (int field = 0; field < 4; ++field) readValue<uint32_t> (data, offset, recordEnd);
+	    const auto sourceIndex = readValue<uint16_t> (data, offset, recordEnd);
+	    const auto firstFrame = readValue<uint32_t> (data, offset, recordEnd);
+	    const auto lastFrame = readValue<uint32_t> (data, offset, recordEnd);
+	    readValue<uint32_t> (data, offset, recordEnd);
+	    readValue<uint32_t> (data, offset, recordEnd);
+	    // Native 1402650c4 reads a source index and inclusive frame range. Bit
+	    // 0x400 selects baked tracks; otherwise the clip samples its source.
+	    // Octillery's Idle has no own tracks and references frames 96..134.
+	    if ((animation.flags & 0x400) == 0 && sourceIndex < previousClips.size ()
+		&& firstFrame <= lastFrame && lastFrame - firstFrame == animation.frameCount
+		&& lastFrame <= previousClips[sourceIndex].frameCount) {
+		const auto& source = previousClips[sourceIndex];
+		const auto crop = [firstFrame, lastFrame] (auto tracks) {
+		    for (auto& track : tracks) {
+			if (track.empty ()) continue;
+			track.resize (std::min (track.size (), static_cast<size_t> (lastFrame) + 1));
+			track.erase (track.begin (), track.begin () + std::min (static_cast<size_t> (firstFrame), track.size () - 1));
+		    }
+		    return tracks;
+		};
+		animation.boneFrames = crop (source.boneFrames);
+		animation.boneFlags = source.boneFlags;
+		animation.controlFrames = crop (source.controlFrames);
+		animation.controlFlags = source.controlFlags;
+		animation.blendTracks = crop (source.blendTracks);
+	    }
 	}
 	const auto count = readValue<uint32_t> (data, offset, recordEnd);
 	if (count > (recordEnd - offset) / 5) return;
@@ -629,7 +653,7 @@ void parseAnimations (
 	    }
 	    recordEnd = *next;
 	}
-	readAnimationEvents (data, offset, recordEnd, version.back () - '0', result.bones.size (), animation);
+	readAnimationEvents (data, offset, recordEnd, version.back () - '0', result.bones.size (), result.animations, animation);
 	result.animations.push_back (std::move (animation));
 	offset = recordEnd;
     }

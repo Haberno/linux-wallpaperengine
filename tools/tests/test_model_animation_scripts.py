@@ -10,7 +10,7 @@ from scene_render import render_scene
 from test_text_effect_targets import base_scene
 
 
-def write_model(root):
+def write_model(root, action_mode='loop'):
     """A skinned triangle with a tip attachment, an idle loop and an action clip."""
     data = bytearray()
     def put(fmt, *values):
@@ -51,7 +51,7 @@ def write_model(root):
             (1, 'Idle', 0, [(9, 'end')]), (2, 'Action', 100, [(3, 'cry'), (9, 'reset')])):
         put('II', clip_id, 0)
         string(name)
-        string('loop')
+        string(action_mode if name == 'Action' else 'loop')
         put('fIII', 10, 10, 0, 1)
         put('II', 0, 11 * 36)
         for frame in range(11):
@@ -73,6 +73,32 @@ def write_model(root):
 
 @unittest.skipUnless(os.environ.get('LWE_TEST_BINARY'), 'Set LWE_TEST_BINARY for graphics integration tests')
 class ModelAnimationScripts(unittest.TestCase):
+    def test_one_shot_blend_out_respects_the_authored_clip_mode(self):
+        for mode in ('', 'loop', 'single'):
+            with self.subTest(mode=mode), tempfile.TemporaryDirectory(prefix='lwe-model-blend-') as directory:
+                root = Path(directory)
+                write_model(root, action_mode=mode)
+                expected = 53.75 if mode == 'single' else 107.5
+                script = '''
+export function init(value) {
+    const idle = thisLayer.getAnimationLayer('Idle');
+    idle.pause();
+    idle.setFrame(0);
+    const action = thisLayer.playSingleAnimation('Action', {blendin: false, blendout: true});
+    action.pause();
+    action.setFrame(7.5);
+    const actual = thisLayer.getAttachmentOrigin('tip').x - 160;
+    if (Math.abs(actual - EXPECTED) > .01) throw Error('Late action pose '+actual+' != '+EXPECTED);
+    console.log('MODEL_BLEND_MODE_OK');
+    return value;
+}
+'''.replace('EXPECTED', str(expected))
+                _, output = render_scene(self, root, base_scene([{
+                    'id': 1, 'name': 'model probe', 'model': 'models/probe.mdl', 'origin': '160 90 0',
+                    'animationlayers': [{'id': 10, 'name': 'Idle', 'animation': 1,
+                                         'blend': {'value': 1, 'script': script}}]}]))
+                self.assertIn('MODEL_BLEND_MODE_OK', output)
+
     def test_property_animations_are_scoped_to_the_selected_model_layer(self):
         from test_script_property_animation import animation
 
