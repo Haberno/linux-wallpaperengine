@@ -422,7 +422,9 @@ CModel::AnimationLayer* CModel::playSingleAnimation (const std::string& name, co
     layer->clip = &*found;
     layer->single = true;
     layer->blendIn = config.blendIn;
-    layer->blendOut = config.blendOut;
+    // Native one-shots of loop clips keep their authored return pose until
+    // retirement; fading them early exposes a paused idle before its reset event.
+    layer->blendOut = config.blendOut && found->mode == "single";
     layer->blendTime = std::max (config.blendTime, 0.0f);
     layer->key = "__model_animation_" + std::to_string (m_nextAnimationLayer++);
     layer->timeline.fps = found->fps;

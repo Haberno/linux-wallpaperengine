@@ -395,6 +395,58 @@ TEST_CASE ("MDLA events follow versioned tracks and cropped clip metadata", "[md
     CHECK (truncated.animations.front ().boneFrames.size () == 2);
 }
 
+TEST_CASE ("MDLA unbaked clip ranges sample their source animation", "[mdl][animation]") {
+    for (const bool baked : { false, true }) {
+	CAPTURE (baked);
+	auto data = makeAnimatedModelSections ();
+	const std::string marker = "MDLA0006";
+	data.resize (std::distance (data.begin (), std::search (data.begin (), data.end (), marker.begin (), marker.end ())));
+	appendMarker (data, "MDLA0006");
+	const auto endField = data.size ();
+	appendValue<uint32_t> (data, 0);
+	appendValue<uint32_t> (data, 2);
+	for (uint32_t clip = 0; clip < 2; ++clip) {
+	    const uint32_t frames = clip == 0 ? 4 : 2;
+	    appendValue<uint32_t> (data, clip == 0 ? 241 : 31);
+	    appendValue<uint32_t> (data, 0);
+	    appendString (data, clip == 0 ? "source" : "Idle");
+	    appendString (data, "loop");
+	    appendValue<float> (data, 24);
+	    appendValue<uint32_t> (data, frames);
+	    appendValue<uint32_t> (data, clip == 0 ? 0 : baked ? 0x401 : 1);
+	    const bool hasTracks = clip == 0 || baked;
+	    appendValue<uint32_t> (data, hasTracks ? 2 : 0);
+	    if (hasTracks) {
+		for (uint32_t bone = 0; bone < 2; ++bone) {
+		    appendValue<uint32_t> (data, bone); // The source masks its second bone.
+		    appendValue<uint32_t> (data, (frames + 1) * 36);
+		    for (uint32_t frame = 0; frame <= frames; ++frame)
+			appendFrame (data, glm::vec3 (clip == 0 ? frame * 10 : 99, 0, 0));
+		}
+	    }
+	    appendValue<uint32_t> (data, 0); // Blend tracks.
+	    appendValue<uint8_t> (data, 0); // Bone scalar tracks.
+	    appendValue<uint8_t> (data, 0); // Constraints.
+	    for (int i = 0; i < 6; ++i) appendValue<float> (data, 0);
+	    appendValue<uint8_t> (data, 0); // Version 6 scalar tracks.
+	    if (clip != 0) {
+		appendValue<uint16_t> (data, 0); // Source index, not clip ID 241.
+		for (const uint32_t field : { 1u, 3u, 0u, UINT32_MAX }) appendValue<uint32_t> (data, field);
+	    }
+	    appendValue<uint32_t> (data, 0); // Events.
+	}
+	patchU32 (data, endField, data.size ());
+	const auto parsed = MdlAnimationParser::parse (data, "clip-range.mdl");
+	REQUIRE (parsed.animations.size () == 2);
+	const auto& idle = parsed.animations[1];
+	const auto middle = MdlAnimationEvaluator::evaluate (parsed, {{ .animation = &idle, .frame = 0.5f }});
+	CHECK (middle.worldBones[0][3].x == Catch::Approx (baked ? 99 : 15));
+	const auto end = MdlAnimationEvaluator::evaluate (parsed, {{ .animation = &idle, .frame = 2.0f }});
+	CHECK (end.worldBones[0][3].x == Catch::Approx (baked ? 99 : 30));
+	CHECK (middle.worldBones[1][3].x == middle.worldBones[0][3].x);
+    }
+}
+
 TEST_CASE ("MDL animation evaluator interpolates and composes parent bones") {
     const auto animationData = MdlAnimationParser::parse (makeAnimatedModelSections (), "synthetic.mdl");
     const std::vector<MdlActiveAnimation> active {
