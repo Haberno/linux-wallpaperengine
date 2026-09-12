@@ -431,3 +431,27 @@ TEST_CASE ("legacy material user shader values bind live project properties", "[
     project.properties.at ("scheme")->update (glm::vec3 (0.2f, 0.6f, 0.1f), DynamicValue::UpdateSource::Script);
     REQUIRE (values.at ("tint")->value->getVec3 () == glm::vec3 (0.2f, 0.6f, 0.1f));
 }
+
+TEST_CASE ("shader comma vectors preserve text and wrapped property bindings", "[material-vectors]") {
+    Project project {};
+    project.properties.emplace ("scheme", WallpaperEngine::Data::Parsers::PropertyParser::parse (
+        JSON::parse (R"({"type":"color","value":"0 0.4 0.7"})"), "scheme"));
+    const auto material = MaterialParser::parse (JSON::parse (R"({"passes":[{
+        "shader":"generic", "constantshadervalues":{
+            "angles":"0.0, 360.0", "offset":{"value":"1, -2, 3"}, "rect":"0,0,0.4,1",
+            "label":"Song, Title", "invalid":"0.0, 360oops", "scalar":"0.4",
+            "tint":{"value":"1, 0, 0","user":"scheme","script":"export function update(value) { return value; }"}
+        }
+    }]})"), "comma.json", project);
+    const auto& values = material->passes.front ()->constants;
+    REQUIRE (values.at ("angles")->value->getVec2 () == glm::vec2 (0, 360));
+    REQUIRE (values.at ("offset")->value->getVec3 () == glm::vec3 (1, -2, 3));
+    REQUIRE (values.at ("rect")->value->getVec4 () == glm::vec4 (0, 0, 0.4f, 1));
+    REQUIRE (values.at ("label")->value->getString () == "Song, Title");
+    REQUIRE (values.at ("invalid")->value->getString () == "0.0, 360oops");
+    REQUIRE (values.at ("scalar")->value->getFloat () == 0.4f);
+    REQUIRE (values.at ("tint")->value->getVec3 () == glm::vec3 (0, 0.4f, 0.7f));
+    REQUIRE (values.at ("tint")->value->getScriptSource () == "export function update(value) { return value; }");
+    project.properties.at ("scheme")->update (glm::vec3 (0.2f, 0.6f, 0.1f), DynamicValue::UpdateSource::Script);
+    REQUIRE (values.at ("tint")->value->getVec3 () == glm::vec3 (0.2f, 0.6f, 0.1f));
+}
