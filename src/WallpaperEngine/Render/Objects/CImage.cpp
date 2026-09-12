@@ -1427,7 +1427,8 @@ void CImage::setup () {
 	const bool prelighting = this->m_passes.empty ()
 	    && (cur->shader == "genericimage4" || cur->shader == "genericimage3" || cur->shader == "genericimage2")
 	    && (comboEnabled ("LIGHTING") || comboEnabled ("REFLECTION"))
-	    && !this->m_hasPuppetMesh && !this->m_image.model->passthrough && !debug.baseOnly
+	    && (!this->m_hasPuppetMesh || !this->getScene ().getScene ().camera.projection.isPerspective)
+	    && !this->m_image.model->passthrough && !debug.baseOnly
 	    && (!this->m_image.effects.empty () || this->m_image.colorBlendMode->value->getInt () > 0
 		|| this->m_image.model->material->passes.size () > 1);
 	ComboMap baseCombos;
@@ -2437,7 +2438,11 @@ void CImage::updateScreenSpacePosition () {
     }
 
     this->m_sceneModelMatrix = model * rotModel;
-    this->m_sceneNormalModelMatrix = glm::mat3 (rotModel);
+    // Orthographic geometry and lights reflect authored Y into render space.
+    // Reflect the image tangent basis too, so normal maps keep their authored
+    // light direction instead of exchanging illumination from above and below.
+    this->m_sceneNormalModelMatrix = glm::mat3 (rotModel)
+	* glm::mat3 (glm::scale (glm::mat4 (1.0f), glm::vec3 (1.0f, -1.0f, 1.0f)));
     if (this->m_prelightingPass != nullptr) {
 	this->m_prelightingModelMatrix = this->m_sceneModelMatrix;
 	const bool drawsToScene = this->m_finalPassDrawsToScene && this->m_finalPassRouting.has_value ()
