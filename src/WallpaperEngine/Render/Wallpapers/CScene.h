@@ -1,6 +1,7 @@
 #pragma once
 
 #include "WallpaperEngine/Render/Camera.h"
+#include "WallpaperEngine/Data/JSON.h"
 
 #include "WallpaperEngine/Render/CWallpaper.h"
 #include "WallpaperEngine/Scripting/ScriptEngine.h"
@@ -231,10 +232,12 @@ public:
     // at init() time via these; without them the controlling script throws and the placeholder
     // template renders as a static block.
     //
-    // createLayer instantiates a new image layer from a model path (e.g. "models/full-pixel.json"),
-    // resolving the script's workshop-scoped asset path when the bare path doesn't exist. Returns the
-    // created object (a scriptable CImage) or nullptr on failure.
+    // createLayer accepts an image, model, particle or sound asset path, or a serialized layer
+    // configuration. Asset paths also resolve in the calling script's workshop scope.
+    // destroyLayer removes a layer at the next frame boundary, after the current script returns.
     Render::CObject* createLayer (const std::string& modelPath, const std::string& workshopId);
+    Render::CObject* createLayer (Data::JSON::JSON configuration, const std::string& workshopId);
+    bool destroyLayer (CObject* layer);
     // Index of a layer within the scriptable-layer subset of the render order (matches getLayer()/
     // getLayerCount()), or -1 if not present.
     [[nodiscard]] int getScriptableLayerIndex (const CObject* layer) const;
@@ -251,6 +254,7 @@ protected:
 private:
     /** Release raw-owned render objects, including during constructor unwinding. */
     void destroyObjects () noexcept;
+    void destroyQueuedLayers ();
     Render::CObject* createObject (const Object& object);
     Render::CObject* dispatchObjectType (const Object& object);
     void addObjectToRenderOrder (const Object& object);
@@ -280,8 +284,9 @@ private:
     ObjectUniquePtr m_bloomObjectData;
     CObject* m_bloomObject = nullptr;
     bool m_bloomSetupAttempted = false;
-    // Keeps runtime-created layer data (createLayer) alive: CImage holds a const Image& into it.
+    // Keeps runtime-created layer data alive while its renderer refers to it.
     std::vector<ObjectUniquePtr> m_runtimeLayerData = {};
+    std::set<int> m_layersToDestroy;
     std::set<int> m_objectsInCreation = {};
     std::map<int, CObject*> m_objects = {};
     std::vector<CObject*> m_objectsByRenderOrder = {};

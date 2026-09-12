@@ -325,6 +325,11 @@ JSValue engine_set_timeout (JSContext* ctx, JSValueConst this_val, int argc, JSV
     return JS_NewCFunctionData (ctx, engine_stop_timeout, 2, magic, 1, args);
 }
 
+static JSValue engine_desktop_mode (JSContext* ctx, JSValueConst, int, JSValueConst*) {
+    // This runtime renders desktop wallpapers; it has no mobile or screensaver mode.
+    return JS_NewBool (ctx, false);
+}
+
 EngineObject::EngineObject (ScriptEngine& engine, Render::Wallpapers::CScene& scene) :
     m_scene (scene), m_engine (engine), m_instanceId (++EngineInstanceId), m_classId (0) {
     engineInstances.emplace (this->m_instanceId, *this);
@@ -339,6 +344,10 @@ EngineObject::EngineObject (ScriptEngine& engine, Render::Wallpapers::CScene& sc
 
     // set properties
     JS_SetOpaque (this->m_instance, this);
+    for (const char* name : { "isMobileDevice", "isScreensaver", "isRunningInEditor" }) {
+	JS_DefinePropertyValueStr (this->m_engine.getContext (), this->m_instance, name,
+	    JS_NewCFunction (this->m_engine.getContext (), engine_desktop_mode, name, 0), JS_PROP_ENUMERABLE);
+    }
     JS_DefinePropertyGetSet (
 	this->m_engine.getContext (), this->m_instance, JS_NewAtom (this->m_engine.getContext (), "frametime"),
 	JS_NewCFunctionData (this->m_engine.getContext (), engine_get_frametime, 0, 0, 1, &instanceId),

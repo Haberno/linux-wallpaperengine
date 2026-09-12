@@ -23,11 +23,18 @@ static constexpr int InvalidVectorInstanceId = 0;
 	if (!(container) || (container)->magic != (int)(VEC_OPAQUE_MAGIC + (components))) {                            \
 	    return JS_ThrowTypeError (ctx, "not a Vec%d object", (int) (components));                                  \
 	}                                                                                                              \
+	if (!(container)->alive || !*(container)->alive) {                                                              \
+	    return JS_ThrowTypeError (ctx, "Vec%d value was destroyed", (int) (components));                            \
+	}                                                                                                              \
     } while (0)
 #define VEC_MAGIC_CHECK_ERROR(container, components)                                                                   \
     do {                                                                                                               \
 	if (!(container) || (container)->magic != (int)(VEC_OPAQUE_MAGIC + (components))) {                            \
 	    JS_ThrowTypeError (ctx, "not a Vec%d object", (int) (components));                                         \
+	    return -1;                                                                                                 \
+	}                                                                                                              \
+	if (!(container)->alive || !*(container)->alive) {                                                              \
+	    JS_ThrowTypeError (ctx, "Vec%d value was destroyed", (int) (components));                                   \
 	    return -1;                                                                                                 \
 	}                                                                                                              \
     } while (0)
@@ -39,6 +46,7 @@ template <int components> struct VectorOpaqueContainer {
     VectorAdapter<components>& adapter;
     std::unique_ptr<DynamicValue> ownedValue;
     DynamicValue& value;
+    std::shared_ptr<const bool> alive;
     uint32_t id;
 };
 
@@ -248,6 +256,9 @@ template <int components> auto vector_get (JSContext* ctx, int argc, JSValueCons
 	JSClassID classId = 0;
 	const auto* source = static_cast<VectorOpaqueContainer<3>*> (JS_GetAnyOpaque (argv[0], &classId));
 	if (source != nullptr && source->magic == static_cast<int> (VEC_OPAQUE_MAGIC + 3)) {
+	    if (!source->alive || !*source->alive) {
+		throw std::runtime_error ("Vec3 value was destroyed");
+	    }
 	    return glm::vec2 (source->value.getVec3 ());
 	}
     }
@@ -386,6 +397,7 @@ template <int components> JSValue vector_equals (JSContext* ctx, JSValueConst th
     if (otherContainer == nullptr || otherContainer->magic != static_cast<int> (VEC_OPAQUE_MAGIC + components)) {
 	return JS_FALSE;
     }
+    VEC_MAGIC_CHECK_EXCEPTION (otherContainer, components);
 
     const auto vector = vector_get<components> (container->value);
     const auto otherVector = vector_get<components> (otherContainer->value);
@@ -1056,6 +1068,7 @@ template <int components> JSValue VectorAdapter<components>::instantiate (Dynami
 	    .adapter = *this,
 	    .ownedValue = nullptr,
 	    .value = value,
+	    .alive = value.getAliveFlag (),
 	    .id = InvalidVectorInstanceId,
 	}
     );
@@ -1075,6 +1088,7 @@ template <int components> JSValue VectorAdapter<components>::instantiate (Dynami
 	    .adapter = *this,
 	    .ownedValue = std::move (value),
 	    .value = valueRef,
+	    .alive = valueRef.getAliveFlag (),
 	    .id = id,
 	}
     );
@@ -1094,6 +1108,7 @@ template <int components> JSValue VectorAdapter<components>::instantiate () {
 	    .adapter = *this,
 	    .ownedValue = std::move (value),
 	    .value = valueRef,
+	    .alive = valueRef.getAliveFlag (),
 	    .id = id,
 	}
     );

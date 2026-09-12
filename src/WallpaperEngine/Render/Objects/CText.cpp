@@ -1191,7 +1191,7 @@ void CText::render () {
     }
 
     const glm::vec4 color = m_text.color->value->getVec4 ();
-    const float alpha = m_text.alpha->value->getFloat ();
+    const float alpha = m_text.alpha->evaluateFloat (getScene ().getTime ());
     // Native text draws (140257d70 / 140258050) multiply RGB by brightness
     // only with the HDR bloom flag (0x2000). LDR projects may save zero here.
     const float brightness = getScene ().isHdr ()

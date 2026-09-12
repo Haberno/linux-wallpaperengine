@@ -79,11 +79,12 @@ const UserSetting* ScriptableObject::getPropertySetting (const std::string& name
 void ScriptableObject::registerProperty (
     const std::string& name, const UserSetting& setting, const std::string& animationScope
 ) {
-    if (setting.animation != nullptr && !setting.animation->name.empty ()) {
-	m_animations.insert_or_assign (animationScope + setting.animation->name, setting.animation.get ());
+    if (setting.animation != nullptr) {
+	m_animations.insert_or_assign (name, setting.animation.get ());
+	if (!setting.animation->name.empty ())
+	    m_animations.insert_or_assign (animationScope + setting.animation->name, setting.animation.get ());
     }
-    registerProperty (name, *setting.value, animationScope);
-    m_properties.at (name).setting = &setting;
+    registerProperty (name, *setting.value, animationScope, &setting);
     // Resolve after each registration: a child can precede its clock property
     // in both serialized data and a derived renderer's registration order.
     for (const auto& [property, entry] : m_properties) {
@@ -102,7 +103,7 @@ void ScriptableObject::registerProperty (
 }
 
 void ScriptableObject::registerProperty (
-    const std::string& name, DynamicValue& value, const std::string& animationScope
+    const std::string& name, DynamicValue& value, const std::string& animationScope, const UserSetting* setting
 ) {
     // Derived renderers repeat some common registrations and add their own
     // properties. Both this map and the queued script must refer to the final
@@ -112,7 +113,7 @@ void ScriptableObject::registerProperty (
     // re-emplace to let the derived value win.
     this->m_properties.erase (name);
     const auto [it, inserted] = this->m_properties.emplace (
-	name, PropertyEntry { .key = key, .value = value, .animationScope = animationScope }
+	name, PropertyEntry { .key = key, .value = value, .setting = setting, .animationScope = animationScope }
     );
 
     // Re-registering the same value is safe: the keyed module is initialized only

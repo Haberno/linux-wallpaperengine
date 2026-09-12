@@ -692,6 +692,20 @@ std::optional<std::string> CModel::getAttachmentName (const size_t requestedInde
     return std::nullopt;
 }
 
+std::optional<size_t> CModel::getBoneIndex (const std::string& name) const {
+    if (name.empty ()) return std::nullopt;
+    for (size_t index = 0; index < this->m_model.animationData.bones.size (); ++index) {
+	if (this->m_model.animationData.bones[index].name == name) return index;
+    }
+    return std::nullopt;
+}
+
+std::optional<glm::mat4> CModel::getBoneTransform (const size_t index) const {
+    this->updateAnimationPose ();
+    if (index >= this->m_worldBones.size ()) return std::nullopt;
+    return this->m_worldBones[index];
+}
+
 const float& CModel::getBrightness () const { return this->m_brightness; }
 
 const float& CModel::getUserAlpha () const { return this->m_alpha; }
