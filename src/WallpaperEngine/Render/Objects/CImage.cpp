@@ -407,6 +407,7 @@ CImage::CImage (Wallpapers::CScene& scene, const Image& image) :
     glBufferData (GL_ARRAY_BUFFER, sizeof (sceneSpacePosition), sceneSpacePosition, GL_STATIC_DRAW);
 
     glGenBuffers (1, &this->m_copySpacePosition);
+    glGenBuffers (1, &this->m_effectSpacePosition);
     glBindBuffer (GL_ARRAY_BUFFER, this->m_copySpacePosition);
     glBufferData (GL_ARRAY_BUFFER, sizeof (copySpacePosition), copySpacePosition, GL_STATIC_DRAW);
 
@@ -465,6 +466,7 @@ CImage::~CImage () {
     // free any gl resources
     glDeleteBuffers (1, &this->m_sceneSpacePosition);
     glDeleteBuffers (1, &this->m_copySpacePosition);
+    glDeleteBuffers (1, &this->m_effectSpacePosition);
     glDeleteBuffers (1, &this->m_passSpacePosition);
     glDeleteBuffers (1, &this->m_texcoordCopy);
     glDeleteBuffers (1, &this->m_texcoordPass);
@@ -1867,6 +1869,15 @@ void CImage::updateFinalPassVisibility (const bool force) {
     pass->setModelViewProjectionMatrix (projection);
     pass->setModelViewProjectionMatrixInverse (inverseProjection);
 
+    if (!route.samplesSourceTexture && !this->m_hasPuppetMesh && !this->getImage ().model->passthrough) {
+	// Vertex effects deform local image coordinates before layer scale/rotation.
+	// Scene-space vertices bake those transforms too early and reverse Y offsets.
+	pass->setPosition (this->m_effectSpacePosition);
+	pass->setModelMatrix (&this->m_effectSceneModel);
+	pass->setModelViewProjectionMatrix (&this->m_effectSceneProjection);
+	pass->setModelViewProjectionMatrixInverse (&this->m_effectSceneProjectionInverse);
+    }
+
     // Hidden composite textures use the undeformed image quad. Build puppet
     // scene geometry once, and restore it whenever this layer becomes visible.
     if (this->m_hasPuppetMesh) {
@@ -1984,6 +1995,7 @@ void CImage::render () {
     // Always update screen transform (handles rotation + parallax dynamically);
     // fullscreen/autosize/locked layers are excluded from parallax inside
     this->updateScreenSpacePosition ();
+    this->updateEffectSceneMatrix ();
 
 #if !NDEBUG
     std::string str = "Image ";
@@ -2305,6 +2317,12 @@ void CImage::uploadGeometryBuffers (const glm::vec2& size) {
     };
 
     uploadIfChanged (this->m_sceneSpacePosition, sceneSpacePosition, this->m_cachedSceneSpacePosition);
+    const glm::vec2 half = size * 0.5f;
+    const std::array<GLfloat, 18> effectSpacePosition = {
+	-half.x, -half.y, 0, -half.x, half.y, 0, half.x, -half.y, 0,
+	half.x, -half.y, 0, -half.x, half.y, 0, half.x, half.y, 0
+    };
+    uploadIfChanged (this->m_effectSpacePosition, effectSpacePosition, this->m_cachedEffectSpacePosition);
     uploadIfChanged (this->m_copySpacePosition, copySpacePosition, this->m_cachedCopySpacePosition);
     uploadIfChanged (this->m_texcoordCopy, texcoordCopy, this->m_cachedTexcoordCopy);
     this->m_geometryBufferCacheValid = true;
@@ -2335,6 +2353,16 @@ CImage::ResolvedTransform CImage::updateGeometryBuffers () {
 	this->updatePuppetPositionBuffer (size);
     }
     return transform;
+}
+
+void CImage::updateEffectSceneMatrix () {
+    if (this->m_size.x == 0.0f || this->m_size.y == 0.0f) return;
+    this->m_effectSceneModel = glm::translate (this->m_sceneModelMatrix, this->m_sceneCenter);
+    this->m_effectSceneModel = glm::scale (this->m_effectSceneModel, glm::vec3 (
+	(this->m_pos.z - this->m_pos.x) / this->m_size.x,
+	(this->m_pos.w - this->m_pos.y) / this->m_size.y, 1.0f));
+    this->m_effectSceneProjection = this->m_sceneViewProjectionMatrix * this->m_effectSceneModel;
+    this->m_effectSceneProjectionInverse = glm::inverse (this->m_effectSceneProjection);
 }
 
 void CImage::updateScreenSpacePosition () {
