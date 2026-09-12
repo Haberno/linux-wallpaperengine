@@ -183,6 +183,7 @@ CParticle::CParticle (Wallpapers::CScene& scene, const Particle& particle, CPart
 	const auto& settings = particle.instanceOverride;
 	for (const auto& [name, value] : std::initializer_list<std::pair<const char*, const UserSetting*>> {
 	    { "enabled", settings.enabled.get () }, { "alpha", settings.alpha.get () },
+	    { "brightness", settings.brightness.get () },
 	    { "size", settings.size.get () }, { "lifetime", settings.lifetime.get () },
 	    { "rate", settings.rate.get () }, { "speed", settings.speed.get () },
 	    { "count", settings.count.get () }, { "color", settings.color.get () },
@@ -432,11 +433,15 @@ void CParticle::render () {
 
     // Render particles
     if (m_particleCount > 0 && m_particle.material) {
+	// Scene alpha belongs to the compositor, just as for image/model draws.
+	// Composition layers need the particle alpha for their later group blend.
+	glColorMask (true, true, true, getScene ().isRenderingToComposition () ? GL_TRUE : GL_FALSE);
 	if (m_useRopeRenderer) {
 	    renderRope ();
 	} else {
 	    renderSprites ();
 	}
+	glColorMask (true, true, true, true);
     }
     for (auto& child : m_children) {
 	child.renderer->render ();
@@ -2537,6 +2542,7 @@ void CParticle::renderSprites () {
     const bool is3D = getScene ().getScene ().camera.projection.isPerspective;
     const bool perspectiveBillboard = is3D
 	&& (m_particle.renderers.empty () || m_particle.renderers[0].orientation != "fixed");
+    const float brightness = getScene ().isHdr () ? getInstanceOverride ().brightness->value->getFloat () : 1.0f;
 
     for (uint32_t i = 0; i < m_particleCount; i++) {
 	const auto& p = m_particles[i];
@@ -2583,9 +2589,9 @@ void CParticle::renderSprites () {
 	    m_vertices[base + 5] = renderRotation.z;
 	    m_vertices[base + 6] = p.size;
 	    // a_Color (vec4: r, g, b, a)
-	    m_vertices[base + 7] = p.color.r;
-	    m_vertices[base + 8] = p.color.g;
-	    m_vertices[base + 9] = p.color.b;
+	    m_vertices[base + 7] = p.color.r * brightness;
+	    m_vertices[base + 8] = p.color.g * brightness;
+	    m_vertices[base + 9] = p.color.b * brightness;
 	    m_vertices[base + 10] = p.alpha;
 	    // a_TexCoordVec4C1 (vec4: vel.x, vel.y, vel.z, lifetime)
 	    m_vertices[base + 11] = p.velocity.x;
@@ -2675,6 +2681,7 @@ void CParticle::renderRopeTrail () {
 	return;
     }
 
+    const float brightness = getScene ().isHdr () ? getInstanceOverride ().brightness->value->getFloat () : 1.0f;
     const int subdivision = std::max (1, m_ropeSubdivision);
     uint32_t vertexIndex = 0;
     uint32_t indexOffset = 0;
@@ -2757,14 +2764,14 @@ void CParticle::renderRopeTrail () {
 		// remains attached to the live particle so alpha/size operators fade the
 		// complete trail instead of leaving bright historical samples behind.
 		splineSizes[index] = particle.size;
-		splineColors[index] = glm::vec4 (particle.color, particle.alpha);
+		splineColors[index] = glm::vec4 (particle.color * brightness, particle.alpha);
 	    }
 	}
 
 	const auto& lastPoint = points.back ();
 	splinePositions.back () = lastPoint.position;
 	splineSizes.back () = particle.size;
-	splineColors.back () = glm::vec4 (particle.color, particle.alpha);
+	splineColors.back () = glm::vec4 (particle.color * brightness, particle.alpha);
 
 	if (m_ropeFadeAlpha || m_ropeFadeSize) {
 	    const float denominator = static_cast<float> (totalPoints - 1);
@@ -2893,6 +2900,7 @@ void CParticle::renderRope () {
     // Array is already in spawn order (oldest at index 0) thanks to order-preserving
     // compaction in update(). All particles in [0, m_particleCount) are alive.
     const uint32_t aliveCount = m_particleCount;
+    const float brightness = getScene ().isHdr () ? getInstanceOverride ().brightness->value->getFloat () : 1.0f;
 
     // Build vertex data with Catmull-Rom spline subdivision.
     // Each segment between consecutive particles is subdivided into m_ropeSubdivision
@@ -2938,7 +2946,8 @@ void CParticle::renderRope () {
 
 	    splinePositions[idx] = catmullRom (p0.position, p1.position, p2.position, p3.position, t);
 	    splineSizes[idx] = glm::mix (p1.size, p2.size, t);
-	    splineColors[idx] = glm::mix (glm::vec4 (p1.color, p1.alpha), glm::vec4 (p2.color, p2.alpha), t);
+	    splineColors[idx] = glm::mix (glm::vec4 (p1.color * brightness, p1.alpha),
+					glm::vec4 (p2.color * brightness, p2.alpha), t);
 	}
     }
     // Last point is the final particle
@@ -2946,7 +2955,7 @@ void CParticle::renderRope () {
 	const auto& pLast = m_particles[aliveCount - 1];
 	splinePositions[totalPoints - 1] = pLast.position;
 	splineSizes[totalPoints - 1] = pLast.size;
-	splineColors[totalPoints - 1] = glm::vec4 (pLast.color, pLast.alpha);
+	splineColors[totalPoints - 1] = glm::vec4 (pLast.color * brightness, pLast.alpha);
     }
 
     // Second pass: build quads from consecutive spline points.
