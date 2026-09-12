@@ -308,13 +308,6 @@ int vector_property_set (
 
     VEC_MAGIC_CHECK_ERROR (container, components);
 
-    int tag = JS_VALUE_GET_TAG (val);
-
-    if (tag != JS_TAG_INT && !JS_TAG_IS_FLOAT64 (tag)) {
-	JS_ThrowTypeError (ctx, "Vec%d component value must be a number", (int) (components));
-	return -1;
-    }
-
     const int index = container->adapter.componentIndex (atom);
     if (index < 0) {
         const char* name = JS_AtomToCString (ctx, atom);
@@ -323,6 +316,10 @@ int vector_property_set (
         JS_FreeCString (ctx, name);
         return -1;
     }
+    // Native component setters leave nonnumeric values unchanged. In particular,
+    // shared values may still be undefined on a controller's first update.
+    const int tag = JS_VALUE_GET_TAG (val);
+    if (tag != JS_TAG_INT && !JS_TAG_IS_FLOAT64 (tag)) return 0;
     auto vec = vector_get<components> (container->value);
 
     double value = 0;
