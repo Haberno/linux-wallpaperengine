@@ -1483,7 +1483,12 @@ std::string ShaderUnit::applyVectorBuiltinCompatibility (std::string source) con
 std::string ShaderUnit::applyBooleanArithmeticCompatibility (std::string source) const {
     static const std::regex comparisonProduct (
 	R"(return\s+\(([^;\n]*(?:<=|>=|==|!=|<|>)[^;\n]*)\)\s*\*\s*\(([^;\n]*(?:<=|>=|==|!=|<|>)[^;\n]*)\)\s*;)");
-    const std::string patched = std::regex_replace (source, comparisonProduct, "return float(($1) && ($2));");
+    static const std::regex audioCircleMask (
+	R"((\bbar\s*\*=\s*)(shapeCoord\.x\s*>\s*0\.0\s*&&\s*shapeCoord\.x\s*\*\s*sign\s*\(\s*endAngle\s*-\s*startAngle\s*\)\s*<\s*1\.0)\s*;)");
+    std::string patched = std::regex_replace (source, comparisonProduct, "return float(($1) && ($2));");
+    // Simple Audio Bars switches bar between int and float with ANTIALIAS.
+    // A numeric 0/1 mask preserves both types without truncating its amplitude.
+    patched = std::regex_replace (patched, audioCircleMask, "$1int($2);");
     if (patched != source) {
 	sLog.out ("Applied boolean arithmetic compatibility in ", this->m_file);
     }
