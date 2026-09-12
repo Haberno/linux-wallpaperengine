@@ -424,8 +424,7 @@ JSValue scene_get_layer_index (JSContext* ctx, JSValueConst this_val, int argc, 
     return JS_NewInt32 (ctx, container->getScene ().getScriptableLayerIndex (layer));
 }
 
-// thisScene.createLayer(modelPath) -> instantiate a new image layer at runtime and return its
-// handle. Generative scripts (audio visualizers, particle-ish bar systems) build their layers here.
+// Assets and full layer configurations share the native object parser.
 JSValue scene_create_layer (JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
     if (argc < 1) {
 	return JS_UNDEFINED;
@@ -438,6 +437,26 @@ JSValue scene_create_layer (JSContext* ctx, JSValueConst this_val, int argc, JSV
 
     if (JS_IsObject (source)) {
 	JSValue file = JS_GetPropertyStr (ctx, source, "file");
+	if (!JS_IsString (file)) {
+	    JS_FreeValue (ctx, file);
+	    JSValue json = JS_JSONStringify (ctx, source, JS_UNDEFINED, JS_UNDEFINED);
+	    JS_FreeValue (ctx, source);
+	    if (JS_IsException (json)) return json;
+	    const char* data = JS_ToCString (ctx, json);
+	    JS_FreeValue (ctx, json);
+	    if (data == nullptr) return JS_EXCEPTION;
+	    ScopeGuard guard ([=] { JS_FreeCString (ctx, data); });
+	    try {
+		auto config = WallpaperEngine::Data::JSON::JSON::parse (data);
+		auto* layer = container->getScene ().createLayer (
+		    std::move (config), container->getEngine ().getRunningModuleWorkshopId ());
+		return layer != nullptr && layer->is<ScriptableObject> ()
+		    ? container->getEngine ().getAdapters ().object->instantiate (*layer->as<ScriptableObject> ())
+		    : JS_UNDEFINED;
+	    } catch (const std::exception& e) {
+		return JS_ThrowTypeError (ctx, "Invalid layer configuration: %s", e.what ());
+	    }
+	}
 	JS_FreeValue (ctx, source);
 	source = file;
     }
@@ -457,13 +476,35 @@ JSValue scene_create_layer (JSContext* ctx, JSValueConst this_val, int argc, JSV
     ScopeGuard guard ([=] { JS_FreeCString (ctx, path); });
 
     const std::string workshopId = container->getEngine ().getRunningModuleWorkshopId ();
-    auto* layer = container->getScene ().createLayer (path, workshopId);
+    auto* layer = container->getScene ().createLayer (std::string (path), workshopId);
 
     if (layer == nullptr || !layer->is<ScriptableObject> ()) {
 	return JS_UNDEFINED;
     }
 
     return container->getEngine ().getAdapters ().object->instantiate (*layer->as<ScriptableObject> ());
+}
+
+static ScriptableObject* resolve_layer_argument (
+    JSContext* ctx, JSValueConst scene, JSValueConst argument
+) {
+    if (auto* layer = WallpaperEngine::Scripting::Adapters::ScriptableObjectAdapter::fromJS (argument)) return layer;
+    JSValue value = get_layer (ctx, scene, 1, &argument);
+    auto* layer = WallpaperEngine::Scripting::Adapters::ScriptableObjectAdapter::fromJS (value);
+    JS_FreeValue (ctx, value);
+    return layer;
+}
+
+JSValue scene_get_initial_layer_config (JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    auto* layer = argc > 0 ? resolve_layer_argument (ctx, this_val, argv[0]) : nullptr;
+    if (layer == nullptr) return JS_UNDEFINED;
+    const auto& config = layer->getObject ().initialConfiguration;
+    return JS_ParseJSON (ctx, config.data (), config.size (), "<initial-layer-config>");
+}
+
+JSValue scene_destroy_layer (JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    auto* layer = argc > 0 ? resolve_layer_argument (ctx, this_val, argv[0]) : nullptr;
+    return JS_NewBool (ctx, get_opaque (this_val)->getScene ().destroyLayer (layer));
 }
 
 // thisScene.sortLayer(layer, index) -> move a layer to a z-position in the render order.
@@ -645,6 +686,15 @@ SceneObject::SceneObject (ScriptEngine& engine, Render::Wallpapers::CScene& scen
     JS_DefinePropertyValueStr (
 	this->m_engine.getContext (), this->m_instance, "createLayer",
 	JS_NewCFunction (this->m_engine.getContext (), scene_create_layer, "createLayer", 1), JS_PROP_ENUMERABLE
+    );
+    JS_DefinePropertyValueStr (
+	this->m_engine.getContext (), this->m_instance, "getInitialLayerConfig",
+	JS_NewCFunction (this->m_engine.getContext (), scene_get_initial_layer_config, "getInitialLayerConfig", 1),
+	JS_PROP_ENUMERABLE
+    );
+    JS_DefinePropertyValueStr (
+	this->m_engine.getContext (), this->m_instance, "destroyLayer",
+	JS_NewCFunction (this->m_engine.getContext (), scene_destroy_layer, "destroyLayer", 1), JS_PROP_ENUMERABLE
     );
     JS_DefinePropertyValueStr (
 	this->m_engine.getContext (), this->m_instance, "sortLayer",

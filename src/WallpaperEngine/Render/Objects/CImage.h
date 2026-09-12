@@ -56,6 +56,8 @@ public:
     [[nodiscard]] std::optional<glm::mat4> getAttachmentTransform (const std::string& name) const override;
     [[nodiscard]] std::optional<size_t> getAttachmentIndex (const std::string& name) const override;
     [[nodiscard]] std::optional<std::string> getAttachmentName (size_t index) const override;
+    [[nodiscard]] std::optional<size_t> getBoneIndex (const std::string& name) const override;
+    [[nodiscard]] std::optional<glm::mat4> getBoneTransform (size_t index) const override;
 
     /** Return cursor coordinates local to this image when the world-space point
      *  intersects its authored quad; std::nullopt means the point is outside. */

@@ -85,6 +85,8 @@ ObjectUniquePtr ObjectParser::parse (const JSON& it, const Project& project) {
 	};
     }
 
+    basedata.initialConfiguration = it.dump ();
+
     if (imageIt != it.end () && imageIt->is_string ()) {
 	return parseImage (it, project, std::move (basedata), *imageIt);
     } else if (soundIt != it.end () && soundIt->is_array ()) {

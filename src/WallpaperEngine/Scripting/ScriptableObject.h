@@ -29,7 +29,8 @@ public:
     virtual void prepareAnimationEvents () { }
 
 protected:
-    void registerProperty (const std::string& name, DynamicValue& value, const std::string& animationScope = {});
+    void registerProperty (const std::string& name, DynamicValue& value, const std::string& animationScope = {},
+	const UserSetting* setting = nullptr);
     void registerProperty (
 	const std::string& name, const UserSetting& setting, const std::string& animationScope = {}
     );

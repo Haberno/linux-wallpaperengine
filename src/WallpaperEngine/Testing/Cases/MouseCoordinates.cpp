@@ -45,6 +45,21 @@ TEST_CASE ("perspective cursor hits tiny rotated image planes", "[mouse][regress
     CHECK_FALSE (CImage::intersectCursorPlane (behind, projection * view, {.5f, .5f}, false));
 }
 
+TEST_CASE ("cursor hit testing preserves a plane with zero Z scale", "[mouse][regression]") {
+    const glm::mat4 view = glm::lookAt (glm::vec3 (0, 0, 10), glm::vec3 (0), glm::vec3 (0, 1, 0));
+    const glm::mat4 projection = glm::perspective (glm::radians (50.0f), 1.0f, .1f, 100.0f);
+    const glm::mat4 world = glm::scale (glm::mat4 (1), glm::vec3 (2, 3, 0));
+    const glm::vec3 expected (.25f, -.5f, 0);
+    const glm::vec4 clip = projection * view * world * glm::vec4 (expected, 1);
+    const auto hit = CImage::intersectCursorPlane (
+	world, projection * view, (glm::vec2 (clip) / clip.w + 1.0f) * .5f, false);
+    REQUIRE (hit.has_value ());
+    CHECK (hit->x == Catch::Approx (expected.x).margin (.001f));
+    CHECK (hit->y == Catch::Approx (expected.y).margin (.001f));
+    CHECK_FALSE (CImage::intersectCursorPlane (
+	glm::scale (glm::mat4 (1), glm::vec3 (0, 3, 0)), projection * view, {.5f, .5f}, false));
+}
+
 /**
  * Test GLFW to OpenGL coordinate conversion
  * GLFW: Y=0 at top, Y=height at bottom

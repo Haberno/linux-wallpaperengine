@@ -60,6 +60,8 @@ public:
     explicit DynamicValue (const Model::Color& value);
     virtual ~DynamicValue ();
 
+    [[nodiscard]] std::shared_ptr<const bool> getAliveFlag () const { return m_aliveFlag; }
+
     [[nodiscard]] const glm::vec4& getVec4 () const;
     [[nodiscard]] const glm::vec3& getVec3 () const;
     [[nodiscard]] const glm::vec2& getVec2 () const;

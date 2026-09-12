@@ -129,8 +129,22 @@ static std::string normalizeSceneScriptModuleSyntax (const std::string& source) 
     static const std::regex namespaceImport (
 	R"(import\s*\*\s*as\s+([a-zA-Z_$][a-zA-Z0-9_$]*)\s+from\s*(['"])(WEMath|WEVector|WEColor)\2\s*;?)"
     );
-    const auto identifier = [] (const unsigned char c) {
-	return std::isalnum (c) || c == '_' || c == '$' || c >= 128;
+    const auto unicodeWhitespaceLength = [&] (const size_t pos) -> size_t {
+	const std::string_view remaining (source.data () + pos, source.size () - pos);
+	// JavaScript permits these UTF-8 spaces between keywords. Do not fold
+	// them into identifiers, or `export\u00a0function` survives module lowering.
+	if (remaining.starts_with ("\u00a0")) return 2;
+	for (const std::string_view space : { "\u1680", "\u2000", "\u2001", "\u2002", "\u2003",
+	    "\u2004", "\u2005", "\u2006", "\u2007", "\u2008", "\u2009", "\u200a",
+	    "\u2028", "\u2029", "\u202f", "\u205f", "\u3000", "\ufeff" }) {
+	    if (remaining.starts_with (space)) return 3;
+	}
+	return 0;
+    };
+    const auto identifier = [&] (const size_t pos) {
+	const unsigned char c = source[pos];
+	return std::isalnum (c) || c == '_' || c == '$'
+	    || (c >= 128 && unicodeWhitespaceLength (pos) == 0);
     };
     std::string output, imports;
     int depth = 0;
@@ -138,7 +152,9 @@ static std::string normalizeSceneScriptModuleSyntax (const std::string& source) 
     for (size_t pos = 0; pos < source.size ();) {
 	const size_t begin = pos;
 	const char c = source[pos++];
-	if (c == '\'' || c == '"' || c == '`') {
+	if (static_cast<unsigned char> (c) >= 128 && unicodeWhitespaceLength (begin) != 0) {
+	    pos = begin + unicodeWhitespaceLength (begin);
+	} else if (c == '\'' || c == '"' || c == '`') {
 	    while (pos < source.size ()) {
 		const char next = source[pos++];
 		if (next == '\\' && pos < source.size ()) ++pos;
@@ -159,10 +175,10 @@ static std::string normalizeSceneScriptModuleSyntax (const std::string& source) 
 		else if (next == ']') characterClass = false;
 		else if (next == '/' && !characterClass) break;
 	    }
-	    while (pos < source.size () && identifier (source[pos])) ++pos;
+	    while (pos < source.size () && identifier (pos)) ++pos;
 	    expressionExpected = false;
-	} else if (identifier (c)) {
-	    while (pos < source.size () && identifier (source[pos])) ++pos;
+	} else if (identifier (begin)) {
+	    while (pos < source.size () && identifier (pos)) ++pos;
 	    const std::string_view token (source.data () + begin, pos - begin);
 	    if (depth == 0 && token == "import") {
 		std::match_results<std::string::const_iterator> match;
@@ -198,7 +214,8 @@ static JSValue anglesToJs (WallpaperEngine::Scripting::Adapters::VectorAdapter<3
     return adapter.instantiate (degrees, true);
 }
 
-static void jsToAngles (JSContext* ctx, JSValue result, JSValue argument, DynamicValue& source) {
+static void jsToAngles (JSContext* ctx, JSValue result, JSValue argument, DynamicValue& source,
+			const glm::vec3& initialDegrees) {
     // scripts either mutate the passed value, return a new one, or both
     const JSValue val = JS_IsObject (result) ? result : argument;
 
@@ -228,7 +245,11 @@ static void jsToAngles (JSContext* ctx, JSValue result, JSValue argument, Dynami
 	return;
     }
 
-    source.update (glm::radians (glm::vec3 (xVal, yVal, zVal)), DynamicValue::UpdateSource::Script);
+    const glm::vec3 degrees (xVal, yVal, zVal);
+    // Unlike ordinary vectors, the degree argument is a copy. An unchanged copy
+    // must not overwrite direct layer assignments or rotateObjectSpace() calls.
+    if (!JS_IsObject (result) && degrees == initialDegrees) return;
+    source.update (glm::radians (degrees), DynamicValue::UpdateSource::Script);
 }
 
 static void jsToDynamicValue (JSContext* ctx, JSValue val, DynamicValue& source) {
@@ -775,11 +796,22 @@ void ScriptEngine::queueScript (const std::string& key, DynamicValue& currentVal
     JSValue layer = object == nullptr ? JS_UNDEFINED : this->m_adapters.object->instantiate (*object);
     JS_SetPropertyStr (this->m_context, this->m_globalThis, "__propScriptLayer", layer);
     std::string animationScope;
+    std::string propertyName;
+    bool propertyAnimated = false;
     if (object != nullptr) {
 	for (const auto& [name, property] : object->getProperties ()) {
-	    if (property.key == key) { animationScope = property.animationScope; break; }
+	    if (property.key == key) {
+		animationScope = property.animationScope;
+		propertyName = name;
+		propertyAnimated = property.setting != nullptr && property.setting->animation != nullptr;
+		break;
+	    }
 	}
     }
+    JS_SetPropertyStr (this->m_context, this->m_globalThis, "__propScriptPropertyAnimated",
+	JS_NewBool (this->m_context, propertyAnimated));
+    JS_SetPropertyStr (this->m_context, this->m_globalThis, "__propScriptPropertyName",
+	JS_NewString (this->m_context, propertyName.c_str ()));
     JS_SetPropertyStr (this->m_context, this->m_globalThis, "__propScriptAnimationScope",
 	JS_NewString (this->m_context, animationScope.c_str ()));
 
@@ -805,8 +837,9 @@ void ScriptEngine::queueScript (const std::string& key, DynamicValue& currentVal
 	    // Material properties control their own timelines. Keep thisLayer bound
 	    // to the owner while thisObject resolves animation names within its pass.
 	    << "  var __animationScope = globalThis.__propScriptAnimationScope;\n"
-	    << "  var thisObject = __animationScope ? new Proxy(thisLayer, { get: function(target, key) {\n"
-	    << "    if (key === 'getAnimation') return function(name) { return target.getAnimation(__animationScope + name); };\n"
+	    << "  var __propertyName = globalThis.__propScriptPropertyName;\n"
+	    << "  var thisObject = (__animationScope || globalThis.__propScriptPropertyAnimated || __propertyName.indexOf('_fx') >= 0) ? new Proxy(thisLayer, { get: function(target, key) {\n"
+	    << "    if (key === 'getAnimation') return function(name) { return target.getAnimation(name === undefined ? __propertyName : __animationScope + name); };\n"
 	    << "    var result = Reflect.get(target, key, target);\n"
 	    << "    return typeof result === 'function' ? result.bind(target) : result;\n"
 	    << "  } }) : thisLayer;\n"
@@ -869,15 +902,19 @@ void ScriptEngine::queueScript (const std::string& key, DynamicValue& currentVal
 	return;
     }
 
-    if (this->m_sceneLayersReady) {
+    // Constructor registrations must wait until the complete renderer is in the scene.
+    if (this->m_sceneLayersReady && (object == nullptr || this->m_scene.getObject (object->getId ()) == object)) {
 	this->initializeModule (key, inserted.first->second);
     }
 }
 
 void ScriptEngine::callLifecycleHook (const std::string& key, LoadedModule& loaded, const char* hook) {
+    auto* previousModule = this->m_runningModule;
+    ScopeGuard restoreModule ([&] { this->m_runningModule = previousModule; });
     this->m_runningModule = &loaded;
 
     const bool angles = isAnglesProperty (key);
+    const glm::vec3 initialDegrees = angles ? glm::degrees (loaded.value.getVec3 ()) : glm::vec3 (0.0f);
     JSValue args[] = { angles ? anglesToJs (*this->m_adapters.vec3, loaded.value) : this->dynamicToJs (loaded.value) };
     JSValue result = this->call (loaded.module, 1, args, hook);
 
@@ -895,7 +932,7 @@ void ScriptEngine::callLifecycleHook (const std::string& key, LoadedModule& load
     }
 
     if (angles) {
-	jsToAngles (this->m_context, result, args[0], loaded.value);
+	jsToAngles (this->m_context, result, args[0], loaded.value, initialDegrees);
     } else {
 	jsToDynamicValue (this->m_context, result, loaded.value);
     }
@@ -919,6 +956,8 @@ void ScriptEngine::unregisterScriptable (const ScriptableObject* object) {
 	return;
     }
 
+    this->m_adapters.object->invalidate (object);
+
     for (auto it = this->m_scriptModules.begin (); it != this->m_scriptModules.end ();) {
 	if (it->second.object != object) {
 	    ++it;
@@ -937,7 +976,7 @@ void ScriptEngine::unregisterScriptable (const ScriptableObject* object) {
     }
 }
 
-void ScriptEngine::initializeQueuedScripts () {
+void ScriptEngine::initializeQueuedScripts (ScriptableObject* target) {
     this->m_sceneLayersReady = true;
 
     // Every init() has to run before any first update(). Scripts publish cross-layer state onto the
@@ -947,7 +986,7 @@ void ScriptEngine::initializeQueuedScripts () {
     std::vector<std::pair<const std::string*, LoadedModule*>> started;
 
     for (auto& [key, module] : this->m_scriptModules) {
-	if (module.initialized) {
+	if (module.initialized || (target != nullptr && module.object != target)) {
 	    continue;
 	}
 
@@ -960,7 +999,11 @@ void ScriptEngine::initializeQueuedScripts () {
     // any first update(). Scripts gate their behaviour on that call rather than on defaults, so
     // skipping it strands them in their inert branch - Passing Breeze 2244339517 only starts
     // orbiting its camera because applyUserProperties sets isCircular.
-    this->dispatchAllUserProperties ();
+    if (target == nullptr) {
+	this->dispatchAllUserProperties ();
+    } else {
+	for (const auto& [key, module] : started) this->dispatchAllUserProperties (module);
+    }
 
     // A player may already be running before these modules subscribe. Seed only
     // the new modules after every init, so handlers can safely access other layers.
@@ -973,10 +1016,13 @@ void ScriptEngine::initializeQueuedScripts () {
     }
 }
 
-void ScriptEngine::applyUserProperties (JSValue changed) {
+void ScriptEngine::applyUserProperties (JSValue changed, LoadedModule* target) {
     // property-script wrappers capture their own thisLayer in the eval closure, so no
     // per-module global rebinding is needed here (unlike beingsuz's original)
     for (auto& module : this->m_scriptModules | std::views::values) {
+	if (target != nullptr && target != &module) continue;
+	auto* previousModule = this->m_runningModule;
+	ScopeGuard restoreModule ([&] { this->m_runningModule = previousModule; });
 	this->m_runningModule = &module;
 	JSValue args[] = { changed };
 	JSValue result = this->call (module.module, 1, args, "applyUserProperties");
@@ -1000,7 +1046,7 @@ void ScriptEngine::dispatchUserProperty (const std::string& key, DynamicValue& v
     JS_FreeValue (this->m_context, changed);
 }
 
-void ScriptEngine::dispatchAllUserProperties () {
+void ScriptEngine::dispatchAllUserProperties (LoadedModule* target) {
     if (this->m_context == nullptr) {
 	return;
     }
@@ -1014,7 +1060,7 @@ void ScriptEngine::dispatchAllUserProperties () {
 	    JS_SetPropertyStr (this->m_context, all, key.c_str (), this->dynamicToJs (*value));
 	}
     }
-    this->applyUserProperties (all);
+    this->applyUserProperties (all, target);
     JS_FreeValue (this->m_context, all);
 }
 
@@ -1079,6 +1125,7 @@ void ScriptEngine::tick () {
 	this->m_runningModule = &module;
 
 	const bool angles = isAnglesProperty (key);
+	const glm::vec3 initialDegrees = angles ? glm::degrees (module.value.getVec3 ()) : glm::vec3 (0.0f);
 	JSValue args[] = { angles ? anglesToJs (*this->m_adapters.vec3, module.value) : this->dynamicToJs (module.value) };
 	JSValue result = this->call (module.module, 1, args, "update");
 	ScopeGuard guard ([result, args, this] () {
@@ -1093,7 +1140,7 @@ void ScriptEngine::tick () {
 	}
 
 	if (angles) {
-	    jsToAngles (this->m_context, result, args[0], module.value);
+	    jsToAngles (this->m_context, result, args[0], module.value, initialDegrees);
 	} else {
 	    jsToDynamicValue (this->m_context, result, module.value);
 	}
@@ -1115,13 +1162,14 @@ void ScriptEngine::dispatchAnimationEvent (
 	JS_SetPropertyStr (m_context, eventValue, "frame", JS_NewFloat64 (m_context, event.frame));
 	JS_SetPropertyStr (m_context, eventValue, "animation", JS_NewString (m_context, animationName.c_str ()));
 	const bool angles = isAnglesProperty (key);
+	const glm::vec3 initialDegrees = angles ? glm::degrees (module.value.getVec3 ()) : glm::vec3 (0.0f);
 	JSValue args[] = { eventValue, angles ? anglesToJs (*m_adapters.vec3, module.value) : dynamicToJs (module.value) };
 	JSValue result = call (module.module, 2, args, "animationEvent");
 	if (JS_IsException (result)) {
 	    logJSException (m_context, key.c_str ());
 	    module.animationEvents = false;
 	} else if (angles) {
-	    jsToAngles (m_context, result, args[1], module.value);
+	    jsToAngles (m_context, result, args[1], module.value, initialDegrees);
 	} else {
 	    jsToDynamicValue (m_context, result, module.value);
 	}
