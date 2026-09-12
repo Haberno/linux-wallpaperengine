@@ -1208,6 +1208,7 @@ void CPass::setupUniforms () {
 
     this->addUniform ("g_LightsPosition", UniformType::Vector3, lights.legacyPositions.data (), 4);
     this->addUniform ("g_LightsColorRadius", lights.legacyColors.data (), 4);
+    this->addUniform ("g_LightsColorPremultiplied", lights.legacyPremultipliedColors.data (), 3);
 
     if (lights.directionalCount > 0) {
 	this->addUniform ("g_LDirectional_Direction", lights.directionalDirections.data (), lights.directionalCount);

@@ -124,6 +124,8 @@ struct ImageData {
     std::string alignment;
     /** The size of the image in pixels */
     glm::vec2 size;
+    /** An authored zero-sized helper must not be enlarged by the implicit-size fallback. */
+    bool sizeSpecified = false;
     /** Parallax depth used for parallax scrolling */
     UserSettingUniquePtr parallaxDepth;
     /** The color blending mode for this image */

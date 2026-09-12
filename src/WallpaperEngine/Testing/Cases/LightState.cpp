@@ -30,10 +30,16 @@ TEST_CASE ("Legacy point lights retain positions and clear unused slots", "[ligh
     CHECK (lights.legacyColors[0] == glm::vec4 (0.2f, 0.4f, 0.6f, 2.5f));
     CHECK (lights.legacyPositions[3] == glm::vec3 (10, 11, 12));
     CHECK (lights.legacyColors[3] == glm::vec4 (0, 0, 1, 5));
+    CHECK (lights.legacyPremultipliedColors[0] == glm::vec4 (1.25f, 2.5f, 3.75f, 0));
+    CHECK (lights.legacyPremultipliedColors[1] == glm::vec4 (9, 0, 0, 0));
+    CHECK (lights.legacyPremultipliedColors[2] == glm::vec4 (0, 16, 0, 25));
 
     lights.pointCount = 1;
     lights.updateLegacyPointLights ();
     CHECK (lights.legacyColors[0] == glm::vec4 (0.2f, 0.4f, 0.6f, 2.5f));
+    CHECK (lights.legacyPremultipliedColors[0] == glm::vec4 (1.25f, 2.5f, 3.75f, 0));
+    CHECK (lights.legacyPremultipliedColors[1] == glm::vec4 (0));
+    CHECK (lights.legacyPremultipliedColors[2] == glm::vec4 (0));
     for (int index = 1; index < 4; ++index) {
 	CHECK (lights.legacyPositions[index] == glm::vec3 (0));
 	CHECK (lights.legacyColors[index] == glm::vec4 (0, 0, 0, 1));
