@@ -16,6 +16,18 @@ import unittest
 
 @unittest.skipUnless(os.environ.get('LWE_TEST_BINARY'), 'Set LWE_TEST_BINARY for render integration tests')
 class SceneScriptMath(unittest.TestCase):
+    def test_vector_components_ignore_nonnumeric_assignments(self):
+        cases = {}
+        for dimension in (2, 3, 4):
+            for name, value in (('undefined', 'undefined'), ('null', 'null'),
+                                ('numeric_string', "'2'"), ('boolean', 'true'),
+                                ('text', "'oops'"), ('object', '{}')):
+                cases[f'vec{dimension}_{name}'] = (
+                    f'(()=>{{const v=new Vec{dimension}(7);v.x={value};return v.x;}})()', 7)
+            cases[f'vec{dimension}_numeric_control'] = (
+                f'(()=>{{const v=new Vec{dimension}(7);v.x=3;v.y=.5;return [v.x,v.y];}})()', [3, .5])
+        self.check_expressions(cases)
+
     def test_squared_lengths_and_scalar_dot_products(self):
         self.check_expressions({
             'vec2_length_squared': ('new Vec2(3,4).lengthSqr()', 25),
