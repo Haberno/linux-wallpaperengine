@@ -39,7 +39,10 @@ JSValue engine_get_frametime (
     // smoothing factor is `engine.frametime * (1 / engine.frametime)`, which is 0 * Infinity = NaN
     // when the delta is exactly zero -- and it is zero on the first tick, before any frame has
     // elapsed. That NaN gets integrated into the script's own state and never washes out.
-    return JS_NewFloat64 (ctx, std::max (engine->getScene ().getDeltaTime (), 0.0001f));
+    // The native SceneScript clock caps long frames at 250 ms. In particular,
+    // fixed-step scripts must not turn a slow frame into an unbounded catch-up
+    // workload. Keep the scene's elapsed clock separate from this reported delta.
+    return JS_NewFloat64 (ctx, std::clamp (engine->getScene ().getDeltaTime (), 0.0001f, 0.25f));
 }
 
 JSValue engine_get_runtime (
