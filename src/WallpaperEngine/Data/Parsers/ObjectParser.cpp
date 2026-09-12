@@ -485,6 +485,7 @@ ParticleUniquePtr ObjectParser::parseParticle (const JSON& it, const Project& pr
 		    .instanceOverride = {
 		        .enabled = Builders::UserSettingBuilder::fromValue(false),
 			.alpha = Builders::UserSettingBuilder::fromValue(1.0f),
+			.brightness = Builders::UserSettingBuilder::fromValue(1.0f),
 			.size = Builders::UserSettingBuilder::fromValue(1.0f),
 			.lifetime = Builders::UserSettingBuilder::fromValue(1.0f),
 			.rate = Builders::UserSettingBuilder::fromValue(1.0f),
@@ -600,6 +601,7 @@ ParticleUniquePtr ObjectParser::parseParticle (const JSON& it, const Project& pr
 	ParticleInstanceOverride instanceOverride = {
 	    .enabled = Builders::UserSettingBuilder::fromValue (false),
 	    .alpha = Builders::UserSettingBuilder::fromValue (1.0f),
+	    .brightness = Builders::UserSettingBuilder::fromValue (1.0f),
 	    .size = Builders::UserSettingBuilder::fromValue (1.0f),
 	    .lifetime = Builders::UserSettingBuilder::fromValue (1.0f),
 	    .rate = Builders::UserSettingBuilder::fromValue (1.0f),
@@ -1070,6 +1072,7 @@ ParticleInstanceOverride ObjectParser::parseParticleInstanceOverride (const JSON
     ParticleInstanceOverride override {
 	.enabled = it.user ("enabled", properties, true),
 	.alpha = it.user ("alpha", properties, 1.0f),
+	.brightness = it.user ("brightness", properties, 1.0f),
 	.size = it.user ("size", properties, 1.0f),
 	.lifetime = it.user ("lifetime", properties, 1.0f),
 	.rate = it.user ("rate", properties, 1.0f),
