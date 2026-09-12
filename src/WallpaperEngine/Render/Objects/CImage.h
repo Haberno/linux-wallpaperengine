@@ -162,6 +162,7 @@ private:
 	const glm::vec3& origin, const glm::vec2& size, const glm::vec3& scale, float sceneWidth, float sceneHeight
     );
     void uploadGeometryBuffers (const glm::vec2& size);
+    void updateEffectSceneMatrix ();
     [[nodiscard]] bool shouldRenderFinalPass (bool isLastPass) const;
     void updateFinalPassVisibility (bool force = false);
     bool configurePassTarget (
@@ -171,6 +172,7 @@ private:
     );
 
     GLuint m_sceneSpacePosition;
+    GLuint m_effectSpacePosition = GL_NONE;
     GLuint m_copySpacePosition;
     GLuint m_passSpacePosition;
     GLuint m_texcoordCopy;
@@ -225,6 +227,9 @@ private:
     glm::mat4 m_modelViewProjectionPass = {};
     glm::mat4 m_modelViewProjectionCopy = {};
     glm::mat4 m_modelViewProjectionScreenInverse = {};
+    glm::mat4 m_effectSceneModel = glm::mat4 (1.0f);
+    glm::mat4 m_effectSceneProjection = glm::mat4 (1.0f);
+    glm::mat4 m_effectSceneProjectionInverse = glm::mat4 (1.0f);
     glm::mat4 m_modelViewProjectionPassInverse = {};
     glm::mat4 m_modelViewProjectionCopyInverse = {};
 
@@ -272,6 +277,7 @@ private:
     glm::vec2 m_effectSize = {};
 
     std::array<GLfloat, 18> m_cachedSceneSpacePosition = {};
+    std::array<GLfloat, 18> m_cachedEffectSpacePosition = {};
     std::array<GLfloat, 18> m_cachedCopySpacePosition = {};
     std::array<GLfloat, 12> m_cachedTexcoordCopy = {};
     bool m_geometryBufferCacheValid = false;
