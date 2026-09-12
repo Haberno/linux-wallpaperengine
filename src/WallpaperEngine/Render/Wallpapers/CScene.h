@@ -31,6 +31,7 @@ namespace WallpaperEngine::Render::Wallpapers {
 using namespace WallpaperEngine::Data::Model;
 
 class HdrBloom;
+class VolumetricLights;
 
 class CScene final : public CWallpaper {
 public:
@@ -292,6 +293,7 @@ private:
     std::vector<CObject*> m_objectsByRenderOrder = {};
     std::vector<Objects::CLight*> m_lightObjects = {};
     SceneLights m_lights = {};
+    std::unique_ptr<VolumetricLights> m_volumetricLights;
     SceneFog m_fog = {};
     std::vector<DynamicValue*> m_scriptedValues = {};
     glm::vec2 m_mousePosition = {};
