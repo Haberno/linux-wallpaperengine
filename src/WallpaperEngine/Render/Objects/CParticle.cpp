@@ -1416,7 +1416,13 @@ CParticle::createMapSequenceAroundControlPointInitializer (const MapSequenceArou
 	} else {
 	    basis1 = glm::vec3 (axis.y, -axis.x, 0.0f) / axisXYLength;
 	}
-	const glm::vec3 basis2 = glm::normalize (glm::cross (axis, basis1));
+	glm::vec3 basis2 = glm::normalize (glm::cross (axis, basis1));
+	// Positions and control points use reflected simulation coordinates. Build
+	// the authored basis first, then reflect all three vectors to retain phase
+	// direction as well as the plane's orientation.
+	axis.y = -axis.y;
+	basis1.y = -basis1.y;
+	basis2.y = -basis2.y;
 
 	const glm::vec2 bounds = boundsValue->getVec2 ();
 	const float angle = (bounds.x + phase * (bounds.y - bounds.x)) * glm::two_pi<float> ();
@@ -1522,13 +1528,10 @@ OperatorFunc CParticle::createMovementOperator (const MovementOperator& op) {
 		continue;
 	    }
 
-	    // Update position FIRST using current velocity
-	    // Velocity is already scaled by speed override
-	    p.position += p.velocity * dt;
-
-	    // Then apply forces to modify velocity for NEXT frame
-	    // Apply gravity
+	    // Native movement applies gravity before advancing position, then drag.
+	    // Otherwise a large drag*dt discards every frame's force without motion.
 	    p.velocity += gravity * dt * speed;
+	    p.position += p.velocity * dt;
 
 	    // Apply drag (velocity decay)
 	    // Clamp to prevent velocity reversal if drag*dt > 1.0
