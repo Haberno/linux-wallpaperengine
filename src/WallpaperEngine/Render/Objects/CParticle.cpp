@@ -26,15 +26,75 @@ float WallpaperEngine::Render::Objects::calculateParticleEmissionRate (const flo
     return glm::max (emitterRate, 0.0f) * glm::max (count, 0.0f);
 }
 
+float WallpaperEngine::Render::Objects::calculateParticleAudioResponse (
+    const float* left, const float* right, const int mode, const glm::vec2& bounds,
+    const float exponent, const int frequencyStart, const int frequencyEnd
+) {
+    if (mode == 0) return 1.0f;
+    // Native 14022a8a0 uses the strongest selected band. Stereo averages
+    // each pair before taking that maximum, rather than averaging the range.
+    float peak = 0.0f;
+    for (int band = std::clamp (frequencyStart, 0, 15); band <= std::clamp (frequencyEnd, 0, 15); ++band) {
+	const float value = mode == 1 ? left[band] : mode == 2 ? right[band]
+	    : mode == 3 ? (left[band] + right[band]) * 0.5f : 0.0f;
+	peak = std::max (peak, value);
+    }
+    const float mapped = (peak - bounds.x) / (bounds.y - bounds.x);
+    const float value = mapped < 0.0f ? 0.0f : mapped < 1.0f ? mapped : 1.0f;
+    const float response = std::pow ((3.0f - 2.0f * value) * value * value, exponent);
+    return response < 0.0f ? 0.0f : response < 1.0f ? response : 1.0f;
+}
+
+void WallpaperEngine::Render::Objects::initializeParticleBetweenControlPoints (
+    ParticleInstance& particle, const MapSequenceBetweenControlPointsInitializer& initializer,
+    const glm::vec3& start, const glm::vec3& end, float& phase, float& direction
+) {
+    // Native initializer opcode 14 (14023ca93) preserves only the emitter's
+    // displacement perpendicular to the control-point segment.
+    const glm::vec3 segment = end - start;
+    const float distance = glm::length (segment);
+    const glm::vec3 axis = distance > 0.0f ? segment / distance : glm::vec3 (0.0f);
+    glm::vec3 displacement = particle.position - axis * glm::dot (particle.position, axis);
+    const float weight = 1.0f - std::pow (std::abs (phase * 2.0f - 1.0f), 2.0f);
+    if ((initializer.flags & 1) != 0) displacement *= weight;
+    const glm::vec2 bounds = initializer.bounds->value->getVec2 ();
+    particle.position = start + segment * glm::mix (bounds.x, bounds.y, phase) + displacement;
+    if ((initializer.flags & 8) != 0) {
+	const glm::vec3 arcDirection (initializer.arcDirection.x, -initializer.arcDirection.y,
+				    initializer.arcDirection.z);
+	particle.position += arcDirection * (weight * distance * initializer.arcAmount);
+    }
+    if ((initializer.flags & 2) != 0) particle.velocity *= weight;
+    if ((initializer.flags & 4) != 0) {
+	particle.size *= 1.0f - initializer.sizeReductionAmount + initializer.sizeReductionAmount * weight;
+	particle.initial.size = particle.size;
+    }
+
+    // Both endpoints are samples: unlike the circular initializer, the step
+    // is 1/(count-1). Native repeat resets to zero; mirror reflects overshoot.
+    phase += direction / std::max (0.0001f, initializer.count->value->getFloat () - 1.0f);
+    if (phase > 1.0f) {
+	if (initializer.limitBehavior == "mirror") {
+	    phase = 2.0f - phase;
+	    direction = -direction;
+	} else {
+	    phase = 0.0f;
+	}
+    } else if (phase < 0.0f) {
+	phase = -phase;
+	direction = -direction;
+    }
+}
+
 glm::vec3
 WallpaperEngine::Render::Objects::convertParticleRotationForRender (
-    const glm::vec3& rotation, const bool perspectiveBillboard
+    const glm::vec3& rotation, const bool preserveZ
 ) {
     // Particle definitions use Wallpaper Engine's Y-down scene space. Reflection across
     // Y changes the handedness of axial rotation vectors, so X and Z change sign.
-    // Perspective billboards already cancel that reflection in their camera
-    // basis. Preserve native Z spin (1402308a0 uploads it unchanged).
-    return { -rotation.x, rotation.y, perspectiveBillboard ? rotation.z : -rotation.z };
+    // Perspective billboards and upright 2D sprite tangents already account
+    // for that reflection. Preserve native Z spin (1402308a0 uploads it unchanged).
+    return { -rotation.x, rotation.y, preserveZ ? rotation.z : -rotation.z };
 }
 
 float WallpaperEngine::Render::Objects::calculateRopeTrailVisualValue (
@@ -797,8 +857,6 @@ EmitterFunc CParticle::createBoxEmitter (const ParticleEmitter& emitter) {
 		    }
 		}
 
-		// TODO: Audio processing (audioProcessingMode, audioProcessingBounds, etc.)
-
 		// Handle instantaneous emission
 		toEmit = 0;
 		if (emitter.instantaneous > 0 && !instantaneousEmitted) {
@@ -808,7 +866,13 @@ EmitterFunc CParticle::createBoxEmitter (const ParticleEmitter& emitter) {
 
 		// Rate-based emission with optional cap at 1 per frame
 		if (emitter.rate > 0.0f) {
-		    const float rate = calculateParticleEmissionRate (emitter.rate, countOverride->getFloat ());
+		    const auto& recorder = getScene ().getAudioContext ().getRecorder ();
+		    const float response = calculateParticleAudioResponse (
+			recorder.audio16Left, recorder.audio16Right, emitter.audioProcessingMode,
+			emitter.audioProcessingBounds, emitter.audioProcessingExponent,
+			emitter.audioProcessingFrequencyStart, emitter.audioProcessingFrequencyEnd
+		    );
+		    const float rate = calculateParticleEmissionRate (emitter.rate, countOverride->getFloat ()) * response;
 		    emissionTimer += dt * rate;
 		    uint32_t rateEmit = static_cast<uint32_t> (emissionTimer);
 		    emissionTimer -= static_cast<float> (rateEmit);
@@ -915,7 +979,13 @@ EmitterFunc CParticle::createSphereEmitter (const ParticleEmitter& emitter) {
 	uint32_t toEmit = burst;
 	if (burst == 0) {
 	    // Rate-based emission with optional cap at 1 per frame
-	    const float rate = calculateParticleEmissionRate (emitter.rate, countOverride->getFloat ());
+	    const auto& recorder = getScene ().getAudioContext ().getRecorder ();
+	    const float response = calculateParticleAudioResponse (
+		recorder.audio16Left, recorder.audio16Right, emitter.audioProcessingMode,
+		emitter.audioProcessingBounds, emitter.audioProcessingExponent,
+		emitter.audioProcessingFrequencyStart, emitter.audioProcessingFrequencyEnd
+	    );
+	    const float rate = calculateParticleEmissionRate (emitter.rate, countOverride->getFloat ()) * response;
 	    emissionTimer += dt * rate;
 	    toEmit = static_cast<uint32_t> (emissionTimer);
 	    emissionTimer -= static_cast<float> (toEmit);
@@ -1069,6 +1139,10 @@ void CParticle::setupInitializers () {
 	} else if (initializer->is<MapSequenceAroundControlPointInitializer> ()) {
 	    func = createMapSequenceAroundControlPointInitializer (
 		*initializer->as<MapSequenceAroundControlPointInitializer> ()
+	    );
+	} else if (initializer->is<MapSequenceBetweenControlPointsInitializer> ()) {
+	    func = createMapSequenceBetweenControlPointsInitializer (
+		*initializer->as<MapSequenceBetweenControlPointsInitializer> ()
 	    );
 	} else {
 	    sLog.out ("Unknown initializer type");
@@ -1284,6 +1358,20 @@ InitializerFunc CParticle::createTurbulentVelocityRandomInitializer (const Turbu
 	glm::vec3 finalVel = result * speed * speedOverride->getFloat ();
 
 	p.velocity += finalVel;
+    };
+}
+
+InitializerFunc
+CParticle::createMapSequenceBetweenControlPointsInitializer (const MapSequenceBetweenControlPointsInitializer& init) {
+    return [this, &init, phase = 0.0f, direction = 1.0f] (ParticleInstance& particle) mutable {
+	const auto point = [this] (const int index) {
+	    const int clamped = std::clamp (index, 0, PARTICLE_CONTROL_POINT_COUNT - 1);
+	    return clamped < static_cast<int> (m_controlPoints.size ())
+		? m_controlPoints[clamped].position : glm::vec3 (0.0f);
+	};
+	initializeParticleBetweenControlPoints (
+	    particle, init, point (init.controlPointStart), point (init.controlPointEnd), phase, direction
+	);
     };
 }
 
@@ -2293,7 +2381,9 @@ void CParticle::updateMatrices () {
     m_mvpMatrix = m_viewProjectionMatrix * m_modelMatrix;
     m_mvpMatrixInverse = glm::inverse (m_mvpMatrix);
 
-    m_orientationUp = glm::vec3 (0.0f, 1.0f, 0.0f);
+    // Image quads map texture top toward -Y in the reflected 2D scene FBO.
+    // Sprite tangents must use the same basis for asymmetric textures.
+    m_orientationUp = glm::vec3 (0.0f, is3D ? 1.0f : -1.0f, 0.0f);
     m_orientationRight = glm::vec3 (1.0f, 0.0f, 0.0f);
     m_orientationForward = glm::vec3 (0.0f, 0.0f, 1.0f);
     m_viewUp = glm::vec3 (0.0f, 1.0f, 0.0f);
@@ -2324,9 +2414,7 @@ void CParticle::updateMatrices () {
 	if (!is3D) {
 	    authoredModel = glm::mat3 (flipY) * authoredModel;
 	}
-	// Orthographic rendering already reflects the world through sceneToParticle;
-	// reflecting its sprite tangents again would reverse asymmetric textures.
-	const glm::mat3 orientation = glm::mat3 (is3D ? flipY : glm::mat4 (1.0f))
+	const glm::mat3 orientation = glm::mat3 (flipY)
 	    * calculateFixedParticleOrientation (renderer.axis, authoredModel, (renderer.flags & 1) != 0);
 	m_orientationRight = orientation[0];
 	m_orientationUp = orientation[1];
@@ -2443,7 +2531,8 @@ void CParticle::renderSprites () {
     //   + a_TexCoordVec4C1(vel.x, vel.y, vel.z, lifetime)(4) + a_TexCoordC2(rotX, rotY)(2) = 17 floats
     uint32_t vertexIndex = 0;
     uint32_t indexOffset = 0;
-    const bool perspectiveBillboard = getScene ().getScene ().camera.projection.isPerspective
+    const bool is3D = getScene ().getScene ().camera.projection.isPerspective;
+    const bool perspectiveBillboard = is3D
 	&& (m_particle.renderers.empty () || m_particle.renderers[0].orientation != "fixed");
 
     for (uint32_t i = 0; i < m_particleCount; i++) {
@@ -2452,7 +2541,7 @@ void CParticle::renderSprites () {
 	    continue;
 	}
 
-	const glm::vec3 renderRotation = convertParticleRotationForRender (p.rotation, perspectiveBillboard);
+	const glm::vec3 renderRotation = convertParticleRotationForRender (p.rotation, perspectiveBillboard || !is3D);
 
 	// Skip particles with invalid values
 	if (!std::isfinite (p.position.x) || !std::isfinite (p.position.y) || !std::isfinite (p.position.z)
@@ -2562,9 +2651,15 @@ void CParticle::renderSprites () {
     // GL_DEPTH_CLAMP prevents near/far clipping by clamping depth instead.
     glEnable (GL_DEPTH_CLAMP);
 
+    // The perspective projection or upright 2D sprite tangents reflect Y.
+    // Trail tangents come from velocity and retain their 2D winding.
+    const bool reflectedWinding = is3D ? getScene ().getCamera ().isYFlipped () : !m_useTrailRenderer;
+    if (reflectedWinding) glFrontFace (GL_CW);
+
     // CPass::render() handles: FBO binding, texture setup, uniforms, blending, draw call, cleanup
     m_pass->render ();
 
+    if (reflectedWinding) glFrontFace (GL_CCW);
     glDisable (GL_DEPTH_CLAMP);
 
 #if !NDEBUG
