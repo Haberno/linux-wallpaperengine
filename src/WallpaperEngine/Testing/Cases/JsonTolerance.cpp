@@ -440,6 +440,7 @@ TEST_CASE ("shader comma vectors preserve text and wrapped property bindings", "
         "shader":"generic", "constantshadervalues":{
             "angles":"0.0, 360.0", "offset":{"value":"1, -2, 3"}, "rect":"0,0,0.4,1",
             "label":"Song, Title", "invalid":"0.0, 360oops", "scalar":"0.4",
+            "incompleteExponent":"1, 2, 3e", "overflowExponent":"1, 2, 1e9999",
             "tint":{"value":"1, 0, 0","user":"scheme","script":"export function update(value) { return value; }"}
         }
     }]})"), "comma.json", project);
@@ -449,6 +450,8 @@ TEST_CASE ("shader comma vectors preserve text and wrapped property bindings", "
     REQUIRE (values.at ("rect")->value->getVec4 () == glm::vec4 (0, 0, 0.4f, 1));
     REQUIRE (values.at ("label")->value->getString () == "Song, Title");
     REQUIRE (values.at ("invalid")->value->getString () == "0.0, 360oops");
+    CHECK (values.at ("incompleteExponent")->value->getString () == "1, 2, 3e");
+    CHECK (values.at ("overflowExponent")->value->getString () == "1, 2, 1e9999");
     REQUIRE (values.at ("scalar")->value->getFloat () == 0.4f);
     REQUIRE (values.at ("tint")->value->getVec3 () == glm::vec3 (0, 0.4f, 0.7f));
     REQUIRE (values.at ("tint")->value->getScriptSource () == "export function update(value) { return value; }");
