@@ -745,19 +745,9 @@ void CImage::selectPuppetAnimations (const float sceneTime) {
 	return found != this->m_puppetAnimation.animations.end () ? &*found : nullptr;
     };
 
-    // Legacy scenes sometimes omit animationlayers entirely and rely on the first
-    // embedded animation. Authored zero-weight layers remain in the list to keep
-    // native layer ordering and playback state stable; the evaluator owns the
-    // model's shared reference pose independently of the active layer order.
-    if (this->getImage ().animationLayers.empty ()) {
-	this->m_puppetActiveLayers.push_back (
-	    {
-		.animation = &this->m_puppetAnimation.animations.front (),
-		.time = sceneTime,
-	    }
-	);
-	return;
-    }
+    // Only scene-assigned clips contribute. An embedded clip can be an unused
+    // editor animation; missing or empty animationlayers must keep the rest pose.
+    // Keep authored zero-weight layers for stable ordering and playback state.
 
     for (const auto& layer : this->getImage ().animationLayers) {
 	const bool visible = layer->visible->value->getBool ();
@@ -2178,7 +2168,7 @@ bool CImage::isPuppetAnimationLayerPlaying (const std::optional<size_t> index) c
 	    return true;
 	}
     }
-    return this->m_image.animationLayers.empty () && !this->m_puppetAnimation.animations.empty ();
+    return false;
 }
 
 glm::vec2 CImage::resolveGeometrySize (float sceneWidth, float sceneHeight, glm::vec3& origin) const {

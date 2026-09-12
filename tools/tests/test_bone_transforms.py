@@ -48,7 +48,8 @@ export function update(value) {
                 (root / 'models/image.json').write_text(json.dumps({
                     'material': 'materials/probe.json', 'puppet': 'models/probe.mdl',
                     'width': 10, 'height': 10}))
-                layer.update(image='models/image.json', size='10 10')
+                layer.update(image='models/image.json', size='10 10', animationlayers=[
+                    {'id': 10, 'animation': 1, 'blend': 1, 'visible': True}])
             else:
                 layer['model'] = 'models/probe.mdl'
             _, output = render_scene(self, root, base_scene([layer]), frames=10)
