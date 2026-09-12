@@ -10,6 +10,90 @@ from scene_render import render_scene
 
 @unittest.skipUnless(os.environ.get('LWE_TEST_BINARY'), 'Set LWE_TEST_BINARY for graphics tests')
 class DynamicLayers(unittest.TestCase):
+    def test_init_created_script_waits_for_all_initializers(self):
+        script = """
+let calls = 0;
+export function init() {
+    shared.childCalls = 0;
+    thisScene.createLayer({ name: 'child', image: 'models/util/solidlayer.json',
+        size: '10 10', visible: { value: false, script:
+            'export function init() { shared.childInitialized=true; } export function update(value) { if (!shared.allInitialized) throw Error("update preceded another layer init"); ++shared.childCalls; return value; }' } });
+    if (!shared.childInitialized || shared.childCalls !== 0)
+        throw Error('init-created child updated synchronously');
+}
+export function update(value) {
+    if (++calls === 1 && shared.childCalls !== 0) throw Error('startup update order changed');
+    if (calls === 2) {
+        if (shared.childCalls !== 1) throw Error('child missed startup update pass');
+        console.log('INIT_CREATION_OK');
+    }
+    return value;
+}
+"""
+        scene = {
+            'camera': {'eye': '0 0 500', 'center': '0 0 0', 'up': '0 1 0'},
+            'general': {'orthogonalprojection': {'width': 320, 'height': 180},
+                        'clearcolor': '0 0 0', 'camerafade': False},
+            'objects': [{'id': 1, 'name': 'creator', 'solid': True,
+                         'visible': {'value': True, 'script': script}},
+                        {'id': 2, 'name': 'later', 'solid': True, 'visible': {'value': True,
+                         'script': 'export function init() { shared.allInitialized=true; }'}}]}
+        with tempfile.TemporaryDirectory(prefix='lwe-init-creation-') as directory:
+            _, output = render_scene(self, Path(directory), scene)
+        self.assertIn('INIT_CREATION_OK', output)
+
+    def test_created_script_updates_once_then_can_destroy_itself(self):
+        script = """
+let calls = 0;
+export function update(value) {
+    ++calls;
+    if (calls === 2) {
+        shared.childCalls = 0;
+        shared.childInitialized = false;
+        thisScene.createLayer({ name: 'child', image: 'models/util/solidlayer.json',
+            size: '10 10', visible: { value: false, script:
+                'export function init() { shared.childInitialized=true; } export function update(value) { if (++shared.childCalls === 2) thisScene.destroyLayer(thisLayer); return value; }' } });
+        if (!shared.childInitialized || shared.childCalls !== 0)
+            throw Error('child update ran synchronously during creation');
+    }
+    if (calls === 3 && shared.childCalls !== 1)
+        throw Error('child did not update exactly once in creation tick');
+    if (calls === 4) {
+        if (thisScene.getLayer('child')) throw Error('child self-destruction was not applied');
+        console.log('CALLBACK_CREATION_OK');
+    }
+    return value;
+}
+"""
+        scene = {
+            'camera': {'eye': '0 0 500', 'center': '0 0 0', 'up': '0 1 0'},
+            'general': {'orthogonalprojection': {'width': 320, 'height': 180},
+                        'clearcolor': '0 0 0', 'camerafade': False},
+            'objects': [{'id': 1, 'name': 'creator', 'solid': True,
+                         'visible': {'value': True, 'script': script}}]}
+        with tempfile.TemporaryDirectory(prefix='lwe-callback-creation-') as directory:
+            _, output = render_scene(self, Path(directory), scene)
+        self.assertIn('CALLBACK_CREATION_OK', output)
+
+    def test_updates_follow_registration_order(self):
+        script = """
+export function update(value) {
+    shared.ordered.toFixed(2);
+    return new Vec3(0, 1, 0);
+}
+"""
+        image = {'image': 'models/util/solidlayer.json', 'origin': '160 90 0', 'size': '40 40'}
+        scene = {
+            'camera': {'eye': '0 0 500', 'center': '0 0 0', 'up': '0 1 0'},
+            'general': {'orthogonalprojection': {'width': 320, 'height': 180},
+                        'clearcolor': '0 0 0', 'camerafade': False},
+            'objects': [dict(image, id=900, name='controller', visible={
+                'value': True, 'script': 'export function update(value) { shared.ordered=1; return value; }'}),
+                dict(image, id=100, name='dependent', color={'value': '1 0 0', 'script': script})]}
+        with tempfile.TemporaryDirectory(prefix='lwe-update-order-') as directory:
+            frame, _ = render_scene(self, Path(directory), scene)
+        self.assertEqual(frame.getpixel((160, 90)), (0, 255, 0))
+
     def test_config_vectors_and_nested_script_properties(self):
         script = """
 export function init() {

@@ -445,6 +445,7 @@ ScriptEngine::~ScriptEngine () {
     this->m_sceneObject.reset ();
     this->m_scriptPropertiesObject.reset ();
     this->m_modules.clear ();
+    this->m_scriptModuleOrder.clear ();
     this->m_scriptModules.clear ();
 
     if (this->m_context) {
@@ -901,6 +902,7 @@ void ScriptEngine::queueScript (const std::string& key, DynamicValue& currentVal
     if (!inserted.second) {
 	return;
     }
+    this->m_scriptModuleOrder.emplace_back (&inserted.first->first, &inserted.first->second);
 
     // Constructor registrations must wait until the complete renderer is in the scene.
     if (this->m_sceneLayersReady && (object == nullptr || this->m_scene.getObject (object->getId ()) == object)) {
@@ -958,6 +960,9 @@ void ScriptEngine::unregisterScriptable (const ScriptableObject* object) {
 
     this->m_adapters.object->invalidate (object);
 
+    std::erase_if (this->m_scriptModuleOrder, [object] (const auto& entry) {
+	return entry.second->object == object;
+    });
     for (auto it = this->m_scriptModules.begin (); it != this->m_scriptModules.end ();) {
 	if (it->second.object != object) {
 	    ++it;
@@ -985,7 +990,9 @@ void ScriptEngine::initializeQueuedScripts (ScriptableObject* target) {
     // there disables that script's update permanently, for the rest of the scene's life.
     std::vector<std::pair<const std::string*, LoadedModule*>> started;
 
-    for (auto& [key, module] : this->m_scriptModules) {
+    for (const auto& entry : this->m_scriptModuleOrder) {
+	const auto& key = *entry.first;
+	auto& module = *entry.second;
 	if (module.initialized || (target != nullptr && module.object != target)) {
 	    continue;
 	}
@@ -1011,8 +1018,14 @@ void ScriptEngine::initializeQueuedScripts (ScriptableObject* target) {
 	this->notifyMediaUpdate (this->m_mediaSource.getMediaInfo (), module);
     }
 
-    for (const auto& [key, module] : started) {
-	this->callLifecycleHook (*key, *module, "update");
+    // createLayer initializes immediately, but its first update belongs to the
+    // normal traversal. Startup also includes children created by init hooks,
+    // after every existing layer has finished initializing.
+    if (target == nullptr) {
+	for (const auto& [key, module] : this->m_scriptModuleOrder) {
+	    if (module->initialized && module->updateEnabled)
+		this->callLifecycleHook (*key, *module, "update");
+	}
     }
 }
 
@@ -1118,7 +1131,9 @@ void ScriptEngine::tick () {
     }
 
     // run all update methods
-    for (auto& [key, module] : this->m_scriptModules) {
+    for (const auto& entry : this->m_scriptModuleOrder) {
+	const auto& key = *entry.first;
+	auto& module = *entry.second;
 	if (!module.initialized || !module.updateEnabled) {
 	    continue;
 	}
