@@ -22,6 +22,8 @@ public:
 
     [[nodiscard]] std::pair<std::string, std::string> toGlsl (const std::string& vertex, const std::string& fragment);
 
+    [[nodiscard]] std::string preprocess (UnitType type, const std::string& source);
+
     [[nodiscard]] static GLSLContext& get ();
 
 private:

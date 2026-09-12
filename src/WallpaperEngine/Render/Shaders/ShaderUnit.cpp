@@ -2125,14 +2125,20 @@ const std::string& ShaderUnit::compile () {
     }
 
     // this should be the rest of the shader
-    // all compat passes are pure functions of (unit type, preprocessed source,
-    // linked preprocessed source); memoized like GLSLContext::toGlsl so stock
-    // shaders shared between wallpapers and switch-backs skip the regex passes.
+    // Compatibility normally depends only on the unit type and linked sources.
+    // Macro expansion also depends on the generated header, included below in
+    // those cache keys. Shared shaders and switch-backs skip the regex passes.
     // Guarded by a mutex so a future worker-thread caller stays safe.
     static std::mutex sCompatCacheMutex;
     static std::unordered_map<std::string, std::string> sCompatCache;
     static size_t sCompatCacheBytes = 0;
     static const std::string sNoLink;
+
+    // A native constant macro may contain a trailing semicolon. Wrapping its
+    // unexpanded use in a numeric constructor places that semicolon inside the
+    // expression. Expand these shaders with their actual combo values first.
+    static const std::regex statementMacro (R"((^|\n)[ \t]*#[ \t]*define\b[^\n]*;)");
+    const bool expandMacros = std::regex_search (maskShaderComments (this->m_preprocessed), statementMacro);
 
     const std::string& linkedSource = this->m_link != nullptr ? this->m_link->m_preprocessed : sNoLink;
     std::string compatKey;
@@ -2141,11 +2147,16 @@ const std::string& ShaderUnit::compile () {
     compatKey.append (this->m_preprocessed);
     compatKey.push_back ('\x1F');
     compatKey.append (linkedSource);
+    if (expandMacros) {
+	compatKey.push_back ('\x1E');
+	compatKey.append (this->m_final);
+    }
 
     {
 	const std::lock_guard<std::mutex> lock (sCompatCacheMutex);
 	const auto it = sCompatCache.find (compatKey);
 	if (it != sCompatCache.end ()) {
+	    if (expandMacros) this->m_final.clear ();
 	    this->m_final += it->second;
 	    // cache hits still produce a distinct fully-composed unit (different combos
 	    // in the header), so dump those too
@@ -2176,6 +2187,12 @@ const std::string& ShaderUnit::compile () {
     compatResult = this->applyWritableInputs (std::move (compatResult));
     compatResult = this->applyFragmentTexCoordCompatibility (std::move (compatResult));
     compatResult = this->applyVectorBuiltinCompatibility (std::move (compatResult));
+    if (expandMacros) {
+	compatResult = this->applyHeaderMacroCompatibility (this->m_final + compatResult);
+	compatResult = this->applyDuplicateMacroCompatibility (std::move (compatResult));
+	this->m_final.clear ();
+	compatResult = GLSLContext::get ().preprocess (this->m_type, compatResult);
+    }
     compatResult = this->applyNumericParameterCallCompatibility (std::move (compatResult));
     compatResult = this->applyNumericInitializerCompatibility (std::move (compatResult));
     compatResult = this->applyNonConstantInitializerCompatibility (std::move (compatResult));
