@@ -55,6 +55,48 @@ compileLinked (const std::string& vertexSource, const std::string& fragmentSourc
 }
 } // namespace
 
+TEST_CASE ("statement macros expand before numeric shader conversions", "[shader][statement-macro]") {
+    for (const std::string expression : { "mask", "MASK_ALIAS", "GET_MASK()" }) {
+	std::string firstVariant;
+	for (const int masked : { 0, 1, 0 }) {
+	    CAPTURE (expression, masked);
+	    const std::string source =
+		"#if MASK\nfloat mask = 0.25;\n#else\n#define mask 1.0;\n#endif\n"
+		"#define MASK_ALIAS mask\n#define GET_MASK() MASK_ALIAS\n"
+		"#define SET_RED() color.r = 0.2;\n"
+		"#define SCALE 1.0\n#define SCALE 0.75\n"
+		"void main() {\nvec4 color = vec4(0.0);\n"
+		"float opacity = SCALE * " + expression + ";\n"
+		"float narrowed = vec2(0.2, 0.8);\n"
+		"#if MASK\nvec3 widened = mask;\n#else\nvec3 widened = vec3(1.0);\nmask\n#endif\n"
+		"SET_RED()\ngl_FragColor = vec4(opacity, widened.x, color.r + narrowed, 1.0);\n}\n";
+	    const auto compiled = compileLinked (
+		"void main() { gl_Position = vec4(0.0); }\n", source, ComboMap { { "MASK", masked } }
+	    );
+	    const auto translated = GLSLContext::get ().toGlsl (compiled.first, compiled.second);
+	    REQUIRE_FALSE (translated.first.empty ());
+	    REQUIRE_FALSE (translated.second.empty ());
+	    if (firstVariant.empty ()) firstVariant = translated.second;
+	    else if (masked) CHECK (translated.second != firstVariant);
+	    else CHECK (translated.second == firstVariant);
+	}
+    }
+}
+
+TEST_CASE ("failed macro preprocessing never caches an incomplete shader", "[shader][statement-macro-error]") {
+    const auto assets = shaderAssets ("");
+    const ShaderConstantMap constants;
+    const TextureMap textures;
+    const ComboMap combos;
+    ShaderUnit unit (
+	GLSLContext::UnitType_Fragment, "macro_error.frag",
+	"#define TERMINATED 1.0;\n#error deliberate\nvoid main() { gl_FragColor = vec4(1.0); }\n",
+	*assets, constants, textures, textures, combos, combos
+    );
+    CHECK_THROWS (unit.compile ());
+    CHECK_THROWS (unit.compile ());
+}
+
 TEST_CASE ("shader parameter declarations accept aligned whitespace", "[shader][parameter][regression]") {
     const auto assets = shaderAssets ("");
     const ShaderConstantMap constants;
