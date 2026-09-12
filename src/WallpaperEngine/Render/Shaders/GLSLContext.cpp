@@ -135,6 +135,22 @@ GLSLContext& GLSLContext::get () {
     return *sInstance;
 }
 
+std::string GLSLContext::preprocess (const UnitType type, const std::string& source) {
+    const EShLanguage stage = type == UnitType_Vertex ? EShLangVertex : EShLangFragment;
+    glslang::TShader shader (stage);
+    const char* text = source.c_str ();
+    shader.setStrings (&text, 1);
+    shader.setEnvInput (glslang::EShSourceGlsl, stage, glslang::EShClientOpenGL, 330);
+    shader.setEnvClient (glslang::EShClientOpenGL, glslang::EShTargetOpenGL_450);
+    shader.setEnvTarget (glslang::EShTargetSpv, glslang::EShTargetSpv_1_5);
+    glslang::TShader::ForbidIncluder includer;
+    std::string result;
+    if (!shader.preprocess (&BuiltInResource, 100, ENoProfile, false, false, EShMsgDefault, &result, includer)) {
+	sLog.exception ("Cannot preprocess shader macros: ", shader.getInfoLog ());
+    }
+    return result;
+}
+
 std::pair<std::string, std::string> GLSLContext::toGlsl (const std::string& vertex, const std::string& fragment) {
     // the translation below is a pure function of (vertex, fragment), so the whole
     // glslang -> SPIR-V -> SPIRV-Cross round trip is memoized; failed translations are
