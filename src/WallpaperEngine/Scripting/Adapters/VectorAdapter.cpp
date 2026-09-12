@@ -430,6 +430,16 @@ template JSValue vector_length<2> (JSContext* ctx, JSValueConst this_val, int ar
 template JSValue vector_length<3> (JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv);
 template JSValue vector_length<4> (JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv);
 
+template <int components> JSValue vector_length_sqr (JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    JSClassID classId = 0;
+    const auto* container = static_cast<VectorOpaqueContainer<components>*> (JS_GetAnyOpaque (this_val, &classId));
+
+    VEC_MAGIC_CHECK_EXCEPTION (container, components);
+
+    const auto vector = vector_get<components> (container->value);
+    return JS_NewFloat64 (ctx, glm::dot (vector, vector));
+}
+
 template <int components>
 JSValue vector_constructor (JSContext* ctx, JSValueConst new_target, int argc, JSValueConst* argv, int magic) {
     auto it = vectorAdapterInstances<components>.find (magic);
@@ -646,17 +656,7 @@ template <int components> JSValue vector_dot (JSContext* ctx, JSValueConst this_
 	return JS_EXCEPTION;
     }
 
-    JSValue newVector = container->adapter.instantiate ();
-    const auto* newContainer = static_cast<VectorOpaqueContainer<components>*> (JS_GetAnyOpaque (newVector, &classId));
-
-    VEC_MAGIC_CHECK_EXCEPTION (newContainer, components);
-
-    newContainer->value.update (
-	glm::dot (*operand, vector_get<components> (container->value)),
-	DynamicValue::UpdateSource::Initialization
-    );
-
-    return newVector;
+    return JS_NewFloat64 (ctx, glm::dot (*operand, vector_get<components> (container->value)));
 }
 
 template JSValue vector_dot<2> (JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv);
@@ -975,7 +975,7 @@ VectorAdapter<components>::VectorAdapter (ScriptEngine& engine) :
     );
     JS_DefinePropertyValueStr (
 	this->m_engine.getContext (), m_prototype, "lengthSqr",
-	JS_NewCFunction (this->m_engine.getContext (), vector_length<components>, "lengthSqr", 0), JS_PROP_ENUMERABLE
+	JS_NewCFunction (this->m_engine.getContext (), vector_length_sqr<components>, "lengthSqr", 0), JS_PROP_ENUMERABLE
     );
     JS_DefinePropertyValueStr (
 	this->m_engine.getContext (), m_prototype, "normalize",
