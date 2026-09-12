@@ -151,7 +151,7 @@ void main() { gl_FragColor = vec4(1.0, 0.0, 0.0, texSample2D(g_Texture0, v_TexCo
     def test_perspective_lighting_survives_an_image_effect(self):
         with tempfile.TemporaryDirectory(prefix='lwe-perspective-prelighting-') as directory:
             pixels = []
-            for effected in (False, True):
+            for effected in (None, True, False):
                 root = Path(directory) / str(effected)
                 write_copy_assets(root)
                 (root / 'materials/lit.json').write_text(json.dumps({'passes': [{
@@ -162,8 +162,8 @@ void main() { gl_FragColor = vec4(1.0, 0.0, 0.0, texSample2D(g_Texture0, v_TexCo
                     'material': 'materials/lit.json', 'width': 64, 'height': 64}))
                 plane = {'id': 1, 'image': 'models/lit.json', 'origin': '0.8 0 0',
                          'scale': '0.025 0.025 0.025', 'size': '64 64'}
-                if effected:
-                    plane['effects'] = [{'id': 3, 'file': 'effects/copy.json'}]
+                if effected is not None:
+                    plane['effects'] = [{'id': 3, 'file': 'effects/copy.json', 'visible': effected}]
                     (root / 'effects/copy.json').write_text(json.dumps({'passes': [
                         {'material': 'materials/copy.json'}]}))
                 scene = {'camera': {'eye': '0 0 5', 'center': '0 0 0', 'up': '0 1 0'},
@@ -175,7 +175,48 @@ void main() { gl_FragColor = vec4(1.0, 0.0, 0.0, texSample2D(g_Texture0, v_TexCo
                 frame, _ = render_scene(self, root, scene)
                 pixels.append(frame.getpixel((191, 90)))
             self.assertGreater(min(pixels[0]), 20)
-            self.assertLessEqual(max(abs(a-b) for a,b in zip(*pixels)), 3, pixels)
+            for sample in pixels[1:]:
+                self.assertLessEqual(max(abs(a-b) for a,b in zip(pixels[0], sample)), 3, pixels)
+
+    def test_reflection_projection_survives_a_perspective_image_effect(self):
+        import struct
+
+        with tempfile.TemporaryDirectory(prefix='lwe-reflection-prelighting-') as directory:
+            pixels = []
+            for effected in (False, True):
+                root = Path(directory) / str(effected)
+                write_copy_assets(root)
+                for name, width, data in (
+                        ('black', 64, bytes((0, 0, 0, 255)) * (64 * 64)),
+                        ('normal', 1, bytes((210, 175, 255, 255))),
+                        ('gradient', 64, bytes(channel for y in range(64) for x in range(64)
+                            for channel in (255 if x // 4 % 2 else 0, 255 if y // 4 % 2 else 0, 0, 255)))):
+                    (root / f'materials/{name}.tex').write_bytes(
+                        b'TEXV0005\0TEXI0001\0' + struct.pack('<7I', 0, 2, width, width, width, width, 0)
+                        + b'TEXB0001\0' + struct.pack('<2I', 1, 1)
+                        + struct.pack('<3I', width, width, len(data)) + data)
+                (root / 'materials/lit.json').write_text(json.dumps({'passes': [{
+                    'shader': 'genericimage3', 'textures': ['black', 'normal', None, 'gradient'],
+                    'combos': {'LIGHTING': 1, 'REFLECTION': 1, 'NORMALMAP': 1},
+                    'constantshadervalues': {'roughness': 0, 'metallic': 1, 'reflectivity': 1},
+                    'blending': 'normal', 'depthtest': 'disabled', 'depthwrite': 'disabled',
+                    'cullmode': 'nocull'}]}))
+                (root / 'models/lit.json').write_text(json.dumps({
+                    'material': 'materials/lit.json', 'width': 64, 'height': 64}))
+                plane = {'id': 1, 'image': 'models/lit.json', 'origin': '0 0 0',
+                         'angles': '0 0 0', 'scale': '0.025 0.025 0.025', 'size': '64 64'}
+                if effected:
+                    plane['effects'] = [{'id': 3, 'file': 'effects/copy.json'}]
+                    (root / 'effects/copy.json').write_text(json.dumps({'passes': [
+                        {'material': 'materials/copy.json'}]}))
+                scene = {'camera': {'eye': '3 0 5', 'center': '0 0 0', 'up': '0 1 0'},
+                         'general': {'ambientcolor': '0 0 0', 'skylightcolor': '0 0 0',
+                                     'camerafade': False, 'orthogonalprojection': None, 'clearcolor': '0 0 1',
+                                     'fov': 50, 'nearz': .1, 'farz': 100}, 'objects': [plane]}
+                frame, _ = render_scene(self, root, scene)
+                pixels.append([frame.getpixel((x, y)) for y in range(75, 106, 5) for x in range(145, 176, 5)])
+            self.assertGreater(max(max(p) for p in pixels[0]), 10)
+            self.assertLessEqual(max(abs(a-b) for pair in zip(*pixels) for a,b in zip(*pair)), 3, pixels)
 
     def test_dynamic_effect_blends_against_the_scene_at_the_layer_position(self):
         with tempfile.TemporaryDirectory(prefix='lwe-dynamic-blend-') as directory:
