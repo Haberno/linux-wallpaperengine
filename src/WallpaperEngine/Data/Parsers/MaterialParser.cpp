@@ -53,7 +53,19 @@ MaterialParser::parsePass (const JSON& it, const Project& project, const bool mo
     const auto textures = it.optional ("textures");
     const auto usertextures = it.optional ("usertextures");
     const auto combos = it.optional ("combos");
-    const auto constants = it.optional ("constantshadervalues");
+    JSON constants = it.optional ("constantshadervalues").value_or (JSON::object ());
+    const auto userValues = it.optional ("usershadervalues");
+    if (userValues.has_value () && userValues->is_object ()) {
+	for (const auto& [property, parameter] : userValues->items ()) {
+	    if (!parameter.is_string () || !project.properties.contains (property)) continue;
+	    const std::string name = parameter.get<std::string> ();
+	    JSON value = constants.is_object () && constants.contains (name) ? constants[name] : JSON (0);
+	    if (!value.is_object ()) value = JSON { { "value", value } };
+	    value["user"] = property;
+	    if (!constants.is_object ()) constants = JSON::object ();
+	    constants[name] = std::move (value);
+	}
+    }
 
     // Image/effect passes historically default to an overlay with no depth state.
     // Opaque 3D model materials use the opposite defaults in Wallpaper Engine: many
@@ -70,7 +82,7 @@ MaterialParser::parsePass (const JSON& it, const Project& project, const bool mo
 	.textures = textures.has_value () ? TextureParser::parseTextureMap (*textures) : TextureMap {},
 	.usertextures = usertextures.has_value () ? TextureParser::parseTextureMap (*usertextures) : TextureMap {},
 	.combos = combos.has_value () ? parseCombos (*combos) : ComboMap {},
-	.constants = constants.has_value () ? ShaderConstantParser::parse (*constants, project) : ShaderConstantMap {},
+	.constants = ShaderConstantParser::parse (constants, project),
     });
 }
 
