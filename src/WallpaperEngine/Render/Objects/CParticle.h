@@ -24,7 +24,11 @@ constexpr uint32_t DEFAULT_MAX_PARTICLES = 1000;
 
 [[nodiscard]] float calculateParticleSimulationDelta (float elapsed, float rate);
 [[nodiscard]] float calculateParticleEmissionRate (float emitterRate, float count);
-[[nodiscard]] glm::vec3 convertParticleRotationForRender (const glm::vec3& rotation, bool perspectiveBillboard = false);
+[[nodiscard]] float calculateParticleAudioResponse (
+    const float* left, const float* right, int mode, const glm::vec2& bounds,
+    float exponent, int frequencyStart, int frequencyEnd
+);
+[[nodiscard]] glm::vec3 convertParticleRotationForRender (const glm::vec3& rotation, bool preserveZ = false);
 [[nodiscard]] float calculateRopeTrailVisualValue (float currentValue, float trailPosition, bool fadeAlongTrail);
 [[nodiscard]] glm::vec3 calculateControlPointAttraction (
     const glm::vec3& toCenter, float strength, float radius, float deltaTime
@@ -107,6 +111,11 @@ struct ParticleInstance {
     bool isAlive () const { return alive && age < lifetime; }
 };
 
+void initializeParticleBetweenControlPoints (
+    ParticleInstance& particle, const MapSequenceBetweenControlPointsInitializer& initializer,
+    const glm::vec3& start, const glm::vec3& end, float& phase, float& direction
+);
+
 /**
  * Control point runtime data
  */
@@ -181,6 +190,8 @@ protected:
     InitializerFunc createTurbulentVelocityRandomInitializer (const TurbulentVelocityRandomInitializer& init);
     InitializerFunc
     createMapSequenceAroundControlPointInitializer (const MapSequenceAroundControlPointInitializer& init);
+    InitializerFunc
+    createMapSequenceBetweenControlPointsInitializer (const MapSequenceBetweenControlPointsInitializer& init);
 
     // Operator creators
     OperatorFunc createMovementOperator (const MovementOperator& op);

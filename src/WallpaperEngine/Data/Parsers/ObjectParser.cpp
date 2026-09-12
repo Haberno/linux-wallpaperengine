@@ -783,7 +783,7 @@ ParticleEmitter ObjectParser::parseParticleEmitter (const JSON& it) {
 	    .delay = it.optional ("delay", 0.0f),
 	    .duration = it.optional ("duration", 0.0f),
 	    .audioProcessingBounds = parseVec2 ("audioprocessingbounds", glm::vec2 (0.8f, 1.0f)),
-	    .audioProcessingExponent = it.optional ("audioprocessingexponent", 2),
+	    .audioProcessingExponent = it.optional ("audioprocessingexponent", 2.0f),
 	    .audioProcessingFrequencyStart = it.optional ("audioprocessingfrequencystart", 0),
 	    .audioProcessingFrequencyEnd = it.optional ("audioprocessingfrequencyend", 1),
 	    .audioProcessingMode = it.optional ("audioprocessingmode", 0),
@@ -841,6 +841,13 @@ ParticleInitializerUniquePtr ObjectParser::parseParticleInitializer (const JSON&
 	    it.user ("forward", properties, glm::vec3 (0.0f, 1.0f, 0.0f)), it.user ("timescale", properties, 1.0f),
 	    it.user ("phasemin", properties, 0.0f), it.user ("phasemax", properties, 0.1f),
 	    it.user ("right", properties, glm::vec3 (0.0f, 0.0f, 1.0f))
+	);
+    } else if (name == "mapsequencebetweencontrolpoints") {
+	return std::make_unique<MapSequenceBetweenControlPointsInitializer> (
+	    it.user ("count", properties, 32.0f), it.user ("bounds", properties, glm::vec2 (0.0f, 1.0f)),
+	    it.optional<std::string> ("limitbehavior", "repeat"), it.optional ("controlpointstart", 0),
+	    it.optional ("controlpointend", 1), it.optional ("flags", 0u), it.optional ("arcamount", 0.3f),
+	    it.optional ("arcdirection", glm::vec3 (0.0f, 1.0f, 0.0f)), it.optional ("sizereductionamount", 0.9f)
 	);
     } else if (name == "mapsequencearoundcontrolpoint") {
 	return std::make_unique<MapSequenceAroundControlPointInitializer> (

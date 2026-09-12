@@ -8,8 +8,11 @@
 #include <catch2/catch_test_macros.hpp>
 #include <cmath>
 #include <glm/gtc/matrix_transform.hpp>
+#include "WallpaperEngine/Data/Parsers/ObjectParser.h"
+#include "WallpaperEngine/FileSystem/Container.h"
 
 using WallpaperEngine::Render::Objects::calculateParticleEmissionRate;
+using WallpaperEngine::Render::Objects::calculateParticleAudioResponse;
 using WallpaperEngine::Render::Objects::calculateControlPointAttraction;
 using WallpaperEngine::Render::Objects::calculateParticleSimulationDelta;
 using WallpaperEngine::Render::Objects::calculateRopeTrailVisualValue;
@@ -17,6 +20,109 @@ using WallpaperEngine::Render::Objects::convertParticleRotationForRender;
 using WallpaperEngine::Render::Objects::resolveParticleControlPoint;
 using WallpaperEngine::Render::Objects::calculateFixedParticleOrientation;
 using WallpaperEngine::Render::Objects::calculateBillboardParticleOrientation;
+using WallpaperEngine::Render::Objects::ParticleInstance;
+
+TEST_CASE ("particle emission follows the strongest selected audio band", "[particle]") {
+    float left[16] {}, right[16] {};
+    CHECK (calculateParticleAudioResponse (left, right, 0, { 0.8f, 1.0f }, 0.5f, 4, 8) == 1.0f);
+    CHECK (calculateParticleAudioResponse (left, right, 3, { 0.8f, 1.0f }, 0.5f, 4, 8) == 0.0f);
+    left[6] = 0.9f;
+    right[6] = 0.9f;
+    // Native 14022a8a0 takes a band maximum, then smoothstep and exponent.
+    CHECK (calculateParticleAudioResponse (left, right, 3, { 0.8f, 1.0f }, 0.5f, 4, 8)
+	   == Catch::Approx (std::sqrt (0.5f)).margin (0.00001f));
+    CHECK (calculateParticleAudioResponse (left, right, 1, { 0.8f, 1.0f }, 1.0f, 6, 6)
+	   == Catch::Approx (0.5f).margin (0.00001f));
+    right[6] = 0.0f;
+    right[7] = 0.9f;
+    CHECK (calculateParticleAudioResponse (left, right, 3, { 0.8f, 1.0f }, 0.5f, 4, 8) == 0.0f);
+    CHECK (calculateParticleAudioResponse (left, right, 2, { 0.8f, 1.0f }, 1.0f, 7, 7)
+	   == Catch::Approx (0.5f).margin (0.00001f));
+    CHECK (calculateParticleAudioResponse (left, right, 1, { 0.8f, 1.0f }, 0.5f, 0, 5) == 0.0f);
+    CHECK (calculateParticleAudioResponse (left, right, 1, { 1.0f, 0.8f }, 1.0f, 6, 6)
+	   == Catch::Approx (0.5f).margin (0.00001f));
+}
+
+TEST_CASE ("discharge particles retain their between-control-point initializer", "[particle]") {
+    auto filesystem = std::make_unique<WallpaperEngine::FileSystem::Container> ();
+    filesystem->getVFS ().add ("particles/discharge.json", R"({
+        "initializer":[{"name":"mapsequencebetweencontrolpoints","count":10,"limitbehavior":"mirror"}],
+        "emitter":[{"name":"sphererandom","audioprocessingexponent":0.5}]
+    })");
+    WallpaperEngine::Data::Model::Project project {};
+    project.assetLocator = std::make_unique<WallpaperEngine::Assets::AssetLocator> (std::move (filesystem));
+    const auto object = WallpaperEngine::Data::Parsers::ObjectParser::parse (
+        WallpaperEngine::Data::JSON::JSON::parse (R"({"id":19,"particle":"particles/discharge.json"})"), project
+    );
+    const auto* particle = object->as<WallpaperEngine::Data::Model::Particle> ();
+    REQUIRE (particle != nullptr);
+    REQUIRE (particle->initializers.size () == 1);
+    REQUIRE (particle->initializers.front () != nullptr);
+    const auto* initializer = particle->initializers.front ()->as<MapSequenceBetweenControlPointsInitializer> ();
+    REQUIRE (initializer != nullptr);
+    CHECK (initializer->count->value->getFloat () == 10.0f);
+    CHECK (initializer->bounds->value->getVec2 () == glm::vec2 (0.0f, 1.0f));
+    CHECK (initializer->controlPointStart == 0);
+    CHECK (initializer->controlPointEnd == 1);
+    CHECK (initializer->flags == 0);
+    CHECK (initializer->limitBehavior == "mirror");
+    CHECK (initializer->arcAmount == Catch::Approx (0.3f));
+    CHECK (initializer->arcDirection == glm::vec3 (0.0f, 1.0f, 0.0f));
+    CHECK (initializer->sizeReductionAmount == Catch::Approx (0.9f));
+    REQUIRE (particle->emitters.size () == 1);
+    CHECK (particle->emitters.front ().audioProcessingExponent == Catch::Approx (0.5f));
+}
+
+TEST_CASE ("between-control-point sequences include endpoints and reflect in spawn order", "[particle]") {
+    using WallpaperEngine::Data::Builders::UserSettingBuilder;
+    using WallpaperEngine::Render::Objects::initializeParticleBetweenControlPoints;
+    MapSequenceBetweenControlPointsInitializer initializer (
+	UserSettingBuilder::fromValue (3.0f), UserSettingBuilder::fromValue (glm::vec2 (0.0f, 1.0f)),
+	"mirror", 0, 1, 0, 0.3f, glm::vec3 (0.0f, 1.0f, 0.0f), 0.9f
+    );
+    float phase = 0.0f, direction = 1.0f;
+    for (const float expectedX : { 20.0f, 70.0f, 120.0f, 70.0f, 20.0f }) {
+	ParticleInstance particle;
+	particle.position = { 7.0f, 5.0f, 3.0f };
+	initializeParticleBetweenControlPoints (particle, initializer, { 20, -30, 0 }, { 120, -30, 0 }, phase, direction);
+	CHECK (particle.position == glm::vec3 (expectedX, -25.0f, 3.0f));
+    }
+    initializer.limitBehavior = "repeat";
+    phase = 0.0f;
+    direction = 1.0f;
+    for (const float expectedX : { 20.0f, 70.0f, 120.0f, 20.0f }) {
+	ParticleInstance particle;
+	initializeParticleBetweenControlPoints (particle, initializer, { 20, -30, 0 }, { 120, -30, 0 }, phase, direction);
+	CHECK (particle.position == glm::vec3 (expectedX, -30.0f, 0.0f));
+    }
+}
+
+TEST_CASE ("between-control-point flags taper spread velocity size and authored arc", "[particle]") {
+    using WallpaperEngine::Data::Builders::UserSettingBuilder;
+    using WallpaperEngine::Render::Objects::initializeParticleBetweenControlPoints;
+    MapSequenceBetweenControlPointsInitializer initializer (
+	UserSettingBuilder::fromValue (3.0f), UserSettingBuilder::fromValue (glm::vec2 (0.0f, 1.0f)),
+	"repeat", 0, 1, 15, 0.3f, glm::vec3 (0.0f, 1.0f, 0.0f), 0.9f
+    );
+    for (const float initialPhase : { 0.0f, 0.5f, 1.0f }) {
+	float phase = initialPhase, direction = 1.0f;
+	ParticleInstance particle;
+	particle.position = { 7, 5, 3 };
+	particle.velocity = { 2, 4, 6 };
+	particle.size = 10.0f;
+	initializeParticleBetweenControlPoints (particle, initializer, { 20, -30, 0 }, { 120, -30, 0 }, phase, direction);
+	if (initialPhase == 0.5f) {
+	    CHECK (particle.position == glm::vec3 (70, -55, 3));
+	    CHECK (particle.velocity == glm::vec3 (2, 4, 6));
+	    CHECK (particle.size == 10.0f);
+	} else {
+	    CHECK (particle.position == glm::vec3 (initialPhase == 0.0f ? 20 : 120, -30, 0));
+	    CHECK (particle.velocity == glm::vec3 (0));
+	    CHECK (particle.size == Catch::Approx (1.0f));
+	}
+	CHECK (particle.initial.size == particle.size);
+    }
+}
 
 TEST_CASE ("billboard particles preserve layer roll in the camera plane", "[particle]") {
     // A tree with a half-turn must point down even under a yawed parent. The
