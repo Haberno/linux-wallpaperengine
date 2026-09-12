@@ -203,7 +203,7 @@ struct ParticleEmitter {
     float delay;
     float duration;
     glm::vec2 audioProcessingBounds;
-    int audioProcessingExponent;
+    float audioProcessingExponent;
     int audioProcessingFrequencyStart;
     int audioProcessingFrequencyEnd;
     int audioProcessingMode;
@@ -299,6 +299,27 @@ public:
     UserSettingUniquePtr phaseMin;
     UserSettingUniquePtr phaseMax;
     UserSettingUniquePtr right;
+};
+
+class MapSequenceBetweenControlPointsInitializer : public ParticleInitializerBase {
+public:
+    MapSequenceBetweenControlPointsInitializer (
+	UserSettingUniquePtr count, UserSettingUniquePtr bounds, std::string limitBehavior,
+	int controlPointStart, int controlPointEnd, uint32_t flags, float arcAmount,
+	glm::vec3 arcDirection, float sizeReductionAmount
+    ) :
+	count (std::move (count)), bounds (std::move (bounds)), limitBehavior (std::move (limitBehavior)),
+	controlPointStart (controlPointStart), controlPointEnd (controlPointEnd), flags (flags),
+	arcAmount (arcAmount), arcDirection (arcDirection), sizeReductionAmount (sizeReductionAmount) { }
+    UserSettingUniquePtr count;
+    UserSettingUniquePtr bounds;
+    std::string limitBehavior;
+    int controlPointStart;
+    int controlPointEnd;
+    uint32_t flags;
+    float arcAmount;
+    glm::vec3 arcDirection;
+    float sizeReductionAmount;
 };
 
 class MapSequenceAroundControlPointInitializer : public ParticleInitializerBase {

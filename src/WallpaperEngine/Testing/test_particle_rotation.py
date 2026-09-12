@@ -12,7 +12,8 @@ import tempfile
 from test_scene_reflections import capture, material, texture, write_json
 
 
-def prepare(root, rotation=0, velocity=0, force=0, layer_roll=0, perspective=True, fixed=False):
+def prepare(root, rotation=0, velocity=0, force=0, layer_roll=0, perspective=True, fixed=False, cull=False,
+            marker_uv=(0.75, 0.5)):
     root.mkdir(parents=True)
     (root / "shaders").mkdir()
     # Keep the installed genericparticle vertex shader and common_particles.h.
@@ -27,11 +28,14 @@ void main() {
         gl_FragColor = vec4(1, 0, 0, 1);
     else discard;
 }
-""")
+""".replace("vec2(0.75, 0.5)", f"vec2({marker_uv[0]}, {marker_uv[1]})"))
     write_json(root / "project.json", {"title": "Particle rotation regression", "type": "scene",
                                        "file": "scene.json"})
     texture(root / "materials/white.tex", [(255, 255, 255)])
-    write_json(root / "materials/marker.json", material("genericparticle", ["white"]))
+    marker_material = material("genericparticle", ["white"])
+    if cull:
+        marker_material["passes"][0]["cullmode"] = "normal"
+    write_json(root / "materials/marker.json", marker_material)
     initializers = [
         {"name": "lifetimerandom", "min": 20, "max": 20},
         {"name": "sizerandom", "min": 8 if perspective else 20,
@@ -84,6 +88,13 @@ def run(engine, root):
          (math.cos(0.6), math.sin(0.6))),
         ("fixed-orientation-control", {"rotation": 0.6, "fixed": True},
          (math.cos(0.6), -math.sin(0.6))),
+        ("perspective-front-face", {"cull": True}, (1, 0)),
+        ("orthographic-front-face", {"cull": True, "perspective": False}, (1, 0)),
+        ("fixed-front-face", {"cull": True, "fixed": True}, (1, 0)),
+        ("orthographic-texture-up", {"perspective": False, "marker_uv": (0.5, 0.25)}, (0, -1)),
+        ("orthographic-fixed-texture-up", {"perspective": False, "fixed": True,
+                                           "cull": True, "marker_uv": (0.5, 0.25)}, (0, -1)),
+        ("perspective-texture-up", {"marker_uv": (0.5, 0.25)}, (0, -1)),
     ]
     for name, arguments, expected in cases:
         case = root / name
