@@ -94,8 +94,8 @@ def fixture(root, settings, fog_combo=None):
     if fog_combo is not None:
         render_material["passes"][0]["combos"] = {"FOG": fog_combo}
     write_json(root / "materials/probe.json", render_material)
-    # Draw as a model so native image-layer composition cannot apply fog a
-    # second time or resample a source-sized effect target. Oversized world
+    # Draw as a model so image-layer composition cannot resample a source-sized
+    # effect target. Oversized world
     # bounds keep clip-space diagnostic geometry inside the native cull region.
     vertices = b"".join(struct.pack("<12f", x * 100, y * 100, 0, 0, 0, 1, 1, 0, 0, 1, u, v)
                         for x, y, u, v in ((-1, -1, 0, 1), (1, -1, 1, 1),
@@ -194,7 +194,9 @@ void main() {
         scene["general"].update(settings)
         image, _ = capture(engine, probe, scene, ("--msaa", "off"))
         actual = image.getpixel((160, 90))
-        expected = (64, 0, 191)
+        # Native genericimage4 does not infer FOG_COMPUTED from its FOG=1
+        # metadata. Models and custom shaders consume the scene fog directly.
+        expected = (0, 0, 255) if kind == "image" else (64, 0, 191)
         passed = max(abs(a - b) for a, b in zip(actual, expected)) <= 1
         results.append(dict(name=f"stock {kind} geometry after fog enable", actual=actual,
                             expected=expected, passed=passed))
