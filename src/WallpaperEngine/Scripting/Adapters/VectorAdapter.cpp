@@ -267,31 +267,9 @@ JSValue vector_property_get (JSContext* ctx, JSValueConst obj_val, JSAtom atom, 
 
     VEC_MAGIC_CHECK_EXCEPTION (container, components);
 
-    const char* name = JS_AtomToCString (ctx, atom);
-
-    if (name == nullptr) {
-	return JS_EXCEPTION;
-    }
-
-    ScopeGuard guard ([=] { JS_FreeCString (ctx, name); });
-    const auto value = vector_get<components> (container->value);
-
-    if (strcmp (name, "x") == 0) {
-	return JS_NewFloat64 (ctx, value.x);
-    }
-    if (strcmp (name, "y") == 0) {
-	return JS_NewFloat64 (ctx, value.y);
-    }
-    if constexpr (components >= 3) {
-	if (strcmp (name, "z") == 0) {
-	    return JS_NewFloat64 (ctx, value.z);
-	}
-
-	if constexpr (components >= 4) {
-	    if (strcmp (name, "w") == 0) {
-		return JS_NewFloat64 (ctx, value.w);
-	    }
-	}
+    const int index = container->adapter.componentIndex (atom);
+    if (index >= 0) {
+        return JS_NewFloat64 (ctx, vector_get<components> (container->value)[index]);
     }
 
     // Component access is exotic, but vector methods live on the ordinary class
@@ -326,62 +304,21 @@ int vector_property_set (
 	return -1;
     }
 
-    const char* name = JS_AtomToCString (ctx, atom);
-
-    if (name == nullptr) {
-	return -1;
+    const int index = container->adapter.componentIndex (atom);
+    if (index < 0) {
+        const char* name = JS_AtomToCString (ctx, atom);
+        if (name == nullptr) return -1;
+        JS_ThrowTypeError (ctx, "Vec%d has no writable property '%s'", (int) (components), name);
+        JS_FreeCString (ctx, name);
+        return -1;
     }
-
-    ScopeGuard guard ([=] { JS_FreeCString (ctx, name); });
     auto vec = vector_get<components> (container->value);
-    void* into = nullptr;
-
-    if (strcmp (name, "x") == 0) {
-	if constexpr (
-	    std::is_same_v<decltype (vec), glm::vec2> || std::is_same_v<decltype (vec), glm::vec3>
-	    || std::is_same_v<decltype (vec), glm::vec4>
-	) {
-	    into = &vec.x;
-	} else if constexpr (std::is_same_v<decltype (vec), Color>) {
-	    into = &vec.r;
-	}
-    } else if (strcmp (name, "y") == 0) {
-	if constexpr (
-	    std::is_same_v<decltype (vec), glm::vec2> || std::is_same_v<decltype (vec), glm::vec3>
-	    || std::is_same_v<decltype (vec), glm::vec4>
-	) {
-	    into = &vec.y;
-	} else if constexpr (std::is_same_v<decltype (vec), Color>) {
-	    into = &vec.g;
-	}
-    } else if constexpr (components >= 3) {
-	if (strcmp (name, "z") == 0) {
-	    if constexpr (std::is_same_v<decltype (vec), glm::vec3> || std::is_same_v<decltype (vec), glm::vec4>) {
-		into = &vec.z;
-	    } else if constexpr (std::is_same_v<decltype (vec), Color>) {
-		into = &vec.b;
-	    }
-	} else if constexpr (components >= 4) {
-	    if (strcmp (name, "w") == 0) {
-		if constexpr (std::is_same_v<decltype (vec), glm::vec4>) {
-		    into = &vec.w;
-		} else if constexpr (std::is_same_v<decltype (vec), Color>) {
-		    into = &vec.a;
-		}
-	    }
-	}
-    }
-
-    if (into == nullptr) {
-	JS_ThrowTypeError (ctx, "Vec%d has no writable property '%s'", (int) (components), name);
-	return -1;
-    }
 
     double value = 0;
 
     JS_ToFloat64 (ctx, &value, val);
 
-    *static_cast<float*> (into) = static_cast<float> (value);
+    vec[index] = static_cast<float> (value);
 
     container->value.update (vec, DynamicValue::UpdateSource::Script);
 
@@ -982,6 +919,12 @@ VectorAdapter<components>::VectorAdapter (ScriptEngine& engine) :
 	    .set_property = vector_property_set<components>,
 	}
     ) {
+    // Atoms belong to this runtime. Keep component lookup allocation-free in
+    // physics scripts, which read and write vectors millions of times per frame.
+    constexpr const char* names[] = { "x", "y", "z", "w" };
+    for (int index = 0; index < components; ++index) {
+        m_componentAtoms[index] = JS_NewAtom (this->m_engine.getContext (), names[index]);
+    }
     vectorAdapterInstances<components>.emplace (this->m_instanceId, *this);
     this->registerType (
 	{
@@ -1094,6 +1037,7 @@ VectorAdapter<components>::VectorAdapter (ScriptEngine& engine) :
 }
 
 template <int components> VectorAdapter<components>::~VectorAdapter () {
+    for (JSAtom atom : m_componentAtoms) JS_FreeAtom (this->m_engine.getContext (), atom);
     vectorAdapterInstances<components>.erase (this->m_instanceId);
 
     JS_FreeValue (this->m_engine.getContext (), m_prototype);
