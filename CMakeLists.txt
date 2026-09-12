@@ -433,6 +433,7 @@ set(COMMON_SOURCES
     src/WallpaperEngine/Render/Wallpapers/CScene.h
     src/WallpaperEngine/Render/Wallpapers/CScene.cpp
     src/WallpaperEngine/Render/Wallpapers/HdrBloom.cpp
+    src/WallpaperEngine/Render/Wallpapers/VolumetricLights.cpp
     src/WallpaperEngine/Render/Wallpapers/CVideo.h
     src/WallpaperEngine/Render/Wallpapers/CVideo.cpp
     src/WallpaperEngine/Render/Wallpapers/CWeb.h

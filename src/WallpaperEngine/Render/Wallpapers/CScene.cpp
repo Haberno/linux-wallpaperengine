@@ -9,6 +9,7 @@
 
 #include "CScene.h"
 #include "HdrBloom.h"
+#include "VolumetricLights.h"
 #include "WallpaperEngine/Logging/Log.h"
 
 #include "WallpaperEngine/Data/Model/Wallpaper.h"
@@ -958,10 +959,31 @@ void CScene::renderFrame (const glm::ivec4& viewport) {
 	}
     };
 
+    std::vector<Objects::CLight*> volumeBatch;
+    const auto renderVolumes = [&] {
+        if (volumeBatch.empty ()) return;
+        if (!this->m_volumetricLights) this->m_volumetricLights = std::make_unique<VolumetricLights> (*this);
+        this->m_volumetricLights->render (this->m_lightObjects, volumeBatch);
+        volumeBatch.clear ();
+    };
     for (const FrameRenderEntry& entry : renderOrder) {
 	CObject* cur = entry.object;
 	if (cur == this->m_bloomObject || compositionAncestor (cur) != nullptr) {
 	    continue;
+	}
+	if (auto* light = dynamic_cast<Objects::CLight*> (cur); light != nullptr) {
+	    if (!this->m_camera->isOrthogonal () && enabledByDebug (light)
+	        && light->getLight ().type == LightData::Type_Spot
+	        && light->getLight ().castVolumetrics->value->getBool ()) {
+	        volumeBatch.push_back (light);
+	    }
+	    continue;
+	}
+	// Native 14018aac0/140198d00 combines contiguous light draws before the
+	// next drawable non-light object. Native image gate 1401ea2d0 also admits
+	// hidden texture sources, including those under a hidden parent.
+	if (enabledByDebug (cur) && (cur->getObject ().is<Image> () || cur->isVisibleThroughParents ())) {
+	    renderVolumes ();
 	}
 	if (auto* composition = dynamic_cast<Objects::CImage*> (cur);
 	    composition != nullptr && composition->isCompositionLayer ()) {
@@ -970,6 +992,7 @@ void CScene::renderFrame (const glm::ivec4& viewport) {
 	}
 	renderEntry (entry);
     }
+    renderVolumes ();
 
     sceneTarget->setMultisampleRendering (false);
 

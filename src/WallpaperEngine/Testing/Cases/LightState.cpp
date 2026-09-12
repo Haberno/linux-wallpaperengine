@@ -1,4 +1,5 @@
 #include "WallpaperEngine/Data/Model/Object.h"
+#include "WallpaperEngine/Data/Parsers/ObjectParser.h"
 #include "WallpaperEngine/Render/Objects/CLight.h"
 
 // CEF exposes its own CHECK macro through CLight's scene includes.
@@ -15,6 +16,28 @@
 using WallpaperEngine::Data::Model::LightData;
 using WallpaperEngine::Render::Objects::CLight;
 using WallpaperEngine::Render::Wallpapers::CScene;
+
+TEST_CASE ("Light volumes preserve native defaults and authored settings", "[lighting][volumetrics]") {
+    using namespace WallpaperEngine::Data::Model;
+    using WallpaperEngine::Data::Parsers::ObjectParser;
+    using WallpaperEngine::Data::JSON::JSON;
+    const Project project {};
+    const auto defaults = ObjectParser::parse (JSON::parse (R"({"id":2,"light":"lspot"})"), project);
+    const auto* light = defaults->as<Light> ();
+    REQUIRE (light != nullptr);
+    CHECK_FALSE (light->castVolumetrics->value->getBool ());
+    // Native 14018ff60 initializes density at +0x2f8 to 2 and exponent at +0x2fc to 1.
+    CHECK (light->density->evaluateFloat (0) == 2.0f);
+    CHECK (light->volumetricsExponent->evaluateFloat (0) == 1.0f);
+
+    const auto authored = ObjectParser::parse (JSON::parse (
+        R"({"id":127,"light":"lspot","castvolumetrics":true,"density":0.5,"volumetricsexponent":3})"
+    ), project);
+    light = authored->as<Light> ();
+    CHECK (light->castVolumetrics->value->getBool ());
+    CHECK (light->density->evaluateFloat (0) == .5f);
+    CHECK (light->volumetricsExponent->evaluateFloat (0) == 3.0f);
+}
 
 TEST_CASE ("Legacy point lights retain positions and clear unused slots", "[lighting]") {
     CScene::SceneLights lights;

@@ -275,6 +275,9 @@ ObjectParser::parseLight (const JSON& it, const Project& project, ObjectData bas
 		it.optional ("cascadedistance2", 100.0f)
 	    ),
 	    .castShadow = it.optional ("castshadow", false),
+	    .castVolumetrics = it.user ("castvolumetrics", properties, false),
+	    .density = it.user ("density", properties, 2.0f),
+	    .volumetricsExponent = it.user ("volumetricsexponent", properties, 1.0f),
 	}
     );
 }

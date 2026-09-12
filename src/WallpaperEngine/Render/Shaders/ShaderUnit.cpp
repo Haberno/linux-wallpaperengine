@@ -59,6 +59,9 @@
 	  "#define MAKE_SAMPLER2D_ARGUMENT(name) name\n"                                                               \
 	  "#define texSample2D texture\n"                                                                              \
 	  "#define texSample2DLod textureLod\n"                                                                        \
+	  "#define sampler2DBackBuffer sampler2D\n"                                                                    \
+	  "#define texSample2DBackBuffer(s, uv, size) texture((s), (uv))\n"                                             \
+	  "#define texLoad2D(s, uv, size) texelFetch((s), ivec2((uv) * (size)), 0)\n"                                  \
 	  "#define sampler2DComparison sampler2DShadow\n"                                                              \
 	  "#define texSample2DCompare(s, uv, reference) vec4(texture((s), vec3((uv), (reference))))\n"                   \
 	  "#define log10(x) (log2(x) * 0.301029995663981)\n"                                                           \
@@ -69,7 +72,11 @@
 	  "#define GLSL 1\n\n";
 #define FRAGMENT_SHADER_DEFINES                                                                                        \
     "out vec4 out_FragColor;\n"                                                                                        \
-    "#define varying in\n"
+    "#define varying in\n"                                                                                           \
+    "void clip(float x) { if (x < 0.0) discard; }\n"                                                                  \
+    "void clip(vec2 x) { if (any(lessThan(x, vec2(0.0)))) discard; }\n"                                               \
+    "void clip(vec3 x) { if (any(lessThan(x, vec3(0.0)))) discard; }\n"                                               \
+    "void clip(vec4 x) { if (any(lessThan(x, vec4(0.0)))) discard; }\n"
 #define VERTEX_SHADER_DEFINES                                                                                          \
     "#define attribute in\n"                                                                                           \
     "#define varying out\n"
@@ -1794,7 +1801,7 @@ void ShaderUnit::parseParameterConfiguration (
     }
 
     if (constant == this->m_constants.end () && !defvalue.has_value ()) {
-	if (type != "sampler2D") {
+	if (type != "sampler2D" && type != "sampler2DBackBuffer" && type != "sampler2DComparison") {
 	    sLog.exception ("Cannot parse parameter data for ", name, " in shader ", this->m_file);
 	}
     }
@@ -1839,7 +1846,7 @@ void ShaderUnit::parseParameterConfiguration (
 	} else {
 	    parameter = new Variables::ShaderVariableInteger (defvalue->get<int> ());
 	}
-    } else if (type == "sampler2D" || type == "sampler2DComparison") {
+    } else if (type == "sampler2D" || type == "sampler2DComparison" || type == "sampler2DBackBuffer") {
 	// samplers can have special requirements, check what sampler we're working with and create definitions
 	// if needed
 	const auto textureName = data.find ("default");
