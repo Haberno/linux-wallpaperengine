@@ -1767,7 +1767,8 @@ void CImage::setupPasses () {
 	first = false;
 
 	pass->setModelMatrix (&this->m_modelMatrix);
-	pass->setViewProjectionMatrix (&this->m_viewProjectionMatrix);
+	pass->setViewProjectionMatrix (pass == this->m_prelightingPass
+	    ? &this->m_sceneViewProjectionMatrix : &this->m_viewProjectionMatrix);
 	pass->setEffectTextureProjectionMatrix (
 	    &this->m_effectTextureProjectionMatrix, &this->m_effectTextureProjectionMatrixInverse
 	);
@@ -1846,7 +1847,8 @@ void CImage::updateFinalPassVisibility (const bool force) {
 	pass->setModelViewProjectionMatrix (route.offscreenProjection);
 	pass->setModelViewProjectionMatrixInverse (route.offscreenProjectionInverse);
 	pass->setModelMatrix (&this->m_modelMatrix);
-	pass->setViewProjectionMatrix (&this->m_viewProjectionMatrix);
+	pass->setViewProjectionMatrix (pass == this->m_prelightingPass
+	    ? &this->m_sceneViewProjectionMatrix : &this->m_viewProjectionMatrix);
 	static const glm::mat3 identityNormal (1.0f);
 	pass->addUniform ("g_NormalModelMatrix", &identityNormal);
 	pass->setGeometryCallback ({}, {}, {});
@@ -2361,7 +2363,10 @@ void CImage::updateScreenSpacePosition () {
 	this->m_sceneNormalModelMatrix = matrices.normalModel;
 	this->m_modelViewProjectionScreen = matrices.modelViewProjection;
 	this->m_modelViewProjectionScreenInverse = glm::inverse (this->m_modelViewProjectionScreen);
-	if (this->m_prelightingPass != nullptr) {
+	const bool prelightingDrawsToScene = this->m_finalPassDrawsToScene && this->m_finalPassRouting.has_value ()
+	    && this->m_finalPassRouting->pass == this->m_prelightingPass;
+	this->m_prelightingModelMatrix = this->m_sceneModelMatrix;
+	if (this->m_prelightingPass != nullptr && !prelightingDrawsToScene) {
 	    // The first effect input is drawn in 0..size texture coordinates.
 	    // Lighting and reflections still need the quad's centered, aligned
 	    // coordinates transformed through the real 3D layer hierarchy.
