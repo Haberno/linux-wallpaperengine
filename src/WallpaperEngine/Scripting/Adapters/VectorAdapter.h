@@ -11,6 +11,7 @@ public:
     ~VectorAdapter () override;
 
     int length () { return components; }
+    bool isInstance (JSValueConst value) const { return JS_GetClassID (value) == m_classId; }
     int componentIndex (JSAtom atom) const {
         for (int index = 0; index < components; ++index) {
             if (m_componentAtoms[index] == atom) return index;
