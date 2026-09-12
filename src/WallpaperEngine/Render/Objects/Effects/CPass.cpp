@@ -714,17 +714,13 @@ void CPass::setupShaders () {
 	"SCENE_ORTHO", this->m_renderable.getScene ().getScene ().camera.projection.isPerspective ? 0 : 1
     );
 
-    // genericimage shaders gate fog with FOG_COMPUTED, but generic4 selects its fog
-    // branches directly with FOG_DIST/FOG_HEIGHT. Respect an explicit FOG=0 in both
-    // paths, or additive details acquire colored rectangles from the scene fog.
-    const auto fogOverride = this->m_override.combos.find ("FOG");
-    const auto fogMaterial = this->m_pass.combos.find ("FOG");
-    const bool materialFogEnabled = fogOverride != this->m_override.combos.end () ? fogOverride->second != 0
-	: fogMaterial != this->m_pass.combos.end () && fogMaterial->second != 0;
+    // FOG_COMPUTED is a separate authored image-shader combo, not an alias for
+    // FOG. Native genericimage4 leaves it off even when FOG defaults to 1;
+    // inferring it here bakes scene fog into reusable image composites.
+    // generic4 model shaders select fog directly with FOG_DIST/FOG_HEIGHT.
     this->m_fogCombos = this->fogCombos ();
     this->m_combos.insert_or_assign ("FOG_DIST", this->m_fogCombos.x);
     this->m_combos.insert_or_assign ("FOG_HEIGHT", this->m_fogCombos.y);
-    this->m_combos.insert_or_assign ("FOG_COMPUTED", materialFogEnabled ? 1 : 0);
 
     // scenes with lights need LightingV1 modules compiled with matching uniform array sizes;
     // 2D scenes have no light objects, keeping their shader compilation untouched
@@ -837,15 +833,6 @@ void CPass::setupShaders () {
 	this->m_renderable.getAssetLocator (), shaderName, this->m_combos, this->m_override.combos, passTextures,
 	overrideTextures, this->m_override.constants
     );
-
-    // Stock image materials opt into fog in shader metadata when the material
-    // omits FOG. That default is discovered only after loading the shader.
-    if (fogOverride == this->m_override.combos.end () && fogMaterial == this->m_pass.combos.end ()) {
-	const auto& defaults = this->m_shader->getFragment ().getDiscoveredCombos ();
-	if (const auto it = defaults.find ("FOG"); it != defaults.end ()) {
-	    this->m_combos.insert_or_assign ("FOG_COMPUTED", it->second != 0 ? 1 : 0);
-	}
-    }
 
     // Samplers the shader declares itself (the "formatcombo":true defaults, like generic4's
     // toon shading gradient) are only discovered while the units preprocess, which happens in
