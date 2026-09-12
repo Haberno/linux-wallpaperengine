@@ -97,6 +97,25 @@ TEST_CASE ("failed macro preprocessing never caches an incomplete shader", "[sha
     CHECK_THROWS (unit.compile ());
 }
 
+TEST_CASE ("audio bar circle masks preserve integer and antialiased amplitudes", "[shader][audio-bar-mask]") {
+    for (const int antialias : { 0, 1 }) {
+	DYNAMIC_SECTION ("antialias " << antialias) {
+	    const auto sources = compileLinked (
+		"void main() { gl_Position = vec4(0.0); }",
+		"uniform vec2 shapeCoord;\nuniform float startAngle;\nuniform float endAngle;\n"
+		"void main() {\n#if ANTIALIAS\nfloat bar = 0.375;\n#else\nint bar = 1;\n#endif\n"
+		// Simple Audio Bars uses a boolean semicircle mask with both numeric types.
+		"bar *= shapeCoord.x > 0.0 && shapeCoord.x * sign(endAngle - startAngle) < 1.0;\n"
+		"gl_FragColor = vec4(bar);\n}", ComboMap { { "ANTIALIAS", antialias } }
+	    );
+	    const auto translated = GLSLContext::get ().toGlsl (sources.first, sources.second);
+	    REQUIRE_FALSE (translated.second.empty ());
+	    CHECK_THAT (translated.second, Catch::Matchers::ContainsSubstring ("&&"));
+	    if (antialias) CHECK_THAT (translated.second, Catch::Matchers::ContainsSubstring ("0.375"));
+	}
+    }
+}
+
 TEST_CASE ("shader parameter declarations accept aligned whitespace", "[shader][parameter][regression]") {
     const auto assets = shaderAssets ("");
     const ShaderConstantMap constants;
