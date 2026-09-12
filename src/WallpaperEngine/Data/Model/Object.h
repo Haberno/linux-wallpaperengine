@@ -597,6 +597,7 @@ struct ParticleChild {
 struct ParticleInstanceOverride {
     UserSettingUniquePtr enabled;
     UserSettingUniquePtr alpha;
+    UserSettingUniquePtr brightness;
     UserSettingUniquePtr size;
     UserSettingUniquePtr lifetime;
     UserSettingUniquePtr rate;

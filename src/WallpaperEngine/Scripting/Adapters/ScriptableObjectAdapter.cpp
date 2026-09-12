@@ -1296,7 +1296,7 @@ int scriptableobject_property_set (
 }
 
 static constexpr const char* particleInstanceFields[] = {
-    "enabled", "alpha", "size", "lifetime", "rate", "speed", "count", "color", "colorn"
+    "enabled", "alpha", "brightness", "size", "lifetime", "rate", "speed", "count", "color", "colorn"
 };
 
 static JSValue particle_instance_field (
