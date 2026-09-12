@@ -2531,13 +2531,38 @@ std::optional<std::string> CImage::getAttachmentName (const size_t requestedInde
     return std::nullopt;
 }
 
+std::optional<size_t> CImage::getBoneIndex (const std::string& name) const {
+    if (name.empty ()) return std::nullopt;
+    for (size_t index = 0; index < this->m_puppetAnimation.bones.size (); ++index) {
+	if (this->m_puppetAnimation.bones[index].name == name) return index;
+    }
+    return std::nullopt;
+}
+
+std::optional<glm::mat4> CImage::getBoneTransform (const size_t index) const {
+    if (index >= this->m_puppetWorldBones.size ()) return std::nullopt;
+    return this->m_puppetWorldBones[index];
+}
+
+static glm::mat4 cursorPlaneTransform (const glm::mat4& world) {
+    // A 2D image can have zero Z scale while retaining a valid XY hit plane.
+    // Complete its basis from the two in-plane axes before taking an inverse.
+    glm::mat4 plane = world;
+    if (glm::determinant (plane) == 0.0f) {
+	const glm::vec3 normal = glm::cross (glm::vec3 (plane[0]), glm::vec3 (plane[1]));
+	const float length = glm::length (normal);
+	if (std::isfinite (length) && length > 0.0f) plane[2] = glm::vec4 (normal / length, 0.0f);
+    }
+    return plane;
+}
+
 std::optional<glm::vec3> CImage::intersectCursorPlane (
     const glm::mat4& world, const glm::mat4& viewProjection,
     const glm::vec2& normalizedPosition, const bool projectionYFlipped
 ) {
     glm::vec2 ndc = normalizedPosition * 2.0f - 1.0f;
     if (projectionYFlipped) ndc.y = -ndc.y;
-    const glm::mat4 inverse = glm::inverse (viewProjection * world);
+    const glm::mat4 inverse = glm::inverse (viewProjection * cursorPlaneTransform (world));
     const glm::vec4 near4 = inverse * glm::vec4 (ndc, -1.0f, 1.0f);
     const glm::vec4 far4 = inverse * glm::vec4 (ndc, 1.0f, 1.0f);
     const glm::vec3 near = glm::vec3 (near4) / near4.w;
@@ -2553,11 +2578,13 @@ std::optional<glm::vec3> CImage::intersectCursorPlane (
 }
 
 std::optional<glm::vec3> CImage::cursorLocalPosition (const glm::vec3& worldPosition) const {
-    if (!this->m_image.visible->value->getBool () || !this->isVisibleThroughParents ()) {
+    // Invisible image layers are used as click/drag targets and can reveal
+    // themselves in cursorDown. Visibility controls drawing, not their hit plane.
+    if (!this->isVisibleThroughParents ()) {
 	return std::nullopt;
     }
 
-    const glm::mat4 world = this->resolveWorldMatrix ();
+    const glm::mat4 world = cursorPlaneTransform (this->resolveWorldMatrix ());
     const float determinant = glm::determinant (world);
     // Small world-space UI plates are valid: Ocarina's note buttons use scales
     // of only a few thousandths. An absolute determinant threshold rejects them.

@@ -86,8 +86,8 @@ public:
     // Hand every script the project's current user properties in one object. Wallpaper Engine does
     // this once at startup, and scripts routinely gate their whole behaviour on it, so skipping it
     // leaves them running their inert default branch forever.
-    void dispatchAllUserProperties ();
-    void applyUserProperties (JSValue changed);
+    void dispatchAllUserProperties (LoadedModule* target = nullptr);
+    void applyUserProperties (JSValue changed, LoadedModule* target = nullptr);
     JSValue dynamicToJs (DynamicValue& value) const;
 
     /**
@@ -104,7 +104,7 @@ public:
     void queueSceneScript (const std::string& key, DynamicValue& currentValue);
 
     /** Run init/first-update after the scene has registered every authored layer. */
-    void initializeQueuedScripts ();
+    void initializeQueuedScripts (ScriptableObject* target = nullptr);
 
     /**
      * Drop every queued script bound to a scriptable object that is going away.

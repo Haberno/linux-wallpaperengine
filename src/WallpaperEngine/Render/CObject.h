@@ -30,6 +30,9 @@ public:
     /** Resolve between the stable SceneScript attachment index and authored name. */
     [[nodiscard]] virtual std::optional<size_t> getAttachmentIndex (const std::string& name) const;
     [[nodiscard]] virtual std::optional<std::string> getAttachmentName (size_t index) const;
+    /** Resolve named bones and their animated model-local transforms. */
+    [[nodiscard]] virtual std::optional<size_t> getBoneIndex (const std::string& name) const;
+    [[nodiscard]] virtual std::optional<glm::mat4> getBoneTransform (size_t index) const;
     /** Camera-parallax translation in the renderer's Y-flipped 2D space. The
      * root-most layer supplies both origin and depth for its entire subtree. */
     [[nodiscard]] glm::vec2 resolveParallaxOffset () const;

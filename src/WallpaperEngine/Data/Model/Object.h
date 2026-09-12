@@ -39,6 +39,8 @@ struct ObjectData {
     UserSettingUniquePtr groupScale;
     UserSettingUniquePtr groupAngles;
     UserSettingUniquePtr groupVisible;
+    /** Authored configuration returned by SceneScript getInitialLayerConfig(). */
+    std::string initialConfiguration;
 };
 
 /**

@@ -74,6 +74,10 @@ std::optional<size_t> CObject::getAttachmentIndex (const std::string&) const { r
 
 std::optional<std::string> CObject::getAttachmentName (const size_t) const { return std::nullopt; }
 
+std::optional<size_t> CObject::getBoneIndex (const std::string&) const { return std::nullopt; }
+
+std::optional<glm::mat4> CObject::getBoneTransform (const size_t) const { return std::nullopt; }
+
 glm::vec2 CObject::calculateParallaxOffset (
     const glm::vec2& rootOrigin, const glm::vec2& depth, const glm::vec2& canvasSize, const glm::vec2& displacement,
     const float amount

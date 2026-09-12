@@ -733,6 +733,7 @@ void CScene::updateOutputSize (const glm::ivec4& viewport) {
 }
 
 void CScene::renderFrame (const glm::ivec4& viewport) {
+    this->destroyQueuedLayers ();
     this->updateOutputSize (viewport);
     // Frame callbacks are per-output on Wayland. A 60 Hz scene can therefore render only once
     // while a 165 Hz output advances the application loop several times. Deriving dt only from
@@ -1707,6 +1708,26 @@ Render::CObject* CScene::createLayer (const std::string& modelPath, const std::s
 	}
     }
 
+    JSON layer;
+    const std::string extension = std::filesystem::path (path).extension ().string ();
+    if (extension == ".mdl") {
+	layer["model"] = path;
+    } else if (extension == ".ogg" || extension == ".wav" || extension == ".mp3" || extension == ".flac") {
+	layer["sound"] = JSON::array ({ path });
+    } else {
+	try {
+	    const auto asset = Data::JSON::parseCompatible (this->getAssetLocator ().readString (path), path);
+	    layer[asset.contains ("emitter") || asset.contains ("initializer") ? "particle" : "image"] = path;
+	} catch (const std::exception& e) {
+	    sLog.error ("createLayer failed for ", modelPath, ": ", e.what ());
+	    return nullptr;
+	}
+    }
+    return this->createLayer (std::move (layer), workshopId);
+}
+
+Render::CObject* CScene::createLayer (JSON layer, const std::string& workshopId) {
+    if (!layer.is_object ()) return nullptr;
     // Allocate a fresh id above everything currently known (live objects + parse-time objects), so it
     // never collides with an existing key in m_objects or a not-yet-instantiated dependency.
     int newId = 0;
@@ -1716,19 +1737,17 @@ Render::CObject* CScene::createLayer (const std::string& modelPath, const std::s
     for (const auto& object : this->getScene ().objects) {
 	newId = std::max (newId, object->id);
     }
+    for (const auto& object : m_runtimeLayerData) newId = std::max (newId, object->id);
     ++newId;
 
     const glm::vec3 origin = { this->m_camera->getWidth () / 2.0f, this->m_camera->getHeight () / 2.0f, 0.0f };
 
-    const JSON layer = {
-	{ "image", path },
-	{ "name", "runtime-layer-" + std::to_string (newId) },
-	{ "visible", true },
-	{ "scale", "1.0 1.0 1.0" },
-	{ "angles", "0.0 0.0 0.0" },
-	{ "origin", std::to_string (origin.x) + " " + std::to_string (origin.y) + " " + std::to_string (origin.z) },
-	{ "id", newId },
-    };
+    layer["id"] = newId;
+    if (!layer.contains ("name")) layer["name"] = "runtime-layer-" + std::to_string (newId);
+    if (!layer.contains ("origin")) {
+	layer["origin"] = this->m_camera->isOrthogonal ()
+	    ? std::to_string (origin.x) + " " + std::to_string (origin.y) + " 0" : "0 0 0";
+    }
 
     try {
 	ObjectUniquePtr data = ObjectParser::parse (layer, this->getScene ().project);
@@ -1741,11 +1760,32 @@ Render::CObject* CScene::createLayer (const std::string& modelPath, const std::s
 	}
 
 	this->m_objectsByRenderOrder.push_back (renderObject);
+	if (auto* scriptable = dynamic_cast<Scripting::ScriptableObject*> (renderObject))
+	    this->m_scriptEngine->initializeQueuedScripts (scriptable);
 	return renderObject;
     } catch (const std::exception& e) {
-	sLog.error ("createLayer failed for ", modelPath, ": ", e.what ());
+	sLog.error ("createLayer failed: ", e.what ());
 	return nullptr;
     }
+}
+
+bool CScene::destroyLayer (CObject* layer) {
+    if (layer == nullptr || getObject (layer->getId ()) != layer) return false;
+    return m_layersToDestroy.insert (layer->getId ()).second;
+}
+
+void CScene::destroyQueuedLayers () {
+    for (const int id : m_layersToDestroy) {
+	const auto it = m_objects.find (id);
+	if (it == m_objects.end ()) continue;
+	auto* object = it->second;
+	std::erase (m_objectsByRenderOrder, object);
+	std::erase_if (m_lightObjects, [object] (const auto* light) { return light == object; });
+	m_objects.erase (it);
+	delete object;
+	std::erase_if (m_runtimeLayerData, [id] (const auto& data) { return data->id == id; });
+    }
+    m_layersToDestroy.clear ();
 }
 
 int CScene::getScriptableLayerIndex (const CObject* layer) const {

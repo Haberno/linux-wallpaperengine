@@ -92,11 +92,7 @@ static WallpaperEngine::Render::Objects::CModel* scriptable_model (JSValueConst 
 
 static WallpaperEngine::Render::Objects::CImage*
 scriptable_animation_image (JSContext* ctx, JSValueConst* functionData) {
-    int64_t imagePointer = 0;
-    if (JS_ToBigInt64 (ctx, &imagePointer, functionData[0]) < 0) {
-	return nullptr;
-    }
-    return reinterpret_cast<WallpaperEngine::Render::Objects::CImage*> (imagePointer);
+    return scriptable_image (functionData[0]);
 }
 
 static JSValue texture_animation_command (
@@ -172,8 +168,8 @@ static JSValue texture_animation_rate_set (
 }
 
 static JSValue
-scriptable_texture_animation_controller (JSContext* ctx, WallpaperEngine::Render::Objects::CImage& image) {
-    JSValue functionData[] = { JS_NewBigInt64 (ctx, reinterpret_cast<int64_t> (&image)) };
+scriptable_texture_animation_controller (JSContext* ctx, JSValueConst owner) {
+    JSValue functionData[] = { JS_DupValue (ctx, owner) };
     JSValue result = JS_NewObject (ctx);
 
     const auto defineReadOnly = [&] (const char* name, const int property) {
@@ -211,7 +207,7 @@ scriptable_texture_animation_controller (JSContext* ctx, WallpaperEngine::Render
 
 static JSValue scriptable_get_texture_animation (JSContext* ctx, JSValueConst thisVal, int argc, JSValueConst* argv) {
     auto* image = scriptable_image (thisVal);
-    return image != nullptr && image->hasTextureAnimation () ? scriptable_texture_animation_controller (ctx, *image)
+    return image != nullptr && image->hasTextureAnimation () ? scriptable_texture_animation_controller (ctx, thisVal)
 							     : JS_UNDEFINED;
 }
 
@@ -356,6 +352,36 @@ static JSValue scriptable_get_attachment_matrix (JSContext* ctx, JSValueConst th
     auto* container = scriptable_container (thisVal);
     return container != nullptr ? make_script_mat4 (ctx, attachment_world_matrix (ctx, container->object, argc, argv))
 				: JS_UNDEFINED;
+}
+
+static JSValue scriptable_get_bone_index (JSContext* ctx, JSValueConst thisVal, int argc, JSValueConst* argv) {
+    auto* container = scriptable_container (thisVal);
+    if (container == nullptr || argc < 1) return JS_NewInt32 (ctx, -1);
+    const char* name = JS_ToCString (ctx, argv[0]);
+    if (name == nullptr) return JS_EXCEPTION;
+    const auto index = container->object.getBoneIndex (name);
+    JS_FreeCString (ctx, name);
+    return JS_NewInt64 (ctx, index.has_value () ? static_cast<int64_t> (*index) : -1);
+}
+
+static JSValue scriptable_get_bone_transform (JSContext* ctx, JSValueConst thisVal, int argc, JSValueConst* argv) {
+    auto* container = scriptable_container (thisVal);
+    if (container == nullptr || argc < 1) return JS_UNDEFINED;
+    std::optional<size_t> index;
+    if (JS_IsNumber (argv[0])) {
+	int32_t number = -1;
+	if (JS_ToInt32 (ctx, &number, argv[0]) < 0) return JS_EXCEPTION;
+	if (number >= 0) index = static_cast<size_t> (number);
+    } else {
+	const char* name = JS_ToCString (ctx, argv[0]);
+	if (name == nullptr) return JS_EXCEPTION;
+	index = container->object.getBoneIndex (name);
+	JS_FreeCString (ctx, name);
+    }
+    const auto transform = index.has_value () ? container->object.getBoneTransform (*index) : std::nullopt;
+    return transform.has_value ()
+	? make_script_mat4 (ctx, container->object.resolveWorldMatrix () * *transform)
+	: JS_UNDEFINED;
 }
 
 static JSValue scriptable_get_attachment_origin (JSContext* ctx, JSValueConst thisVal, int argc, JSValueConst* argv) {
@@ -580,13 +606,12 @@ static JSValue scriptable_look_at_yaw (JSContext* ctx, JSValueConst thisVal, int
 static JSValue scriptable_animation_command (
     JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv, int magic, JSValueConst* functionData
 ) {
-    int64_t imagePointer = 0;
     int32_t layerIndex = -1;
-    if (JS_ToBigInt64 (ctx, &imagePointer, functionData[0]) < 0 || JS_ToInt32 (ctx, &layerIndex, functionData[1]) < 0) {
+    if (JS_ToInt32 (ctx, &layerIndex, functionData[1]) < 0) {
 	return JS_EXCEPTION;
     }
 
-    auto* image = reinterpret_cast<WallpaperEngine::Render::Objects::CImage*> (imagePointer);
+    auto* image = scriptable_image (functionData[0]);
     if (image == nullptr) {
 	return JS_UNDEFINED;
     }
@@ -611,11 +636,11 @@ static JSValue scriptable_animation_command (
 }
 
 static JSValue scriptable_animation_controller (
-    JSContext* ctx, WallpaperEngine::Render::Objects::CImage& image, const std::optional<size_t> index
+    JSContext* ctx, JSValueConst owner, const std::optional<size_t> index
 ) {
     const int32_t layerIndex = index.has_value () ? static_cast<int32_t> (*index) : -1;
     JSValue functionData[] = {
-	JS_NewBigInt64 (ctx, reinterpret_cast<int64_t> (&image)),
+	JS_DupValue (ctx, owner),
 	JS_NewInt32 (ctx, layerIndex),
     };
     JSValue result = JS_NewObject (ctx);
@@ -878,7 +903,7 @@ static JSValue scriptable_get_animation (JSContext* ctx, JSValueConst this_val, 
 	return JS_UNDEFINED;
     }
     if (argc < 1) {
-	return scriptable_animation_controller (ctx, *image, std::nullopt);
+	return scriptable_animation_controller (ctx, this_val, std::nullopt);
     }
 
     std::optional<size_t> index;
@@ -897,7 +922,7 @@ static JSValue scriptable_get_animation (JSContext* ctx, JSValueConst this_val, 
 	JS_FreeCString (ctx, name);
     }
 
-    return index.has_value () ? scriptable_animation_controller (ctx, *image, index) : JS_UNDEFINED;
+    return index.has_value () ? scriptable_animation_controller (ctx, this_val, index) : JS_UNDEFINED;
 }
 
 static JSValue scriptable_play_single_animation (JSContext* ctx, JSValueConst thisVal, int argc, JSValueConst* argv) {
@@ -1029,6 +1054,8 @@ static JSValue scriptable_get_video_texture (JSContext* ctx, JSValueConst thisVa
 	: JS_UNDEFINED;
 }
 
+static JSValue create_particle_instance (JSContext* ctx, JSValueConst owner);
+
 JSValue scriptableobject_property_get (JSContext* ctx, JSValueConst obj_val, JSAtom atom, JSValueConst receiver) {
     JSClassID classId = 0;
 
@@ -1046,6 +1073,16 @@ JSValue scriptableobject_property_get (JSContext* ctx, JSValueConst obj_val, JSA
 
     ScopeGuard guard ([=] { JS_FreeCString (ctx, name); });
 
+    if (container->object.getObject ().is<Text> ()) {
+	if (std::strcmp (name, "font") == 0) {
+	    return JS_NewString (ctx, container->object.getObject ().as<Text> ()->font.c_str ());
+	}
+	if (std::strcmp (name, "pointsize") == 0) name = "pointSize";
+    }
+    if (std::strcmp (name, "instance") == 0
+	&& dynamic_cast<WallpaperEngine::Render::Objects::CParticle*> (&container->object) != nullptr) {
+	return create_particle_instance (ctx, obj_val);
+    }
     if (std::strcmp (name, "name") == 0) {
 	return JS_NewString (ctx, container->object.getObject ().name.c_str ());
     }
@@ -1102,6 +1139,12 @@ JSValue scriptableobject_property_get (JSContext* ctx, JSValueConst obj_val, JSA
     }
     if (std::strcmp (name, "getAttachmentAngles") == 0) {
 	return JS_NewCFunction (ctx, scriptable_get_attachment_angles, name, 1);
+    }
+    if (std::strcmp (name, "getBoneIndex") == 0) {
+	return JS_NewCFunction (ctx, scriptable_get_bone_index, name, 1);
+    }
+    if (std::strcmp (name, "getBoneTransform") == 0) {
+	return JS_NewCFunction (ctx, scriptable_get_bone_transform, name, 1);
     }
 
     if (std::strcmp (name, "getAnimation") == 0 || std::strcmp (name, "getAnimationLayer") == 0) {
@@ -1211,6 +1254,7 @@ int scriptableobject_property_set (
 
     ScopeGuard guard ([=] { JS_FreeCString (ctx, name); });
 
+    if (std::strcmp (name, "pointsize") == 0 && container->object.getObject ().is<Text> ()) name = "pointSize";
     if (!container->object.getProperties ().contains (name)) return 1;
     try {
 	auto& property = container->object.getProperty (name);
@@ -1251,6 +1295,33 @@ int scriptableobject_property_set (
     return 1;
 }
 
+static constexpr const char* particleInstanceFields[] = {
+    "enabled", "alpha", "size", "lifetime", "rate", "speed", "count", "color", "colorn"
+};
+
+static JSValue particle_instance_field (
+    JSContext* ctx, JSValueConst, int argc, JSValueConst* argv, int magic, JSValue* data
+) {
+    const JSAtom atom = JS_NewAtom (ctx, particleInstanceFields[magic]);
+    ScopeGuard guard ([=] { JS_FreeAtom (ctx, atom); });
+    if (argc == 0) return scriptableobject_property_get (ctx, data[0], atom, data[0]);
+    return scriptableobject_property_set (ctx, data[0], atom, argv[0], data[0], JS_PROP_THROW) < 0
+	? JS_EXCEPTION : JS_UNDEFINED;
+}
+
+static JSValue create_particle_instance (JSContext* ctx, JSValueConst owner) {
+    JSValue instance = JS_NewObject (ctx);
+    JSValue data[] = { owner };
+    for (int i = 0; i < static_cast<int> (std::size (particleInstanceFields)); ++i) {
+	const JSAtom atom = JS_NewAtom (ctx, particleInstanceFields[i]);
+	JS_DefinePropertyGetSet (ctx, instance, atom,
+	    JS_NewCFunctionData (ctx, particle_instance_field, 0, i, 1, data),
+	    JS_NewCFunctionData (ctx, particle_instance_field, 1, i, 1, data), JS_PROP_ENUMERABLE);
+	JS_FreeAtom (ctx, atom);
+    }
+    return instance;
+}
+
 ScriptableObjectAdapter::ScriptableObjectAdapter (ScriptEngine& engine, std::string name) :
     ObjectAdapter (engine), m_exoticMethods (), m_name (std::move (name)) {
     this->m_exoticMethods.get_property = scriptableobject_property_get;
@@ -1266,13 +1337,29 @@ ScriptableObjectAdapter::ScriptableObjectAdapter (ScriptEngine& engine, std::str
 }
 
 JSValue ScriptableObjectAdapter::instantiate (ScriptableObject& object) {
+    if (const auto it = m_instances.find (&object); it != m_instances.end ()) {
+	return JS_DupValue (m_engine.getContext (), it->second);
+    }
     JSValue result = this->ObjectAdapter::instantiate (object);
     JS_SetOpaque (
 	result,
 	new OpaqueScriptableObjectAdapter { .magic = SCRIPTABLE_OPAQUE_MAGIC, .adapter = *this, .object = object }
     );
 
+    m_instances.emplace (&object, JS_DupValue (m_engine.getContext (), result));
     return result;
+}
+
+ScriptableObjectAdapter::~ScriptableObjectAdapter () {
+    for (const auto& [object, value] : m_instances) JS_FreeValue (m_engine.getContext (), value);
+}
+
+void ScriptableObjectAdapter::invalidate (const ScriptableObject* object) {
+    const auto it = m_instances.find (object);
+    if (it == m_instances.end ()) return;
+    if (auto* container = scriptable_container (it->second)) container->magic = 0;
+    JS_FreeValue (m_engine.getContext (), it->second);
+    m_instances.erase (it);
 }
 
 JSValue ScriptableObjectAdapter::instantiate (DynamicValue& value) {

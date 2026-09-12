@@ -58,6 +58,8 @@ public:
     [[nodiscard]] std::optional<glm::mat4> getAttachmentTransform (const std::string& name) const override;
     [[nodiscard]] std::optional<size_t> getAttachmentIndex (const std::string& name) const override;
     [[nodiscard]] std::optional<std::string> getAttachmentName (size_t index) const override;
+    [[nodiscard]] std::optional<size_t> getBoneIndex (const std::string& name) const override;
+    [[nodiscard]] std::optional<glm::mat4> getBoneTransform (size_t index) const override;
 
     [[nodiscard]] const float& getBrightness () const override;
     [[nodiscard]] const float& getUserAlpha () const override;
