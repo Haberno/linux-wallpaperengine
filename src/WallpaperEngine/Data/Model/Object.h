@@ -754,6 +754,10 @@ struct LightData {
     glm::vec3 cascadeDistances;
     /** Whether this light renders and samples a scene shadow map. */
     bool castShadow;
+    /** Authored participation and falloff in the point/spot light-volume pass. */
+    UserSettingUniquePtr castVolumetrics;
+    UserSettingUniquePtr density;
+    UserSettingUniquePtr volumetricsExponent;
 };
 
 class Light : public Object, public LightData {

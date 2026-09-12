@@ -55,6 +55,34 @@ compileLinked (const std::string& vertexSource, const std::string& fragmentSourc
 }
 } // namespace
 
+TEST_CASE ("native depth buffer sampling compiles without a comparison sampler", "[shader][backbuffer]") {
+    const auto sources = compileLinked (
+        "void main() { gl_Position = vec4(0.0); }",
+        "uniform sampler2DBackBuffer g_Texture1; // {\"hidden\":true,\"default\":\"_rt_volumetricsBack\"}\n"
+        "uniform sampler2D g_Texture3;\n"
+        "void main() { gl_FragColor = texSample2DBackBuffer(g_Texture1, vec2(.25), vec2(32))"
+        " + texLoad2D(g_Texture3, vec2(.25), vec2(32)); }", {}
+    );
+    const auto translated = GLSLContext::get ().toGlsl (sources.first, sources.second);
+    REQUIRE_FALSE (translated.second.empty ());
+    CHECK_THAT (translated.second, Catch::Matchers::ContainsSubstring ("texelFetch"));
+}
+
+TEST_CASE ("native clip discards fragments with a negative component", "[shader][clip]") {
+    for (const std::string type : { "float", "vec2", "vec3", "vec4" }) {
+        CAPTURE (type);
+        const auto sources = compileLinked (
+            "void main() { gl_Position = vec4(0.0); }",
+            "uniform " + type + " value;\nvoid main() { clip(value); gl_FragColor = vec4(1.0); }", {}
+        );
+        const auto translated = GLSLContext::get ().toGlsl (sources.first, sources.second);
+        REQUIRE_FALSE (translated.second.empty ());
+        CHECK_THAT (translated.second, Catch::Matchers::ContainsSubstring ("discard"));
+        CHECK_THAT (translated.second, Catch::Matchers::ContainsSubstring (
+            type == "float" ? "< 0.0" : "lessThan"));
+    }
+}
+
 TEST_CASE ("statement macros expand before numeric shader conversions", "[shader][statement-macro]") {
     for (const std::string expression : { "mask", "MASK_ALIAS", "GET_MASK()" }) {
 	std::string firstVariant;

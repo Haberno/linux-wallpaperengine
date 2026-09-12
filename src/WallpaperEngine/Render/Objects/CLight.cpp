@@ -20,6 +20,9 @@ CLight::CLight (Wallpapers::CScene& scene, const Light& light) :
     this->registerProperty ("innercone", *light.innerCone);
     this->registerProperty ("outercone", *light.outerCone);
     this->registerProperty ("controlpoint", *light.controlPoint);
+    this->registerProperty ("castvolumetrics", *light.castVolumetrics);
+    this->registerProperty ("density", *light.density);
+    this->registerProperty ("volumetricsexponent", *light.volumetricsExponent);
 }
 
 const Light& CLight::getLight () const { return this->m_light; }
