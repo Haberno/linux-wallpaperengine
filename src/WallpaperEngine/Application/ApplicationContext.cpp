@@ -6,6 +6,7 @@
 #include "WallpaperEngine/Render/Shaders/ShaderDiskCache.h"
 
 #include <algorithm>
+#include <cctype>
 #include <cstdlib>
 #include <cstring>
 #include <fstream>
@@ -246,7 +247,48 @@ const ApplicationContext::PlaylistDefinition& ApplicationContext::getPlaylistFro
     return cur->second;
 }
 
-ApplicationContext::ApplicationContext (int argc, char* argv[]) : m_argc (argc), m_argv (argv) { }
+ApplicationContext::ApplicationContext (int argc, char* argv[]) : m_argc (argc), m_argv (argv) {
+    for (const char* name : { "LC_ALL", "LC_MESSAGES", "LANG" }) {
+	if (const char* value = std::getenv (name); value && *value) {
+	    this->setLanguage (value);
+	    break;
+	}
+    }
+}
+
+std::string ApplicationContext::normalizeLanguage (std::string language) {
+    std::transform (language.begin (), language.end (), language.begin (), [] (unsigned char c) {
+	return c == '_' ? '-' : static_cast<char> (std::tolower (c));
+    });
+    language = language.substr (0, language.find_first_of (".@:"));
+    const std::string base = language.substr (0, language.find ('-'));
+    if (base == "zh") {
+	return language == "zh-cht" || language.starts_with ("zh-hant")
+	    || language == "zh-tw" || language == "zh-hk" || language == "zh-mo" ? "zh-cht" : "zh-chs";
+    }
+    if (base == "no") return "nb-no";
+    // Wallpaper Engine exposes UI translation codes, not arbitrary locale regions.
+    static constexpr std::string_view languages[] = {
+	"ar-sa", "be-by", "bg-bg", "cs-cz", "da-dk", "de-de", "el-gr", "en-us", "es-es", "eu-es",
+	"fa-ir", "fi-fi", "fr-fr", "he-il", "hu-hu", "id-id", "it-it", "ja-jp", "ko-kr", "lt-lt",
+	"nb-no", "nl-nl", "pl-pl", "pt-pt", "pt-br", "ro-ro", "ru-ru", "sk-sk", "sl-si", "sv-se",
+	"th-th", "tr-tr", "uk-ua", "vi-vn"
+    };
+    for (const auto code : languages) if (code == language) return std::string (code);
+    for (const auto code : languages) if (code.starts_with (base + "-")) return std::string (code);
+    return "en-us";
+}
+
+std::string ApplicationContext::getLanguage () const {
+    const std::lock_guard lock (m_languageMutex);
+    return m_language;
+}
+
+void ApplicationContext::setLanguage (const std::string& language) {
+    const auto normalized = normalizeLanguage (language);
+    const std::lock_guard lock (m_languageMutex);
+    m_language = normalized;
+}
 
 void ApplicationContext::loadSettingsFromArgv () {
     std::string lastScreen;
@@ -650,6 +692,10 @@ void ApplicationContext::loadSettingsFromArgv () {
 	    }
 	})
 	.append ();
+
+    configurationGroup.add_argument ("--language")
+	.help ("Wallpaper language (e.g. en-us, fr-fr, zh-cht). Defaults to LC_ALL, LC_MESSAGES, then LANG.")
+	.action ([this] (const std::string& value) { this->setLanguage (value); });
 
     auto& debuggingGroup = program.add_group ("Debugging options");
 

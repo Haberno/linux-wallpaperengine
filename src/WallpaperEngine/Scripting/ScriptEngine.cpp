@@ -9,6 +9,7 @@
 #include "Modules/ScriptModule.h"
 #include "ScriptPropertiesObject.h"
 #include "ScriptableObject.h"
+#include "WallpaperEngine/Application/WallpaperApplication.h"
 #include "WallpaperEngine/Audio/AudioContext.h"
 #include "WallpaperEngine/Audio/Drivers/Recorders/PlaybackRecorder.h"
 // Property is only forward-declared through Types.h; dispatchAllUserProperties needs the full
@@ -865,6 +866,7 @@ void ScriptEngine::queueScript (const std::string& key, DynamicValue& currentVal
 	    << "    mediaTimelineChanged: (typeof mediaTimelineChanged === 'function') ? mediaTimelineChanged : null,\n"
 	    << "    mediaThumbnailChanged: (typeof mediaThumbnailChanged === 'function') ? mediaThumbnailChanged : null,\n"
 	    << "    applyUserProperties: (typeof applyUserProperties === 'function') ? applyUserProperties : null,\n"
+	    << "    applyGeneralSettings: (typeof applyGeneralSettings === 'function') ? applyGeneralSettings : null,\n"
 	    << "    resizeScreen: (typeof resizeScreen === 'function') ? resizeScreen : null,\n"
 	    << "    cursorEnter: (typeof cursorEnter === 'function') ? cursorEnter : null,\n"
 	    << "    cursorLeave: (typeof cursorLeave === 'function') ? cursorLeave : null,\n"
@@ -992,28 +994,36 @@ void ScriptEngine::initializeQueuedScripts (ScriptableObject* target) {
     // there disables that script's update permanently, for the rest of the scene's life.
     std::vector<std::pair<const std::string*, LoadedModule*>> started;
 
-    for (const auto& entry : this->m_scriptModuleOrder) {
-	const auto& key = *entry.first;
-	auto& module = *entry.second;
-	if (module.initialized || (target != nullptr && module.object != target)) {
-	    continue;
+    {
+	const bool previous = m_initializingScripts;
+	ScopeGuard restoreInitialization ([&] { m_initializingScripts = previous; });
+	m_initializingScripts = true;
+	for (const auto& entry : this->m_scriptModuleOrder) {
+	    const auto& key = *entry.first;
+	    auto& module = *entry.second;
+	    if (module.initialized || (target != nullptr && module.object != target)) {
+		continue;
+	    }
+
+	    module.initialized = true;
+	    module.lastOutputSize = this->m_scene.getOutputSize ();
+	    started.emplace_back (&key, &module);
+	    this->callLifecycleHook (key, module, "init");
 	}
 
-	module.initialized = true;
-	module.lastOutputSize = this->m_scene.getOutputSize ();
-	started.emplace_back (&key, &module);
-	this->callLifecycleHook (key, module, "init");
+	// Wallpaper Engine hands the scripts their user properties once, after every init() and before
+	// any first update(). Scripts gate their behaviour on that call rather than on defaults, so
+	// skipping it strands them in their inert branch - Passing Breeze 2244339517 only starts
+	// orbiting its camera because applyUserProperties sets isCircular.
+	if (target == nullptr) {
+	    this->dispatchAllUserProperties ();
+	} else {
+	    for (const auto& [key, module] : started) this->dispatchAllUserProperties (module);
+	}
     }
-
-    // Wallpaper Engine hands the scripts their user properties once, after every init() and before
-    // any first update(). Scripts gate their behaviour on that call rather than on defaults, so
-    // skipping it strands them in their inert branch - Passing Breeze 2244339517 only starts
-    // orbiting its camera because applyUserProperties sets isCircular.
-    if (target == nullptr) {
-	this->dispatchAllUserProperties ();
-    } else {
-	for (const auto& [key, module] : started) this->dispatchAllUserProperties (module);
-    }
+    // Children created by init wait for the outer startup broadcast. Children
+    // created later by update receive no replay, matching the native lifecycle.
+    this->dispatchGeneralSettings ();
 
     // A player may already be running before these modules subscribe. Seed only
     // the new modules after every init, so handlers can safely access other layers.
@@ -1048,6 +1058,28 @@ void ScriptEngine::applyUserProperties (JSValue changed, LoadedModule* target) {
 	}
 
 	JS_FreeValue (this->m_context, result);
+    }
+}
+
+void ScriptEngine::dispatchGeneralSettings () {
+    if (m_context == nullptr || m_initializingScripts) return;
+    const auto language = m_scene.getContext ().getApp ().getContext ().getLanguage ();
+    if (language == m_lastGeneralLanguage) return;
+    m_lastGeneralLanguage = language;
+
+    // The list remains stable if a callback appends a layer. Native includes
+    // those new modules in this broadcast, giving each its own mutable payload.
+    for (const auto& [key, module] : m_scriptModuleOrder) {
+        if (!module->initialized) continue;
+        auto* previous = m_runningModule;
+        ScopeGuard restoreModule ([&] { m_runningModule = previous; });
+        m_runningModule = module;
+        JSValue settings = JS_NewObject (m_context);
+        JS_SetPropertyStr (m_context, settings, "language", JS_NewString (m_context, language.c_str ()));
+        JSValue result = this->call (module->module, 1, &settings, "applyGeneralSettings");
+        if (JS_IsException (result)) logJSException (m_context, "applyGeneralSettings");
+        JS_FreeValue (m_context, result);
+        JS_FreeValue (m_context, settings);
     }
 }
 
@@ -1101,6 +1133,7 @@ std::string ScriptEngine::getRunningModuleWorkshopId () const {
 }
 
 void ScriptEngine::tick () {
+    this->dispatchGeneralSettings ();
     this->dispatchScreenResize ();
 
     // run intervals
