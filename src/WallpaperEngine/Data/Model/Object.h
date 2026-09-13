@@ -41,6 +41,8 @@ struct ObjectData {
     UserSettingUniquePtr groupVisible;
     /** Authored configuration returned by SceneScript getInitialLayerConfig(). */
     std::string initialConfiguration;
+    /** Visible hit layers stop cursor events from reaching lower layers. */
+    bool disablePropagation = false;
 };
 
 /**

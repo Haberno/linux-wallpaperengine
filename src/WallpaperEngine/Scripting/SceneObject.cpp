@@ -362,13 +362,13 @@ JSValue scene_set_camera_transforms (JSContext* ctx, JSValueConst this_val, int 
     return JS_UNDEFINED;
 }
 
-// thisScene.enumerateLayers() -> array of every scriptable layer in render order.
+// thisScene.enumerateLayers() -> array of every scriptable layer in authored stacking order.
 JSValue scene_enumerate_layers (JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
     auto* container = get_opaque (this_val);
     JSValue arr = JS_NewArray (ctx);
     uint32_t index = 0;
 
-    for (auto* object : container->getScene ().getObjectsByRenderOrder ()) {
+    for (auto* object : container->getScene ().getObjectsByCursorOrder ()) {
 	if (object == nullptr || !object->is<ScriptableObject> ()) {
 	    continue;
 	}
@@ -408,7 +408,7 @@ JSValue scene_get_layer_by_id (JSContext* ctx, JSValueConst this_val, int argc, 
     return JS_UNDEFINED;
 }
 
-// thisScene.getLayerIndex(layer) -> index of the layer in the scriptable render order, or -1.
+// thisScene.getLayerIndex(layer) -> index of the layer in the authored scriptable order, or -1.
 JSValue scene_get_layer_index (JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
     if (argc != 1) {
 	return JS_ThrowTypeError (ctx, "getLayerIndex() expects one argument");
