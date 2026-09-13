@@ -261,6 +261,8 @@ private:
     const glm::mat4* m_modelViewProjectionMatrix = &s_defaultMatrix;
     const glm::mat4* m_modelViewProjectionMatrixInverse = &s_defaultMatrix;
     const glm::mat4* m_modelMatrix = &s_defaultMatrix;
+    glm::mat4 m_layerModelMatrix = glm::mat4 (1.0f);
+    bool m_usesLayerModelMatrix = false;
     const glm::mat4* m_viewProjectionMatrix = &s_defaultMatrix;
     const glm::mat4* m_effectTextureProjectionMatrix = &s_defaultMatrix;
     const glm::mat4* m_effectTextureProjectionMatrixInverse = &s_defaultMatrix;

@@ -50,6 +50,8 @@ void CRenderable::setup () {
 
 std::shared_ptr<const TextureProvider> CRenderable::getTexture () const { return this->m_texture; }
 
+glm::mat4 CRenderable::resolveLayerModelMatrix () const { return this->resolveWorldMatrix (); }
+
 double CRenderable::getAnimationTime () const { return this->m_animationTime; }
 
 bool CRenderable::hasTextureAnimation () const {

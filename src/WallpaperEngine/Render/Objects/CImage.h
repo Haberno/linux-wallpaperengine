@@ -55,6 +55,7 @@ public:
     [[nodiscard]] bool copiesCompositionBackground () const;
     [[nodiscard]] std::shared_ptr<const CFBO> getCompositionFBO () const;
     [[nodiscard]] glm::vec2 getSize () const;
+    [[nodiscard]] glm::mat4 resolveLayerModelMatrix () const override;
     [[nodiscard]] std::optional<glm::mat4> getAttachmentTransform (const std::string& name) const override;
     [[nodiscard]] std::optional<size_t> getAttachmentIndex (const std::string& name) const override;
     [[nodiscard]] std::optional<std::string> getAttachmentName (size_t index) const override;

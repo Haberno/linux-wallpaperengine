@@ -8,7 +8,7 @@ import subprocess
 import time
 
 
-def render_scene(test, root, scene, frames=5):
+def render_scene(test, root, scene, frames=5, parallax=False):
     from PIL import Image
 
     root.mkdir(parents=True, exist_ok=True)
@@ -24,7 +24,8 @@ def render_scene(test, root, scene, frames=5):
     with log_path.open('w') as log:
         process = subprocess.Popen([
             str(binary), '--window', '0x0x320x180', '--silent', '--fps', '10',
-            '--no-full-screen-pause', '--disable-mouse', '--disable-parallax',
+            '--no-full-screen-pause', '--disable-mouse',
+            *([] if parallax else ['--disable-parallax']),
             '--no-audio-processing', '--screenshot', str(frame),
             '--screenshot-delay', str(frames), str(root)],
             env=env, stdout=log, stderr=subprocess.STDOUT)

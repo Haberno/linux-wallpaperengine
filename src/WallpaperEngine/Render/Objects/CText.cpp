@@ -301,10 +301,15 @@ namespace WallpaperEngine::Render::Objects {
  */
 class CTextEffectHost final : public CRenderable {
 public:
-    CTextEffectHost (Wallpapers::CScene& scene, const Text& text, const Material& material) :
-	CObject (scene, text), CRenderable (scene, text, material) { }
+    CTextEffectHost (Wallpapers::CScene& scene, const Text& text, const Material& material,
+	const glm::vec2& surfaceOffset) :
+	CObject (scene, text), CRenderable (scene, text, material), m_surfaceOffset (surfaceOffset) { }
 
     void setTexture (std::shared_ptr<const TextureProvider> texture) { this->m_texture = std::move (texture); }
+
+    [[nodiscard]] glm::mat4 resolveLayerModelMatrix () const override {
+	return glm::translate (this->resolveWorldMatrix (), glm::vec3 (m_surfaceOffset.x, -m_surfaceOffset.y, 0.0f));
+    }
 
     [[nodiscard]] const float& getBrightness () const override { return m_one; }
     [[nodiscard]] const float& getUserAlpha () const override { return m_one; }
@@ -314,6 +319,7 @@ public:
     [[nodiscard]] const glm::vec3& getCompositeColor () const override { return m_white3; }
 
 private:
+    const glm::vec2& m_surfaceOffset;
     const float m_one = 1.0f;
     const glm::vec3 m_white3 = glm::vec3 (1.0f);
     const glm::vec4 m_white4 = glm::vec4 (1.0f);
@@ -423,7 +429,9 @@ void CText::setupEffectChain () {
     m_effectMaterial = Data::Parsers::MaterialParser::load (
 	this->getScene ().getScene ().project, "materials/util/effectpassthrough.json"
     );
-    m_effectHost = std::make_unique<CTextEffectHost> (this->getScene (), m_text, *m_effectMaterial);
+    m_effectHost = std::make_unique<CTextEffectHost> (
+	this->getScene (), m_text, *m_effectMaterial, m_effectCompositeOffset
+    );
 
     // Keep working surfaces private. Consumers need the completed result, not
     // whichever ping-pong surface happens to contain it this frame.

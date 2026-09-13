@@ -19,6 +19,8 @@ public:
     CRenderable (Wallpapers::CScene& scene, const Object& object, const Material& material);
 
     [[nodiscard]] std::shared_ptr<const TextureProvider> getTexture () const;
+    /** Original layer transform in authored coordinates, independent of the current effect pass. */
+    [[nodiscard]] virtual glm::mat4 resolveLayerModelMatrix () const;
 
     [[nodiscard]] double getAnimationTime () const;
 
