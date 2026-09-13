@@ -22,6 +22,78 @@ using WallpaperEngine::Render::Objects::calculateFixedParticleOrientation;
 using WallpaperEngine::Render::Objects::calculateBillboardParticleOrientation;
 using WallpaperEngine::Render::Objects::ParticleInstance;
 
+TEST_CASE ("stock cap velocity particles retain their speed limit operator", "[particle][capvelocity]") {
+    auto filesystem = std::make_unique<WallpaperEngine::FileSystem::Container> ();
+    // Installed particleelementpreviews/capvelocity uses this delayed speed cap.
+    filesystem->getVFS ().add ("particles/capvelocity.json", R"({
+        "operator":[{"name":"capvelocity","maxspeed":100,"blendinstart":0.5,"blendinend":0.6}]
+    })");
+    WallpaperEngine::Data::Model::Project project {};
+    project.assetLocator = std::make_unique<WallpaperEngine::Assets::AssetLocator> (std::move (filesystem));
+    const auto object = WallpaperEngine::Data::Parsers::ObjectParser::parse (
+        WallpaperEngine::Data::JSON::JSON::parse (R"({"id":19,"particle":"particles/capvelocity.json"})"), project
+    );
+    const auto* particle = object->as<WallpaperEngine::Data::Model::Particle> ();
+    REQUIRE (particle != nullptr);
+    REQUIRE (particle->operators.size () == 1);
+    REQUIRE (particle->operators.front () != nullptr);
+    const auto* cap = particle->operators.front ()->as<CapVelocityOperator> ();
+    REQUIRE (cap != nullptr);
+    REQUIRE (cap->maxSpeed != nullptr);
+    CHECK (cap->maxSpeed->value->getFloat () == 100.0f);
+    CHECK (cap->blendTimes == glm::vec4 (0.5f, 0.6f, 1.0f, 1.0f));
+}
+
+TEST_CASE ("omitted cap velocity settings retain scene defaults and a full lifetime envelope", "[particle][capvelocity]") {
+    WallpaperEngine::Data::Model::Project project {};
+    const auto object = WallpaperEngine::Data::Parsers::ObjectParser::parse (
+        WallpaperEngine::Data::JSON::JSON::parse (R"({"id":19,"particle":{"operator":[{"name":"capvelocity"}]}})"),
+        project
+    );
+    const auto* particle = object->as<WallpaperEngine::Data::Model::Particle> ();
+    REQUIRE (particle != nullptr);
+    REQUIRE (particle->operators.size () == 1);
+    const auto* cap = particle->operators.front ()->as<CapVelocityOperator> ();
+    REQUIRE (cap != nullptr);
+    CHECK (cap->maxSpeed == nullptr);
+    CHECK (cap->blendTimes == glm::vec4 (0.0f, 0.0f, 1.0f, 1.0f));
+}
+
+TEST_CASE ("particle velocity caps preserve direction and do not accelerate slow particles", "[particle][capvelocity]") {
+    using WallpaperEngine::Render::Objects::calculateParticleVelocityCap;
+    const glm::vec4 fullLifetime (0.0f, 0.0f, 1.0f, 1.0f);
+    CHECK (calculateParticleVelocityCap ({ 0.0f, 120.0f, -160.0f }, 100.0f, 0.0f, fullLifetime)
+	   == glm::vec3 (0.0f, 60.0f, -80.0f));
+    CHECK (calculateParticleVelocityCap ({ 30.0f, 40.0f, 0.0f }, 100.0f, 0.5f, fullLifetime)
+	   == glm::vec3 (30.0f, 40.0f, 0.0f));
+    CHECK (calculateParticleVelocityCap ({ 30.0f, 40.0f, 0.0f }, 0.0f, 0.5f, fullLifetime)
+	   == glm::vec3 (0.0f));
+    CHECK (calculateParticleVelocityCap (glm::vec3 (0.0f), 0.0f, 0.5f, fullLifetime) == glm::vec3 (0.0f));
+}
+
+TEST_CASE ("particle velocity caps fade by normalized lifetime rather than seconds", "[particle][capvelocity]") {
+    using WallpaperEngine::Render::Objects::calculateParticleVelocityCap;
+    const glm::vec4 blendTimes (0.2f, 0.4f, 0.6f, 0.8f);
+    ParticleInstance particle;
+    particle.lifetime = 10.0f;
+    for (const auto& [age, expectedSpeed] : std::vector<std::pair<float, float>> {
+	     { 1.0f, 200.0f }, { 3.0f, 150.0f }, { 5.0f, 100.0f }, { 7.0f, 150.0f }, { 9.0f, 200.0f } }) {
+	particle.age = age;
+	const auto velocity = calculateParticleVelocityCap (
+	    { 200.0f, 0.0f, 0.0f }, 100.0f, particle.getLifetimePos (), blendTimes
+	);
+	CHECK (velocity.x == Catch::Approx (expectedSpeed));
+    }
+    // Overlapping ramps multiply; a min() envelope would cap to 150 instead.
+    CHECK (calculateParticleVelocityCap ({ 200.0f, 0.0f, 0.0f }, 100.0f, 0.5f, { 0.0f, 1.0f, 0.0f, 1.0f }).x
+	   == Catch::Approx (175.0f));
+    // The shipped thunderbolt uses coincident .2/.2 blend-in endpoints.
+    CHECK (calculateParticleVelocityCap ({ 200.0f, 0.0f, 0.0f }, 50.0f, 0.1f, { 0.2f, 0.2f, 1.0f, 1.0f }).x
+	   == 200.0f);
+    CHECK (calculateParticleVelocityCap ({ 200.0f, 0.0f, 0.0f }, 50.0f, 0.2f, { 0.2f, 0.2f, 1.0f, 1.0f }).x
+	   == Catch::Approx (50.0f));
+}
+
 TEST_CASE ("particle emission follows the strongest selected audio band", "[particle]") {
     float left[16] {}, right[16] {};
     CHECK (calculateParticleAudioResponse (left, right, 0, { 0.8f, 1.0f }, 0.5f, 4, 8) == 1.0f);
