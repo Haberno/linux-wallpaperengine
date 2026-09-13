@@ -137,13 +137,13 @@ uint32_t WallpaperEngine::Render::Objects::nextUtf8Codepoint (const std::string&
 }
 
 std::vector<std::string> WallpaperEngine::Render::Objects::layoutTextLines (
-    const std::string& text, const TextLayoutLimits& limits, const std::function<int (uint32_t)>& glyphAdvance
+    const std::string& text, const TextLayoutLimits& limits, const std::function<float (uint32_t)>& glyphAdvance
 ) {
     struct Glyph {
 	size_t begin;
 	size_t end;
 	uint32_t code;
-	int advance;
+	float advance;
     };
     const auto whitespace = [] (uint32_t code) { return code == ' ' || code == '\t'; };
     std::vector<std::string> lines;
@@ -165,7 +165,7 @@ std::vector<std::string> WallpaperEngine::Render::Objects::layoutTextLines (
 	    lines.emplace_back ();
 	}
 	for (size_t start = 0; start < glyphs.size ();) {
-	    int width = 0;
+	    float width = 0.0f;
 	    size_t lastSpace = std::string::npos;
 	    size_t stop = start;
 	    for (; stop < glyphs.size (); stop++) {
@@ -205,7 +205,7 @@ std::vector<std::string> WallpaperEngine::Render::Objects::layoutTextLines (
 	if (limits.ellipsis) {
 	    auto& last = lines.back ();
 	    const auto measure = [&] (const std::string& value) {
-		int width = 0;
+		float width = 0.0f;
 		for (size_t offset = 0; offset < value.size ();) {
 		    width += glyphAdvance (nextUtf8Codepoint (value, offset));
 		}
@@ -330,6 +330,7 @@ CText::CText (Wallpapers::CScene& scene, const Text& text) :
     this->registerProperty ("visible", *text.visible);
     this->registerProperty ("pointSize", *text.pointSize);
     this->registerProperty ("text", *text.text);
+    this->registerProperty ("spacing", *text.spacing);
     this->registerProperty ("limitwidth", *text.limitWidth);
     this->registerProperty ("maxwidth", *text.maxWidth);
     this->registerProperty ("limitrows", *text.limitRows);
@@ -873,6 +874,10 @@ TextLayoutLimits CText::currentLayoutLimits () const {
     };
 }
 
+glm::vec2 CText::currentSpacing () const {
+    return glm::vec2 (m_text.spacing->evaluateVec3 (getScene ().getTime ()));
+}
+
 void CText::rebuildTextureFrom (const std::string& text) {
     // Wallpaper Engine lays out a glyph mesh, then aligns that mesh around the layer
     // origin from its actual bounds and the font's ascender/descender. The serialized
@@ -885,33 +890,38 @@ void CText::rebuildTextureFrom (const std::string& text) {
     // already allocated, so dynamic/scripted text can regenerate the glyph
     // bitmap every time the rendered string changes without leaking.
     FT_GlyphSlot slot = m_ftFace->glyph;
+    FT_Set_Transform (m_ftFace, nullptr, nullptr);
+    m_lastSpacing = currentSpacing ();
 
     // Metrics-based row spacing is stable across glyph mixes and meaningful for empty rows.
-    const int lineHeight = static_cast<int> (m_ftFace->size->metrics.height >> 6);
+    // Native spacing adds pixels after converting FreeType's 26.6 metrics; it
+    // neither scales with pointsize nor rounds the resulting glyph/row advance.
+    const float lineHeight = static_cast<float> (m_ftFace->size->metrics.height >> 6) + m_lastSpacing.y;
     const int ascender = static_cast<int> (m_ftFace->size->metrics.ascender >> 6);
     const int descender = static_cast<int> (m_ftFace->size->metrics.descender >> 6);
 
     m_lastLayoutLimits = currentLayoutLimits ();
     struct Line {
 	std::string text;
-	int width = 0;
-	int x = 0;
+	float width = 0.0f;
+	float x = 0.0f;
     };
     std::vector<Line> lines;
     for (auto& line : layoutTextLines (text, m_lastLayoutLimits, [this, slot] (uint32_t code) {
-	     return FT_Load_Char (m_ftFace, code, FT_LOAD_DEFAULT) == 0 ? static_cast<int> (slot->advance.x >> 6) : 0;
+	     return FT_Load_Char (m_ftFace, code, FT_LOAD_DEFAULT) == 0
+		 ? static_cast<float> (slot->advance.x >> 6) + m_lastSpacing.x : 0.0f;
 	 })) {
 	lines.push_back ({ .text = std::move (line) });
     }
 
-    int maxLineWidth = 0;
+    float maxLineWidth = 0.0f;
     for (auto& line : lines) {
 	for (size_t offset = 0; offset < line.text.size ();) {
 	    if (FT_Load_Char (m_ftFace, static_cast<FT_ULong> (nextUtf8Codepoint (line.text, offset)), FT_LOAD_RENDER)
 		!= 0) {
 		continue;
 	    }
-	    line.width += slot->advance.x >> 6;
+	    line.width += static_cast<float> (slot->advance.x >> 6) + m_lastSpacing.x;
 	}
 	maxLineWidth = std::max (maxLineWidth, line.width);
     }
@@ -923,9 +933,24 @@ void CText::rebuildTextureFrom (const std::string& text) {
 	} else if (m_text.alignment == "right") {
 	    line.x = maxLineWidth - line.width;
 	} else {
-	    line.x = static_cast<int> (std::round ((maxLineWidth - line.width) * 0.5f));
+	    line.x = (maxLineWidth - line.width) * 0.5f;
+	    if (m_lastSpacing.x == 0.0f) {
+		line.x = std::round (line.x);
+	    }
 	}
     }
+
+    // FreeType translates scalable glyph outlines at 26.6 precision. Keep the
+    // integer pen in the bitmap destination and apply its fractional part to the
+    // outline, so measuring and rasterizing use identical subpixel ink bounds.
+    const auto loadPositionedGlyph = [this] (uint32_t code, float x, float y) {
+	FT_Vector delta = {
+	    static_cast<FT_Pos> (std::round ((x - std::floor (x)) * 64.0f)),
+	    static_cast<FT_Pos> (std::round (-(y - std::floor (y)) * 64.0f)),
+	};
+	FT_Set_Transform (m_ftFace, nullptr, &delta);
+	return FT_Load_Char (m_ftFace, static_cast<FT_ULong> (code), FT_LOAD_RENDER);
+    };
 
     // Measure the actual bitmap bounds in a first-baseline coordinate system with +y down.
     // Native alignment uses these glyph bounds rather than advances or a line-height box.
@@ -937,26 +962,25 @@ void CText::rebuildTextureFrom (const std::string& text) {
 
     for (size_t i = 0; i < lines.size (); ++i) {
 	const auto& line = lines[i];
-	int penX = line.x;
-	const int baseline = static_cast<int> (i) * lineHeight;
+	float penX = line.x;
+	const float baseline = static_cast<float> (i) * lineHeight;
 
 	for (size_t offset = 0; offset < line.text.size ();) {
-	    if (FT_Load_Char (m_ftFace, static_cast<FT_ULong> (nextUtf8Codepoint (line.text, offset)), FT_LOAD_RENDER)
-		!= 0) {
+	    if (loadPositionedGlyph (nextUtf8Codepoint (line.text, offset), penX, baseline) != 0) {
 		continue;
 	    }
 
 	    const auto& bmp = slot->bitmap;
 	    if (bmp.width != 0 && bmp.rows != 0) {
-		const int glyphLeft = penX + slot->bitmap_left;
-		const int glyphTop = baseline - slot->bitmap_top;
+		const int glyphLeft = static_cast<int> (std::floor (penX)) + slot->bitmap_left;
+		const int glyphTop = static_cast<int> (std::floor (baseline)) - slot->bitmap_top;
 		inkLeft = std::min (inkLeft, glyphLeft);
 		inkTop = std::min (inkTop, glyphTop);
 		inkRight = std::max (inkRight, glyphLeft + static_cast<int> (bmp.width));
 		inkBottom = std::max (inkBottom, glyphTop + static_cast<int> (bmp.rows));
 		hasInk = true;
 	    }
-	    penX += slot->advance.x >> 6;
+	    penX += static_cast<float> (slot->advance.x >> 6) + m_lastSpacing.x;
 	}
     }
 
@@ -964,9 +988,10 @@ void CText::rebuildTextureFrom (const std::string& text) {
 	// A scripted layer is initially represented by a space. Keep a meaningful,
 	// transparent surface and native font-metric alignment until it gets real glyphs.
 	inkLeft = 0;
-	inkRight = std::max (1, maxLineWidth);
-	inkTop = -ascender;
-	inkBottom = -descender + static_cast<int> (lines.size () - 1) * lineHeight;
+	inkRight = std::max (1, static_cast<int> (std::ceil (maxLineWidth)));
+	const float lastBaseline = static_cast<float> (lines.size () - 1) * lineHeight;
+	inkTop = -ascender + static_cast<int> (std::floor (std::min (0.0f, lastBaseline)));
+	inkBottom = -descender + static_cast<int> (std::ceil (std::max (0.0f, lastBaseline)));
     }
 
     // Equal margins preserve the glyph-bounds center while protecting filter sampling.
@@ -979,18 +1004,17 @@ void CText::rebuildTextureFrom (const std::string& text) {
 
     for (size_t i = 0; i < lines.size (); i++) {
 	const auto& line = lines[i];
-	int penX = line.x - x0;
-	const int baseline = static_cast<int> (i) * lineHeight - y0;
+	float penX = line.x;
+	const float baseline = static_cast<float> (i) * lineHeight;
 
 	for (size_t offset = 0; offset < line.text.size ();) {
-	    if (FT_Load_Char (m_ftFace, static_cast<FT_ULong> (nextUtf8Codepoint (line.text, offset)), FT_LOAD_RENDER)
-		!= 0) {
+	    if (loadPositionedGlyph (nextUtf8Codepoint (line.text, offset), penX, baseline) != 0) {
 		continue;
 	    }
 
 	    const auto& bmp = slot->bitmap;
-	    const int originX = penX + slot->bitmap_left;
-	    const int originY = baseline - slot->bitmap_top;
+	    const int originX = static_cast<int> (std::floor (penX)) + slot->bitmap_left - x0;
+	    const int originY = static_cast<int> (std::floor (baseline)) - slot->bitmap_top - y0;
 
 	    for (unsigned int row = 0; row < bmp.rows; ++row) {
 		for (unsigned int col = 0; col < bmp.width; ++col) {
@@ -1008,9 +1032,10 @@ void CText::rebuildTextureFrom (const std::string& text) {
 		}
 	    }
 
-	    penX += slot->advance.x >> 6;
+	    penX += static_cast<float> (slot->advance.x >> 6) + m_lastSpacing.x;
 	}
     }
+    FT_Set_Transform (m_ftFace, nullptr, nullptr);
 
     const bool firstUpload = (m_texture == 0);
     if (firstUpload) {
@@ -1172,7 +1197,8 @@ void CText::render () {
 	FT_Set_Pixel_Sizes (m_ftFace, 0, static_cast<FT_UInt> (m_lastPixelSize));
 	rebuildTextureFrom (renderedText);
 	rebuiltGlyphs = true;
-    } else if (renderedText != m_lastRenderedText || currentLayoutLimits () != m_lastLayoutLimits) {
+    } else if (renderedText != m_lastRenderedText || currentLayoutLimits () != m_lastLayoutLimits
+	       || currentSpacing () != m_lastSpacing) {
 	rebuildTextureFrom (renderedText);
 	rebuiltGlyphs = true;
     }

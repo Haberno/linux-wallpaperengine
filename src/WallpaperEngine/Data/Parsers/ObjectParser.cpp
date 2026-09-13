@@ -190,6 +190,7 @@ TextUniquePtr ObjectParser::parseText (const JSON& it, const Project& project, O
 		}
 		return it.optional ("padding", glm::vec2 (0.0f));
 	    }(),
+	    .spacing = it.user ("spacing", project.properties, glm::vec2 (0.0f)),
 	    .brightness = it.user ("brightness", project.properties, 1.0f),
 	    .effects = effects.has_value () ? parseEffects (*effects, project) : std::vector<ImageEffectUniquePtr> {},
 	    .colorBlendMode = it.user ("colorBlendMode", project.properties, 0),

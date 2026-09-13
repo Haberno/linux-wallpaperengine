@@ -1,11 +1,75 @@
 #include <catch2/catch_test_macros.hpp>
+#include <utility>
 
+#include "WallpaperEngine/Data/Model/Project.h"
+#include "WallpaperEngine/Data/Parsers/ObjectParser.h"
 #include "WallpaperEngine/Render/Objects/CText.h"
 
 using WallpaperEngine::Render::Objects::computeTextAlignmentOffset;
 using WallpaperEngine::Render::Objects::computeTextEffectLayout;
 using WallpaperEngine::Render::Objects::layoutTextLines;
 using WallpaperEngine::Render::Objects::nextUtf8Codepoint;
+
+TEST_CASE ("text spacing defaults to zero and preserves signed fractional pixels", "[text][spacing]") {
+    const WallpaperEngine::Data::Model::Project project {};
+    for (const auto& [source, expected] : std::vector<std::pair<const char*, glm::vec2>> {
+	     { R"({"id":1,"name":"text","text":"AA"})", glm::vec2 (0.0f) },
+	     { R"({"id":1,"name":"text","text":"AA","spacing":"0 0"})", glm::vec2 (0.0f) },
+	     { R"({"id":1,"name":"text","text":"AA","spacing":"1.25 -2.5"})", { 1.25f, -2.5f } },
+	 }) {
+	const auto data = WallpaperEngine::Data::JSON::JSON::parse (source);
+	const auto object = WallpaperEngine::Data::Parsers::ObjectParser::parse (data, project);
+	const auto* text = object->as<WallpaperEngine::Data::Model::Text> ();
+	REQUIRE (text != nullptr);
+	REQUIRE (text->spacing != nullptr);
+	CHECK (glm::vec2 (text->spacing->evaluateVec3 (0.0f)) == expected);
+    }
+}
+
+TEST_CASE ("text spacing retains scripts and samples both animation channels", "[text][spacing]") {
+    const WallpaperEngine::Data::Model::Project project {};
+    const auto object = WallpaperEngine::Data::Parsers::ObjectParser::parse (
+	WallpaperEngine::Data::JSON::JSON::parse (R"({
+	    "id":1,"name":"text","text":"AA",
+	    "spacing": {
+		"value":"0.25 -0.5",
+		"script":"export function update(value) { return value; }",
+		"animation": {
+		    "c0":[{"frame":0,"value":0},{"frame":30,"value":2}],
+		    "c1":[{"frame":0,"value":0},{"frame":30,"value":-4}],
+		    "options":{"fps":30,"length":30,"mode":"single"},
+		    "relative":true
+		}
+	    }
+	})"), project
+    );
+    const auto* text = object->as<WallpaperEngine::Data::Model::Text> ();
+    REQUIRE (text != nullptr);
+    REQUIRE (text->spacing->value->getScriptSource ().has_value ());
+    REQUIRE (text->spacing->animation != nullptr);
+    CHECK (glm::vec2 (text->spacing->evaluateVec3 (0.0f)) == glm::vec2 (0.25f, -0.5f));
+    CHECK (glm::vec2 (text->spacing->evaluateVec3 (0.5f)) == glm::vec2 (1.25f, -2.5f));
+    CHECK (glm::vec2 (text->spacing->evaluateVec3 (1.0f)) == glm::vec2 (2.25f, -4.5f));
+}
+
+TEST_CASE ("text wrapping retains fractional glyph advances", "[text][spacing]") {
+    REQUIRE (
+	layoutTextLines ("abc", { .width = 30.5f }, [] (uint32_t) { return 10.25f; })
+	== std::vector<std::string> { "ab", "c" }
+    );
+    REQUIRE (
+	layoutTextLines ("abc", { .width = 29.0f }, [] (uint32_t) { return 9.75f; })
+	== std::vector<std::string> { "ab", "c" }
+    );
+}
+
+TEST_CASE ("text ellipsis fitting retains fractional glyph advances", "[text][spacing]") {
+    REQUIRE (
+	layoutTextLines ("abc\ndef", { .width = 36.0f, .rows = 1, .ellipsis = true },
+	    [] (uint32_t code) { return code == '.' ? 2.5f : 10.5f; })
+	== std::vector<std::string> { "ab..." }
+    );
+}
 
 TEST_CASE ("text width wraps words and narrow vertical dates without splitting UTF-8") {
     const auto advance = [] (uint32_t) { return 10; };
