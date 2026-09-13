@@ -289,6 +289,33 @@ std::unordered_map<std::string, PreprocessedIncludes> sIncludeCache;
 size_t sIncludeCacheBytes = 0;
 constexpr size_t SHADER_TEXT_CACHE_BUDGET_BYTES = 64ULL * 1024 * 1024;
 
+bool hasStatementMacro (const std::string& source) {
+    // This scan precedes the compatibility cache, whose key needs the answer.
+    // Cache both positive and negative results by exact source, across units.
+    static std::mutex cacheMutex;
+    static std::unordered_map<std::string, bool> cache;
+    static size_t cacheBytes = 0;
+    {
+        const std::lock_guard lock (cacheMutex);
+        if (const auto found = cache.find (source); found != cache.end ()) {
+            return found->second;
+        }
+    }
+
+    static const std::regex statementMacro (R"((^|\n)[ \t]*#[ \t]*define\b[^\n]*;)");
+    const bool result = std::regex_search (maskShaderComments (source), statementMacro);
+    const size_t entryBytes = source.size () + sizeof (decltype (cache)::value_type);
+    if (entryBytes <= SHADER_TEXT_CACHE_BUDGET_BYTES) {
+        const std::lock_guard lock (cacheMutex);
+        if (cacheBytes + entryBytes > SHADER_TEXT_CACHE_BUDGET_BYTES) {
+            cache.clear ();
+            cacheBytes = 0;
+        }
+        if (cache.emplace (source, result).second) cacheBytes += entryBytes;
+    }
+    return result;
+}
+
 std::string buildIncludeCacheKey (const std::string& locatorIdentity, const std::string& file, const std::string& content) {
     std::string key = locatorIdentity;
     key += '|';
@@ -1601,6 +1628,17 @@ void ShaderUnit::preprocessReservedIdentifiers () {
     // Engine accepts it, but GLSL reserves input/output even as variable names.
     // Keep material metadata intact and rename declarations, macros and uses
     // together before uniform bindings are collected.
+    static std::mutex cacheMutex;
+    static std::unordered_map<std::string, std::string> cache;
+    static size_t cacheBytes = 0;
+    {
+        const std::lock_guard lock (cacheMutex);
+        if (const auto found = cache.find (m_preprocessed); found != cache.end ()) {
+            m_preprocessed = found->second;
+            return;
+        }
+    }
+
     const std::string code = maskShaderComments (m_preprocessed);
     static const std::regex reserved (R"(\b(input|output)\b)");
     std::string result;
@@ -1612,6 +1650,16 @@ void ShaderUnit::preprocessReservedIdentifiers () {
 	copied = position + it->length ();
     }
     result.append (m_preprocessed, copied);
+
+    const size_t entryBytes = m_preprocessed.size () + result.size () + sizeof (decltype (cache)::value_type);
+    if (entryBytes <= SHADER_TEXT_CACHE_BUDGET_BYTES) {
+        const std::lock_guard lock (cacheMutex);
+        if (cacheBytes + entryBytes > SHADER_TEXT_CACHE_BUDGET_BYTES) {
+            cache.clear ();
+            cacheBytes = 0;
+        }
+        if (cache.emplace (m_preprocessed, result).second) cacheBytes += entryBytes;
+    }
     m_preprocessed = std::move (result);
 }
 
@@ -2149,8 +2197,7 @@ const std::string& ShaderUnit::compile () {
     // A native constant macro may contain a trailing semicolon. Wrapping its
     // unexpanded use in a numeric constructor places that semicolon inside the
     // expression. Expand these shaders with their actual combo values first.
-    static const std::regex statementMacro (R"((^|\n)[ \t]*#[ \t]*define\b[^\n]*;)");
-    const bool expandMacros = std::regex_search (maskShaderComments (this->m_preprocessed), statementMacro);
+    const bool expandMacros = hasStatementMacro (this->m_preprocessed);
 
     const std::string& linkedSource = this->m_link != nullptr ? this->m_link->m_preprocessed : sNoLink;
     std::string compatKey;
