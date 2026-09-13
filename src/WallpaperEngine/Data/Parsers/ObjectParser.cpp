@@ -86,6 +86,7 @@ ObjectUniquePtr ObjectParser::parse (const JSON& it, const Project& project) {
     }
 
     basedata.initialConfiguration = it.dump ();
+    basedata.disablePropagation = it.optional ("disablepropagation", false);
 
     if (imageIt != it.end () && imageIt->is_string ()) {
 	return parseImage (it, project, std::move (basedata), *imageIt);

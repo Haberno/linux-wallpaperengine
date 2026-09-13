@@ -376,6 +376,8 @@ CScene::CScene (
     // copy over objects by render order
     for (const auto& object : scene->objects) {
 	this->addObjectToRenderOrder (*object);
+	if (const auto rendered = m_objects.find (object->id); rendered != m_objects.end ())
+	    m_objectsByCursorOrder.push_back (rendered->second);
     }
 
     // Property-script init hooks commonly resolve other layers by name. Construction can
@@ -497,6 +499,7 @@ void CScene::destroyObjects () noexcept {
     }
 
     this->m_objectsByRenderOrder.clear ();
+    this->m_objectsByCursorOrder.clear ();
     this->m_objects.clear ();
     this->m_lightObjects.clear ();
     this->m_scriptedValues.clear ();
@@ -1678,6 +1681,7 @@ const glm::vec2* CScene::getParallaxDisplacement () const { return &this->m_para
 const glm::vec2* CScene::getParallaxPosition () const { return &this->m_parallaxPosition; }
 
 const std::vector<CObject*>& CScene::getObjectsByRenderOrder () const { return this->m_objectsByRenderOrder; }
+const std::vector<CObject*>& CScene::getObjectsByCursorOrder () const { return this->m_objectsByCursorOrder; }
 
 const CObject* CScene::getObject (int id) const {
     const auto object = this->m_objects.find (id);
@@ -1784,6 +1788,7 @@ Render::CObject* CScene::createLayer (JSON layer, const std::string& workshopId)
 	}
 
 	this->m_objectsByRenderOrder.push_back (renderObject);
+	this->m_objectsByCursorOrder.push_back (renderObject);
 	if (auto* scriptable = dynamic_cast<Scripting::ScriptableObject*> (renderObject))
 	    this->m_scriptEngine->initializeQueuedScripts (scriptable);
 	return renderObject;
@@ -1804,6 +1809,7 @@ void CScene::destroyQueuedLayers () {
 	if (it == m_objects.end ()) continue;
 	auto* object = it->second;
 	std::erase (m_objectsByRenderOrder, object);
+	std::erase (m_objectsByCursorOrder, object);
 	std::erase_if (m_lightObjects, [object] (const auto* light) { return light == object; });
 	m_objects.erase (it);
 	delete object;
@@ -1814,7 +1820,7 @@ void CScene::destroyQueuedLayers () {
 
 int CScene::getScriptableLayerIndex (const CObject* layer) const {
     int index = 0;
-    for (const auto* object : this->m_objectsByRenderOrder) {
+    for (const auto* object : this->m_objectsByCursorOrder) {
 	if (object == nullptr || !object->is<Scripting::ScriptableObject> ()) {
 	    continue;
 	}
@@ -1827,30 +1833,35 @@ int CScene::getScriptableLayerIndex (const CObject* layer) const {
 }
 
 void CScene::moveLayerToScriptableIndex (CObject* layer, int index) {
-    auto& order = this->m_objectsByRenderOrder;
-    const auto current = std::ranges::find (order, layer);
-    if (current == order.end ()) {
-	return;
-    }
-    order.erase (current);
-
-    // Insert just before the index-th scriptable layer; a negative / past-the-end index appends,
-    // leaving the layer on top of the render order.
-    auto insertPos = order.end ();
-    if (index >= 0) {
-	int scriptIndex = 0;
-	for (auto it = order.begin (); it != order.end (); ++it) {
-	    if (*it == nullptr || !(*it)->is<Scripting::ScriptableObject> ()) {
-		continue;
-	    }
-	    if (scriptIndex == index) {
-		insertPos = it;
-		break;
-	    }
-	    ++scriptIndex;
+    // Authored and dependency render indices can differ. A script-facing no-op
+    // must not reschedule a dependency after its consumer.
+    if (index == this->getScriptableLayerIndex (layer)) return;
+    for (auto* layers : { &m_objectsByRenderOrder, &m_objectsByCursorOrder }) {
+	auto& order = *layers;
+	const auto current = std::ranges::find (order, layer);
+	if (current == order.end ()) {
+	    continue;
 	}
+	order.erase (current);
+
+	// Insert just before the index-th scriptable layer; a negative / past-the-end index appends,
+	// leaving the layer on top of the render order.
+	auto insertPos = order.end ();
+	if (index >= 0) {
+	    int scriptIndex = 0;
+	    for (auto it = order.begin (); it != order.end (); ++it) {
+		if (*it == nullptr || !(*it)->is<Scripting::ScriptableObject> ()) {
+		    continue;
+		}
+		if (scriptIndex == index) {
+		    insertPos = it;
+		    break;
+		}
+		++scriptIndex;
+	    }
+	}
+	order.insert (insertPos, layer);
     }
-    order.insert (insertPos, layer);
 }
 
 std::shared_ptr<const TextureProvider> CScene::resolveTexture (const std::string& name) const {

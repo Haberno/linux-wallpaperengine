@@ -1272,57 +1272,74 @@ void ScriptEngine::dispatchCursorEvents () {
     const bool moved = !this->m_lastCursorWorldPosition.has_value ()
 	|| glm::dot (cursorDelta, cursorDelta) > 1e-8f;
 
-    for (auto& [key, module] : this->m_scriptModules) {
-	if (!module.cursorEvents) {
-	    continue;
-	}
-	auto* image = dynamic_cast<Render::Objects::CImage*> (module.object);
-	const auto localPosition = image != nullptr ? image->cursorLocalPosition (worldPosition) : std::nullopt;
-	const bool inside = localPosition.has_value ();
-
-	const auto callCursorHook = [&] (const char* hook) {
-	    if (!inside && std::string_view (hook) != "cursorLeave") {
-		return;
-	    }
-	    this->m_runningModule = &module;
-	    const glm::vec3 local = localPosition.value_or (glm::vec3 (0.0f));
-	    const glm::vec3 hit = inside && !m_scene.getCamera ().isOrthogonal ()
-		? glm::vec3 (image->resolveWorldMatrix () * glm::vec4 (local, 1.0f)) : worldPosition;
-	    JSValue event = this->makeCursorEvent (hit, local);
-	    JSValue args[] = { event };
-	    JSValue result = this->call (module.module, 1, args, hook);
-	    if (JS_IsException (result)) {
-		logJSException (this->m_context, key.c_str ());
-	    }
-	    JS_FreeValue (this->m_context, result);
-	    JS_FreeValue (this->m_context, event);
-	};
-
-	if (inside && !module.cursorInside) {
-	    callCursorHook ("cursorEnter");
-	}
-	if (!inside && module.cursorInside) {
-	    callCursorHook ("cursorLeave");
-	}
-	if (inside && moved) {
-	    callCursorHook ("cursorMove");
-	}
-	if (inside && leftDown && !this->m_cursorLeftDown) {
-	    module.cursorPressedInside = true;
-	    callCursorHook ("cursorDown");
-	}
-	if (!leftDown && this->m_cursorLeftDown) {
-	    if (inside) {
-		callCursorHook ("cursorUp");
-		if (module.cursorPressedInside) {
-		    callCursorHook ("cursorClick");
-		}
-	    }
-	    module.cursorPressedInside = false;
-	}
-	module.cursorInside = inside;
+    using CursorModule = std::pair<const std::string*, LoadedModule*>;
+    std::unordered_map<Render::Objects::CImage*, std::vector<CursorModule>> modules;
+    for (auto& [key, module] : m_scriptModules) {
+	if (!module.initialized || !module.cursorEvents) continue;
+	if (auto* image = dynamic_cast<Render::Objects::CImage*> (module.object))
+	    modules[image].emplace_back (&key, &module);
     }
 
+    // Both snapshots remain stable if a callback creates, reorders or queues
+    // removal of a layer. Native visits frontmost layers first, including
+    // scriptless blockers, and broadcasts each event to all modules on a layer.
+    const auto order = m_scene.getObjectsByCursorOrder ();
+    for (auto* object : order | std::views::reverse) {
+	auto* image = dynamic_cast<Render::Objects::CImage*> (object);
+	if (!image) continue;
+	const auto found = modules.find (image);
+	if (found == modules.end () && !image->getObject ().disablePropagation) continue;
+	const auto localPosition = image->cursorLocalPosition (worldPosition);
+	const bool inside = localPosition.has_value ();
+
+	if (found != modules.end ()) {
+	    const auto callCursorHook = [&] (const char* hook, auto accepts) {
+		for (const auto& [key, module] : found->second) {
+		    if (!accepts (*module)) continue;
+		    auto* previous = m_runningModule;
+		    ScopeGuard restoreModule ([&] { m_runningModule = previous; });
+		    m_runningModule = module;
+		    const glm::vec3 local = localPosition.value_or (glm::vec3 (0.0f));
+		    const glm::vec3 hit = inside && !m_scene.getCamera ().isOrthogonal ()
+			? glm::vec3 (image->resolveWorldMatrix () * glm::vec4 (local, 1.0f)) : worldPosition;
+		    JSValue event = makeCursorEvent (hit, local);
+		    JSValue result = call (module->module, 1, &event, hook);
+		    if (JS_IsException (result)) logJSException (m_context, key->c_str ());
+		    JS_FreeValue (m_context, result);
+		    JS_FreeValue (m_context, event);
+		}
+	    };
+	    const auto all = [] (const LoadedModule&) { return true; };
+	    if (inside) {
+		callCursorHook ("cursorEnter", [] (const LoadedModule& m) { return !m.cursorInside; });
+		if (moved) callCursorHook ("cursorMove", all);
+		if (leftDown && !m_cursorLeftDown) {
+		    for (const auto& [key, module] : found->second) module->cursorPressedInside = true;
+		    callCursorHook ("cursorDown", all);
+		}
+		if (!leftDown && m_cursorLeftDown) {
+		    callCursorHook ("cursorUp", all);
+		    callCursorHook ("cursorClick", [] (const LoadedModule& m) { return m.cursorPressedInside; });
+		}
+	    } else {
+		callCursorHook ("cursorLeave", [] (const LoadedModule& m) { return m.cursorInside; });
+	    }
+	    for (const auto& [key, module] : found->second) {
+		module->cursorInside = inside;
+	    }
+	}
+
+	// Visibility changes in the callbacks apply immediately. Covered layers
+	// retain their prior hover state until propagation reaches them again.
+	if (inside && image->getObject ().disablePropagation
+	    && image->getImage ().visible->value->getBool () && image->isVisibleThroughParents ()) break;
+    }
+
+    // A covered release still ends the press. Retaining it would turn a later
+    // outside press and inside release into a spurious click on the lower layer.
+    if (!leftDown && m_cursorLeftDown) {
+	for (auto& [key, module] : m_scriptModules) module.cursorPressedInside = false;
+    }
     this->m_cursorLeftDown = leftDown;
     this->m_lastCursorWorldPosition = worldPosition;
 }

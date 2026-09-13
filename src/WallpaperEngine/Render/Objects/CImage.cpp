@@ -2644,11 +2644,8 @@ std::optional<glm::vec3> CImage::intersectCursorPlane (
 }
 
 std::optional<glm::vec3> CImage::cursorLocalPosition (const glm::vec3& worldPosition) const {
-    // Invisible image layers are used as click/drag targets and can reveal
-    // themselves in cursorDown. Visibility controls drawing, not their hit plane.
-    if (!this->isVisibleThroughParents ()) {
-	return std::nullopt;
-    }
+    // Native dispatches to hidden images, including children of hidden parents.
+    // Visibility controls propagation blocking, not the layer's hit plane.
 
     const glm::mat4 world = cursorPlaneTransform (this->resolveWorldMatrix ());
     const float determinant = glm::determinant (world);

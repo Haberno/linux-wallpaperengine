@@ -135,6 +135,7 @@ public:
     const glm::vec2* getParallaxPosition () const;
 
     [[nodiscard]] const std::vector<CObject*>& getObjectsByRenderOrder () const;
+    [[nodiscard]] const std::vector<CObject*>& getObjectsByCursorOrder () const;
     [[nodiscard]] const CObject* getObject (int id) const;
 
     /** Composition layers with explicit children isolate that subtree. Childless
@@ -291,6 +292,8 @@ private:
     std::set<int> m_objectsInCreation = {};
     std::map<int, CObject*> m_objects = {};
     std::vector<CObject*> m_objectsByRenderOrder = {};
+    /** Authored stacking order, independent of dependency-driven render scheduling. */
+    std::vector<CObject*> m_objectsByCursorOrder = {};
     std::vector<Objects::CLight*> m_lightObjects = {};
     SceneLights m_lights = {};
     std::unique_ptr<VolumetricLights> m_volumetricLights;
