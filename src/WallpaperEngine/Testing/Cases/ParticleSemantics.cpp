@@ -22,6 +22,57 @@ using WallpaperEngine::Render::Objects::calculateFixedParticleOrientation;
 using WallpaperEngine::Render::Objects::calculateBillboardParticleOrientation;
 using WallpaperEngine::Render::Objects::ParticleInstance;
 
+TEST_CASE ("particles retain the control-point velocity initializer", "[particle][inheritvelocity]") {
+    WallpaperEngine::Data::Model::Project project {};
+    const auto object = WallpaperEngine::Data::Parsers::ObjectParser::parse (
+        WallpaperEngine::Data::JSON::JSON::parse (R"({"id":19,"particle":{
+            "initializer":[{"name":"inheritcontrolpointvelocity","controlpoint":1,"min":0.3,"max":1}]
+        }})"), project
+    );
+    const auto* particle = object->as<WallpaperEngine::Data::Model::Particle> ();
+    REQUIRE (particle != nullptr);
+    REQUIRE (particle->initializers.size () == 1);
+    REQUIRE (particle->initializers.front () != nullptr);
+    const auto* initializer = particle->initializers.front ()->as<InheritControlPointVelocityInitializer> ();
+    REQUIRE (initializer != nullptr);
+    CHECK (initializer->controlPoint == 1);
+    CHECK (initializer->min->value->getFloat () == Catch::Approx (0.3f));
+    CHECK (initializer->max->value->getFloat () == 1.0f);
+}
+
+TEST_CASE ("control-point velocity uses native default fractions", "[particle][inheritvelocity]") {
+    WallpaperEngine::Data::Model::Project project {};
+    const auto object = WallpaperEngine::Data::Parsers::ObjectParser::parse (
+        WallpaperEngine::Data::JSON::JSON::parse (R"({"id":19,"particle":{
+            "initializer":[{"name":"inheritcontrolpointvelocity"}]
+        }})"), project
+    );
+    const auto* particle = object->as<WallpaperEngine::Data::Model::Particle> ();
+    REQUIRE (particle != nullptr);
+    REQUIRE (particle->initializers.size () == 1);
+    const auto* initializer = particle->initializers.front ()->as<InheritControlPointVelocityInitializer> ();
+    REQUIRE (initializer != nullptr);
+    CHECK (initializer->controlPoint == 0);
+    CHECK (initializer->min->value->getFloat () == Catch::Approx (0.1f));
+    CHECK (initializer->max->value->getFloat () == Catch::Approx (0.2f));
+}
+
+TEST_CASE ("control-point velocity follows frame displacement without startup impulses", "[particle][inheritvelocity]") {
+    WallpaperEngine::Render::Objects::ControlPointData point;
+    point.sampleVelocity ({ 100.0f, 50.0f, -20.0f }, 0.1f);
+    CHECK (point.velocity == glm::vec3 (0.0f));
+    point.sampleVelocity ({ 110.0f, 30.0f, -15.0f }, 0.5f);
+    CHECK (point.velocity == glm::vec3 (20.0f, -40.0f, 10.0f));
+    point.sampleVelocity ({ 108.0f, 34.0f, -16.0f }, 0.1f);
+    CHECK (point.velocity == glm::vec3 (-20.0f, 40.0f, -10.0f));
+    point.sampleVelocity ({ 108.0f, 34.0f, -16.0f }, 0.1f);
+    CHECK (point.velocity == glm::vec3 (0.0f));
+    point.sampleVelocity ({ 0.0f, 0.0f, 0.0f }, 0.0f);
+    CHECK (point.velocity == glm::vec3 (0.0f));
+    point.sampleVelocity ({ 1.0f, 0.0f, 0.0f }, 0.25f);
+    CHECK (point.velocity == glm::vec3 (4.0f, 0.0f, 0.0f));
+}
+
 TEST_CASE ("stock cap velocity particles retain their speed limit operator", "[particle][capvelocity]") {
     auto filesystem = std::make_unique<WallpaperEngine::FileSystem::Container> ();
     // Installed particleelementpreviews/capvelocity uses this delayed speed cap.

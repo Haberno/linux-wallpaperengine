@@ -420,6 +420,10 @@ void CParticle::render () {
     float dt = g_Time - static_cast<float> (m_time);
     m_time = g_Time;
 
+    // Control-point motion uses elapsed frame time, before simulation rate and
+    // the physics stability cap. Sample even when emission/rate is paused.
+    updateControlPoints (dt);
+
     if (dt > 0.0f) {
 	// Cap dt to prevent simulation instability
 	// Also provides more consistent behavior across different FPS
@@ -550,8 +554,17 @@ glm::mat4 CParticle::particleWorldMatrix () {
     return m_particleParent ? m_particleParent->particleWorldMatrix () * local : local;
 }
 
-void CParticle::updateControlPoints () {
-    const glm::mat4 worldToLocal = glm::inverse (particleWorldMatrix ());
+void ControlPointData::sampleVelocity (const glm::vec3& simulationPosition, const float frameTime) {
+    velocity = hasPreviousPosition && frameTime > 0.0f
+	? (simulationPosition - previousPosition) / frameTime : glm::vec3 (0.0f);
+    previousPosition = simulationPosition;
+    hasPreviousPosition = true;
+}
+
+void CParticle::updateControlPoints (const float frameTime) {
+    const glm::mat4 localToWorld = particleWorldMatrix ();
+    const glm::mat4 worldToLocal = glm::inverse (localToWorld);
+    const bool worldSpace = (m_particle.flags & 1) != 0;
     const glm::vec2* mouse = getScene ().getMousePositionNormalized ();
     glm::vec3 mouseWorld (0.0f);
     if (mouse) {
@@ -580,18 +593,29 @@ void CParticle::updateControlPoints () {
 	    cp.position = (cp.flags & 8) != 0 ? source.position
 		: glm::vec3 (parentToLocal * glm::vec4 (source.position, 1.0f));
 	} else {
-	    cp.position = resolveParticleControlPoint (cp.offset, worldToLocal, (cp.flags & 2) != 0);
+	    // Native 14022a070 keeps point zero attached to a world-space emitter
+	    // even when flagged as world. Other world points remain independent.
+	    const bool worldOffset = (cp.flags & 2) != 0 && !(worldSpace && i == 0);
+	    cp.position = resolveParticleControlPoint (cp.offset, worldToLocal, worldOffset);
 	}
     }
     if (m_followPosition.has_value () && (m_controlPoints[0].flags & 5) == 0) {
 	m_controlPoints[0].position = *m_followPosition;
     }
+    const glm::mat4 particleToWorld = flipY * localToWorld * flipY;
+    const glm::mat3 worldToParticle = glm::mat3 (flipY * worldToLocal * flipY);
+    for (auto& cp : m_controlPoints) {
+	cp.sampleVelocity (worldSpace ? glm::vec3 (particleToWorld * glm::vec4 (cp.position, 1.0f))
+	    : cp.position, frameTime);
+	// Native initializer opcode 8 measures in simulation space, then undoes
+	// the layer transform for local-authored points before the birth transform.
+	if (worldSpace && (cp.flags & 2) == 0) {
+	    cp.velocity = worldToParticle * cp.velocity;
+	}
+    }
 }
 
 void CParticle::update (float dt) {
-    // Re-evaluate after scripted or parent transforms, not only on a resize.
-    updateControlPoints ();
-
     // Reclaim this frame's expired slots before emitting. A full one-particle
     // glow otherwise rejects its replacement, then disappears for one frame.
     uint32_t writeIdx = 0;
@@ -613,7 +637,9 @@ void CParticle::update (float dt) {
 	}
     }
     if (m_pendingEmission > 0) {
+	m_initializingManualEmission = true;
 	for (auto& emitter : m_emitters) emitter (m_particles, m_particleCount, 0.0f, m_pendingEmission);
+	m_initializingManualEmission = false;
 	m_pendingEmission = 0;
     }
     for (uint32_t i = firstNewParticle; i < m_particleCount; ++i) {
@@ -1135,6 +1161,8 @@ void CParticle::setupInitializers () {
 	    func = createLifetimeRandomInitializer (lifeInit);
 	} else if (initializer->is<VelocityRandomInitializer> ()) {
 	    func = createVelocityRandomInitializer (*initializer->as<VelocityRandomInitializer> ());
+	} else if (initializer->is<InheritControlPointVelocityInitializer> ()) {
+	    func = createInheritControlPointVelocityInitializer (*initializer->as<InheritControlPointVelocityInitializer> ());
 	} else if (initializer->is<RotationRandomInitializer> ()) {
 	    func = createRotationRandomInitializer (*initializer->as<RotationRandomInitializer> ());
 	} else if (initializer->is<AngularVelocityRandomInitializer> ()) {
@@ -1224,6 +1252,24 @@ InitializerFunc CParticle::createVelocityRandomInitializer (const VelocityRandom
 	    * speedOverride->getFloat ();
 	vel.y = -vel.y;
 	p.velocity += vel;
+    };
+}
+
+InitializerFunc CParticle::createInheritControlPointVelocityInitializer (
+    const InheritControlPointVelocityInitializer& init
+) {
+    DynamicValue* minValue = init.min->value.get ();
+    DynamicValue* maxValue = init.max->value.get ();
+    DynamicValue* speedOverride = getInstanceOverride ().speed->value.get ();
+    const int point = init.controlPoint;
+    return [this, minValue, maxValue, speedOverride, point] (ParticleInstance& particle) {
+	// Use one scalar for all axes; independent samples would change direction.
+	const float weight = WallpaperEngine::Maths::randomFloat (m_rng, minValue->getFloat (), maxValue->getFloat ());
+	// Native scripted bursts run between simulation ticks, after current
+	// control-point matrices have been copied to previous: their delta is zero.
+	if (!m_initializingManualEmission && point >= 0 && point < static_cast<int> (m_controlPoints.size ())) {
+	    particle.velocity += m_controlPoints[point].velocity * weight * speedOverride->getFloat ();
+	}
     };
 }
 
