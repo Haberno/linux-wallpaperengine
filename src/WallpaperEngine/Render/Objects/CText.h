@@ -49,7 +49,7 @@ struct TextLayoutLimits {
 /** Wrap at spaces, split oversized words on UTF-8 character boundaries, and
  * truncate to the authored row count with a width-fitting ellipsis if enabled. */
 std::vector<std::string> layoutTextLines (
-    const std::string& text, const TextLayoutLimits& limits, const std::function<int (uint32_t)>& glyphAdvance
+    const std::string& text, const TextLayoutLimits& limits, const std::function<float (uint32_t)>& glyphAdvance
 );
 
 /**
@@ -113,6 +113,7 @@ private:
     bool loadSystemFont ();
     unsigned int computeEffectivePixelSize () const;
     TextLayoutLimits currentLayoutLimits () const;
+    glm::vec2 currentSpacing () const;
 
     // text-effect chain (rebuilt when dynamic glyph metrics change, like the native renderer)
     void setupEffectChain ();
@@ -123,6 +124,7 @@ private:
     std::string m_lastRenderedText;
     unsigned int m_lastPixelSize = 0;
     TextLayoutLimits m_lastLayoutLimits;
+    glm::vec2 m_lastSpacing = glm::vec2 (0.0f);
 
     FT_Library m_ftLibrary = nullptr;
     FT_Face m_ftFace = nullptr;
