@@ -82,6 +82,8 @@ private:
      * Parses the input shader looking for require directives and resolves them into generated code
      */
     void preprocessRequires ();
+    /** Native varying declarations ignore a trailing component selection on their name. */
+    void preprocessVaryingDeclarations ();
     /** Rename authored identifiers reserved by GLSL before recording uniform names. */
     void preprocessReservedIdentifiers ();
     /**

@@ -126,6 +126,7 @@ void ShaderUnit::preprocess () {
 
     this->preprocessIncludes ();
     this->preprocessRequires ();
+    this->preprocessVaryingDeclarations ();
     this->preprocessReservedIdentifiers ();
     this->preprocessVariables ();
     this->stripOrphanedEndifs ();
@@ -528,6 +529,21 @@ std::string collectUnconditionalIncludeDefines (const std::string& includes) {
     return defines;
 }
 } // namespace
+
+void ShaderUnit::preprocessVaryingDeclarations () {
+    // Misty Sea declares "varying vec4 v_Size.xy". Native retains the vec4;
+    // normalize before linked-varying discovery would insert a second declaration.
+    static const std::regex declaration (
+        R"(\bvarying\s+[biu]?vec[234]\s+[A-Za-z_][A-Za-z0-9_]*(\s*\.\s*(?:[xyzw]{1,4}|[rgba]{1,4}))\s*;)"
+    );
+    const std::string code = maskShaderComments (m_preprocessed);
+    size_t removed = 0;
+    for (std::sregex_iterator it (code.begin (), code.end (), declaration), last; it != last; ++it) {
+        const size_t length = (*it).length (1);
+        m_preprocessed.erase ((*it).position (1) - removed, length);
+        removed += length;
+    }
+}
 
 void ShaderUnit::preprocessIncludes () {
     // check the memo cache first, keyed on the locator's mount fingerprint (stable across
