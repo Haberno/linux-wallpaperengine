@@ -5,6 +5,7 @@ import os
 from pathlib import Path
 import tempfile
 import unittest
+from unittest.mock import Mock, patch
 
 import capture
 
@@ -51,6 +52,27 @@ class CaptureTests(unittest.TestCase):
     def test_prefix_ownership_accepts_proton_trailing_slash_but_not_siblings(self):
         self.assertTrue(capture.owns_prefix([b'WINEPREFIX=/tmp/owned/compat/pfx/'], Path('/tmp/owned')))
         self.assertFalse(capture.owns_prefix([b'WINEPREFIX=/tmp/owned-other/compat/pfx/'], Path('/tmp/owned')))
+
+    def test_reference_window_disappearing_during_ownership_check_is_skipped(self):
+        x11 = Mock()
+        x11.named.return_value = ['0x101', '0x102']
+        with patch.object(capture.subprocess, 'run', side_effect=[
+            Mock(stdout='_NET_WM_PID(CARDINAL) = 101'),
+            Mock(stdout='_NET_WM_PID(CARDINAL) = 102'),
+        ]), patch.object(Path, 'read_bytes', side_effect=[
+            ProcessLookupError('process exited'), b'WINEPREFIX=/tmp/owned/compat/pfx/\0',
+        ]):
+            self.assertEqual(capture.owned_window(x11, Path('/tmp/owned'), 'reference', Mock()),
+                             ('0x102', 102))
+
+    def test_reference_window_with_foreign_prefix_is_rejected(self):
+        x11 = Mock()
+        x11.named.return_value = ['0x101']
+        with patch.object(capture.subprocess, 'run', return_value=Mock(
+            stdout='_NET_WM_PID(CARDINAL) = 101')), patch.object(Path, 'read_bytes',
+            return_value=b'WINEPREFIX=/tmp/foreign/compat/pfx/\0'):
+            with self.assertRaisesRegex(RuntimeError, 'Refusing unowned'):
+                capture.owned_window(x11, Path('/tmp/owned'), 'reference', Mock())
 
     def test_input_boundary_distinguishes_generated_cache_from_authored_mutation(self):
         with tempfile.TemporaryDirectory() as directory:
