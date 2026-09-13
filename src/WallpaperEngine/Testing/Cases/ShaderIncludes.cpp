@@ -68,6 +68,22 @@ TEST_CASE ("native depth buffer sampling compiles without a comparison sampler",
     CHECK_THAT (translated.second, Catch::Matchers::ContainsSubstring ("texelFetch"));
 }
 
+TEST_CASE ("linked translation keys distinguish separators inside source comments", "[shader][cache-key]") {
+    const std::string vertex = "#version 330\nvoid main() { gl_Position = vec4(0.0); }\n// vertex";
+    const std::string fragment = "\n#version 330\nout vec4 color;\nvoid main() { color = vec4(1.0); }\n";
+    const std::string extra = "// extra comment";
+    const std::string firstFragment = extra + '\x1f' + fragment;
+    const std::string secondVertex = vertex + '\x1f' + extra;
+    // These pairs collided when a single separator joined the two strings.
+    const auto first = GLSLContext::get ().toGlsl (vertex, firstFragment);
+    const auto second = GLSLContext::get ().toGlsl (secondVertex, fragment);
+    REQUIRE_FALSE (first.first.empty ());
+    REQUIRE_FALSE (second.first.empty ());
+    CHECK (first.first.ends_with (vertex + "\n#endif"));
+    CHECK (second.first.ends_with (secondVertex + "\n#endif"));
+    CHECK (second.second.ends_with (fragment + "\n#endif"));
+}
+
 TEST_CASE ("native clip discards fragments with a negative component", "[shader][clip]") {
     for (const std::string type : { "float", "vec2", "vec3", "vec4" }) {
         CAPTURE (type);

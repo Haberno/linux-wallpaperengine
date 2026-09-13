@@ -1,4 +1,6 @@
 #include "ShaderUnit.h"
+#include "ShaderDiskCache.h"
+#include "WallpaperEngine/Debug/RenderHealth.h"
 
 #include "WallpaperEngine/Debug/DebugHelpers.h"
 #include "WallpaperEngine/Logging/Log.h"
@@ -2201,10 +2203,12 @@ const std::string& ShaderUnit::compile () {
 
     const std::string& linkedSource = this->m_link != nullptr ? this->m_link->m_preprocessed : sNoLink;
     std::string compatKey;
-    compatKey.reserve (this->m_preprocessed.size () + linkedSource.size () + 2);
+    compatKey.reserve (this->m_preprocessed.size () + linkedSource.size () + 64);
     compatKey.push_back (this->m_type == GLSLContext::UnitType_Vertex ? 'v' : 'f');
+    compatKey.append (std::to_string (this->m_preprocessed.size ())).push_back (':');
     compatKey.append (this->m_preprocessed);
     compatKey.push_back ('\x1F');
+    compatKey.append (std::to_string (linkedSource.size ())).push_back (':');
     compatKey.append (linkedSource);
     if (expandMacros) {
 	compatKey.push_back ('\x1E');
@@ -2224,39 +2228,49 @@ const std::string& ShaderUnit::compile () {
 	}
     }
 
-    // Native shader loading seeds revision 69 before evaluating source conditionals,
-    // independently of scene/project versions. Authored source definitions may
-    // replace it; the duplicate-macro pass below preserves that behavior in GLSL.
-    std::string compatResult = "#undef SHADERVERSION\n#define SHADERVERSION 69\n" + this->m_preprocessed;
-    if (m_type == GLSLContext::UnitType_Vertex
-	&& compatResult.find ("in_ParticleTrailLength") != std::string::npos
-	&& compatResult.find ("trailRightStart") != std::string::npos) {
-	// The stock rope's non-GS fallback subtracts a scalar after multiplying
-	// by the width. Native genericropeparticle.geom emits position +/- right;
-	// center the fallback on the same path so child star heads stay attached.
-	static const std::regex offsetRope (
-	    R"(\bposition\s*\+=\s*right\s*\*\s*uvs\.x\s*\*\s*2\.0\s*-\s*1\.0\s*;)"
-	);
-	compatResult = std::regex_replace (compatResult, offsetRope, "position += right * (uvs.x * 2.0 - 1.0);");
-    }
-    compatResult = this->applyLinkedVaryingCompatibility (std::move (compatResult));
-    compatResult = this->applyMissingFragmentVaryingCompatibility (std::move (compatResult));
-    compatResult = this->applyFloatTernaryCompatibility (std::move (compatResult));
-    compatResult = this->applyBooleanArithmeticCompatibility (std::move (compatResult));
-    compatResult = this->applyWritableInputs (std::move (compatResult));
-    compatResult = this->applyFragmentTexCoordCompatibility (std::move (compatResult));
-    compatResult = this->applyVectorBuiltinCompatibility (std::move (compatResult));
-    if (expandMacros) {
-	compatResult = this->applyHeaderMacroCompatibility (this->m_final + compatResult);
+    std::string compatResult;
+    if (auto cached = ShaderDiskCache::get ().load ("compat", compatKey)) {
+        Debug::RenderHealth::count ("shader.disk_compat_hit");
+        compatResult = std::move (cached->first);
+        if (expandMacros) this->m_final.clear ();
+    } else {
+        Debug::RenderHealth::count ("shader.disk_compat_miss");
+	// Native shader loading seeds revision 69 before evaluating source conditionals,
+	// independently of scene/project versions. Authored source definitions may
+	// replace it; the duplicate-macro pass below preserves that behavior in GLSL.
+	compatResult = "#undef SHADERVERSION\n#define SHADERVERSION 69\n" + this->m_preprocessed;
+	if (m_type == GLSLContext::UnitType_Vertex
+	    && compatResult.find ("in_ParticleTrailLength") != std::string::npos
+	    && compatResult.find ("trailRightStart") != std::string::npos) {
+	    // The stock rope's non-GS fallback subtracts a scalar after multiplying
+	    // by the width. Native genericropeparticle.geom emits position +/- right;
+	    // center the fallback on the same path so child star heads stay attached.
+	    static const std::regex offsetRope (
+		R"(\bposition\s*\+=\s*right\s*\*\s*uvs\.x\s*\*\s*2\.0\s*-\s*1\.0\s*;)"
+	    );
+	    compatResult = std::regex_replace (compatResult, offsetRope, "position += right * (uvs.x * 2.0 - 1.0);");
+	}
+	compatResult = this->applyLinkedVaryingCompatibility (std::move (compatResult));
+	compatResult = this->applyMissingFragmentVaryingCompatibility (std::move (compatResult));
+	compatResult = this->applyFloatTernaryCompatibility (std::move (compatResult));
+	compatResult = this->applyBooleanArithmeticCompatibility (std::move (compatResult));
+	compatResult = this->applyWritableInputs (std::move (compatResult));
+	compatResult = this->applyFragmentTexCoordCompatibility (std::move (compatResult));
+	compatResult = this->applyVectorBuiltinCompatibility (std::move (compatResult));
+	if (expandMacros) {
+	    compatResult = this->applyHeaderMacroCompatibility (this->m_final + compatResult);
+	    compatResult = this->applyDuplicateMacroCompatibility (std::move (compatResult));
+	    this->m_final.clear ();
+	    compatResult = GLSLContext::get ().preprocess (this->m_type, compatResult);
+	}
+	compatResult = this->applyNumericParameterCallCompatibility (std::move (compatResult));
+	compatResult = this->applyNumericInitializerCompatibility (std::move (compatResult));
+	compatResult = this->applyNonConstantInitializerCompatibility (std::move (compatResult));
+	compatResult = this->applyHeaderMacroCompatibility (std::move (compatResult));
 	compatResult = this->applyDuplicateMacroCompatibility (std::move (compatResult));
-	this->m_final.clear ();
-	compatResult = GLSLContext::get ().preprocess (this->m_type, compatResult);
+
+        ShaderDiskCache::get ().store ("compat", compatKey, { compatResult, "" });
     }
-    compatResult = this->applyNumericParameterCallCompatibility (std::move (compatResult));
-    compatResult = this->applyNumericInitializerCompatibility (std::move (compatResult));
-    compatResult = this->applyNonConstantInitializerCompatibility (std::move (compatResult));
-    compatResult = this->applyHeaderMacroCompatibility (std::move (compatResult));
-    compatResult = this->applyDuplicateMacroCompatibility (std::move (compatResult));
     this->m_final += compatResult;
 
     {

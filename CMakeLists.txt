@@ -275,6 +275,38 @@ configure_file(
 # re-run configuration (regenerating the header) whenever the .js changes
 set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${WPENGINE_BUILTINS_JS}")
 
+# Invalidate persistent shader results automatically when processing code, bundled
+# translators or build options change, including uncommitted source edits.
+file(GLOB_RECURSE WPENGINE_SHADER_CACHE_SOURCES CONFIGURE_DEPENDS
+    "src/WallpaperEngine/Render/Shaders/*.cpp" "src/WallpaperEngine/Render/Shaders/*.h"
+    "src/External/glslang-WallpaperEngine/*.cpp" "src/External/glslang-WallpaperEngine/*.h"
+    "src/External/glslang-WallpaperEngine/*.hpp" "src/External/glslang-WallpaperEngine/*.inc"
+    "src/External/glslang-WallpaperEngine/*.in" "src/External/glslang-WallpaperEngine/*.cmake"
+    "src/External/glslang-WallpaperEngine/CMakeLists.txt"
+    "src/External/SPIRV-Cross-WallpaperEngine/*.cpp" "src/External/SPIRV-Cross-WallpaperEngine/*.hpp"
+    "src/External/SPIRV-Cross-WallpaperEngine/*.h" "src/External/SPIRV-Cross-WallpaperEngine/*.inc"
+    "src/External/SPIRV-Cross-WallpaperEngine/*.in" "src/External/SPIRV-Cross-WallpaperEngine/*.cmake"
+    "src/External/SPIRV-Cross-WallpaperEngine/CMakeLists.txt")
+list(APPEND WPENGINE_SHADER_CACHE_SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/CMakeLists.txt")
+list(SORT WPENGINE_SHADER_CACHE_SOURCES)
+set(WPENGINE_SHADER_CACHE_ID "v1;${CMAKE_CXX_COMPILER_ID};${CMAKE_CXX_COMPILER_VERSION};${CMAKE_SYSTEM_NAME};${CMAKE_SYSTEM_PROCESSOR};${CMAKE_BUILD_TYPE}")
+get_cmake_property(WPENGINE_SHADER_CACHE_OPTIONS CACHE_VARIABLES)
+list(SORT WPENGINE_SHADER_CACHE_OPTIONS)
+foreach(WPENGINE_SHADER_CACHE_OPTION IN LISTS WPENGINE_SHADER_CACHE_OPTIONS)
+    if(WPENGINE_SHADER_CACHE_OPTION MATCHES "^(CMAKE_CXX_FLAGS|ENABLE_|SPIRV_|GLSLANG_)")
+        string(APPEND WPENGINE_SHADER_CACHE_ID "${WPENGINE_SHADER_CACHE_OPTION}=${${WPENGINE_SHADER_CACHE_OPTION}};")
+    endif()
+endforeach()
+foreach(WPENGINE_SHADER_CACHE_SOURCE IN LISTS WPENGINE_SHADER_CACHE_SOURCES)
+    file(SHA256 "${WPENGINE_SHADER_CACHE_SOURCE}" WPENGINE_SHADER_CACHE_HASH)
+    string(APPEND WPENGINE_SHADER_CACHE_ID "${WPENGINE_SHADER_CACHE_HASH};")
+endforeach()
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS ${WPENGINE_SHADER_CACHE_SOURCES})
+string(SHA256 WPENGINE_SHADER_CACHE_VERSION "${WPENGINE_SHADER_CACHE_ID}")
+configure_file(
+    src/WallpaperEngine/Render/Shaders/ShaderCacheVersion.h.in
+    "${WPENGINE_GENERATED_DIR}/ShaderCacheVersion.generated.h" @ONLY)
+
 include_directories(
     ${WPENGINE_GENERATED_DIR}
     src
@@ -384,6 +416,8 @@ set(COMMON_SOURCES
     src/WallpaperEngine/Render/Shaders/Shader.cpp
     src/WallpaperEngine/Render/Shaders/ShaderProgramCache.cpp
     src/WallpaperEngine/Render/Shaders/ShaderProgramCache.h
+    src/WallpaperEngine/Render/Shaders/ShaderDiskCache.cpp
+    src/WallpaperEngine/Render/Shaders/ShaderDiskCache.h
     src/WallpaperEngine/Render/Shaders/ShaderUnit.cpp
     src/WallpaperEngine/Render/Shaders/ShaderUnit.h
     src/WallpaperEngine/Render/Shaders/GLSLContext.cpp
@@ -620,6 +654,7 @@ if(BUILD_TESTING)
         src/WallpaperEngine/Testing/Cases/AudioStreamLoop.cpp
         src/WallpaperEngine/Testing/Cases/ShaderIncludes.cpp
         src/WallpaperEngine/Testing/Cases/ShaderProgramCache.cpp
+        src/WallpaperEngine/Testing/Cases/ShaderDiskCache.cpp
         src/WallpaperEngine/Testing/Cases/PackageLookup.cpp)
 endif()
 

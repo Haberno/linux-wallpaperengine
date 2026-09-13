@@ -180,6 +180,7 @@ If you're one of those developers, feel free to open an issue to get your projec
 | `--noautomute` | Don't mute when other apps play audio |
 | `--no-audio-processing` | Disable audio reactive features |
 | `--fps <val>` | Limit frame rate |
+| `--disable-persistent-cache` | Bypass persistent shader-cache reads and writes without deleting entries; in-memory and GPU driver caches stay enabled |
 | `--msaa <off\|2\|4\|8>` | Multisample scene geometry before post-processing (default: 2; independent from `--render-scale`) |
 | `--post-processing <disabled\|enabled\|ultra>` | Scene bloom quality (default: enabled); Ultra uses HDR bloom for wallpapers authored with HDR and bloom enabled |
 | `--window <XxYxWxH>` | Run in windowed mode with custom size/position |

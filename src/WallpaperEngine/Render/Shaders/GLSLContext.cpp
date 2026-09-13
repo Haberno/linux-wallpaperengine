@@ -1,4 +1,6 @@
 #include "GLSLContext.h"
+#include "ShaderDiskCache.h"
+#include "WallpaperEngine/Debug/RenderHealth.h"
 #include "WallpaperEngine/Logging/Log.h"
 
 #include <cassert>
@@ -156,7 +158,8 @@ std::pair<std::string, std::string> GLSLContext::toGlsl (const std::string& vert
     // glslang -> SPIR-V -> SPIRV-Cross round trip is memoized; failed translations are
     // not cached so repeated attempts keep logging their cause
     std::string cacheKey;
-    cacheKey.reserve (vertex.size () + fragment.size () + 1);
+    cacheKey.reserve (vertex.size () + fragment.size () + 32);
+    cacheKey.append (std::to_string (vertex.size ())).push_back (':');
     cacheKey.append (vertex);
     cacheKey.push_back ('\x1F');
     cacheKey.append (fragment);
@@ -170,64 +173,73 @@ std::pair<std::string, std::string> GLSLContext::toGlsl (const std::string& vert
 	}
     }
 
-    glslang::TShader vertexShader (EShLangVertex);
+    std::pair<std::string, std::string> result;
+    if (auto cached = ShaderDiskCache::get ().load ("glsl", cacheKey)) {
+        Debug::RenderHealth::count ("shader.disk_glsl_hit");
+        result = std::move (*cached);
+    } else {
+        Debug::RenderHealth::count ("shader.disk_glsl_miss");
+	glslang::TShader vertexShader (EShLangVertex);
 
-    const char* vertexSource = vertex.c_str ();
-    vertexShader.setStrings (&vertexSource, 1);
-    vertexShader.setEntryPoint ("main");
-    vertexShader.setEnvInput (glslang::EShSourceGlsl, EShLangVertex, glslang::EShClientOpenGL, 330);
-    vertexShader.setEnvClient (glslang::EShClientOpenGL, glslang::EShTargetOpenGL_450);
-    vertexShader.setEnvTarget (glslang::EShTargetSpv, glslang::EShTargetSpv_1_5);
-    vertexShader.setAutoMapLocations (true);
-    vertexShader.setAutoMapBindings (true);
+	const char* vertexSource = vertex.c_str ();
+	vertexShader.setStrings (&vertexSource, 1);
+	vertexShader.setEntryPoint ("main");
+	vertexShader.setEnvInput (glslang::EShSourceGlsl, EShLangVertex, glslang::EShClientOpenGL, 330);
+	vertexShader.setEnvClient (glslang::EShClientOpenGL, glslang::EShTargetOpenGL_450);
+	vertexShader.setEnvTarget (glslang::EShTargetSpv, glslang::EShTargetSpv_1_5);
+	vertexShader.setAutoMapLocations (true);
+	vertexShader.setAutoMapBindings (true);
 
-    if (!vertexShader.parse (&BuiltInResource, 100, false, EShMsgDefault)) {
-	sLog.error ("GLSL vertex unit parsing Failed: ", vertexShader.getInfoLog ());
-	return { "", "" };
+	if (!vertexShader.parse (&BuiltInResource, 100, false, EShMsgDefault)) {
+	    sLog.error ("GLSL vertex unit parsing Failed: ", vertexShader.getInfoLog ());
+	    return { "", "" };
+	}
+	glslang::TShader fragmentShader (EShLangFragment);
+
+	const char* fragmentSource = fragment.c_str ();
+	fragmentShader.setStrings (&fragmentSource, 1);
+	fragmentShader.setEntryPoint ("main");
+	fragmentShader.setEnvInput (glslang::EShSourceGlsl, EShLangFragment, glslang::EShClientOpenGL, 330);
+	fragmentShader.setEnvClient (glslang::EShClientOpenGL, glslang::EShTargetOpenGL_450);
+	fragmentShader.setEnvTarget (glslang::EShTargetSpv, glslang::EShTargetSpv_1_5);
+	fragmentShader.setAutoMapLocations (true);
+	fragmentShader.setAutoMapBindings (true);
+
+	if (!fragmentShader.parse (&BuiltInResource, 100, false, EShMsgDefault)) {
+	    sLog.error ("GLSL fragment unit parsing Failed: ", fragmentShader.getInfoLog ());
+	    return { "", "" };
+	}
+	glslang::TProgram program;
+	program.addShader (&vertexShader);
+	program.addShader (&fragmentShader);
+
+	if (!program.link (EShMsgDefault)) {
+	    sLog.error ("Program Linking Failed: ", program.getInfoLog ());
+	    return { "", "" };
+	}
+
+	std::vector<uint32_t> spirv;
+	glslang::GlslangToSpv (*program.getIntermediate (EShLangVertex), spirv);
+
+	spirv_cross::CompilerGLSL vertexCompiler (spirv);
+	spirv_cross::CompilerGLSL::Options options;
+	options.version = 330;
+	options.es = false;
+	vertexCompiler.set_common_options (options);
+
+	spirv.clear ();
+	glslang::GlslangToSpv (*program.getIntermediate (EShLangFragment), spirv);
+
+	spirv_cross::CompilerGLSL fragmentCompiler (spirv);
+	options.version = 330;
+	options.es = false;
+	fragmentCompiler.set_common_options (options);
+
+        result = { vertexCompiler.compile () + "#if 0\n" + vertex + "\n#endif",
+                   fragmentCompiler.compile () + "#if 0\n" + fragment + "\n#endif" };
+
+        ShaderDiskCache::get ().store ("glsl", cacheKey, result);
     }
-    glslang::TShader fragmentShader (EShLangFragment);
-
-    const char* fragmentSource = fragment.c_str ();
-    fragmentShader.setStrings (&fragmentSource, 1);
-    fragmentShader.setEntryPoint ("main");
-    fragmentShader.setEnvInput (glslang::EShSourceGlsl, EShLangFragment, glslang::EShClientOpenGL, 330);
-    fragmentShader.setEnvClient (glslang::EShClientOpenGL, glslang::EShTargetOpenGL_450);
-    fragmentShader.setEnvTarget (glslang::EShTargetSpv, glslang::EShTargetSpv_1_5);
-    fragmentShader.setAutoMapLocations (true);
-    fragmentShader.setAutoMapBindings (true);
-
-    if (!fragmentShader.parse (&BuiltInResource, 100, false, EShMsgDefault)) {
-	sLog.error ("GLSL fragment unit parsing Failed: ", fragmentShader.getInfoLog ());
-	return { "", "" };
-    }
-    glslang::TProgram program;
-    program.addShader (&vertexShader);
-    program.addShader (&fragmentShader);
-
-    if (!program.link (EShMsgDefault)) {
-	sLog.error ("Program Linking Failed: ", program.getInfoLog ());
-	return { "", "" };
-    }
-
-    std::vector<uint32_t> spirv;
-    glslang::GlslangToSpv (*program.getIntermediate (EShLangVertex), spirv);
-
-    spirv_cross::CompilerGLSL vertexCompiler (spirv);
-    spirv_cross::CompilerGLSL::Options options;
-    options.version = 330;
-    options.es = false;
-    vertexCompiler.set_common_options (options);
-
-    spirv.clear ();
-    glslang::GlslangToSpv (*program.getIntermediate (EShLangFragment), spirv);
-
-    spirv_cross::CompilerGLSL fragmentCompiler (spirv);
-    options.version = 330;
-    options.es = false;
-    fragmentCompiler.set_common_options (options);
-
-    std::pair<std::string, std::string> result { vertexCompiler.compile () + "#if 0\n" + vertex + "\n#endif",
-						  fragmentCompiler.compile () + "#if 0\n" + fragment + "\n#endif" };
 
     {
 	const std::lock_guard<std::mutex> lock (m_cacheMutex);
