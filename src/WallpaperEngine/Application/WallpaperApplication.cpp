@@ -600,7 +600,18 @@ void WallpaperApplication::processControlSocket () {
 	}
 
 	std::string reply
-	    = "err invalid command, expected: switch <screen> [transition] <path> | prop <screen> <key> <value>\n";
+	    = "err invalid command, expected: switch <screen> [transition] <path> | prop <screen> <key> <value> | language [locale]\n";
+
+	if (command == "language" || command.starts_with ("language ")) {
+	    if (command.starts_with ("language ")) {
+		this->m_context.setLanguage (command.substr (9));
+		for (const auto& [screen, wallpaper] : this->m_renderContext->getWallpapers ()) {
+		    if (auto* scene = dynamic_cast<Render::Wallpapers::CScene*> (wallpaper.get ()))
+			scene->getScriptEngine ().dispatchGeneralSettings ();
+		}
+	    }
+	    reply = "ok " + this->m_context.getLanguage () + "\n";
+	}
 
 	// prop <screen> <key> <value> - live user-property change: updates the property value and
 	// fires the scripts' applyUserProperties handler. Properties that gate scene structure

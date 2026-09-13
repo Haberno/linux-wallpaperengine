@@ -89,6 +89,8 @@ public:
     // this once at startup, and scripts routinely gate their whole behaviour on it, so skipping it
     // leaves them running their inert default branch forever.
     void dispatchAllUserProperties (LoadedModule* target = nullptr);
+    /** Send the initial or changed application language, once per scene-wide broadcast. */
+    void dispatchGeneralSettings ();
     void applyUserProperties (JSValue changed, LoadedModule* target = nullptr);
     JSValue dynamicToJs (DynamicValue& value) const;
 
@@ -217,6 +219,8 @@ private:
 
     LoadedModule* m_runningModule = nullptr;
     bool m_sceneLayersReady = false;
+    bool m_initializingScripts = false;
+    std::string m_lastGeneralLanguage;
     bool m_cursorLeftDown = false;
     std::optional<glm::vec3> m_lastCursorWorldPosition = std::nullopt;
 

@@ -3,6 +3,7 @@
 #include <cstdint>
 #include <filesystem>
 #include <map>
+#include <mutex>
 #include <optional>
 #include <string>
 #include <vector>
@@ -262,12 +263,18 @@ public:
 
     [[nodiscard]] int getArgc () const;
     [[nodiscard]] char** getArgv () const;
+    /** Native language code shared by the render and background-loading threads. */
+    [[nodiscard]] std::string getLanguage () const;
+    void setLanguage (const std::string& language);
+    [[nodiscard]] static std::string normalizeLanguage (std::string language);
 
 private:
     /** Program argument count on startup */
     int m_argc;
     /** Program arguments on startup */
     char** m_argv;
+    mutable std::mutex m_languageMutex;
+    std::string m_language = "en-us";
 
     /**
      * Validates the assets folder and ensures a valid one is present

@@ -629,6 +629,7 @@ if(BUILD_TESTING)
         ${COMMON_SOURCES}
 
         src/WallpaperEngine/Testing/Cases/Example.cpp
+        src/WallpaperEngine/Testing/Cases/ApplicationLanguage.cpp
         src/WallpaperEngine/Testing/Render/TestingOpenGLDriver.cpp
         src/WallpaperEngine/Testing/Render/TestingOpenGLDriver.h
         src/WallpaperEngine/Testing/Input/TestingMouseInput.cpp
