@@ -68,6 +68,46 @@ TEST_CASE ("native depth buffer sampling compiles without a comparison sampler",
     CHECK_THAT (translated.second, Catch::Matchers::ContainsSubstring ("texelFetch"));
 }
 
+TEST_CASE ("native varying declarations ignore component suffixes", "[shader][varying-suffix]") {
+    for (const std::string suffix : { "", ".xy", ".rgba" }) {
+	for (const bool vertexSuffix : { false, true }) {
+	    CAPTURE (suffix, vertexSuffix);
+	    const auto sources = compileLinked (
+		"varying vec4 v_Size" + (vertexSuffix ? suffix : "") + ";\n"
+		"void main() { v_Size = vec4(0.25, 0.5, 0.75, 1.0); gl_Position = vec4(0.0); }\n",
+		"// varying vec4 v_Comment.xy;\n"
+		"varying vec4 v_Size" + (vertexSuffix ? "" : suffix) + ";\n"
+		"void main() { gl_FragColor = v_Size; }\n", {}
+	    );
+	    const auto translated = GLSLContext::get ().toGlsl (sources.first, sources.second);
+	    REQUIRE_FALSE (translated.first.empty ());
+	    REQUIRE_FALSE (translated.second.empty ());
+	    CHECK_THAT (sources.second, Catch::Matchers::ContainsSubstring ("// varying vec4 v_Comment.xy;"));
+	}
+    }
+}
+
+TEST_CASE ("varying suffix normalization preserves conditional types and expression swizzles", "[shader][varying-suffix]") {
+    const std::string declarations =
+        "#if SMALL\nvarying vec2 v_Size.xy;\n#else\nvarying vec4 v_Size.rgba;\n#endif\n"
+        "/* varying vec4 v_Comment.xy; */\nvarying vec4 v_Offset . xy;\n";
+    for (const int small : { 0, 1 }) {
+	CAPTURE (small);
+	const auto sources = compileLinked (
+	    declarations + "void main() {\n#if SMALL\nv_Size = vec2(0.25, 0.5);\n"
+	    "#else\nv_Size = vec4(0.25, 0.5, 0.75, 1.0);\n#endif\n"
+	    "v_Offset = vec4(0.0, 0.0, 0.75, 1.0); gl_Position = vec4(0.0); }\n",
+	    declarations + "void main() { gl_FragColor = vec4(v_Size.xy, v_Offset.zw); }\n",
+	    ComboMap { { "SMALL", small } }
+	);
+	const auto translated = GLSLContext::get ().toGlsl (sources.first, sources.second);
+	REQUIRE_FALSE (translated.first.empty ());
+	REQUIRE_FALSE (translated.second.empty ());
+	CHECK_THAT (sources.second, Catch::Matchers::ContainsSubstring ("vec4(v_Size.xy, v_Offset.zw)"));
+	CHECK_THAT (sources.second, Catch::Matchers::ContainsSubstring ("/* varying vec4 v_Comment.xy; */"));
+    }
+}
+
 TEST_CASE ("linked translation keys distinguish separators inside source comments", "[shader][cache-key]") {
     const std::string vertex = "#version 330\nvoid main() { gl_Position = vec4(0.0); }\n// vertex";
     const std::string fragment = "\n#version 330\nout vec4 color;\nvoid main() { color = vec4(1.0); }\n";
