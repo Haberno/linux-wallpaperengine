@@ -268,6 +268,15 @@ public:
     UserSettingUniquePtr max;
 };
 
+class InheritControlPointVelocityInitializer : public ParticleInitializerBase {
+public:
+    InheritControlPointVelocityInitializer (UserSettingUniquePtr min, UserSettingUniquePtr max, int controlPoint) :
+	min (std::move (min)), max (std::move (max)), controlPoint (controlPoint) { }
+    UserSettingUniquePtr min;
+    UserSettingUniquePtr max;
+    int controlPoint;
+};
+
 class RotationRandomInitializer : public ParticleInitializerBase {
 public:
     RotationRandomInitializer (UserSettingUniquePtr min, UserSettingUniquePtr max) :

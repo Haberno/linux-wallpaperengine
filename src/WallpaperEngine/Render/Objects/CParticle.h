@@ -127,6 +127,11 @@ struct ControlPointData {
     glm::vec3 offset { 0.0f };
     uint32_t flags { 0 };
     int parentControlPoint { 0 };
+    glm::vec3 velocity { 0.0f };
+    glm::vec3 previousPosition { 0.0f };
+    bool hasPreviousPosition { false };
+
+    void sampleVelocity (const glm::vec3& simulationPosition, float frameTime);
 };
 
 /**
@@ -175,7 +180,7 @@ protected:
     void setupEmitters ();
     void setupInitializers ();
     void setupOperators ();
-    void updateControlPoints ();
+    void updateControlPoints (float frameTime = 0.0f);
     [[nodiscard]] glm::mat4 particleWorldMatrix ();
 
     // Emitter creators
@@ -188,6 +193,7 @@ protected:
     InitializerFunc createAlphaRandomInitializer (const AlphaRandomInitializer& init);
     InitializerFunc createLifetimeRandomInitializer (const LifetimeRandomInitializer& init);
     InitializerFunc createVelocityRandomInitializer (const VelocityRandomInitializer& init);
+    InitializerFunc createInheritControlPointVelocityInitializer (const InheritControlPointVelocityInitializer& init);
     InitializerFunc createRotationRandomInitializer (const RotationRandomInitializer& init);
     InitializerFunc createAngularVelocityRandomInitializer (const AngularVelocityRandomInitializer& init);
     InitializerFunc createTurbulentVelocityRandomInitializer (const TurbulentVelocityRandomInitializer& init);
@@ -265,6 +271,7 @@ private:
     std::vector<OperatorFunc> m_operators;
 
     std::vector<ControlPointData> m_controlPoints;
+    bool m_initializingManualEmission { false };
 
     std::vector<float> m_vertices;
     std::vector<uint32_t> m_indices;
