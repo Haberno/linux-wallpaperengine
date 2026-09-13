@@ -1,5 +1,6 @@
 #include "CObject.h"
 
+#include <algorithm>
 #include <glm/gtc/matrix_transform.hpp>
 #include <utility>
 
@@ -67,6 +68,25 @@ const AssetLocator& CObject::getAssetLocator () const { return this->getScene ()
 int CObject::getId () const { return this->m_object.id; }
 
 const Object& CObject::getObject () const { return this->m_object; }
+
+void CObject::registerEffectFunctions (const ImageEffect& effect, std::shared_ptr<FBOProvider> provider) {
+    if (!effect.effect->functions.empty ()) m_effectFunctionProviders.insert_or_assign (&effect, std::move (provider));
+}
+
+void CObject::clearEffectFunctions () { m_effectFunctionProviders.clear (); }
+
+void CObject::executeMaterialFunction (const ImageEffect& effect, const std::string& name) const {
+    const auto provider = m_effectFunctionProviders.find (&effect);
+    const auto function = effect.effect->functions.find (name);
+    if (provider == m_effectFunctionProviders.end () || function == effect.effect->functions.end ()) return;
+    // Wallpaper Engine 2.8.42 uses the resolved target count, then clears the
+    // first physical FBOs instead of dereferencing those resolved target indices.
+    const auto count = std::min (function->second.size (), effect.effect->fbos.size ());
+    for (size_t index = 0; index < count; ++index) {
+	const auto& definition = *effect.effect->fbos[index];
+	if (const auto target = provider->second->find (definition.name); target != nullptr) target->clear (definition.clear);
+    }
+}
 
 std::optional<glm::mat4> CObject::getAttachmentTransform (const std::string&) const { return std::nullopt; }
 

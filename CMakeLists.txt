@@ -643,6 +643,9 @@ if(BUILD_TESTING)
         src/WallpaperEngine/Testing/Cases/Utf8Text.cpp
         src/WallpaperEngine/Testing/Cases/JsonTolerance.cpp
         src/WallpaperEngine/Testing/Cases/EffectConditions.cpp
+        src/WallpaperEngine/Testing/Cases/EffectFunctions.cpp
+        src/WallpaperEngine/Testing/Cases/FluidTargetFormats.cpp
+        src/WallpaperEngine/Testing/Cases/EffectFBOBindings.cpp
         src/WallpaperEngine/Testing/Cases/TextureUpload.cpp
         src/WallpaperEngine/Testing/Cases/TextureDecode.cpp
         src/WallpaperEngine/Testing/Cases/MdlParser.cpp

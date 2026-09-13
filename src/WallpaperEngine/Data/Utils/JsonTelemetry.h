@@ -132,6 +132,7 @@ private:
 	    "properties",
 	    "combos",
 	    "constantshadervalues",
+	    "functions",
 	    "scriptproperties",
 	};
 

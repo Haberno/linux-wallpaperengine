@@ -27,15 +27,29 @@ std::mutex s_liveFBOsMutex;
 std::map<const CFBO*, LiveFBOInfo> s_liveFBOs;
 
 GLenum colorInternalFormat (const TextureFormat format) {
-    return format == TextureFormat_RGBA16161616f ? GL_RGBA16F : GL_RGBA8;
+    switch (format) {
+	case TextureFormat_R16f: return GL_R16F;
+	case TextureFormat_RG1616f: return GL_RG16F;
+	case TextureFormat_RGBA16161616f: return GL_RGBA16F;
+	default: return GL_RGBA8;
+    }
 }
 
 GLenum colorUploadType (const TextureFormat format) {
-    return format == TextureFormat_RGBA16161616f ? GL_FLOAT : GL_UNSIGNED_BYTE;
+    switch (format) {
+	case TextureFormat_R16f:
+	case TextureFormat_RG1616f:
+	case TextureFormat_RGBA16161616f: return GL_FLOAT;
+	default: return GL_UNSIGNED_BYTE;
+    }
 }
 
 size_t colorPixelBytes (const TextureFormat format) {
-    return format == TextureFormat_RGBA16161616f ? 8 : 4;
+    switch (format) {
+	case TextureFormat_R16f: return 2;
+	case TextureFormat_RGBA16161616f: return 8;
+	default: return 4;
+    }
 }
 
 uint32_t supportedSampleCount (const uint32_t requested, const bool withDepth, const GLenum colorFormat) {
@@ -366,7 +380,9 @@ size_t CFBO::calculateStorageBytes (uint32_t width, uint32_t height) const {
     return bytes;
 }
 
-void CFBO::clearTextureStorage () const {
+void CFBO::clear (const glm::vec4& color) const { clearTextureStorage (color); }
+
+void CFBO::clearTextureStorage (const glm::vec4& color) const {
     GLint previousDraw = GL_NONE, previousRead = GL_NONE;
     GLboolean colorMask[4], depthMask;
     glGetIntegerv (GL_DRAW_FRAMEBUFFER_BINDING, &previousDraw);
@@ -393,9 +409,8 @@ void CFBO::clearTextureStorage () const {
     glDisable (GL_SCISSOR_TEST);
     glColorMask (GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
     glDepthMask (GL_TRUE);
-    const GLfloat zero[4] = {};
     const GLfloat farDepth = 1.0f;
-    if (!this->m_depthTexture) glClearBufferfv (GL_COLOR, 0, zero);
+    if (!this->m_depthTexture) glClearBufferfv (GL_COLOR, 0, &color.x);
     if (this->m_depthTexture || this->m_depthbuffer != GL_NONE) glClearBufferfv (GL_DEPTH, 0, &farDepth);
     glColorMask (colorMask[0], colorMask[1], colorMask[2], colorMask[3]);
     glDepthMask (depthMask);
@@ -404,7 +419,14 @@ void CFBO::clearTextureStorage () const {
     glBindFramebuffer (GL_READ_FRAMEBUFFER, previousRead);
     glDeleteFramebuffers (1, &framebuffer);
 
-    if (this->m_mipMapCount > 1) glGenerateMipmap (GL_TEXTURE_2D);
+    m_storageCleared = true;
+    if (this->m_mipMapCount > 1) {
+	GLint previousTexture;
+	glGetIntegerv (GL_TEXTURE_BINDING_2D, &previousTexture);
+	glBindTexture (GL_TEXTURE_2D, m_texture);
+	glGenerateMipmap (GL_TEXTURE_2D);
+	glBindTexture (GL_TEXTURE_2D, previousTexture);
+    }
 }
 
 CFBO::~CFBO () {
@@ -508,7 +530,7 @@ void CFBO::ensureFramebuffer () const {
 	// Unrendered atlas texels represent the far plane and therefore compare as lit.
 	glClearDepth (1.0);
 	glClear (GL_DEPTH_BUFFER_BIT);
-    } else if (!this->hasMipmaps ()) {
+    } else if (!this->hasMipmaps () && !m_storageCleared) {
 	// Layer framebuffers must start transparent. The scene clear color is often opaque,
 	// and using it here makes empty layer areas render as solid rectangles.
 	GLfloat previousClearColor[4] = {};

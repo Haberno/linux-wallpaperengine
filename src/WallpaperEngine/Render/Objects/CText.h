@@ -1,7 +1,11 @@
 #pragma once
 
+#include "Effects/EffectSwapCommand.h"
+
 #include <functional>
 #include <string>
+#include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 #include <GL/glew.h>
@@ -117,6 +121,7 @@ private:
 
     // text-effect chain (rebuilt when dynamic glyph metrics change, like the native renderer)
     void setupEffectChain ();
+    void updateEffectVisibility ();
     void destroyEffectChain ();
     void renderEffectChain (const glm::mat4& mvp, float brightness, float alpha, bool drawToScene);
 
@@ -157,9 +162,12 @@ private:
     std::unique_ptr<class CTextEffectHost> m_effectHost;
     Data::Model::MaterialUniquePtr m_effectMaterial;
     std::vector<Effects::CPass*> m_effectPasses;
+    std::vector<Effects::CPass*> m_activeEffectPasses;
+    std::unordered_map<Effects::CPass*, const UserSetting*> m_passVisibility;
+    std::unordered_set<Effects::CPass*> m_copyPasses;
+    std::unordered_set<const UserSetting*> m_failedEffects;
+    std::vector<Effects::EffectSwapCommand> m_swapCommands;
     std::vector<std::shared_ptr<const FBOProvider>> m_effectProviders;
-    /** destinations written by the chain, cleared each frame before the passes run */
-    std::vector<std::shared_ptr<const CFBO>> m_effectClears;
     std::shared_ptr<CFBO> m_fboA;
     std::shared_ptr<CFBO> m_fboB;
     /** Stable published result; other layers keep references across glyph rebuilds. */

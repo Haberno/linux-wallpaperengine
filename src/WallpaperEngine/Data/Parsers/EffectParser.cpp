@@ -1,6 +1,9 @@
 #include "EffectParser.h"
 #include "MaterialParser.h"
 
+#include <algorithm>
+#include <cstdlib>
+
 #include "WallpaperEngine/Data/Model/DynamicValue.h"
 #include "WallpaperEngine/Data/Model/Effect.h"
 #include "WallpaperEngine/Data/Model/Material.h"
@@ -12,6 +15,21 @@ using namespace WallpaperEngine::Data::Parsers;
 using namespace WallpaperEngine::Data::Model;
 
 namespace {
+void parseClearColor (FBO& fbo, const JSON& it) {
+    const auto value = it.optional ("clear");
+    if (!value.has_value () || !value->is_string ()) return;
+    const auto text = value->get<std::string> ();
+    const char* cursor = text.c_str ();
+    fbo.clearOnCreate = text.empty ();
+    for (int channel = 0; channel < 4; ++channel) {
+	fbo.clear[channel] = std::strtof (cursor, nullptr);
+	if (channel == 3) fbo.clearOnCreate = true;
+	while (*cursor != '\0' && *cursor != ' ') ++cursor;
+	if (*cursor == '\0') break;
+	while (*cursor == ' ') ++cursor;
+    }
+}
+
 bool conditionsPass (const JSON& it, const JSON& combos) {
     const auto conditions = it.optional ("conditions");
     if (!conditions.has_value () || !conditions->is_array ()) return true;
@@ -59,7 +77,7 @@ EffectUniquePtr EffectParser::parse (const JSON& it, const Project& project, con
     const auto dependencies = it.optional ("dependencies");
     const auto fbos = it.optional ("fbos");
 
-    return std::make_unique<Effect> (Effect {
+    auto result = std::make_unique<Effect> (Effect {
 	.name = it.optional<std::string> ("name", ""),
 	.description = it.optional<std::string> ("description", ""),
 	.group = it.optional<std::string> ("group", ""),
@@ -68,6 +86,9 @@ EffectUniquePtr EffectParser::parse (const JSON& it, const Project& project, con
 	.passes = parseEffectPasses (it.require ("passes", "Effect file must have passes"), project, combos),
 	.fbos = fbos.has_value () ? parseFBOs (*fbos, combos) : std::vector<FBOUniquePtr> {},
     });
+    const auto functions = it.optional ("functions");
+    if (functions.has_value ()) result->functions = parseFunctions (*functions, result->fbos);
+    return result;
 }
 
 std::vector<std::string> EffectParser::parseDependencies (const JSON& it) {
@@ -158,7 +179,32 @@ std::vector<FBOUniquePtr> EffectParser::parseFBOs (const JSON& it, const JSON& c
 		.fit = cur.optional ("fit", 0),
 	    })
 	);
+	parseClearColor (*result.back (), cur);
     }
 
+    return result;
+}
+
+std::map<std::string, std::vector<std::string>> EffectParser::parseFunctions (
+    const JSON& it, const std::vector<FBOUniquePtr>& fbos
+) {
+    std::map<std::string, std::vector<std::string>> result;
+    if (!it.is_object ()) return result;
+    for (const auto& [name, definition] : it.items ()) {
+	if (name.empty () || !definition.is_object ()) continue;
+	const auto action = definition.optional ("action");
+	const auto targets = definition.optional ("fbos");
+	if (!action.has_value () || !action->is_string () || *action != "clear"
+	    || !targets.has_value () || !targets->is_array ()) continue;
+	std::vector<std::string> resolved;
+	for (const auto& target : *targets) {
+	    if (!target.is_string ()) continue;
+	    const auto targetName = target.get<std::string> ();
+	    if (!targetName.empty () && std::any_of (fbos.begin (), fbos.end (), [&] (const auto& fbo) {
+		    return fbo->name == targetName;
+		})) resolved.push_back (targetName);
+	}
+	if (!resolved.empty ()) result.emplace (name, std::move (resolved));
+    }
     return result;
 }

@@ -8,6 +8,7 @@
 #include <utility>
 
 #include "../../TextureProvider.h"
+#include "EffectFBOBindings.h"
 #include "WallpaperEngine/Data/Model/Material.h"
 #include "WallpaperEngine/Render/CFBO.h"
 #include "WallpaperEngine/Render/FBOProvider.h"
@@ -32,7 +33,7 @@ public:
 	std::optional<std::reference_wrapper<const ImageEffectPassOverride>> override,
 	std::optional<std::reference_wrapper<const TextureMap>> binds,
 	std::optional<std::reference_wrapper<std::string>> target, ComboMap runtimeCombos = {},
-	bool deferShaderSetup = false
+	bool deferShaderSetup = false, std::shared_ptr<const EffectFBOBindings> effectFBOBindings = nullptr
     );
     ~CPass ();
 
@@ -40,6 +41,8 @@ public:
     void initialize ();
     void render ();
 
+    /** Copy commands remap their explicit source together with effect binds. */
+    void setCopySource (const std::string& source);
     void setDestination (std::shared_ptr<const CFBO> drawTo);
     void setInput (std::shared_ptr<const TextureProvider> input);
     void setPreviousInput (std::shared_ptr<const TextureProvider> input);
@@ -218,6 +221,9 @@ private:
     const ImageEffectPassOverride& m_override;
     ComboMap m_runtimeCombos = {};
     std::optional<std::reference_wrapper<std::string>> m_target;
+    std::shared_ptr<const EffectFBOBindings> m_effectFBOBindings;
+    std::optional<std::string> m_copySource;
+    std::map<int, glm::vec4> m_effectTextureResolutions;
     std::map<int, std::shared_ptr<const CFBO>> m_fbos = {};
     std::map<std::string, int> m_combos = {};
     std::vector<std::unique_ptr<AttribEntry>> m_attribs = {};

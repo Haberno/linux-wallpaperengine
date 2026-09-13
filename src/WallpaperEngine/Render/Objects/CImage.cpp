@@ -1388,7 +1388,7 @@ void CImage::setup () {
 	bool allEffectsInvisible = true;
 	for (const auto& cur : this->m_image.effects) {
 	    if (cur->visible->value->getBool () || cur->visible->value->getScriptSource ().has_value ()
-		|| cur->visible->property != nullptr) {
+		|| cur->visible->property != nullptr || !cur->effect->functions.empty ()) {
 		allEffectsInvisible = false;
 		break;
 	    }
@@ -1464,7 +1464,8 @@ void CImage::setup () {
 		    *cur->visible->value, *this
 		);
 	    }
-	    if (!cur->visible->value->getBool () && !dynamicVisibility) {
+	    const bool retainedHidden = !cur->effect->functions.empty ();
+	    if (!cur->visible->value->getBool () && !dynamicVisibility && !retainedHidden) {
 		continue;
 	    }
 	    const size_t firstEffectPass = m_passes.size ();
@@ -1501,7 +1502,10 @@ void CImage::setup () {
 		}
 	    }
 
-	    // TODO: MAKE USE OF ZIP OPERATOR IN BOOST? WAY OVERKILL JUST FOR THIS...
+	    registerEffectFunctions (*cur, fboProvider);
+	    std::vector<std::string> bufferNames;
+	    for (const auto& fbo : cur->effect->fbos) bufferNames.push_back (fbo->name);
+	    const auto effectBindings = std::make_shared<Effects::EffectFBOBindings> (bufferNames);
 
 	    auto curEffect = cur->effect->passes.begin ();
 	    auto endEffect = cur->effect->passes.end ();
@@ -1531,8 +1535,9 @@ void CImage::setup () {
 			continue;
 		    }
 
-		    if ((*curEffect)->command != Command_Copy) {
-			sLog.error ("Only copy command is supported for pass without material");
+		    if ((*curEffect)->command == Command_Swap) {
+			m_swapCommands.push_back ({ m_passes.size (), effectBindings,
+			    *(*curEffect)->source, *(*curEffect)->target, cur->visible.get () });
 			continue;
 		    }
 
@@ -1551,8 +1556,10 @@ void CImage::setup () {
 		    // build a pass for a copy shader
 		    this->m_passes.push_back (new CPass (
 			*this, fboProvider, config, std::nullopt, std::nullopt, (*curEffect)->target.value (),
-			{}, deferShaderSetup
+			{}, deferShaderSetup, effectBindings
 		    ));
+		    m_passes.back ()->setCopySource (*(*curEffect)->source);
+		    m_copyPasses.insert (m_passes.back ());
 		} else {
 		    for (auto& pass : (*curEffect)->material.value ()->passes) {
 			const auto target = (*curEffect)->target.has_value ()
@@ -1560,12 +1567,12 @@ void CImage::setup () {
 			    : std::optional<std::reference_wrapper<std::string>> (std::nullopt);
 
 			this->m_passes.push_back (
-			    new CPass (*this, fboProvider, *pass, override, (*curEffect)->binds, target, {}, deferShaderSetup)
+			    new CPass (*this, fboProvider, *pass, override, (*curEffect)->binds, target, {}, deferShaderSetup, effectBindings)
 			);
 		    }
 		}
 	    }
-	    if (dynamicVisibility) {
+	    if (dynamicVisibility || retainedHidden) {
 		for (size_t index = firstEffectPass; index < m_passes.size (); ++index) {
 		    m_passVisibility.emplace (m_passes[index], cur->visible.get ());
 		}
@@ -1674,7 +1681,8 @@ void CImage::setup () {
     // Workshop 3101147701).
     if (this->m_passes.size () > 1) {
 	const auto first = this->m_passes.begin ();
-	const auto last = this->m_passes.rbegin ();
+	const auto last = std::find_if (m_passes.rbegin (), m_passes.rend (),
+	    [this] (auto* pass) { return !m_copyPasses.contains (pass); });
 
 	(*last)->setBlendingMode ((*first)->getBlendingMode ());
 	(*first)->setBlendingMode (BlendingMode_Normal);
@@ -1742,12 +1750,22 @@ void CImage::setupPasses () {
 
     auto cur = this->m_activePasses.begin ();
     auto end = this->m_activePasses.end ();
+    const auto lastMaterial = std::find_if (m_activePasses.rbegin (), m_activePasses.rend (),
+	[this] (auto* pass) { return !m_copyPasses.contains (pass); });
     bool first = true;
     bool inTargetEffectSequence = false;
     std::shared_ptr<const TextureProvider> effectInput = nullptr;
 
     for (; cur != end; ++cur) {
 	Effects::CPass* pass = *cur;
+	if (m_copyPasses.contains (pass)) {
+	    pass->setDestination (pass->resolveFBO (pass->getTarget ()->get ()));
+	    pass->setInput (asInput);
+	    pass->setPosition (getPassSpacePosition ());
+	    pass->setTexCoord (getTexCoordPass ());
+	    pass->setModelViewProjectionMatrix (&m_modelViewProjectionPass);
+	    continue;
+	}
 	std::shared_ptr<const CFBO> prevDrawTo = drawTo;
 	bool writesToTarget = false;
 	const bool isFirstPass = first;
@@ -1766,7 +1784,7 @@ void CImage::setupPasses () {
 	);
 
 	writesToTarget = this->configurePassTarget (pass, drawTo, asInput, effectInput, inTargetEffectSequence);
-	if (!writesToTarget && this->shouldRenderFinalPass (std::next (cur) == end)) {
+	if (!writesToTarget && this->shouldRenderFinalPass (lastMaterial != m_activePasses.rend () && pass == *lastMaterial)) {
 	    // Keep the offscreen route as well as the scene route. A layer may become
 	    // visible after scripts initialize, or hide while another layer samples it.
 	    this->m_finalPassRouting = FinalPassRouting {
@@ -2018,9 +2036,17 @@ void CImage::render () {
 #endif /* DEBUG */
 
     auto cur = this->m_activePasses.begin ();
-
-    for (const auto end = this->m_activePasses.end (); cur != end; ++cur) {
-	if (std::next (cur) == end && this->m_finalPassDrawsToScene) {
+    const auto end = this->m_activePasses.end ();
+    auto command = m_swapCommands.begin ();
+    for (size_t index = 0; index <= m_passes.size (); ++index) {
+	for (; command != m_swapCommands.end () && command->beforePass == index; ++command) {
+	    if (!m_failedEffects.contains (command->visible)) command->execute ();
+	}
+	if (index == m_passes.size ()) break;
+	if (cur == end || *cur != m_passes[index]) continue;
+	auto* pass = *cur++;
+	glColorMask (true, true, true, true);
+	if (m_finalPassRouting && pass == m_finalPassRouting->pass && this->m_finalPassDrawsToScene) {
 	    if (this->m_hasPuppetClipping) {
 		this->renderPuppetClipping ();
 		continue;
@@ -2032,7 +2058,7 @@ void CImage::render () {
 	    );
 	}
 
-	(*cur)->render ();
+	pass->render ();
     }
 
     // Hidden layers publish their completed effect chain through the named _a

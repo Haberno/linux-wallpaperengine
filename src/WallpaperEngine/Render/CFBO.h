@@ -32,6 +32,8 @@ public:
      * _rt_MipMappedFrameBuffer target (a no-op for ordinary layer composites).
      */
     void generateMipmaps () const;
+    /** Clear color storage in the calling context, including script initialization. */
+    void clear (const glm::vec4& color) const;
     /** Resize storage on the render thread while preserving references and GL handles. */
     void resize (uint32_t width, uint32_t height);
     [[nodiscard]] GLuint getTextureID (uint32_t imageIndex) const override;
@@ -75,9 +77,10 @@ private:
     /** Only the dedicated reflection target carries a mip chain. */
     [[nodiscard]] bool hasMipmaps () const;
     void configureMipmaps (uint32_t width, uint32_t height);
-    void clearTextureStorage () const;
+    void clearTextureStorage (const glm::vec4& color = glm::vec4 (0.0f)) const;
     [[nodiscard]] size_t calculateStorageBytes (uint32_t width, uint32_t height) const;
 
+    mutable bool m_storageCleared = false;
     mutable GLuint m_framebuffer = GL_NONE;
     mutable GLuint m_multisampleFramebuffer = GL_NONE;
     GLuint m_depthbuffer = GL_NONE;

@@ -1,5 +1,6 @@
 #pragma once
 
+#include <glm/vec4.hpp>
 #include <optional>
 #include <string>
 
@@ -15,6 +16,10 @@ struct FBO {
     bool unique;
     /** Optional maximum edge length for aspect-preserving simulation targets. */
     int fit = 0;
+    /** Color used by this target's clear action. */
+    glm::vec4 clear = glm::vec4 (0.0f);
+    /** Native initial clearing requires a complete or empty clear-color string. */
+    bool clearOnCreate = false;
 };
 
 struct EffectPass {
@@ -47,5 +52,7 @@ struct Effect {
     std::vector<EffectPassUniquePtr> passes;
     /** The fbos declared by this effect */
     std::vector<FBOUniquePtr> fbos;
+    /** Clear functions retain their resolved, effect-local authored target names. */
+    std::map<std::string, std::vector<std::string>> functions;
 };
 } // namespace WallpaperEngine::Data::Model
