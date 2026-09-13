@@ -2547,6 +2547,16 @@ std::shared_ptr<const CFBO> CImage::getCompositionFBO () const {
     return this->m_compositionFBO;
 }
 
+glm::mat4 CImage::resolveLayerModelMatrix () const {
+    const glm::vec2 half = this->getSize () * 0.5f;
+    glm::vec3 offset (0.0f);
+    if (m_image.alignment.find ("left") != std::string::npos) offset.x = half.x;
+    else if (m_image.alignment.find ("right") != std::string::npos) offset.x = -half.x;
+    if (m_image.alignment.find ("top") != std::string::npos) offset.y = -half.y;
+    else if (m_image.alignment.find ("bottom") != std::string::npos) offset.y = half.y;
+    return glm::translate (this->resolveWorldMatrix (), offset);
+}
+
 glm::vec2 CImage::getSize () const {
     if (this->m_image.sizeSpecified && !this->m_image.model->fullscreen
 	&& (this->m_image.size.x == 0.0f || this->m_image.size.y == 0.0f)) {

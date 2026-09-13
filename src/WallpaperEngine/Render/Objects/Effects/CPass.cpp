@@ -442,6 +442,7 @@ void CPass::setupRenderReferenceUniforms () {
 }
 
 void CPass::setupRenderUniforms () {
+    if (m_usesLayerModelMatrix) m_layerModelMatrix = m_renderable.resolveLayerModelMatrix ();
     const float time = m_renderable.getScene ().getTime ();
     for (auto& [name, uniform] : m_animatedUniforms) {
 	const auto& animation = *uniform.setting->animation;
@@ -1313,6 +1314,8 @@ void CPass::setupUniforms () {
     this->addUniform ("g_ModelViewProjectionMatrix", &this->m_modelViewProjectionMatrix);
     this->addUniform ("g_EffectModelViewProjectionMatrix", &this->m_modelViewProjectionMatrix);
     this->addUniform ("g_ModelMatrix", &this->m_modelMatrix);
+    this->addUniform ("g_LayerModelMatrix", &this->m_layerModelMatrix);
+    this->m_usesLayerModelMatrix = this->m_uniforms.contains ("g_LayerModelMatrix");
     this->addUniform ("g_EffectModelMatrix", &this->m_modelMatrix);
     this->addUniform ("g_NormalModelMatrix", glm::identity<glm::mat3> ());
     this->addUniform ("g_ViewProjectionMatrix", &this->m_viewProjectionMatrix);
