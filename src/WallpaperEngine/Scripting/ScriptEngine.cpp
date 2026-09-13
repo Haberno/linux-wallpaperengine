@@ -865,6 +865,7 @@ void ScriptEngine::queueScript (const std::string& key, DynamicValue& currentVal
 	    << "    mediaTimelineChanged: (typeof mediaTimelineChanged === 'function') ? mediaTimelineChanged : null,\n"
 	    << "    mediaThumbnailChanged: (typeof mediaThumbnailChanged === 'function') ? mediaThumbnailChanged : null,\n"
 	    << "    applyUserProperties: (typeof applyUserProperties === 'function') ? applyUserProperties : null,\n"
+	    << "    resizeScreen: (typeof resizeScreen === 'function') ? resizeScreen : null,\n"
 	    << "    cursorEnter: (typeof cursorEnter === 'function') ? cursorEnter : null,\n"
 	    << "    cursorLeave: (typeof cursorLeave === 'function') ? cursorLeave : null,\n"
 	    << "    cursorMove: (typeof cursorMove === 'function') ? cursorMove : null,\n"
@@ -946,6 +947,7 @@ void ScriptEngine::initializeModule (const std::string& key, LoadedModule& loade
     }
 
     loaded.initialized = true;
+    loaded.lastOutputSize = this->m_scene.getOutputSize ();
 
     // run the script's init hook (if any) followed by the first update, mirroring WE's lifecycle
     this->callLifecycleHook (key, loaded, "init");
@@ -998,6 +1000,7 @@ void ScriptEngine::initializeQueuedScripts (ScriptableObject* target) {
 	}
 
 	module.initialized = true;
+	module.lastOutputSize = this->m_scene.getOutputSize ();
 	started.emplace_back (&key, &module);
 	this->callLifecycleHook (key, module, "init");
     }
@@ -1098,6 +1101,8 @@ std::string ScriptEngine::getRunningModuleWorkshopId () const {
 }
 
 void ScriptEngine::tick () {
+    this->dispatchScreenResize ();
+
     // run intervals
     this->m_engineObject->tick ();
 
@@ -1159,6 +1164,27 @@ void ScriptEngine::tick () {
 	} else {
 	    jsToDynamicValue (this->m_context, result, module.value);
 	}
+    }
+}
+
+void ScriptEngine::dispatchScreenResize () {
+    const glm::vec2 outputSize = this->m_scene.getOutputSize ();
+    for (const auto& [key, module] : this->m_scriptModuleOrder) {
+	if (!module->initialized || module->lastOutputSize == outputSize) continue;
+	// Each module starts at its initialization size. A layer created by this
+	// callback must not receive the resize that created it as a startup event.
+	module->lastOutputSize = outputSize;
+	auto* previous = this->m_runningModule;
+	ScopeGuard restore ([&] { this->m_runningModule = previous; });
+	this->m_runningModule = module;
+	DynamicValue size (outputSize);
+	JSValue args[] = { this->m_adapters.vec2->instantiate (size, true) };
+	JSValue result = this->call (module->module, 1, args, "resizeScreen");
+	if (JS_IsException (result)) {
+	    logJSException (this->m_context, key->c_str ());
+	}
+	JS_FreeValue (this->m_context, result);
+	JS_FreeValue (this->m_context, args[0]);
     }
 }
 

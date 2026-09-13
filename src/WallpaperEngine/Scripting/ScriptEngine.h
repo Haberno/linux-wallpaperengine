@@ -52,6 +52,7 @@ public:
 	JSValue module;
 	ScriptableObject* object = nullptr;
 	bool initialized = false;
+	glm::vec2 lastOutputSize = { 0, 0 };
 	/** Cleared after an authored update hook throws, preventing per-frame retries/log spam. */
 	bool updateEnabled = true;
 	bool animationEvents = false;
@@ -187,6 +188,7 @@ private:
     void queueScript (const std::string& key, DynamicValue& currentValue, ScriptableObject* object);
     void callLifecycleHook (const std::string& key, LoadedModule& module, const char* hook);
     void initializeModule (const std::string& key, LoadedModule& module);
+    void dispatchScreenResize ();
     void dispatchCursorEvents ();
     JSValue makeCursorEvent (const glm::vec3& worldPosition, const glm::vec3& localPosition);
 

@@ -101,12 +101,12 @@ JSValue engine_get_screen_resolution (
     if (engine == nullptr) {
 	return JS_EXCEPTION;
     }
-    const auto& output = engine->getScene ().getContext ().getOutput ();
+    const auto& size = engine->getScene ().getOutputSize ();
 
     JSValue result = engine->getEngine ().getAdapters ().vec2->instantiate ();
 
-    JS_SetPropertyStr (ctx, result, "x", JS_NewFloat64 (ctx, output.getFullWidth ()));
-    JS_SetPropertyStr (ctx, result, "y", JS_NewFloat64 (ctx, output.getFullHeight ()));
+    JS_SetPropertyStr (ctx, result, "x", JS_NewFloat64 (ctx, size.x));
+    JS_SetPropertyStr (ctx, result, "y", JS_NewFloat64 (ctx, size.y));
 
     return result;
 }
@@ -328,9 +328,16 @@ JSValue engine_set_timeout (JSContext* ctx, JSValueConst this_val, int argc, JSV
     return JS_NewCFunctionData (ctx, engine_stop_timeout, 2, magic, 1, args);
 }
 
-static JSValue engine_desktop_mode (JSContext* ctx, JSValueConst, int, JSValueConst*) {
+static JSValue engine_device_mode (JSContext* ctx, JSValueConst, int, JSValueConst*, int magic) {
     // This runtime renders desktop wallpapers; it has no mobile or screensaver mode.
-    return JS_NewBool (ctx, false);
+    return JS_NewBool (ctx, magic);
+}
+
+static JSValue engine_orientation (JSContext* ctx, JSValueConst, int, JSValueConst*, int magic, JSValueConst* data) {
+    const auto* engine = engineForGetter (ctx, data);
+    if (engine == nullptr) return JS_EXCEPTION;
+    const auto& size = engine->getScene ().getOutputSize ();
+    return JS_NewBool (ctx, magic == 0 ? size.y > size.x : size.x >= size.y);
 }
 
 EngineObject::EngineObject (ScriptEngine& engine, Render::Wallpapers::CScene& scene) :
@@ -347,9 +354,16 @@ EngineObject::EngineObject (ScriptEngine& engine, Render::Wallpapers::CScene& sc
 
     // set properties
     JS_SetOpaque (this->m_instance, this);
-    for (const char* name : { "isMobileDevice", "isScreensaver", "isRunningInEditor" }) {
+    for (const char* name : { "isMobileDevice", "isScreensaver", "isRunningInEditor", "isDesktopDevice", "isWallpaper" }) {
+	const bool desktop = std::string_view (name) == "isDesktopDevice" || std::string_view (name) == "isWallpaper";
 	JS_DefinePropertyValueStr (this->m_engine.getContext (), this->m_instance, name,
-	    JS_NewCFunction (this->m_engine.getContext (), engine_desktop_mode, name, 0), JS_PROP_ENUMERABLE);
+	    JS_NewCFunctionMagic (this->m_engine.getContext (), engine_device_mode, name, 0,
+		JS_CFUNC_generic_magic, desktop), JS_PROP_ENUMERABLE);
+    }
+    for (const char* name : { "isPortrait", "isLandscape" }) {
+	JS_DefinePropertyValueStr (this->m_engine.getContext (), this->m_instance, name,
+	    JS_NewCFunctionData (this->m_engine.getContext (), engine_orientation, 0,
+		std::string_view (name) == "isLandscape", 1, &instanceId), JS_PROP_ENUMERABLE);
     }
     JS_DefinePropertyGetSet (
 	this->m_engine.getContext (), this->m_instance, JS_NewAtom (this->m_engine.getContext (), "frametime"),
