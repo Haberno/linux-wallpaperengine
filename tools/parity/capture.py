@@ -207,7 +207,7 @@ def owned_window(x11, root, role, proc):
                 owned = owns_prefix(variables, root)
             else:
                 owned = pid == proc.pid
-        except FileNotFoundError:
+        except (FileNotFoundError, ProcessLookupError):
             continue
         if not owned:
             raise RuntimeError(f'Refusing unowned {role} XID {xid}, PID {pid}')
