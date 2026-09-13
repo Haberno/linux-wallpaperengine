@@ -53,8 +53,6 @@ CScene::CScene (
     this->m_scriptEngine = std::make_unique<Scripting::ScriptEngine> (*this, context.getMediaSource (), screenName);
     // setup the scene camera
     this->m_camera = std::make_unique<Camera> (*this, scene->camera);
-    this->registerFogScripts ();
-    this->updateFogState ();
 
     float width = scene->camera.projection.width;
     float height = scene->camera.projection.height;
@@ -72,6 +70,9 @@ CScene::CScene (
 	    this->m_outputSize = { output.getFullWidth (), output.getFullHeight () };
 	}
     }
+    // Module-scope scene scripts can query the output during registration.
+    this->registerFogScripts ();
+    this->updateFogState ();
     if (isPerspective) {
 	width = this->m_outputSize.x;
 	height = this->m_outputSize.y;
