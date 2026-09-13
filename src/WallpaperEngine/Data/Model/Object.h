@@ -365,6 +365,15 @@ public:
     UserSettingUniquePtr gravity;
 };
 
+class CapVelocityOperator : public ParticleOperatorBase {
+public:
+    CapVelocityOperator (UserSettingUniquePtr maxSpeed, glm::vec4 blendTimes) :
+	maxSpeed (std::move (maxSpeed)), blendTimes (blendTimes) { }
+    /** Omitted limits use the scene's native 2D/3D default. */
+    UserSettingUniquePtr maxSpeed;
+    glm::vec4 blendTimes;
+};
+
 class AngularMovementOperator : public ParticleOperatorBase {
 public:
     AngularMovementOperator (UserSettingUniquePtr drag, UserSettingUniquePtr force) :

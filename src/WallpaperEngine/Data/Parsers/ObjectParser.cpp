@@ -878,6 +878,12 @@ ParticleOperatorUniquePtr ObjectParser::parseParticleOperator (const JSON& it, c
 	return std::make_unique<MovementOperator> (
 	    it.user ("drag", properties, 0.0f), it.user ("gravity", properties, glm::vec3 (0.0f))
 	);
+    } else if (name == "capvelocity") {
+	return std::make_unique<CapVelocityOperator> (
+	    it.optional ("maxspeed") ? it.user ("maxspeed", properties) : nullptr,
+	    glm::vec4 (it.optional ("blendinstart", 0.0f), it.optional ("blendinend", 0.0f),
+		       it.optional ("blendoutstart", 1.0f), it.optional ("blendoutend", 1.0f))
+	);
     } else if (name == "angularmovement") {
 	return std::make_unique<AngularMovementOperator> (
 	    it.user ("drag", properties, 0.0f), it.user ("force", properties, glm::vec3 (0.0f))

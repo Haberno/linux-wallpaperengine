@@ -1470,6 +1470,28 @@ CParticle::createMapSequenceAroundControlPointInitializer (const MapSequenceArou
 
 // ========== OPERATORS ==========
 
+glm::vec3 WallpaperEngine::Render::Objects::calculateParticleVelocityCap (
+    const glm::vec3& velocity, const float maxSpeed, const float lifetimePosition, glm::vec4 blendTimes
+) {
+    const float speed = glm::length (velocity);
+    if (speed == 0.0f) return velocity;
+
+    // Native 1401c2a40 expands coincident endpoints and selects the blended
+    // opcode only when its lifetime envelope has a meaningful duration.
+    blendTimes.x = std::min (blendTimes.x, blendTimes.y - 0.0001f);
+    blendTimes.w = std::max (blendTimes.w, blendTimes.z + 0.0001f);
+    float weight = 1.0f;
+    if ((blendTimes.y > 0.01f || blendTimes.z < 0.99f)
+	&& (blendTimes.z - blendTimes.y > 0.01f || blendTimes.y - blendTimes.x > 0.01f
+	    || blendTimes.w - blendTimes.z > 0.01f)) {
+	weight = std::clamp ((lifetimePosition - blendTimes.x) / (blendTimes.y - blendTimes.x), 0.0f, 1.0f)
+	    * std::clamp ((blendTimes.w - lifetimePosition) / (blendTimes.w - blendTimes.z), 0.0f, 1.0f);
+    }
+    // Native 140244790 blends the velocity toward its capped value each tick;
+    // it does not blend the limit or multiply by the simulation delta.
+    return velocity * (1.0f + std::min (0.0f, maxSpeed / speed - 1.0f) * weight);
+}
+
 void CParticle::setupOperators () {
     for (const auto& op : m_particle.operators) {
 	if (!op) {
@@ -1480,6 +1502,8 @@ void CParticle::setupOperators () {
 
 	if (op->is<MovementOperator> ()) {
 	    func = createMovementOperator (*op->as<MovementOperator> ());
+	} else if (op->is<CapVelocityOperator> ()) {
+	    func = createCapVelocityOperator (*op->as<CapVelocityOperator> ());
 	} else if (op->is<AngularMovementOperator> ()) {
 	    func = createAngularMovementOperator (*op->as<AngularMovementOperator> ());
 	} else if (op->is<AlphaFadeOperator> ()) {
@@ -1545,6 +1569,25 @@ OperatorFunc CParticle::createMovementOperator (const MovementOperator& op) {
 		dragFactor = 0.0f;
 	    }
 	    p.velocity *= dragFactor;
+	}
+    };
+}
+
+OperatorFunc CParticle::createCapVelocityOperator (const CapVelocityOperator& op) {
+    DynamicValue* maxSpeedValue = op.maxSpeed ? op.maxSpeed->value.get () : nullptr;
+    const float defaultMaxSpeed = getScene ().getScene ().camera.projection.isPerspective ? 1.0f : 100.0f;
+    return [maxSpeedValue, defaultMaxSpeed, blendTimes = op.blendTimes] (
+	       std::vector<ParticleInstance>& particles, uint32_t count, const std::vector<ControlPointData>&,
+	       float, float
+	   ) {
+	const float maxSpeed = maxSpeedValue ? maxSpeedValue->getFloat () : defaultMaxSpeed;
+	for (uint32_t i = 0; i < count; i++) {
+	    auto& particle = particles[i];
+	    if (particle.alive) {
+		particle.velocity = calculateParticleVelocityCap (
+		    particle.velocity, maxSpeed, particle.getLifetimePos (), blendTimes
+		);
+	    }
 	}
     };
 }
