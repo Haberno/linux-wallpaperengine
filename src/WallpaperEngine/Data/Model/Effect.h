@@ -18,6 +18,8 @@ struct FBO {
 };
 
 struct EffectPass {
+    /** Disabled passes retain their original instance-override index. */
+    bool enabled = true;
     /** The material to use for this effect's pass */
     std::optional<MaterialUniquePtr> material;
     /** Texture bindings for this effect's pass */
