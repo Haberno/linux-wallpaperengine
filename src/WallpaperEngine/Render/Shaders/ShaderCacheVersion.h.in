@@ -1,0 +1,4 @@
+#pragma once
+
+// Generated from the shader pipeline and bundled translator sources at build time.
+inline constexpr auto SHADER_CACHE_VERSION = "@WPENGINE_SHADER_CACHE_VERSION@";

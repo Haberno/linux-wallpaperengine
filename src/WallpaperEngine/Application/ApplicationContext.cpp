@@ -3,6 +3,7 @@
 #include "Steam/FileSystem/FileSystem.h"
 #include "WallpaperEngine/Data/JSON.h"
 #include "WallpaperEngine/Logging/Log.h"
+#include "WallpaperEngine/Render/Shaders/ShaderDiskCache.h"
 
 #include <algorithm>
 #include <cstdlib>
@@ -490,6 +491,11 @@ void ApplicationContext::loadSettingsFromArgv () {
 	});
 
     auto& performanceGroup = program.add_group ("Performance options");
+
+    performanceGroup.add_argument ("--disable-persistent-cache")
+        .help ("Bypass persistent shader cache reads and writes without deleting cached files. In-memory and driver caches remain enabled.")
+        .flag ()
+        .action ([] (const std::string&) { Render::Shaders::ShaderDiskCache::get ().disable (); });
 
     performanceGroup.add_argument ("-f", "--fps")
 	.help ("Limits the FPS to the given number, useful to keep battery consumption low")
