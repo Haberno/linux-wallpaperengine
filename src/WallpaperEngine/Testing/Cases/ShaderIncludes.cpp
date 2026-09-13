@@ -125,6 +125,69 @@ TEST_CASE ("failed macro preprocessing never caches an incomplete shader", "[sha
     CHECK_THROWS (unit.compile ());
 }
 
+TEST_CASE ("shader text scans distinguish changed source at the same filename", "[shader][scan-cache]") {
+    const auto assets = shaderAssets ("");
+    const ShaderConstantMap constants;
+    const TextureMap textures;
+    const ComboMap combos;
+    // Reuse both changed and unchanged source, including a negative macro scan.
+    for (const bool terminated : { false, true, false, true }) {
+        CAPTURE (terminated);
+        const std::string source =
+            "// input output and #define IGNORED 1.0; stay comments\n"
+            "/*\n#define ALSO_IGNORED 1.0;\n*/\n"
+            "uniform float output; // {\"material\":\"input\",\"default\":0.5}\n"
+            "#define VALUE 0.25" + std::string (terminated ? ";\n" : "\n") +
+            "void main() { float input = VALUE; gl_FragColor = vec4(input * output); }\n";
+        ShaderUnit unit (
+            GLSLContext::UnitType_Fragment, "scan_cache.frag", source, *assets, constants, textures,
+            textures, combos, combos
+        );
+        const auto& parameters = unit.getParameters ();
+        REQUIRE (parameters.size () == 1);
+        CHECK (parameters[0]->getName () == "_lweReserved_output");
+        CHECK (parameters[0]->getIdentifierName () == "input");
+        CHECK (parameters[0]->getFloat () == 0.5f);
+        const auto fragment = unit.compile ();
+        if (terminated) {
+            CHECK (fragment.find ("#define VALUE") == std::string::npos);
+        } else {
+            CHECK_THAT (fragment, Catch::Matchers::ContainsSubstring ("#define VALUE 0.25\n"));
+            CHECK_THAT (fragment, Catch::Matchers::ContainsSubstring ("#define ALSO_IGNORED 1.0;"));
+            CHECK_THAT (fragment, Catch::Matchers::ContainsSubstring ("\"material\":\"input\""));
+        }
+        const auto translated = GLSLContext::get ().toGlsl (
+            "#version 330\nvoid main() { gl_Position = vec4(0.0); }\n", fragment
+        );
+        CHECK_FALSE (translated.second.empty ());
+    }
+}
+
+TEST_CASE ("reserved identifier scans preserve tokens and quoted metadata on reuse", "[shader][scan-cache]") {
+    const auto assets = shaderAssets ("");
+    const ShaderConstantMap constants;
+    const TextureMap textures;
+    const ComboMap combos;
+    for (const std::string name : { "input", "inputValue", "output", "output_2", "input" }) {
+        CAPTURE (name);
+        const bool reserved = name == "input" || name == "output";
+        const std::string source = "uniform float " + name +
+            "; // {\"material\":\"output\",\"default\":0.75}\n"
+            "#if 0\n\"input \\\" output\"\n'input'\n#endif\n"
+            "void main() { gl_FragColor = vec4(" + name + "); }\n";
+        ShaderUnit unit (
+            GLSLContext::UnitType_Fragment, "reserved_cache.frag", source, *assets, constants,
+            textures, textures, combos, combos
+        );
+        REQUIRE (unit.getParameters ().size () == 1);
+        CHECK (unit.getParameters ()[0]->getName () == (reserved ? "_lweReserved_" + name : name));
+        CHECK (unit.getParameters ()[0]->getIdentifierName () == "output");
+        const auto fragment = unit.compile ();
+        CHECK_THAT (fragment, Catch::Matchers::ContainsSubstring ("\"input \\\" output\""));
+        CHECK_THAT (fragment, Catch::Matchers::ContainsSubstring ("'input'"));
+    }
+}
+
 TEST_CASE ("audio bar circle masks preserve integer and antialiased amplitudes", "[shader][audio-bar-mask]") {
     for (const int antialias : { 0, 1 }) {
 	DYNAMIC_SECTION ("antialias " << antialias) {
