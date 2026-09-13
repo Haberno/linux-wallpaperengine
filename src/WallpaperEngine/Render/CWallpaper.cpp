@@ -482,6 +482,7 @@ void CWallpaper::setPause (bool newState) { }
 float CWallpaper::getSceneFadeAlpha () const { return 0.0f; }
 
 void CWallpaper::setupFramebuffers (bool sceneDepthBuffer, glm::vec2 size, uint32_t samples, TextureFormat format) {
+    this->setBackbufferFormat (format);
     if (size.x <= 0 || size.y <= 0) {
 	size = { this->getWidth (), this->getHeight () };
     }

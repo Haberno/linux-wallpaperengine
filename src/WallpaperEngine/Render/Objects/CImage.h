@@ -1,5 +1,7 @@
 #pragma once
 
+#include "Effects/EffectSwapCommand.h"
+
 #include "CRenderable.h"
 #include "WallpaperEngine/Data/Model/MdlAnimation.h"
 #include "WallpaperEngine/Render/CObject.h"
@@ -266,6 +268,8 @@ private:
     mutable glm::vec4 m_resolvedColor4 { 1.0f };
 
     std::vector<Effects::CPass*> m_passes = {};
+    std::unordered_set<Effects::CPass*> m_copyPasses;
+    std::vector<Effects::EffectSwapCommand> m_swapCommands;
     std::vector<Effects::CPass*> m_activePasses = {};
     std::unordered_map<Effects::CPass*, const UserSetting*> m_passVisibility;
     std::unordered_set<const UserSetting*> m_failedEffects;

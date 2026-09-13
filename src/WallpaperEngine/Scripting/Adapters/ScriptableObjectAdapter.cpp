@@ -849,6 +849,40 @@ static JSValue effect_get_material (
     return result;
 }
 
+struct OpaqueEffect {
+    JSValue owner;
+    int32_t index;
+};
+
+static void effect_finalizer (JSRuntime* runtime, JSValueConst value) {
+    JSClassID classId = 0;
+    auto* effect = static_cast<OpaqueEffect*> (JS_GetAnyOpaque (value, &classId));
+    if (effect == nullptr) return;
+    JS_FreeValueRT (runtime, effect->owner);
+    delete effect;
+}
+
+static void effect_mark (JSRuntime* runtime, JSValueConst value, JS_MarkFunc* mark) {
+    JSClassID classId = 0;
+    const auto* effect = static_cast<const OpaqueEffect*> (JS_GetAnyOpaque (value, &classId));
+    if (effect != nullptr) JS_MarkValue (runtime, effect->owner, mark);
+}
+
+static JSValue effect_execute_material_function (
+    JSContext* ctx, JSValueConst thisVal, int argc, JSValueConst* argv, int magic
+) {
+    const auto* receiver = static_cast<const OpaqueEffect*> (JS_GetOpaque (thisVal, magic));
+    if (receiver == nullptr || argc < 1 || !JS_IsString (argv[0])) return JS_UNDEFINED;
+    const auto* effects = scriptable_effects (receiver->owner);
+    if (effects == nullptr || receiver->index < 0
+	|| static_cast<size_t> (receiver->index) >= effects->size ()) return JS_UNDEFINED;
+    const char* name = JS_ToCString (ctx, argv[0]);
+    if (name == nullptr) return JS_EXCEPTION;
+    ScopeGuard releaseName ([&] { JS_FreeCString (ctx, name); });
+    scriptable_container (receiver->owner)->object.executeMaterialFunction (*(*effects)[receiver->index], name);
+    return JS_UNDEFINED;
+}
+
 static JSValue scriptable_get_effect (JSContext* ctx, JSValueConst owner, int argc, JSValueConst* argv) {
     const auto* effects = scriptable_effects (owner);
     if (effects == nullptr || argc < 1) return JS_UNDEFINED;
@@ -864,9 +898,19 @@ static JSValue scriptable_get_effect (JSContext* ctx, JSValueConst owner, int ar
 	JS_FreeCString (ctx, name);
     }
     if (index < 0 || static_cast<size_t> (index) >= effects->size ()) return JS_UNDEFINED;
+    return scriptable_container (owner)->adapter.instantiateEffect (owner, index);
+}
+
+JSValue ScriptableObjectAdapter::instantiateEffect (JSValueConst owner, const int32_t index) {
+    JSContext* ctx = m_engine.getContext ();
+    JSValue result = JS_NewObjectClass (ctx, m_effectClassId);
+    if (JS_IsException (result)) return result;
+    JS_SetOpaque (result, new OpaqueEffect { JS_DupValue (ctx, owner), index });
     JSValue data[] = { owner, JS_NewInt32 (ctx, index) };
-    JSValue result = JS_NewObject (ctx);
     JS_SetPropertyStr (ctx, result, "getMaterial", JS_NewCFunctionData (ctx, effect_get_material, 1, 0, 2, data));
+    JS_SetPropertyStr (ctx, result, "executeMaterialFunction",
+	JS_NewCFunctionMagic (ctx, effect_execute_material_function, "executeMaterialFunction", 1,
+	    JS_CFUNC_generic_magic, m_effectClassId));
     JS_FreeValue (ctx, data[1]);
     return result;
 }
@@ -1324,6 +1368,12 @@ static JSValue create_particle_instance (JSContext* ctx, JSValueConst owner) {
 
 ScriptableObjectAdapter::ScriptableObjectAdapter (ScriptEngine& engine, std::string name) :
     ObjectAdapter (engine), m_exoticMethods (), m_name (std::move (name)) {
+    JS_NewClassID (engine.getRuntime (), &m_effectClassId);
+    const JSClassDef effectClass = { .class_name = "IEffect", .finalizer = effect_finalizer, .gc_mark = effect_mark };
+    JS_NewClass (engine.getRuntime (), m_effectClassId, &effectClass);
+    JSValue plainObject = JS_NewObject (engine.getContext ());
+    JS_SetClassProto (engine.getContext (), m_effectClassId, JS_GetPrototype (engine.getContext (), plainObject));
+    JS_FreeValue (engine.getContext (), plainObject);
     this->m_exoticMethods.get_property = scriptableobject_property_get;
     this->m_exoticMethods.set_property = scriptableobject_property_set;
 

@@ -1,6 +1,8 @@
 #pragma once
 
 #include <cstddef>
+#include <map>
+#include <memory>
 #include <optional>
 #include <string>
 
@@ -25,6 +27,11 @@ public:
     [[nodiscard]] const AssetLocator& getAssetLocator () const;
     [[nodiscard]] int getId () const;
     [[nodiscard]] const Object& getObject () const;
+    /** Bind the effect's physical targets before its scripts initialize. */
+    void registerEffectFunctions (const ImageEffect& effect, std::shared_ptr<FBOProvider> provider);
+    void executeMaterialFunction (const ImageEffect& effect, const std::string& name) const;
+    /** Text effect rebuilds replace all physical target registrations. */
+    void clearEffectFunctions ();
     /** Model-local animated attachment transform for a named MDAT attachment. */
     [[nodiscard]] virtual std::optional<glm::mat4> getAttachmentTransform (const std::string& name) const;
     /** Resolve between the stable SceneScript attachment index and authored name. */
@@ -55,5 +62,6 @@ public:
 private:
     Wallpapers::CScene& m_scene;
     const Object& m_object;
+    std::map<const ImageEffect*, std::shared_ptr<FBOProvider>> m_effectFunctionProviders;
 };
 } // namespace WallpaperEngine::Render

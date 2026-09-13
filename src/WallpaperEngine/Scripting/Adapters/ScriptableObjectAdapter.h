@@ -11,6 +11,7 @@ public:
 
     JSValue instantiate (ScriptableObject& object) override;
     JSValue instantiate (Data::Model::DynamicValue& value) override;
+    JSValue instantiateEffect (JSValueConst owner, int32_t index);
     void invalidate (const ScriptableObject* object);
 
     // Recover the underlying ScriptableObject from a JS layer value produced by instantiate(),
@@ -20,6 +21,7 @@ public:
 
 private:
     JSClassExoticMethods m_exoticMethods;
+    JSClassID m_effectClassId = 0;
     std::string m_name;
     std::map<const ScriptableObject*, JSValue> m_instances;
 };

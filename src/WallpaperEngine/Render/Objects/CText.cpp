@@ -340,6 +340,7 @@ CText::CText (Wallpapers::CScene& scene, const Text& text) :
     // Effect parameters carry property scripts just like image effects. Queue them
     // once for this layer, so rebuilding changing glyphs does not restart fades.
     for (const auto& effect : text.effects) {
+	registerProperty ("visible_fx" + std::to_string (effect->id), *effect->visible);
 	int passIndex = 0;
 	for (const auto& pass : effect->passOverrides) {
 	    for (const auto& [name, setting] : pass->constants) {
@@ -458,88 +459,69 @@ void CText::setupEffectChain () {
     glBindBuffer (GL_ARRAY_BUFFER, m_passTexCoord);
     glBufferData (GL_ARRAY_BUFFER, sizeof (passTexcoord), passTexcoord, GL_STATIC_DRAW);
 
-    // build the passes, mirroring the material-pass subset of CImage::setup/setupPasses
-    // (no copy commands, no scene writeback — the final result composites in render())
-    std::shared_ptr<const TextureProvider> asInput = m_fboA;
-    std::shared_ptr<const CFBO> drawTo = m_fboB;
-
+    // Build material/copy passes; swaps run between draws without consuming a target.
     for (const auto& effect : m_text.effects) {
-	if (!effect->visible->value->getBool ()) {
-	    continue;
-	}
-
-	const auto fboProvider = std::make_shared<FBOProvider> (nullptr);
+	const auto fboProvider = std::make_shared<FBOProvider> (&getScene ());
 	m_effectProviders.push_back (fboProvider);
 
 	for (const auto& fbo : effect->effect->fbos) {
-	    m_effectClears.push_back (fboProvider->create (*fbo, TextureFlags_ClampUVs, surface));
+	    fboProvider->create (*fbo, TextureFlags_ClampUVs, surface);
 	}
+	registerEffectFunctions (*effect, fboProvider);
+	std::vector<std::string> bufferNames;
+	for (const auto& fbo : effect->effect->fbos) bufferNames.push_back (fbo->name);
+	const auto effectBindings = std::make_shared<Effects::EffectFBOBindings> (bufferNames);
 
 	auto curOverride = effect->passOverrides.begin ();
 	const auto endOverride = effect->passOverrides.end ();
-	std::shared_ptr<const TextureProvider> effectInput;
-	bool inTargetSequence = false;
-
 	for (const auto& effectPass : effect->effect->passes) {
 	    const auto override = curOverride != endOverride
 		? **curOverride
 		: std::optional<std::reference_wrapper<const ImageEffectPassOverride>> (std::nullopt);
 	    if (curOverride != endOverride) ++curOverride;
 	    if (!effectPass->enabled) continue;
-	    if (!effectPass->material.has_value ()) {
-		sLog.error ("CText: command passes are not supported on text effects, object ", this->getId ());
-		continue;
+	    std::vector<const MaterialPass*> materialPasses;
+	    const bool copy = !effectPass->material.has_value ();
+	    if (copy) {
+		if (!effectPass->command || !effectPass->source || !effectPass->target) continue;
+		if (*effectPass->command == Command_Swap) {
+		    m_swapCommands.push_back ({ m_effectPasses.size (), effectBindings,
+			*effectPass->source, *effectPass->target, effect->visible.get () });
+		    continue;
+		}
+		auto material = std::make_unique<MaterialPass> (MaterialPass {
+		    .blending = BlendingMode_Normal, .cullmode = CullingMode_Disable,
+		    .depthtest = DepthtestMode_Disabled, .depthwrite = DepthwriteMode_Disabled,
+		    .shader = "commands/copy", .textures = {{ 0, *effectPass->source }},
+		});
+		materialPasses.push_back (material.get ());
+		m_effectMaterial->passes.push_back (std::move (material));
+	    } else {
+		for (const auto& pass : effectPass->material.value ()->passes) materialPasses.push_back (pass.get ());
 	    }
 
-	    for (const auto& pass : effectPass->material.value ()->passes) {
+	    for (const auto* pass : materialPasses) {
 		const auto target = effectPass->target.has_value ()
 		    ? *effectPass->target
 		    : std::optional<std::reference_wrapper<std::string>> (std::nullopt);
 
 		auto* cpass
-		    = new Effects::CPass (*m_effectHost, fboProvider, *pass, override, effectPass->binds, target);
-
-		const std::shared_ptr<const CFBO> prevDrawTo = drawTo;
-		bool writesToTarget = false;
-
-		if (cpass->getTarget ().has_value ()) {
-		    const std::string& targetName = cpass->getTarget ().value ();
-		    if (auto resolved = fboProvider->find (targetName); resolved != nullptr) {
-			if (!inTargetSequence) {
-			    effectInput = asInput;
-			    inTargetSequence = true;
-			}
-			drawTo = resolved;
-			writesToTarget = true;
-		    } else {
-			sLog.error ("CText: pass target FBO '", targetName, "' not found, object ", this->getId ());
-		    }
+		    = new Effects::CPass (*m_effectHost, fboProvider, *pass, override, effectPass->binds, target, {}, true, effectBindings);
+		if (copy) {
+		    cpass->setCopySource (*effectPass->source);
+		    m_copyPasses.insert (cpass);
 		}
-
-		cpass->setDestination (drawTo);
-		cpass->setInput (asInput);
-		cpass->setPreviousInput (inTargetSequence ? effectInput : nullptr);
 		cpass->setPosition (m_ndcPosition);
 		cpass->setTexCoord (m_passTexCoord);
 		// matrices keep CPass' shared identity defaults: intermediate passes are 1:1 blits
 
 		m_effectPasses.push_back (cpass);
-
-		if (writesToTarget) {
-		    asInput = drawTo;
-		    drawTo = prevDrawTo;
-		} else {
-		    // pingpong between the A/B buffers
-		    const auto nextDraw = (drawTo == m_fboA) ? m_fboB : m_fboA;
-		    asInput = drawTo;
-		    drawTo = nextDraw;
-		    inTargetSequence = false;
-		}
+		m_passVisibility.emplace (cpass, effect->visible.get ());
 	    }
 	}
     }
 
-    m_effectResult = std::dynamic_pointer_cast<const CFBO> (asInput);
+    updateEffectVisibility ();
 
     // composite program: same vertex shader, RGBA fragment
     GLuint vs = compileShader (GL_VERTEX_SHADER, kVertexShader);
@@ -627,6 +609,81 @@ void CText::setupEffectChain () {
     m_effectsEnabled = true;
 }
 
+void CText::updateEffectVisibility () {
+    const auto enabled = [this] (Effects::CPass* pass) {
+	const auto* visible = m_passVisibility.at (pass);
+	return visible->value->getBool () && !m_failedEffects.contains (visible);
+    };
+    size_t active = 0;
+    bool changed = false;
+    for (auto* pass : m_effectPasses) {
+	if (!enabled (pass)) continue;
+	changed |= active >= m_activeEffectPasses.size () || m_activeEffectPasses[active] != pass;
+	++active;
+    }
+    if (!changed && active == m_activeEffectPasses.size () && m_effectResult != nullptr) return;
+
+    // Retain hidden effects' buffers and swap state, preparing their shaders on
+    // first activation. A failed optional effect is skipped as a whole.
+    for (auto* pass : m_effectPasses) {
+	if (!enabled (pass)) continue;
+	try {
+	    pass->initialize ();
+	} catch (const std::exception& error) {
+	    m_failedEffects.insert (m_passVisibility.at (pass));
+	    sLog.error ("Disabling text effect on object ", getId (), " after shader setup failed: ", error.what ());
+	}
+    }
+    m_activeEffectPasses.clear ();
+    for (auto* pass : m_effectPasses) {
+	if (enabled (pass)) m_activeEffectPasses.push_back (pass);
+    }
+
+    std::shared_ptr<const TextureProvider> asInput = m_fboA;
+    std::shared_ptr<const CFBO> drawTo = m_fboB;
+    std::shared_ptr<const FBOProvider> effectProvider;
+    std::shared_ptr<const TextureProvider> effectInput;
+    bool inTargetSequence = false;
+    for (auto* pass : m_activeEffectPasses) {
+	if (effectProvider != pass->getFBOProvider ()) {
+	    effectProvider = pass->getFBOProvider ();
+	    effectInput = nullptr;
+	    inTargetSequence = false;
+	}
+	const auto previousDrawTo = drawTo;
+	const bool copy = m_copyPasses.contains (pass);
+	bool writesToTarget = false;
+	if (pass->getTarget ()) {
+	    const std::string& targetName = pass->getTarget ()->get ();
+	    if (const auto target = effectProvider->find (targetName)) {
+		if (!copy && !inTargetSequence) {
+		    effectInput = asInput;
+		    inTargetSequence = true;
+		}
+		drawTo = target;
+		writesToTarget = true;
+	    } else {
+		sLog.error ("CText: pass target FBO '", targetName, "' not found, object ", getId ());
+	    }
+	}
+	pass->setDestination (drawTo);
+	pass->setInput (asInput);
+	pass->setPreviousInput (inTargetSequence ? effectInput : nullptr);
+
+	if (copy) {
+	    drawTo = previousDrawTo;
+	} else if (writesToTarget) {
+	    asInput = drawTo;
+	    drawTo = previousDrawTo;
+	} else {
+	    asInput = drawTo;
+	    drawTo = drawTo == m_fboA ? m_fboB : m_fboA;
+	    inTargetSequence = false;
+	}
+    }
+    m_effectResult = std::dynamic_pointer_cast<const CFBO> (asInput);
+}
+
 void CText::destroyEffectChain () {
     m_colorBlendPass.reset ();
     m_colorBlendOverride.reset ();
@@ -637,8 +694,13 @@ void CText::destroyEffectChain () {
 	delete pass;
     }
     m_effectPasses.clear ();
+    m_activeEffectPasses.clear ();
+    m_passVisibility.clear ();
+    m_copyPasses.clear ();
+    m_failedEffects.clear ();
     m_effectProviders.clear ();
-    m_effectClears.clear ();
+    m_swapCommands.clear ();
+    clearEffectFunctions ();
     m_effectResult = nullptr;
     m_fboA = nullptr;
     m_fboB = nullptr;
@@ -668,6 +730,7 @@ void CText::destroyEffectChain () {
 }
 
 void CText::renderEffectChain (const glm::mat4& mvp, const float brightness, const float alpha, const bool drawToScene) {
+    updateEffectVisibility ();
     const glm::vec4 color = m_text.color->value->getVec4 ();
 
     // the scene sets its clear color once at setup, not per frame — leaking ours would
@@ -699,17 +762,20 @@ void CText::renderEffectChain (const glm::mat4& mvp, const float brightness, con
     glDrawArrays (GL_TRIANGLES, 0, 6);
     glBindVertexArray (0);
 
-    // 2. clear the chain's other destinations — nothing in the chain samples last frame
-    for (const auto& fbo : m_effectClears) {
-	glBindFramebuffer (GL_FRAMEBUFFER, fbo->getFramebuffer ());
-	glClear (GL_COLOR_BUFFER_BIT);
-    }
+    // Named simulation targets persist between frames; only the working
+    // compositing surface is reset here. Authored clear functions reset state.
     glBindFramebuffer (GL_FRAMEBUFFER, m_fboB->getFramebuffer ());
     glClear (GL_COLOR_BUFFER_BIT);
 
-    // 3. run the passes (each binds its own destination FBO and viewport)
-    for (auto* pass : m_effectPasses) {
-	pass->render ();
+    auto command = m_swapCommands.begin ();
+    auto pass = m_activeEffectPasses.begin ();
+    for (size_t index = 0; index <= m_effectPasses.size (); ++index) {
+	for (; command != m_swapCommands.end () && command->beforePass == index; ++command) {
+	    if (!m_failedEffects.contains (command->visible)) command->execute ();
+	}
+	if (index < m_effectPasses.size () && pass != m_activeEffectPasses.end () && *pass == m_effectPasses[index]) {
+	    (*pass++)->render ();
+	}
     }
 
     // Publish the finished, modulated layer through a stable target. A later

@@ -50,12 +50,14 @@ CPass::CPass (
     CRenderable& renderable, std::shared_ptr<const FBOProvider> fboProvider, const MaterialPass& pass,
     std::optional<std::reference_wrapper<const ImageEffectPassOverride>> override,
     std::optional<std::reference_wrapper<const TextureMap>> binds,
-    std::optional<std::reference_wrapper<std::string>> target, ComboMap runtimeCombos, bool deferShaderSetup
+    std::optional<std::reference_wrapper<std::string>> target, ComboMap runtimeCombos, bool deferShaderSetup,
+    std::shared_ptr<const EffectFBOBindings> effectFBOBindings
 ) :
     Helpers::ContextAware (renderable), m_renderable (renderable), m_fboProvider (std::move (fboProvider)),
     m_pass (pass), m_binds (binds.has_value () ? binds.value ().get () : DEFAULT_BINDS),
     m_override (override.has_value () ? override.value ().get () : DEFAULT_OVERRIDE),
     m_runtimeCombos (std::move (runtimeCombos)), m_target (target),
+    m_effectFBOBindings (std::move (effectFBOBindings)),
     m_blendingmode (pass.blending), m_depthtestmode (pass.depthtest), m_depthwritemode (pass.depthwrite) {
     if (!deferShaderSetup) this->initialize ();
     // NOTE: m_vao is created lazily in render(): VAOs are not shared between GL
@@ -130,7 +132,7 @@ std::shared_ptr<const TextureProvider> CPass::resolveTexture (
     }
 
     // the bind actually has a name, search the FBO in the effect and return it
-    return this->resolveFBO (it->second);
+    return this->resolveFBO (m_effectFBOBindings ? m_effectFBOBindings->resolveName (it->second) : it->second);
 }
 
 std::shared_ptr<const CFBO> CPass::resolveFBO (const std::string& name) const {
@@ -227,6 +229,21 @@ void CPass::setupRenderFramebuffer (const std::shared_ptr<const CFBO>& drawTo) c
 }
 
 void CPass::setupRenderTexture () {
+    // Only explicit effect bindings participate in native swap commands.
+    // Material texture references and the provider's physical registry stay fixed.
+    if (m_effectFBOBindings) {
+	if (m_copySource && m_textures.contains (0)) {
+	    if (const auto source = m_fboProvider->find (m_effectFBOBindings->resolveName (*m_copySource))) {
+		m_textures.at (0)->texture = source;
+	    }
+	}
+	for (const auto& [index, name] : m_binds) {
+	    if (name == "previous") continue;
+	    if (const auto chain = m_textures.find (index); chain != m_textures.end ()) {
+		chain->second->texture = resolveFBO (m_effectFBOBindings->resolveName (name));
+	    }
+	}
+    }
     // use the shader we have registered
     glUseProgram (this->m_sharedProgram ? this->m_sharedProgram->id : this->m_programID);
 
@@ -330,6 +347,9 @@ void CPass::bindTextureUnit (int index, const std::shared_ptr<const TextureProvi
 
     glActiveTexture (GL_TEXTURE0 + index);
     glBindTexture (GL_TEXTURE_2D, texture->getTextureID (frame));
+    if (const auto resolution = m_effectTextureResolutions.find (index); resolution != m_effectTextureResolutions.end ()) {
+	resolution->second = *texture->getResolution ();
+    }
     if (index >= 0 && index < static_cast<int> (this->m_textureMipMapCounts.size ())) {
 	this->m_textureMipMapCounts[index] = static_cast<float> (texture->getMipMapCount (frame));
     }
@@ -573,7 +593,12 @@ void CPass::render () {
 	}
     }
 
-    const auto drawTo = this->m_renderable.getScene ().resolveRenderTarget (this->m_drawTo);
+    auto destination = m_drawTo;
+    if (m_effectFBOBindings && m_target) {
+	const auto& name = m_effectFBOBindings->resolveName (m_target->get ());
+	if (const auto target = m_fboProvider->find (name)) destination = target;
+    }
+    const auto drawTo = this->m_renderable.getScene ().resolveRenderTarget (destination);
     if (drawTo == nullptr) {
 	sLog.error ("Skipping render pass for object ", this->m_renderable.getId (), ": no destination FBO set");
 	return;
@@ -619,6 +644,8 @@ void CPass::render () {
 std::shared_ptr<const FBOProvider> CPass::getFBOProvider () const { return this->m_fboProvider; }
 
 const CRenderable& CPass::getRenderable () const { return this->m_renderable; }
+
+void CPass::setCopySource (const std::string& source) { m_copySource = source; }
 
 void CPass::setDestination (std::shared_ptr<const CFBO> drawTo) { this->m_drawTo = std::move (drawTo); }
 
@@ -1138,7 +1165,12 @@ void CPass::setupTextureUniforms () {
 	namestream << "g_Texture" << textureIndex << "Resolution";
 
 	texture = this->resolveTexture (expectedTexture->texture, textureIndex, texture);
-	this->addUniform (namestream.str (), texture->getResolution ());
+	if (m_effectFBOBindings && m_binds.contains (textureIndex) && m_binds.at (textureIndex) != "previous") {
+	    m_effectTextureResolutions[textureIndex] = *texture->getResolution ();
+	    this->addUniform (namestream.str (), &m_effectTextureResolutions.at (textureIndex));
+	} else {
+	    this->addUniform (namestream.str (), texture->getResolution ());
+	}
 	registerTexelUniform (textureIndex, *texture);
     }
 

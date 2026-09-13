@@ -39,15 +39,31 @@ void FBOProvider::setRenderScale (const float scale) { this->m_renderScale = std
 
 float FBOProvider::getRenderScale () const { return this->m_renderScale; }
 
+void FBOProvider::setBackbufferFormat (const TextureFormat format) { this->m_backbufferFormat = format; }
+
+TextureFormat FBOProvider::getBackbufferFormat () const {
+    return this->m_parent != nullptr ? this->m_parent->getBackbufferFormat () : this->m_backbufferFormat;
+}
+
+TextureFormat FBOProvider::resolveTargetFormat (const std::string_view format, const TextureFormat backbufferFormat) {
+    if (format == "rg1616f") return TextureFormat_RG1616f;
+    if (format == "r16f") return TextureFormat_R16f;
+    if (format == "rgba_backbuffer") return backbufferFormat;
+    return (format == "rgba16161616f" || format == "rgba16f")
+	? TextureFormat_RGBA16161616f : TextureFormat_ARGB8888;
+}
+
 std::shared_ptr<CFBO> FBOProvider::create (const FBO& base, uint32_t flags, const glm::vec2 size) {
     const auto targetSize = calculateTargetSize (
 	size / base.scale, this->m_renderScale, !isFixedSizeTarget (base.name), base.fit
     );
-    return this->m_fbos[base.name] = std::make_shared<CFBO> (
+    auto target = this->m_fbos[base.name] = std::make_shared<CFBO> (
 	       base.name,
-	       (base.format == "rgba16161616f" || base.format == "rgba16f")
-		   ? TextureFormat_RGBA16161616f : TextureFormat_ARGB8888, flags, base.scale, targetSize.x, targetSize.y, targetSize.x, targetSize.y
+	       resolveTargetFormat (base.format, this->getBackbufferFormat ()), flags, base.scale,
+	       targetSize.x, targetSize.y, targetSize.x, targetSize.y
 	   );
+    if (base.clearOnCreate) target->clear (base.clear);
+    return target;
 }
 
 std::shared_ptr<CFBO> FBOProvider::create (

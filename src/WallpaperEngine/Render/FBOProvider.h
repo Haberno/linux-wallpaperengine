@@ -27,6 +27,13 @@ public:
     void setRenderScale (float scale);
     [[nodiscard]] float getRenderScale () const;
 
+    /** Scene color format used by rgba_backbuffer targets in child effect providers. */
+    void setBackbufferFormat (TextureFormat format);
+    [[nodiscard]] TextureFormat getBackbufferFormat () const;
+    [[nodiscard]] static TextureFormat resolveTargetFormat (
+	std::string_view format, TextureFormat backbufferFormat = TextureFormat_ARGB8888
+    );
+
     /** Pure sizing helpers kept public so quality scaling can be regression-tested without GL. */
     [[nodiscard]] static bool isFixedSizeTarget (std::string_view name);
     [[nodiscard]] static glm::uvec2 calculateTargetSize (
@@ -36,6 +43,7 @@ public:
 private:
     const FBOProvider* m_parent;
     float m_renderScale = 1.0f;
+    TextureFormat m_backbufferFormat = TextureFormat_ARGB8888;
     std::map<std::string, std::shared_ptr<CFBO>> m_fbos = {};
 };
 }

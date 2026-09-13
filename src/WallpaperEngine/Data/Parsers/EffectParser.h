@@ -17,5 +17,8 @@ private:
     static std::vector<EffectPassUniquePtr> parseEffectPasses (const JSON& it, const Project& project, const JSON& combos);
     static std::map<int, std::string> parseBinds (const JSON& it, const JSON& combos);
     static std::vector<FBOUniquePtr> parseFBOs (const JSON& it, const JSON& combos);
+    static std::map<std::string, std::vector<std::string>> parseFunctions (
+	const JSON& it, const std::vector<FBOUniquePtr>& fbos
+    );
 };
 } // namespace WallpaperEngine::Data::Parsers
