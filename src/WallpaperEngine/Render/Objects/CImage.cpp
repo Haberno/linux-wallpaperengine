@@ -1509,6 +1509,12 @@ void CImage::setup () {
 	    auto endOverride = cur->passOverrides.end ();
 
 	    for (; curEffect != endEffect; ++curEffect) {
+		const auto override = curOverride != endOverride
+		    ? **curOverride
+		    : std::optional<std::reference_wrapper<const ImageEffectPassOverride>> (std::nullopt);
+		// Override slots follow authored passes, including commands and disabled passes.
+		if (curOverride != endOverride) ++curOverride;
+		if (!(*curEffect)->enabled) continue;
 		if (!(*curEffect)->material.has_value ()) {
 		    if (!(*curEffect)->command.has_value ()) {
 			sLog.error ("Pass without material and command not supported");
@@ -1549,9 +1555,6 @@ void CImage::setup () {
 		    ));
 		} else {
 		    for (auto& pass : (*curEffect)->material.value ()->passes) {
-			const auto override = curOverride != endOverride
-			    ? **curOverride
-			    : std::optional<std::reference_wrapper<const ImageEffectPassOverride>> (std::nullopt);
 			const auto target = (*curEffect)->target.has_value ()
 			    ? *(*curEffect)->target
 			    : std::optional<std::reference_wrapper<std::string>> (std::nullopt);
@@ -1559,10 +1562,6 @@ void CImage::setup () {
 			this->m_passes.push_back (
 			    new CPass (*this, fboProvider, *pass, override, (*curEffect)->binds, target, {}, deferShaderSetup)
 			);
-		    }
-
-		    if (curOverride != endOverride) {
-			++curOverride;
 		    }
 		}
 	    }
@@ -1822,7 +1821,15 @@ void CImage::updateFinalPassVisibility (const bool force) {
     }
     const bool emptyGeometry = this->m_image.sizeSpecified && !this->m_image.model->fullscreen
 	&& (this->m_image.size.x == 0.0f || this->m_image.size.y == 0.0f);
-    const bool visible = !emptyGeometry && this->getImage ().visible->value->getBool ()
+    const auto& debug = this->getScene ().getContext ().getApp ().getContext ().settings.render.debug;
+    // Native retains empty effects but suppresses their layer's scene draw,
+    // even when another effect follows. Hiding the empty effect restores it.
+    const bool emptyEffect = !debug.baseOnly && std::ranges::any_of (m_image.effects, [&debug] (const auto& effect) {
+	return effect->visible->value->getBool ()
+	    && std::ranges::find (debug.skipEffects, effect->id) == debug.skipEffects.end ()
+	    && std::ranges::none_of (effect->effect->passes, [] (const auto& pass) { return pass->enabled; });
+    });
+    const bool visible = !emptyGeometry && !emptyEffect && this->getImage ().visible->value->getBool ()
 	&& this->isVisibleThroughParents ();
     if (!force && visible == this->m_finalPassDrawsToScene) {
 	return;

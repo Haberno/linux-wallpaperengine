@@ -481,15 +481,17 @@ void CText::setupEffectChain () {
 	bool inTargetSequence = false;
 
 	for (const auto& effectPass : effect->effect->passes) {
+	    const auto override = curOverride != endOverride
+		? **curOverride
+		: std::optional<std::reference_wrapper<const ImageEffectPassOverride>> (std::nullopt);
+	    if (curOverride != endOverride) ++curOverride;
+	    if (!effectPass->enabled) continue;
 	    if (!effectPass->material.has_value ()) {
 		sLog.error ("CText: command passes are not supported on text effects, object ", this->getId ());
 		continue;
 	    }
 
 	    for (const auto& pass : effectPass->material.value ()->passes) {
-		const auto override = curOverride != endOverride
-		    ? **curOverride
-		    : std::optional<std::reference_wrapper<const ImageEffectPassOverride>> (std::nullopt);
 		const auto target = effectPass->target.has_value ()
 		    ? *effectPass->target
 		    : std::optional<std::reference_wrapper<std::string>> (std::nullopt);
@@ -533,10 +535,6 @@ void CText::setupEffectChain () {
 		    drawTo = nextDraw;
 		    inTargetSequence = false;
 		}
-	    }
-
-	    if (curOverride != endOverride) {
-		++curOverride;
 	    }
 	}
     }
@@ -1176,7 +1174,11 @@ void CText::render () {
     if (!m_valid) {
 	return;
     }
-    const bool drawToScene = m_text.visible->value->getBool () && this->isVisibleThroughParents ();
+    const bool emptyEffect = std::ranges::any_of (m_text.effects, [] (const auto& effect) {
+	return effect->visible->value->getBool ()
+	    && std::ranges::none_of (effect->effect->passes, [] (const auto& pass) { return pass->enabled; });
+    });
+    const bool drawToScene = !emptyEffect && m_text.visible->value->getBool () && this->isVisibleThroughParents ();
     if (!drawToScene && !m_effectsEnabled) {
         return;
     }
