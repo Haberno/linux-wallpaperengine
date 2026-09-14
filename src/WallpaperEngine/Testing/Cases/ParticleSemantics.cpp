@@ -24,6 +24,35 @@ using WallpaperEngine::Render::Objects::calculateFixedParticleOrientation;
 using WallpaperEngine::Render::Objects::calculateBillboardParticleOrientation;
 using WallpaperEngine::Render::Objects::ParticleInstance;
 
+TEST_CASE ("turbulence simplex preserves native corner hashing and rank ties", "[particle][noise]") {
+    using WallpaperEngine::Render::Utils::simplexNoise3D;
+    CHECK (simplexNoise3D (0, 0, 0) == 0.0f);
+    CHECK (simplexNoise3D (.05f, 0, 0) == Catch::Approx (.203925595f).margin (0.000002f));
+    // Conventional final-corner hashing produces .680892885 here.
+    CHECK (simplexNoise3D (.4f, .4f, .4f) == Catch::Approx (.005308409f).margin (0.000002f));
+    // Conventional tie ranking with the native hash produces -.304392606.
+    CHECK (simplexNoise3D (.1f, .4f, .4f) == Catch::Approx (-.213692456f).margin (0.000002f));
+    CHECK (simplexNoise3D (.4f, .1f, .4f) == Catch::Approx (.412096322f).margin (0.000002f));
+    CHECK (simplexNoise3D (.4f, .4f, .1f) == Catch::Approx (.136049703f).margin (0.000002f));
+}
+
+TEST_CASE ("turbulence simplex samples all coordinate orders and negative cells", "[particle][noise]") {
+    using WallpaperEngine::Render::Utils::simplexNoise3D;
+    const struct { glm::vec3 point; float expected; } samples[] = {
+        { { .3f, .2f, .1f }, .747236490f }, { { .3f, .1f, .2f }, .632986784f },
+        { { .2f, .3f, .1f }, .686017990f }, { { .1f, .3f, .2f }, .512414038f },
+        { { .2f, .1f, .3f }, .459884644f }, { { .1f, .2f, .3f }, .399469018f },
+        { { -.3f, -.2f, -.1f }, -.496379316f }, { { -.7f, .25f, 1.1f }, -.915374756f },
+        { { -1, -2, -3 }, 0 }, { { 12.125f, -7.25f, 3.75f }, .520894349f },
+        { { 1.3f, 2.1f, 3.2f }, .628044486f }, { { 256.1f, .2f, -.3f }, .237908944f }
+    };
+    for (const auto& sample : samples) {
+        CAPTURE (sample.point.x, sample.point.y, sample.point.z);
+        CHECK (simplexNoise3D (sample.point.x, sample.point.y, sample.point.z)
+               == Catch::Approx (sample.expected).margin (0.000002f));
+    }
+}
+
 TEST_CASE ("turbulence parses native lifetime defaults and authored ranges", "[particle][turbulence]") {
     WallpaperEngine::Data::Model::Project project {};
     const auto object = WallpaperEngine::Data::Parsers::ObjectParser::parse (

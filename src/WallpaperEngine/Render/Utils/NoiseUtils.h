@@ -72,6 +72,58 @@ inline float fractalNoise2D (float x, float y, int octaves) {
     return sum / normalization;
 }
 
+// Native turbulence's scalar 3D simplex field. Its last corner and Y/Z tie
+// ranking differ from the conventional simplex algorithm.
+inline float simplexNoise3D (float x, float y, float z) {
+    constexpr float skew = 1.0f / 3.0f;
+    constexpr float unskew = 1.0f / 6.0f;
+    const float s = ((y + z) + x) * skew;
+    int i = static_cast<int> (std::floor (x + s));
+    int j = static_cast<int> (std::floor (y + s));
+    int k = static_cast<int> (std::floor (z + s));
+    const float t = static_cast<float> ((k + j) + i) * unskew;
+    const float x0 = x - (static_cast<float> (i) - t);
+    const float y0 = y - (static_cast<float> (j) - t);
+    const float z0 = z - (static_cast<float> (k) - t);
+    glm::ivec3 first, second;
+    if (y0 == z0 && x0 < y0) {
+	first = { 0, 0, 0 };
+	second = { 0, 0, 1 };
+    } else if (x0 >= y0) {
+	if (y0 >= z0) { first = { 1, 0, 0 }; second = { 1, 1, 0 }; }
+	else if (x0 >= z0) { first = { 1, 0, 0 }; second = { 1, 0, 1 }; }
+	else { first = { 0, 0, 1 }; second = { 1, 0, 1 }; }
+    } else {
+	if (y0 < z0) { first = { 0, 0, 1 }; second = { 0, 1, 1 }; }
+	else if (x0 < z0) { first = { 0, 1, 0 }; second = { 0, 1, 1 }; }
+	else { first = { 0, 1, 0 }; second = { 1, 1, 0 }; }
+    }
+    static constexpr int gradients[12][3] = {
+	{ 1, 1, 0 }, { -1, 1, 0 }, { 1, -1, 0 }, { -1, -1, 0 },
+	{ 1, 0, 1 }, { -1, 0, 1 }, { 1, 0, -1 }, { -1, 0, -1 },
+	{ 0, 1, 1 }, { 0, -1, 1 }, { 0, 1, -1 }, { 0, -1, -1 }
+    };
+    const auto corner = [] (float cx, float cy, float cz, int hash) {
+	const float weight = ((0.6f - cx * cx) - cy * cy) - cz * cz;
+	if (weight < 0.0f) return 0.0f;
+	const auto& gradient = gradients[hash % 12];
+	const float dot = (gradient[2] * cz + gradient[1] * cy) + gradient[0] * cx;
+	const float squared = weight * weight;
+	return dot * (squared * squared);
+    };
+    i &= 255; j &= 255; k &= 255;
+    const auto hash = [] (int ix, int iy, int iz) { return PERLIN_PERM[ix + PERLIN_PERM[iy + PERLIN_PERM[iz]]]; };
+    const float n0 = corner (x0, y0, z0, hash (i, j, k));
+    const float n1 = corner (x0 - first.x + unskew, y0 - first.y + unskew, z0 - first.z + unskew,
+			     hash (i + first.x, j + first.y, k + first.z));
+    const float n2 = corner (x0 - second.x + skew, y0 - second.y + skew, z0 - second.z + skew,
+			     hash (i + second.x, j + second.y, k + second.z));
+    // Native advances i/j but retains k for this corner's gradient lookup.
+    const float n3 = corner ((x0 - 1.0f) + 0.5f, (y0 - 1.0f) + 0.5f, (z0 - 1.0f) + 0.5f,
+			     hash (i + 1, j + 1, k));
+    return (((n3 + n2) + n1) + n0) * 32.0f;
+}
+
 // Perlin noise gradient function
 inline double perlinGrad (int hash, double x, double y, double z) {
     switch (hash & 0xF) {
