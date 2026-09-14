@@ -108,6 +108,32 @@ TEST_CASE ("turbulence keeps absent projection settings distinct from explicit z
     }
 }
 
+TEST_CASE ("turbulence audio distinguishes missing defaults from null and authored values", "[particle][turbulence]") {
+    WallpaperEngine::Data::Model::Project project {};
+    const auto object = WallpaperEngine::Data::Parsers::ObjectParser::parse (
+        WallpaperEngine::Data::JSON::JSON::parse (R"({"id":25,"particle":{"operator":[
+            {"name":"turbulence"},
+            {"name":"turbulence","audioprocessingmode":null,"audioprocessingbounds":null,
+             "audioprocessingexponent":null,"audioprocessingfrequencystart":null,"audioprocessingfrequencyend":null},
+            {"name":"turbulence","audioprocessingmode":3,"audioprocessingbounds":"1 0.8",
+             "audioprocessingexponent":0.5,"audioprocessingfrequencystart":-1,"audioprocessingfrequencyend":99}
+        ]}})"), project
+    );
+    const auto* particle = object->as<Particle> ();
+    REQUIRE (particle != nullptr);
+    REQUIRE (particle->operators.size () == 3);
+    for (size_t i = 0; i < 3; ++i) {
+        const auto* op = particle->operators[i]->as<TurbulenceOperator> ();
+        REQUIRE (op != nullptr);
+        CHECK (op->audioProcessingMode->value->getInt () == (i == 2 ? 3 : 0));
+        CHECK (op->audioProcessingBounds->value->getVec2 ()
+               == (i == 0 ? glm::vec2 (.8f, 1) : i == 1 ? glm::vec2 (0) : glm::vec2 (1, .8f)));
+        CHECK (op->audioProcessingExponent->value->getFloat () == (i == 0 ? 2.0f : i == 1 ? 0.0f : .5f));
+        CHECK (op->audioProcessingFrequencyStart->value->getInt () == (i == 2 ? -1 : 0));
+        CHECK (op->audioProcessingFrequencyEnd->value->getInt () == (i == 0 ? 1 : i == 1 ? 0 : 99));
+    }
+}
+
 TEST_CASE ("angular movement parses native lifetime defaults and authored ranges", "[particle][angularmovement]") {
     WallpaperEngine::Data::Model::Project project {};
     const auto object = WallpaperEngine::Data::Parsers::ObjectParser::parse (
