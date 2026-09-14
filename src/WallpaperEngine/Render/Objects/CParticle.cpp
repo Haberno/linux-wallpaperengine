@@ -1958,9 +1958,11 @@ OperatorFunc CParticle::createTurbulenceOperator (const TurbulenceOperator& op) 
 	// Native samples owner time with the cached rate, not integrated particle time.
 	const float timeOffset = (timeScaleValue->getFloat () * m_turbulenceRate) * getScene ().getTime ();
 	const glm::vec3 mask = maskValue->getVec3 ();
-	const float speed = speedOverride->getFloat ();
-	const float speedMin = speedMinValue->getFloat ();
-	const float speedSpan = speedMaxValue->getFloat () - speedMin;
+	// Flag16 skips native's speed updater, but keeps the rate/time updater.
+	// Scale endpoints before forming the span, including negative multipliers.
+	const float speed = (m_particle.flags & 16) != 0 ? 1.0f : speedOverride->getFloat ();
+	const float speedMin = speedMinValue->getFloat () * speed;
+	const float speedSpan = speedMaxValue->getFloat () * speed - speedMin;
 	const float phaseSpan = phaseMaxValue->getFloat () - phaseMinValue->getFloat ();
 
 	for (size_t i = 0; i < count; ++i) {
@@ -1989,7 +1991,7 @@ OperatorFunc CParticle::createTurbulenceOperator (const TurbulenceOperator& op) 
 	    // Native keeps the scalar field's magnitude and signed speed; it neither
 	    // takes a curl nor normalizes the three cyclic samples.
 	    force *= mask * turbSpeed;
-	    p.velocity += force * dt * speed * particleOperatorBlend (p.getLifetimePos (), blendTimes);
+	    p.velocity += force * dt * particleOperatorBlend (p.getLifetimePos (), blendTimes);
 	}
     };
 }
