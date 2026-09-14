@@ -1924,13 +1924,8 @@ OperatorFunc CParticle::createTurbulenceOperator (const TurbulenceOperator& op) 
     // DynamicValue* audioFreqStartValue = op.audioProcessingFrequencyStart->value.get ();
     // DynamicValue* audioFreqEndValue = op.audioProcessingFrequencyEnd->value.get ();
 
-    // Phase and speed are randomized once per operator instance, not per particle
-    const float phase
-	= WallpaperEngine::Maths::randomFloat (m_rng, phaseMinValue->getFloat (), phaseMaxValue->getFloat ());
-    const float turbSpeed
-	= WallpaperEngine::Maths::randomFloat (m_rng, speedMinValue->getFloat (), speedMaxValue->getFloat ());
-
-    return [scaleValue, timeScaleValue, maskValue, speedOverride, phase, turbSpeed, blendTimes = op.blendTimes] (
+    return [this, scaleValue, timeScaleValue, maskValue, speedOverride, speedMinValue, speedMaxValue,
+            phaseMinValue, phaseMaxValue, blendTimes = op.blendTimes] (
 	       std::vector<ParticleInstance>& particles, uint32_t count, const std::vector<ControlPointData>&,
 	       float currentTime, float dt
 	   ) {
@@ -1938,17 +1933,28 @@ OperatorFunc CParticle::createTurbulenceOperator (const TurbulenceOperator& op) 
 	const float timeScale = timeScaleValue->getFloat ();
 	const glm::vec3 mask = maskValue->getVec3 ();
 	const float speed = speedOverride->getFloat ();
+	const float speedMin = speedMinValue->getFloat ();
+	const float speedSpan = speedMaxValue->getFloat () - speedMin;
+	const float phaseSpan = phaseMaxValue->getFloat () - phaseMinValue->getFloat ();
 
 	for (size_t i = 0; i < count; ++i) {
 	    ParticleInstance& p = particles[i];
 	    if (!p.alive) {
 		continue;
 	    }
+	    if (p.oscillationRandom < 0.0f) {
+		p.oscillationRandom = WallpaperEngine::Maths::randomFloat (m_rng, 0.0f, 1.0f);
+	    }
+	    const float turbSpeed = speedMin + p.oscillationRandom * speedSpan;
+	    // Native shares one particle fraction with the oscillators and uses
+	    // only the phase span; the stored phase minimum is not added.
+	    const float phase = p.oscillationRandom * phaseSpan;
 
 	    glm::vec3 noisePos = p.position;
 	    noisePos.y = -noisePos.y;
-	    // Phase/random and time mapping retain their existing behavior for now.
-	    noisePos.x += phase + timeScale * currentTime;
+	    noisePos += glm::vec3 (phase);
+	    // Time coordinates and clock/rate mapping remain a separate component.
+	    noisePos.x += timeScale * currentTime;
 	    noisePos *= noiseScale;
 
 	    glm::vec3 force (

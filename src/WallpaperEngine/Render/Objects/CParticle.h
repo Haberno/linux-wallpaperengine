@@ -87,7 +87,7 @@ struct ParticleInstance {
     float lifetime { 1.0f }; // Total lifetime in seconds
     float age { 0.0f }; // Current age in seconds
 
-    // Native alpha, size and position oscillators share one stable fraction.
+    // Native alpha, size, position oscillation and turbulence share one stable fraction.
     float oscillationRandom { -1.0f };
 
     // Initial values for resets/multipliers
