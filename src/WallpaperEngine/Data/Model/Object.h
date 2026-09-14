@@ -626,7 +626,7 @@ struct ParticleInstanceOverride {
     UserSettingUniquePtr color; // Replaces particle color
     UserSettingUniquePtr colorn; // Multiplies particle color
     /** Overrides retain each control point's local/world-space flags. */
-    std::map<int, glm::vec3> controlPointOffsets;
+    std::map<int, UserSettingUniquePtr> controlPointOffsets;
 };
 
 struct ParticleData {

@@ -123,6 +123,11 @@ JSValue ScriptEngine::dynamicToJs (DynamicValue& value) const {
 // degree objects instead of live radian adapters.
 static bool isAnglesProperty (const std::string& key) { return key.rfind ("angles_", 0) == 0; }
 
+static bool isControlPointProperty (const std::string& key) {
+    return key.starts_with ("instance.controlpoint") && key.size () > 22
+	&& key[21] >= '0' && key[21] <= '7' && key[22] == '_';
+}
+
 static std::string normalizeSceneScriptModuleSyntax (const std::string& source) {
     // Workshop scripts may put an aliased import in the middle of a minified
     // line: `setup();import*as math from'WEMath';export function update...`.
@@ -920,7 +925,9 @@ void ScriptEngine::callLifecycleHook (const std::string& key, LoadedModule& load
 
     const bool angles = isAnglesProperty (key);
     const glm::vec3 initialDegrees = angles ? glm::degrees (loaded.value.getVec3 ()) : glm::vec3 (0.0f);
-    JSValue args[] = { angles ? anglesToJs (*this->m_adapters.vec3, loaded.value) : this->dynamicToJs (loaded.value) };
+    JSValue args[] = { angles ? anglesToJs (*this->m_adapters.vec3, loaded.value)
+	: isControlPointProperty (key) ? this->m_adapters.vec3->instantiate (loaded.value, true)
+	: this->dynamicToJs (loaded.value) };
     JSValue result = this->call (loaded.module, 1, args, hook);
 
     ScopeGuard guard2 ([this, args, result] () {
@@ -1179,7 +1186,9 @@ void ScriptEngine::tick () {
 
 	const bool angles = isAnglesProperty (key);
 	const glm::vec3 initialDegrees = angles ? glm::degrees (module.value.getVec3 ()) : glm::vec3 (0.0f);
-	JSValue args[] = { angles ? anglesToJs (*this->m_adapters.vec3, module.value) : this->dynamicToJs (module.value) };
+	JSValue args[] = { angles ? anglesToJs (*this->m_adapters.vec3, module.value)
+	    : isControlPointProperty (key) ? this->m_adapters.vec3->instantiate (module.value, true)
+	    : this->dynamicToJs (module.value) };
 	JSValue result = this->call (module.module, 1, args, "update");
 	ScopeGuard guard ([result, args, this] () {
 	    JS_FreeValue (this->m_context, result);
@@ -1237,7 +1246,9 @@ void ScriptEngine::dispatchAnimationEvent (
 	JS_SetPropertyStr (m_context, eventValue, "animation", JS_NewString (m_context, animationName.c_str ()));
 	const bool angles = isAnglesProperty (key);
 	const glm::vec3 initialDegrees = angles ? glm::degrees (module.value.getVec3 ()) : glm::vec3 (0.0f);
-	JSValue args[] = { eventValue, angles ? anglesToJs (*m_adapters.vec3, module.value) : dynamicToJs (module.value) };
+	JSValue args[] = { eventValue, angles ? anglesToJs (*m_adapters.vec3, module.value)
+	    : isControlPointProperty (key) ? m_adapters.vec3->instantiate (module.value, true)
+	    : dynamicToJs (module.value) };
 	JSValue result = call (module.module, 2, args, "animationEvent");
 	if (JS_IsException (result)) {
 	    logJSException (m_context, key.c_str ());

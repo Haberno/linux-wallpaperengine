@@ -11,6 +11,7 @@
 #include <cmath>
 #include <glm/gtc/constants.hpp>
 #include <glm/gtc/matrix_transform.hpp>
+#include <limits>
 
 extern float g_Time;
 
@@ -190,6 +191,12 @@ CParticle::CParticle (Wallpapers::CScene& scene, const Particle& particle, CPart
 	    { "colorn", settings.colorn.get () } }) {
 	    this->registerProperty (name, *value);
 	}
+	for (const auto& [id, value] : settings.controlPointOffsets) {
+	    m_controlPointSubscriptions.emplace_back (Data::Utils::ScopeGuard (value->value->listen ([this, id] (const DynamicValue&, DynamicValue::UpdateSource source) {
+		if (source != DynamicValue::UpdateSource::Initialization) m_controlPointOverridesChanged[id] = true;
+	    })));
+	    this->registerProperty ("instance.controlpoint" + std::to_string (id), *value, "instance.");
+	}
     }
 
     this->detectTexture ();
@@ -318,12 +325,6 @@ void CParticle::setup () {
 	runtime.offset = cp.offset;
 	runtime.flags = cp.flags;
 	runtime.parentControlPoint = cp.parentControlPoint;
-    }
-    for (const auto& [id, offset] : getInstanceOverride ().controlPointOffsets) {
-	// Mouse and inherited points get their positions from their linked source.
-	if (id >= 0 && id < PARTICLE_CONTROL_POINT_COUNT && (m_controlPoints[id].flags & 5) == 0) {
-	    m_controlPoints[id].offset = offset;
-	}
     }
     updateControlPoints ();
 
@@ -478,11 +479,16 @@ void CParticle::pause () {
 }
 
 void CParticle::emitParticles (const uint32_t count) {
+    if (count > 0 && m_pendingEmission == 0) {
+	m_pendingControlPoints = m_controlPoints;
+	m_pendingBirthTransform = m_controlPointTransform;
+    }
     m_pendingEmission += std::min (count, m_maxParticles - m_pendingEmission);
 }
 
 void CParticle::stop () {
     m_pendingEmission = 0;
+    m_pendingControlPoints.clear ();
     m_emitting = false;
     m_particleCount = 0;
     m_emitters.clear ();
@@ -562,6 +568,8 @@ void ControlPointData::sampleVelocity (const glm::vec3& simulationPosition, cons
 }
 
 void CParticle::updateControlPoints (const float frameTime) {
+    const CParticle* root = this;
+    while (root->m_particleParent != nullptr) root = root->m_particleParent;
     const glm::mat4 localToWorld = particleWorldMatrix ();
     const glm::mat4 worldToLocal = glm::inverse (localToWorld);
     const bool worldSpace = (m_particle.flags & 1) != 0;
@@ -593,16 +601,29 @@ void CParticle::updateControlPoints (const float frameTime) {
 	    cp.position = (cp.flags & 8) != 0 ? source.position
 		: glm::vec3 (parentToLocal * glm::vec4 (source.position, 1.0f));
 	} else {
+	    glm::vec3 offset = cp.offset;
+	    // Authored root offsets stay on that system. Script/user assignments
+	    // propagate to descendants, including assignments of the same value.
+	    const auto& overrides = root->m_particle.instanceOverride.controlPointOffsets;
+	    if ((cp.flags & 5) == 0) {
+		if (const auto it = overrides.find (static_cast<int> (i)); it != overrides.end ()) {
+		    if (this == root || root->m_controlPointOverridesChanged[i] || it->second->animation != nullptr) {
+			const auto value = it->second->evaluateVec3 (getScene ().getTime ());
+			if (value.x != std::numeric_limits<float>::max ()) offset = value;
+		    }
+		}
+	    }
 	    // Native 14022a070 keeps point zero attached to a world-space emitter
 	    // even when flagged as world. Other world points remain independent.
 	    const bool worldOffset = (cp.flags & 2) != 0 && !(worldSpace && i == 0);
-	    cp.position = resolveParticleControlPoint (cp.offset, worldToLocal, worldOffset);
+	    cp.position = resolveParticleControlPoint (offset, worldToLocal, worldOffset);
 	}
     }
     if (m_followPosition.has_value () && (m_controlPoints[0].flags & 5) == 0) {
 	m_controlPoints[0].position = *m_followPosition;
     }
     const glm::mat4 particleToWorld = flipY * localToWorld * flipY;
+    m_controlPointTransform = particleToWorld;
     const glm::mat3 worldToParticle = glm::mat3 (flipY * worldToLocal * flipY);
     for (auto& cp : m_controlPoints) {
 	cp.sampleVelocity (worldSpace ? glm::vec3 (particleToWorld * glm::vec4 (cp.position, 1.0f))
@@ -636,10 +657,16 @@ void CParticle::update (float dt) {
 	    emitter (m_particles, m_particleCount, dt, 0);
 	}
     }
+    const uint32_t firstManualParticle = m_particleCount;
     if (m_pendingEmission > 0) {
+	// Native emitParticles() uses the matrices resolved before its callback.
+	// Queue that same point state, even if the callback also changes a point.
+	m_controlPoints.swap (m_pendingControlPoints);
 	m_initializingManualEmission = true;
 	for (auto& emitter : m_emitters) emitter (m_particles, m_particleCount, 0.0f, m_pendingEmission);
 	m_initializingManualEmission = false;
+	m_controlPoints.swap (m_pendingControlPoints);
+	m_pendingControlPoints.clear ();
 	m_pendingEmission = 0;
     }
     for (uint32_t i = firstNewParticle; i < m_particleCount; ++i) {
@@ -656,8 +683,9 @@ void CParticle::update (float dt) {
 	const glm::mat4 localToWorld = flipY * particleWorldMatrix () * flipY;
 	for (uint32_t i = firstNewParticle; i < m_particleCount; ++i) {
 	    auto& particle = m_particles[i];
-	    particle.position = glm::vec3 (localToWorld * glm::vec4 (particle.position, 1.0f));
-	    particle.velocity = glm::mat3 (localToWorld) * particle.velocity;
+	    const auto& birthTransform = i < firstManualParticle ? localToWorld : m_pendingBirthTransform;
+	    particle.position = glm::vec3 (birthTransform * glm::vec4 (particle.position, 1.0f));
+	    particle.velocity = glm::mat3 (birthTransform) * particle.velocity;
 	}
 	// Emitters and child inheritance still need layer-local points. Operators
 	// act in the same space as the already spawned particles.
@@ -1000,7 +1028,7 @@ EmitterFunc CParticle::createSphereEmitter (const ParticleEmitter& emitter) {
     bool limitOnePerFrame = (emitter.flags & 2) != 0;
 
     return [this, emitter, transformedEmitterOrigin, controlPointIndex, countOverride, lifetime, limitOnePerFrame,
-	    emissionTimer = 0.0f,
+	    emissionTimer = 0.0f, delayTimer = emitter.delay,
 	    remaining
 	    = emitter.instantaneous] (std::vector<ParticleInstance>& particles, uint32_t& count, float dt, uint32_t burst) mutable {
 	if (count >= particles.size ()) {
@@ -1009,6 +1037,10 @@ EmitterFunc CParticle::createSphereEmitter (const ParticleEmitter& emitter) {
 
 	uint32_t toEmit = burst;
 	if (burst == 0) {
+	    if (delayTimer > 0.0f) {
+		delayTimer -= dt;
+		return;
+	    }
 	    // Rate-based emission with optional cap at 1 per frame
 	    const auto& recorder = getScene ().getAudioContext ().getRecorder ();
 	    const float response = calculateParticleAudioResponse (
