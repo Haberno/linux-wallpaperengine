@@ -31,6 +31,47 @@ static const unsigned char PERLIN_PERM[]
 	214, 31, 181, 199, 106, 157, 184, 84, 204, 176, 115, 121, 50, 45, 127, 4, 150, 254, 138, 236, 205, 93, 222, 114,
 	67, 29, 24, 72, 243, 141, 128, 195, 78, 66, 215, 61, 156, 180 };
 
+// The particle position-offset field uses 2D simplex noise with the same
+// permutation as Perlin, a 6-bit gradient hash and normalized octave weights.
+inline float simplexNoise2D (float x, float y) {
+    constexpr float skew = 0.3660254037844386f;
+    constexpr float unskew = 0.2113248654051871f;
+    const float s = (x + y) * skew;
+    const int i = static_cast<int> (std::floor (x + s));
+    const int j = static_cast<int> (std::floor (y + s));
+    const float t = static_cast<float> (i + j) * unskew;
+    const float x0 = x - (static_cast<float> (i) - t);
+    const float y0 = y - (static_cast<float> (j) - t);
+    const int i1 = x0 > y0 ? 1 : 0;
+    const int j1 = 1 - i1;
+    const auto corner = [] (float cx, float cy, int ix, int iy) {
+	const float weight = 0.5f - cx * cx - cy * cy;
+	if (weight < 0.0f) return 0.0f;
+	const int hash = PERLIN_PERM[((ix & 255) + PERLIN_PERM[iy & 255]) & 255] & 63;
+	const float u = hash < 4 ? cx : cy;
+	const float v = hash < 4 ? cy : cx;
+	const float gradient = ((hash & 1) ? -u : u) + ((hash & 2) ? -2.0f * v : 2.0f * v);
+	return gradient * weight * weight * weight * weight;
+    };
+    return 45.23065f * (corner (x0, y0, i, j)
+	+ corner (x0 - i1 + unskew, y0 - j1 + unskew, i + i1, j + j1)
+	+ corner (x0 - 1.0f + 2.0f * unskew, y0 - 1.0f + 2.0f * unskew, i + 1, j + 1));
+}
+
+inline float fractalNoise2D (float x, float y, int octaves) {
+    float sum = 0.0f;
+    float normalization = 0.0f;
+    float frequency = 1.0f;
+    float weight = 1.0f;
+    for (int octave = 0; octave < octaves; ++octave) {
+	sum += simplexNoise2D (x * frequency, y * frequency) * weight;
+	normalization += weight;
+	frequency *= 2.0f;
+	weight *= 0.5f;
+    }
+    return sum / normalization;
+}
+
 // Perlin noise gradient function
 inline double perlinGrad (int hash, double x, double y, double z) {
     switch (hash & 0xF) {

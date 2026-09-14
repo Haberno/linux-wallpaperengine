@@ -316,6 +316,23 @@ public:
     UserSettingUniquePtr right;
 };
 
+class PositionOffsetRandomInitializer : public ParticleInitializerBase {
+public:
+    PositionOffsetRandomInitializer (
+	UserSettingUniquePtr directions, UserSettingUniquePtr sign, UserSettingUniquePtr scale,
+	UserSettingUniquePtr distance, UserSettingUniquePtr timeScale, int octaves
+    ) :
+	directions (std::move (directions)), sign (std::move (sign)), scale (std::move (scale)),
+	distance (std::move (distance)), timeScale (std::move (timeScale)), octaves (octaves) { }
+    // Omitted directions, scale and distance depend on the scene projection.
+    UserSettingUniquePtr directions;
+    UserSettingUniquePtr sign;
+    UserSettingUniquePtr scale;
+    UserSettingUniquePtr distance;
+    UserSettingUniquePtr timeScale;
+    int octaves;
+};
+
 class MapSequenceBetweenControlPointsInitializer : public ParticleInitializerBase {
 public:
     MapSequenceBetweenControlPointsInitializer (

@@ -1201,6 +1201,8 @@ void CParticle::setupInitializers () {
 	    func = createAngularVelocityRandomInitializer (*initializer->as<AngularVelocityRandomInitializer> ());
 	} else if (initializer->is<TurbulentVelocityRandomInitializer> ()) {
 	    func = createTurbulentVelocityRandomInitializer (*initializer->as<TurbulentVelocityRandomInitializer> ());
+	} else if (initializer->is<PositionOffsetRandomInitializer> ()) {
+	    func = createPositionOffsetRandomInitializer (*initializer->as<PositionOffsetRandomInitializer> ());
 	} else if (initializer->is<MapSequenceAroundControlPointInitializer> ()) {
 	    func = createMapSequenceAroundControlPointInitializer (
 		*initializer->as<MapSequenceAroundControlPointInitializer> ()
@@ -1339,6 +1341,36 @@ InitializerFunc CParticle::createAngularVelocityRandomInitializer (const Angular
 	}
 
 	p.angularVelocity = result * speedOverride->getFloat ();
+    };
+}
+
+InitializerFunc CParticle::createPositionOffsetRandomInitializer (const PositionOffsetRandomInitializer& init) {
+    const bool perspective = getScene ().getScene ().camera.projection.isPerspective;
+    return [this, &init, perspective] (ParticleInstance& p) {
+	const glm::vec3 directions = init.directions ? init.directions->value->getVec3 ()
+	    : glm::vec3 (1.0f, 1.0f, perspective ? 1.0f : 0.0f);
+	const float scale = init.scale ? init.scale->value->getFloat () : (perspective ? 1.0f : 0.001f);
+	const float distance = init.distance ? init.distance->value->getFloat () : (perspective ? 0.1f : 100.0f);
+	const float time = getScene ().getTime () * init.timeScale->value->getFloat ();
+	const bool worldSpace = (m_particle.flags & 1) != 0;
+	const auto& birthTransform = m_initializingManualEmission ? m_pendingBirthTransform : m_controlPointTransform;
+	const glm::mat3 basis (birthTransform);
+	// A collapsed birth transform cannot represent a world offset locally.
+	// Keep its particles finite rather than applying a singular inverse.
+	if (distance == 0.0f || (worldSpace && glm::determinant (basis) == 0.0f)) return;
+	const glm::vec3 position = (worldSpace ? glm::vec3 (birthTransform * glm::vec4 (p.position, 1.0f)) : p.position)
+	    * glm::vec3 (1.0f, -1.0f, 1.0f);
+	glm::vec3 offset (
+	    fractalNoise2D (position.x * scale, time, init.octaves),
+	    fractalNoise2D (time, position.y * scale, init.octaves),
+	    fractalNoise2D (position.z * scale, -time, init.octaves)
+	);
+	offset *= directions;
+	const glm::vec3 sign = init.sign->value->getVec3 ();
+	offset = offset * (glm::vec3 (1.0f) - glm::abs (sign)) + glm::abs (offset) * sign;
+	offset *= distance * glm::vec3 (1.0f, -1.0f, 1.0f);
+	// The ordinary birth path applies this matrix after all initializers.
+	p.position += worldSpace ? glm::inverse (basis) * offset : offset;
     };
 }
 

@@ -864,6 +864,15 @@ ParticleInitializerUniquePtr ObjectParser::parseParticleInitializer (const JSON&
 	    it.user ("phasemin", properties, 0.0f), it.user ("phasemax", properties, 0.1f),
 	    it.user ("right", properties, glm::vec3 (0.0f, 0.0f, 1.0f))
 	);
+    } else if (name == "positionoffsetrandom") {
+	return std::make_unique<PositionOffsetRandomInitializer> (
+	    it.contains ("directions") && !it.at ("directions").is_null ()
+		? it.user ("directions", properties, glm::vec3 (1.0f)) : nullptr,
+	    it.user ("sign", properties, glm::vec3 (0.0f)),
+	    it.contains ("scale") && !it.at ("scale").is_null () ? it.user ("scale", properties, 1.0f) : nullptr,
+	    it.contains ("distance") && !it.at ("distance").is_null () ? it.user ("distance", properties, 0.1f) : nullptr,
+	    it.user ("timescale", properties, 1.0f), static_cast<int> (std::clamp (it.optional ("octaves", 6u), 1u, 8u))
+	);
     } else if (name == "mapsequencebetweencontrolpoints") {
 	return std::make_unique<MapSequenceBetweenControlPointsInitializer> (
 	    it.user ("count", properties, 32.0f), it.user ("bounds", properties, glm::vec2 (0.0f, 1.0f)),
