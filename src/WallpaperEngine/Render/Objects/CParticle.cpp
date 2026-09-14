@@ -1934,14 +1934,10 @@ OperatorFunc CParticle::createTurbulenceOperator (const TurbulenceOperator& op) 
 	       std::vector<ParticleInstance>& particles, uint32_t count, const std::vector<ControlPointData>&,
 	       float currentTime, float dt
 	   ) {
-	const float noiseScale = scaleValue->getFloat () * 2.0f;
+	const float noiseScale = scaleValue->getFloat ();
 	const float timeScale = timeScaleValue->getFloat ();
 	const glm::vec3 mask = maskValue->getVec3 ();
 	const float speed = speedOverride->getFloat ();
-
-	if (turbSpeed <= 0.0001f) {
-	    return;
-	}
 
 	for (size_t i = 0; i < count; ++i) {
 	    ParticleInstance& p = particles[i];
@@ -1950,19 +1946,20 @@ OperatorFunc CParticle::createTurbulenceOperator (const TurbulenceOperator& op) 
 	    }
 
 	    glm::vec3 noisePos = p.position;
+	    noisePos.y = -noisePos.y;
+	    // Phase/random and time mapping retain their existing behavior for now.
 	    noisePos.x += phase + timeScale * currentTime;
 	    noisePos *= noiseScale;
 
-	    glm::vec3 curlDir = curlNoise (noisePos);
-	    const float len = glm::length (curlDir);
-	    if (len > 0.0001f) {
-		curlDir = (curlDir / len) * turbSpeed;
-	    }
-
-	    curlDir *= mask;
-	    // Native opcode 36 weights the added force, preserving the noise sample
-	    // and existing velocity. Noise generation and force-clock parity are separate.
-	    p.velocity += curlDir * dt * speed * particleOperatorBlend (p.getLifetimePos (), blendTimes);
+	    glm::vec3 force (
+		simplexNoise3D (noisePos.x, noisePos.y, noisePos.z),
+		-simplexNoise3D (noisePos.z, noisePos.x, noisePos.y),
+		simplexNoise3D (noisePos.y, noisePos.z, noisePos.x)
+	    );
+	    // Native keeps the scalar field's magnitude and signed speed; it neither
+	    // takes a curl nor normalizes the three cyclic samples.
+	    force *= mask * turbSpeed;
+	    p.velocity += force * dt * speed * particleOperatorBlend (p.getLifetimePos (), blendTimes);
 	}
     };
 }
