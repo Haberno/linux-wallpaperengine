@@ -124,8 +124,9 @@ JSValue ScriptEngine::dynamicToJs (DynamicValue& value) const {
 static bool isAnglesProperty (const std::string& key) { return key.rfind ("angles_", 0) == 0; }
 
 static bool isControlPointProperty (const std::string& key) {
-    return key.starts_with ("instance.controlpoint") && key.size () > 22
-	&& key[21] >= '0' && key[21] <= '7' && key[22] == '_';
+    const size_t index = key.starts_with ("instance.controlpointangle") ? 26 : 21;
+    return key.starts_with ("instance.controlpoint") && key.size () > index + 1
+	&& key[index] >= '0' && key[index] <= '7' && key[index + 1] == '_';
 }
 
 static std::string normalizeSceneScriptModuleSyntax (const std::string& source) {

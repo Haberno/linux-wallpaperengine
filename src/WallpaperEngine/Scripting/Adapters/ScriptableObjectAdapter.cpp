@@ -1222,6 +1222,10 @@ JSValue scriptableobject_property_get (JSContext* ctx, JSValueConst obj_val, JSA
 	// find the property inside, otherwise return undefined
 	auto& property = container->object.getProperty (name);
 	const auto* setting = container->object.getPropertySetting (name);
+	if (setting != nullptr && std::string_view (name).starts_with ("instance.controlpoint")) {
+	    DynamicValue sampled (setting->evaluateVec3 (container->object.getScene ().getTime ()));
+	    return container->adapter.getEngine ().getAdapters ().vec3->instantiate (sampled, true);
+	}
 	if (setting != nullptr && setting->animation != nullptr) {
 	    // A camera-follow script reads the animated layer pose, not the base
 	    // value stored in scene.json. Use owned snapshots so sampling relative
@@ -1342,7 +1346,9 @@ int scriptableobject_property_set (
 static constexpr const char* particleInstanceFields[] = {
     "enabled", "alpha", "brightness", "size", "lifetime", "rate", "speed", "count", "color", "colorn",
     "controlpoint0", "controlpoint1", "controlpoint2", "controlpoint3",
-    "controlpoint4", "controlpoint5", "controlpoint6", "controlpoint7"
+    "controlpoint4", "controlpoint5", "controlpoint6", "controlpoint7",
+    "controlpointangle0", "controlpointangle1", "controlpointangle2", "controlpointangle3",
+    "controlpointangle4", "controlpointangle5", "controlpointangle6", "controlpointangle7"
 };
 
 static JSValue particle_instance_field (

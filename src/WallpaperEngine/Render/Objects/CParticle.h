@@ -137,6 +137,8 @@ void initializeParticleBetweenControlPoints (
 struct ControlPointData {
     glm::vec3 position { 0.0f };
     glm::vec3 offset { 0.0f };
+    glm::mat3 baseOrientation { 1.0f };
+    glm::mat3 orientation { 1.0f };
     uint32_t flags { 0 };
     int parentControlPoint { 0 };
     glm::vec3 velocity { 0.0f };
@@ -193,6 +195,7 @@ protected:
     void setupInitializers ();
     void setupOperators ();
     void updateControlPoints (float frameTime = 0.0f);
+    void includeControlPoint (uint32_t index);
     [[nodiscard]] glm::mat4 particleWorldMatrix ();
 
     // Emitter creators
@@ -249,6 +252,9 @@ private:
     const Particle& m_particle;
     CParticle* m_particleParent = nullptr;
     std::array<bool, PARTICLE_CONTROL_POINT_COUNT> m_controlPointOverridesChanged {};
+    bool m_controlPointAnglesChanged = false;
+    bool m_controlPointTimelines = false;
+    uint32_t m_controlPointCount = 0;
     std::vector<Data::Utils::ScopeGuard<std::function<void ()>>> m_controlPointSubscriptions;
     std::vector<Data::Utils::ScopeGuard<std::function<void ()>>> m_turbulenceRateSubscriptions;
     float m_turbulenceRate = 1.0f;
