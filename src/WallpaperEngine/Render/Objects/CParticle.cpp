@@ -105,17 +105,22 @@ float WallpaperEngine::Render::Objects::calculateRopeTrailVisualValue (
 }
 
 glm::vec3 WallpaperEngine::Render::Objects::calculateControlPointAttraction (
-    const glm::vec3& toCenter, const float strength, const float radius, const float deltaTime
+    const glm::vec3& toCenter, const float strength, const float radius, const float deltaTime,
+    const bool limitToDistance, const float lifetimeWeight
 ) {
     const float distance = glm::length (toCenter);
-    if (distance <= 0.001f || distance >= radius) {
+    if (distance <= std::numeric_limits<float>::min () || distance >= radius) {
 	return glm::vec3 (0.0f);
     }
     // The native controlpointattract operator fades linearly over the complete
     // threshold radius. A constant force in half that radius makes flocks turn
     // abruptly and changes the shape of magic vortices.
     const float falloff = 1.0f - distance / radius;
-    return toCenter * (strength * deltaTime * falloff / distance);
+    float magnitude = strength * deltaTime * falloff;
+    // Native flags default to 2: cap positive attraction before lifetime blending.
+    // Negative strength remains an uncapped repulsion.
+    if (limitToDistance) magnitude = std::min (magnitude, distance);
+    return toCenter * (magnitude * lifetimeWeight / distance);
 }
 
 glm::vec3 WallpaperEngine::Render::Objects::resolveParticleControlPoint (
@@ -2135,11 +2140,6 @@ OperatorFunc CParticle::createVortexOperator (const VortexOperator& op) {
 }
 
 OperatorFunc CParticle::createControlPointAttractOperator (const ControlPointAttractOperator& op) {
-    int controlPoint = op.controlPoint;
-    DynamicValue* originValue = op.origin->value.get ();
-    DynamicValue* scaleValue = op.scale ? op.scale->value.get () : nullptr;
-    DynamicValue* thresholdValue = op.threshold ? op.threshold->value.get () : nullptr;
-    DynamicValue* speedOverride = getInstanceOverride ().speed->value.get ();
     // The authored defaults use pixels in an orthographic scene and world units
     // in a perspective scene. The project is still being parsed when operators
     // are read, so resolve omitted settings here rather than guessing in the parser.
@@ -2147,21 +2147,21 @@ OperatorFunc CParticle::createControlPointAttractOperator (const ControlPointAtt
     const float defaultScale = isPerspective ? 20.0f : 512.0f;
     const float defaultThreshold = isPerspective ? 5.0f : 512.0f;
 
-    return [controlPoint, originValue, scaleValue, thresholdValue, speedOverride, defaultScale, defaultThreshold] (
+    return [this, &op, defaultScale, defaultThreshold] (
 	       std::vector<ParticleInstance>& particles, uint32_t count,
-	       const std::vector<ControlPointData>& controlPoints, float currentTime, float dt
+	       const std::vector<ControlPointData>& controlPoints, float, float dt
 	   ) {
-	// Get dynamic values
-	glm::vec3 origin = originValue->getVec3 ();
-	float scale = scaleValue ? scaleValue->getFloat () : defaultScale;
-	float threshold = thresholdValue ? thresholdValue->getFloat () : defaultThreshold;
+	const float speed = (m_particle.flags & 16) != 0 ? 1.0f : getInstanceOverride ().speed->value->getFloat ();
+	const float scale = (op.scale ? op.scale->value->getFloat () : defaultScale) * speed;
+	const float threshold = op.threshold ? op.threshold->value->getFloat () : defaultThreshold;
 
 	// Get control point position
-	if (controlPoint < 0 || controlPoint >= static_cast<int> (controlPoints.size ())) {
+	if (op.controlPoint < 0 || op.controlPoint >= static_cast<int> (controlPoints.size ())) {
 	    return;
 	}
 
-	glm::vec3 center = controlPoints[controlPoint].position + origin;
+	// Native uses only the selected control point; origin/offset do not move it.
+	const glm::vec3 center = controlPoints[op.controlPoint].position;
 
 	// Apply attraction force to all particles within threshold
 	for (uint32_t i = 0; i < count; i++) {
@@ -2170,8 +2170,10 @@ OperatorFunc CParticle::createControlPointAttractOperator (const ControlPointAtt
 		continue;
 	    }
 
-	    p.velocity += calculateControlPointAttraction (center - p.position, scale, threshold, dt)
-		* speedOverride->getFloat ();
+	    p.velocity += calculateControlPointAttraction (
+		center - p.position, scale, threshold, dt, (op.flags & 2) != 0,
+		particleOperatorBlend (p.getLifetimePos (), op.blendTimes)
+	    );
 	}
     };
 }
