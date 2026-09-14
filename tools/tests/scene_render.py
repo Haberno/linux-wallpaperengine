@@ -8,7 +8,7 @@ import subprocess
 import time
 
 
-def render_scene(test, root, scene, frames=5, parallax=False):
+def render_scene(test, root, scene, frames=5, parallax=False, fps=10):
     from PIL import Image
 
     root.mkdir(parents=True, exist_ok=True)
@@ -23,7 +23,7 @@ def render_scene(test, root, scene, frames=5, parallax=False):
                WPE_HEALTH_REPORT=str(root / 'health.json'))
     with log_path.open('w') as log:
         process = subprocess.Popen([
-            str(binary), '--window', '0x0x320x180', '--silent', '--fps', '10',
+            str(binary), '--window', '0x0x320x180', '--silent', '--fps', str(fps),
             '--no-full-screen-pause', '--disable-mouse',
             *([] if parallax else ['--disable-parallax']),
             '--no-audio-processing', '--screenshot', str(frame),

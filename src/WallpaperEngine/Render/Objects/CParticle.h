@@ -29,6 +29,10 @@ constexpr uint32_t DEFAULT_MAX_PARTICLES = 1000;
 [[nodiscard]] glm::vec3 calculateParticleVelocityCap (
     const glm::vec3& velocity, float maxSpeed, float lifetimePosition, glm::vec4 blendTimes
 );
+[[nodiscard]] glm::vec3 calculateParticleMovementReduction (
+    const glm::vec3& velocity, float distance, glm::vec2 distanceRange, glm::vec2 reductions,
+    float deltaTime, float lifetimePosition, glm::vec4 blendTimes
+);
 [[nodiscard]] float calculateParticleAudioResponse (
     const float* left, const float* right, int mode, const glm::vec2& bounds,
     float exponent, int frequencyStart, int frequencyEnd
@@ -207,6 +211,7 @@ protected:
 
     // Operator creators
     OperatorFunc createMovementOperator (const MovementOperator& op);
+    OperatorFunc createReduceMovementNearControlPointOperator (const ReduceMovementNearControlPointOperator& op);
     OperatorFunc createCapVelocityOperator (const CapVelocityOperator& op);
     OperatorFunc createAngularMovementOperator (const AngularMovementOperator& op);
     OperatorFunc createAlphaFadeOperator (const AlphaFadeOperator& op);

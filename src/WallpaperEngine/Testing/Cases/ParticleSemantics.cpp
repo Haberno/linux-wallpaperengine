@@ -121,6 +121,78 @@ TEST_CASE ("control-point velocity follows frame displacement without startup im
     CHECK (point.velocity == glm::vec3 (4.0f, 0.0f, 0.0f));
 }
 
+TEST_CASE ("particles retain the authored control-point motion reduction operator", "[particle][motioncontrolpoint]") {
+    WallpaperEngine::Data::Model::Project project {};
+    const auto object = WallpaperEngine::Data::Parsers::ObjectParser::parse (
+        WallpaperEngine::Data::JSON::JSON::parse (R"({"id":19,"particle":{"operator":[{
+            "name":"reducemovementnearcontrolpoint","controlpoint":1,
+            "distanceinner":50,"distanceouter":150,"reductioninner":10,"reductionouter":0
+        }]}})"), project
+    );
+    const auto* particle = object->as<WallpaperEngine::Data::Model::Particle> ();
+    REQUIRE (particle != nullptr);
+    REQUIRE (particle->operators.size () == 1);
+    const auto* op = particle->operators.front ()->as<ReduceMovementNearControlPointOperator> ();
+    REQUIRE (op != nullptr);
+    CHECK (op->controlPoint == 1);
+    CHECK (op->distanceInner->value->getFloat () == 50.0f);
+    CHECK (op->distanceOuter->value->getFloat () == 150.0f);
+    CHECK (op->reductionInner->value->getFloat () == 10.0f);
+    CHECK (op->reductionOuter->value->getFloat () == 0.0f);
+}
+
+TEST_CASE ("control-point motion reduction preserves native defaults and index bounds", "[particle][motioncontrolpoint]") {
+    WallpaperEngine::Data::Model::Project project {};
+    const auto object = WallpaperEngine::Data::Parsers::ObjectParser::parse (
+        WallpaperEngine::Data::JSON::JSON::parse (R"({"id":19,"particle":{"operator":[
+            {"name":"reducemovementnearcontrolpoint"},
+            {"name":"reducemovementnearcontrolpoint","controlpoint":-1},
+            {"name":"reducemovementnearcontrolpoint","controlpoint":2147483648}
+        ]}})"), project
+    );
+    const auto* particle = object->as<WallpaperEngine::Data::Model::Particle> ();
+    REQUIRE (particle->operators.size () == 3);
+    const auto* op = particle->operators.front ()->as<ReduceMovementNearControlPointOperator> ();
+    REQUIRE (op != nullptr);
+    CHECK (op->controlPoint == 0);
+    CHECK (op->distanceInner == nullptr);
+    CHECK (op->distanceOuter == nullptr);
+    CHECK (op->reductionInner->value->getFloat () == 100.0f);
+    CHECK (op->reductionOuter->value->getFloat () == 0.0f);
+    CHECK (op->blendTimes == glm::vec4 (0.0f, 0.0f, 1.0f, 1.0f));
+    CHECK (particle->operators[1]->as<ReduceMovementNearControlPointOperator> ()->controlPoint == 7);
+    CHECK (particle->operators[2]->as<ReduceMovementNearControlPointOperator> ()->controlPoint == 7);
+}
+
+TEST_CASE ("control-point motion reduction follows native damping and endpoint rules", "[particle][motioncontrolpoint]") {
+    using WallpaperEngine::Render::Objects::calculateParticleMovementReduction;
+    const glm::vec3 velocity (40.0f, -20.0f, 10.0f);
+    const glm::vec4 fullLifetime (0.0f, 0.0f, 1.0f, 1.0f);
+    CHECK (calculateParticleMovementReduction (velocity, 40, {50, 150}, {10, 0}, .05f, 0, fullLifetime)
+           == glm::vec3 (20, -10, 5));
+    CHECK (calculateParticleMovementReduction (velocity, 100, {50, 150}, {10, 0}, .05f, 0, fullLifetime)
+           == glm::vec3 (30, -15, 7.5f));
+    CHECK (calculateParticleMovementReduction (velocity, 200, {50, 150}, {10, 0}, .05f, 0, fullLifetime) == velocity);
+    CHECK (calculateParticleMovementReduction (velocity, 40, {50, 150}, {-10, 0}, .05f, 0, fullLifetime) == velocity);
+    CHECK (calculateParticleMovementReduction (velocity, 40, {50, 150}, {1000, 0}, .05f, 0, fullLifetime)
+           == glm::vec3 (0));
+    CHECK (calculateParticleMovementReduction (velocity, 0, {50, 150}, {10, 0}, .05f, 0, fullLifetime) == velocity);
+    CHECK (calculateParticleMovementReduction (velocity, 50.5f, {50, 50}, {10, 0}, .05f, 0, fullLifetime)
+           == glm::vec3 (30, -15, 7.5f));
+    CHECK (calculateParticleMovementReduction (velocity, 200, {50, 150}, {5, 5}, .05f, 0, fullLifetime)
+           == glm::vec3 (28, -14, 7));
+    CHECK (calculateParticleMovementReduction (velocity, 200, {50, 150}, {0, 0}, .05f, 0, fullLifetime)
+           == glm::vec3 (38, -19, 9.5f));
+    CHECK (calculateParticleMovementReduction (velocity, 200, {50, 150}, {-.5f, -.5f}, .05f, 0, fullLifetime)
+           == glm::vec3 (39, -19.5f, 9.75f));
+    CHECK (calculateParticleMovementReduction (velocity, 100, {150, 50}, {10, 0}, .05f, 0, fullLifetime)
+           == glm::vec3 (30, -15, 7.5f));
+    CHECK (calculateParticleMovementReduction (velocity, 40, {50, 150}, {1000, 0}, .05f, .25f, {0, .5f, 1, 1})
+           == glm::vec3 (20, -10, 5));
+    CHECK (calculateParticleMovementReduction (velocity, 40, {50, 150}, {1000, 0}, .05f, .75f, {0, 0, .5f, 1})
+           == glm::vec3 (20, -10, 5));
+}
+
 TEST_CASE ("stock cap velocity particles retain their speed limit operator", "[particle][capvelocity]") {
     auto filesystem = std::make_unique<WallpaperEngine::FileSystem::Container> ();
     // Installed particleelementpreviews/capvelocity uses this delayed speed cap.
