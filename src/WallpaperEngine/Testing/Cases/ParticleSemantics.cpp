@@ -24,6 +24,69 @@ using WallpaperEngine::Render::Objects::calculateFixedParticleOrientation;
 using WallpaperEngine::Render::Objects::calculateBillboardParticleOrientation;
 using WallpaperEngine::Render::Objects::ParticleInstance;
 
+TEST_CASE ("vortex v2 preserves its own blending and projection defaults", "[particle][vortex]") {
+    WallpaperEngine::Data::Model::Project project {};
+    const auto object = WallpaperEngine::Data::Parsers::ObjectParser::parse (
+        WallpaperEngine::Data::JSON::JSON::parse (R"({"id":21,"particle":{"operator":[
+            {"name":"vortex_v2"}, {"name":"vortex"},
+            {"name":"vortex_v2","controlpoint":-1,"flags":259,"speedinner":20,"audioprocessingexponent":3,
+             "audioprocessingfrequencystart":8,"audioprocessingfrequencyend":4,
+             "blendinstart":0.2,"blendinend":0.4,"blendoutstart":0.6,"blendoutend":0.8}
+        ]}})"), project
+    );
+    const auto* particle = object->as<Particle> ();
+    REQUIRE (particle != nullptr);
+    REQUIRE (particle->operators.size () == 3);
+    const auto* defaults = particle->operators[0]->as<VortexOperator> ();
+    const auto* legacy = particle->operators[1]->as<VortexOperator> ();
+    const auto* authored = particle->operators[2]->as<VortexOperator> ();
+    REQUIRE (defaults != nullptr);
+    REQUIRE (legacy != nullptr);
+    REQUIRE (authored != nullptr);
+    CHECK (defaults->nativeV2);
+    CHECK_FALSE (legacy->nativeV2);
+    CHECK (defaults->distanceInner == nullptr);
+    CHECK (defaults->distanceOuter == nullptr);
+    CHECK (defaults->speedInner == nullptr);
+    CHECK (defaults->ringRadius == nullptr);
+    CHECK (defaults->ringWidth == nullptr);
+    CHECK (defaults->ringPullDistance == nullptr);
+    CHECK (defaults->ringPullForce == nullptr);
+    CHECK (defaults->blendTimes == glm::vec4 (0, 0, 1, 1));
+    CHECK (defaults->audioProcessingBounds->value->getVec2 () == glm::vec2 (.8f, 1));
+    CHECK (defaults->audioProcessingExponent->value->getFloat () == 2.0f);
+    CHECK (defaults->audioProcessingFrequencyStart->value->getInt () == 0);
+    CHECK (defaults->audioProcessingFrequencyEnd->value->getInt () == 1);
+    CHECK (authored->audioProcessingExponent->value->getFloat () == 3.0f);
+    CHECK (authored->audioProcessingFrequencyStart->value->getInt () == 8);
+    CHECK (authored->audioProcessingFrequencyEnd->value->getInt () == 4);
+    CHECK (legacy->audioProcessingBounds->value->getVec2 () == glm::vec2 (0, 1));
+    CHECK (legacy->distanceInner->value->getFloat () == 500.0f);
+    CHECK (authored->controlPoint == 7);
+    CHECK (authored->flags == 3);
+    CHECK (authored->speedInner->value->getFloat () == 20.0f);
+    CHECK (authored->blendTimes == glm::vec4 (.2f, .4f, .6f, .8f));
+}
+
+TEST_CASE ("vortex v2 weights spin and predicted radius together", "[particle][vortex]") {
+    using WallpaperEngine::Render::Objects::calculateParticleVortexV2;
+    const auto increment = calculateParticleVortexV2 (
+        {10, 0, 0}, {0, -10, 0}, {0, 0, 1}, 2, {0, 20}, {20, 20}, 1, {}, .1f, .1f, .5f
+    );
+    CHECK (increment.x == Catch::Approx (-.24814049f).margin (.00002f));
+    CHECK (increment.y == Catch::Approx (1.02481405f).margin (.00002f));
+    CHECK (increment.z == 0.0f);
+    const auto slowerForce = calculateParticleVortexV2 (
+        {10, 0, 0}, {0, -10, 0}, {0, 0, 1}, 2, {0, 20}, {20, 20}, 1, {}, .1f, .05f, .5f
+    );
+    CHECK (slowerForce.x == increment.x);
+    CHECK (slowerForce.y == Catch::Approx (increment.y - .5f));
+    CHECK (calculateParticleVortexV2 ({}, {}, {0, 0, 1}, 2, {0, 20}, {20, 20}, 1, {}, .1f, .1f, 1)
+           == glm::vec3 (0));
+    CHECK (calculateParticleVortexV2 ({10, 0, 0}, {}, {0, 0, 1}, 2, {0, 20}, {20, 20}, 1, {}, 0, 0, 1)
+           == glm::vec3 (0));
+}
+
 TEST_CASE ("attraction parses lifetime blending and native point selection", "[particle][attraction]") {
     WallpaperEngine::Data::Model::Project project {};
     const auto object = WallpaperEngine::Data::Parsers::ObjectParser::parse (

@@ -1980,7 +1980,83 @@ OperatorFunc CParticle::createTurbulenceOperator (const TurbulenceOperator& op) 
     };
 }
 
+glm::vec3 WallpaperEngine::Render::Objects::calculateParticleVortexV2 (
+    const glm::vec3& displacement, const glm::vec3& velocity, const glm::vec3& axis, const int flags,
+    const glm::vec2 distances, const glm::vec2 speeds, const float centerForce, const glm::vec4 ring,
+    const float rawDt, const float forceDt, const float lifetimeWeight
+) {
+    if (rawDt <= 0.0f || lifetimeWeight == 0.0f) return glm::vec3 (0.0f);
+    const glm::vec3 radial = (flags & 1) != 0
+        ? displacement - axis * glm::dot (displacement, axis) : displacement;
+    const float distance = glm::length (radial);
+    // Native rsqrt is singular at the center. Keep that undefined case finite.
+    if (distance <= std::numeric_limits<float>::min ()) return glm::vec3 (0.0f);
+    const glm::vec3 predicted = radial + velocity * rawDt;
+    const float predictedDistance = glm::length (predicted);
+    const bool ringShape = (flags & 4) != 0;
+    const float span = ringShape ? ring.z : distances.y - distances.x;
+    const float offset = ringShape ? std::abs (ring.x - distance) - ring.y : distance - distances.x;
+    const float t = std::clamp (offset * (span == 0.0f ? 1.0f : 1.0f / span), 0.0f, 1.0f);
+    float correction = (flags & 2) != 0 && predictedDistance > std::numeric_limits<float>::min ()
+        ? (distance / predictedDistance - 1.0f) * centerForce / rawDt : 0.0f;
+    if (ringShape) {
+        const float pull = 1.0f - t;
+        correction += std::copysign (pull == 1.0f ? 0.0f : pull, ring.x - distance) * rawDt * ring.w;
+    }
+    // Native cross(radial, axis) reverses under our Y reflection. Do not
+    // normalize the tangent separately: sphere poles retain their attenuation.
+    const glm::vec3 tangent = glm::cross (axis, radial / distance);
+    return (tangent * (glm::mix (speeds.x, speeds.y, t) * forceDt) + predicted * correction) * lifetimeWeight;
+}
+
+OperatorFunc CParticle::createVortexV2Operator (const VortexOperator& op) {
+    const bool perspective = getScene ().getScene ().camera.projection.isPerspective;
+    return [this, &op, perspective] (
+        std::vector<ParticleInstance>& particles, uint32_t count,
+        const std::vector<ControlPointData>& controlPoints, float, float dt
+    ) {
+        if (op.controlPoint >= static_cast<int> (controlPoints.size ())) return;
+        const auto value = [] (const UserSettingUniquePtr& setting, float fallback) {
+            return setting ? setting->value->getFloat () : fallback;
+        };
+        const glm::vec2 distances (value (op.distanceInner, perspective ? 1.0f : 500.0f),
+                                  value (op.distanceOuter, perspective ? 2.0f : 650.0f));
+        const glm::vec4 ring (value (op.ringRadius, perspective ? 1.0f : 300.0f),
+                             value (op.ringWidth, perspective ? .2f : 50.0f),
+                             value (op.ringPullDistance, perspective ? .25f : 50.0f),
+                             value (op.ringPullForce, perspective ? .05f : 10.0f));
+        const float speed = (m_particle.flags & 16) != 0 ? 1.0f : getInstanceOverride ().speed->value->getFloat ();
+        const auto& recorder = getScene ().getAudioContext ().getRecorder ();
+        auto firstBand = std::min (static_cast<uint32_t> (op.audioProcessingFrequencyStart->value->getInt ()), 15u);
+        auto lastBand = std::min (static_cast<uint32_t> (op.audioProcessingFrequencyEnd->value->getInt ()), 15u);
+        if (firstBand > lastBand) std::swap (firstBand, lastBand);
+        const float audio = calculateParticleAudioResponse (
+            recorder.audio16Left, recorder.audio16Right, op.audioProcessingMode->value->getInt (),
+            op.audioProcessingBounds->value->getVec2 (), op.audioProcessingExponent->value->getFloat (), firstBand, lastBand
+        );
+        const glm::vec2 speeds = glm::vec2 (value (op.speedInner, perspective ? 1.0f : 2500.0f),
+                                          op.speedOuter->value->getFloat ()) * speed * audio;
+        glm::vec3 axis = op.axis->value->getVec3 ();
+        axis = glm::dot (axis, axis) < .001f ? glm::vec3 (0, 0, 1) : glm::normalize (axis);
+        axis.y = -axis.y;
+        if ((m_particle.flags & 1) != 0) axis = glm::mat3 (m_controlPointTransform) * axis;
+        const glm::vec3 center = controlPoints[op.controlPoint].position;
+        const float centerForce = op.centerForce->value->getFloat ();
+        for (uint32_t i = 0; i < count; ++i) {
+            auto& particle = particles[i];
+            if (!particle.alive) continue;
+            // Native has a separately adjusted force clock. The fork currently
+            // supplies one simulation delta; clock/scheduler parity is separate.
+            particle.velocity += calculateParticleVortexV2 (
+                particle.position - center, particle.velocity, axis, op.flags, distances, speeds,
+                centerForce, ring, dt, dt, particleOperatorBlend (particle.getLifetimePos (), op.blendTimes)
+            );
+        }
+    };
+}
+
 OperatorFunc CParticle::createVortexOperator (const VortexOperator& op) {
+    if (op.nativeV2) return createVortexV2Operator (op);
     int controlPoint = op.controlPoint;
     int flags = op.flags;
     DynamicValue* axisValue = op.axis->value.get ();
