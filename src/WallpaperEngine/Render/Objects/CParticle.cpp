@@ -430,6 +430,11 @@ void CParticle::render () {
     // the physics stability cap. Sample even when emission/rate is paused.
     updateControlPoints (dt);
 
+    if (m_turbulenceRateDirty) {
+	m_turbulenceRate = std::max (0.01f, getInstanceOverride ().rate->value->getFloat ());
+	m_turbulenceRateDirty = false;
+    }
+
     if (dt > 0.0f) {
 	// Cap dt to prevent simulation instability
 	// Also provides more consistent behavior across different FPS
@@ -535,6 +540,8 @@ void CParticle::updateFollowChildren (const uint32_t firstNewParticle) {
 	    slot->parentSerial = particle.serial;
 	    slot->renderer->stop ();
 	    slot->renderer->m_simulationTime = 0.0f;
+	    // Native child activation rebuilds derived parameters from root overrides.
+	    slot->renderer->m_turbulenceRateDirty = true;
 	    slot->renderer->m_time = g_Time;
 	    slot->renderer->play ();
 	}
@@ -1916,6 +1923,24 @@ OperatorFunc CParticle::createTurbulenceOperator (const TurbulenceOperator& op) 
     DynamicValue* phaseMinValue = op.phaseMin->value.get ();
     DynamicValue* phaseMaxValue = op.phaseMax->value.get ();
     DynamicValue* speedOverride = getInstanceOverride ().speed->value.get ();
+    DynamicValue* rateOverride = getInstanceOverride ().rate->value.get ();
+
+    if (m_turbulenceRateSubscriptions.empty ()) {
+	m_turbulenceRate = std::max (0.01f, rateOverride->getFloat ());
+	const auto subscribe = [this] (const UserSetting& setting) {
+	    m_turbulenceRateSubscriptions.emplace_back (Data::Utils::ScopeGuard (setting.value->listen (
+		[this] (const DynamicValue&, DynamicValue::UpdateSource) { m_turbulenceRateDirty = true; }
+	    )));
+	};
+	const auto& settings = getInstanceOverride ();
+	// Native rate setters do not invalidate derived parameters. These setters
+	// do, even for unchanged values; read the final rate when simulation runs.
+	for (const auto* setting : { settings.alpha.get (), settings.size.get (), settings.count.get (),
+		settings.speed.get (), settings.lifetime.get (), settings.brightness.get (), settings.colorn.get () }) {
+	    subscribe (*setting);
+	}
+	for (const auto& [id, setting] : settings.controlPointOffsets) subscribe (*setting);
+    }
 
     // TODO: Audio processing support
     // DynamicValue* audioModeValue = op.audioProcessingMode->value.get ();
@@ -1927,10 +1952,11 @@ OperatorFunc CParticle::createTurbulenceOperator (const TurbulenceOperator& op) 
     return [this, scaleValue, timeScaleValue, maskValue, speedOverride, speedMinValue, speedMaxValue,
             phaseMinValue, phaseMaxValue, blendTimes = op.blendTimes] (
 	       std::vector<ParticleInstance>& particles, uint32_t count, const std::vector<ControlPointData>&,
-	       float currentTime, float dt
+	       float, float dt
 	   ) {
 	const float noiseScale = scaleValue->getFloat ();
-	const float timeScale = timeScaleValue->getFloat ();
+	// Native samples owner time with the cached rate, not integrated particle time.
+	const float timeOffset = (timeScaleValue->getFloat () * m_turbulenceRate) * getScene ().getTime ();
 	const glm::vec3 mask = maskValue->getVec3 ();
 	const float speed = speedOverride->getFloat ();
 	const float speedMin = speedMinValue->getFloat ();
@@ -1952,9 +1978,7 @@ OperatorFunc CParticle::createTurbulenceOperator (const TurbulenceOperator& op) 
 
 	    glm::vec3 noisePos = p.position;
 	    noisePos.y = -noisePos.y;
-	    noisePos += glm::vec3 (phase);
-	    // Time coordinates and clock/rate mapping remain a separate component.
-	    noisePos.x += timeScale * currentTime;
+	    noisePos += glm::vec3 (phase + timeOffset);
 	    noisePos *= noiseScale;
 
 	    glm::vec3 force (
