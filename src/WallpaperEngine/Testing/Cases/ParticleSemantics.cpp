@@ -11,6 +11,7 @@
 #include <glm/gtc/matrix_transform.hpp>
 #include "WallpaperEngine/Data/Parsers/ObjectParser.h"
 #include "WallpaperEngine/FileSystem/Container.h"
+#include "WallpaperEngine/Render/Utils/NoiseUtils.h"
 
 using WallpaperEngine::Render::Objects::calculateParticleEmissionRate;
 using WallpaperEngine::Render::Objects::calculateParticleAudioResponse;
@@ -22,6 +23,29 @@ using WallpaperEngine::Render::Objects::resolveParticleControlPoint;
 using WallpaperEngine::Render::Objects::calculateFixedParticleOrientation;
 using WallpaperEngine::Render::Objects::calculateBillboardParticleOrientation;
 using WallpaperEngine::Render::Objects::ParticleInstance;
+
+TEST_CASE ("particles retain the fractal position-offset initializer", "[particle][positionoffset]") {
+    WallpaperEngine::Data::Model::Project project {};
+    const auto object = WallpaperEngine::Data::Parsers::ObjectParser::parse (
+        WallpaperEngine::Data::JSON::JSON::parse (R"({"id":19,"particle":{
+            "initializer":[{"name":"positionoffsetrandom","distance":150}]
+        }})"), project
+    );
+    const auto* particle = object->as<WallpaperEngine::Data::Model::Particle> ();
+    REQUIRE (particle != nullptr);
+    REQUIRE (particle->initializers.size () == 1);
+}
+
+TEST_CASE ("position-offset noise keeps signed simplex gradients", "[particle][positionoffset]") {
+    using WallpaperEngine::Render::Utils::simplexNoise2D;
+    CHECK (simplexNoise2D (0.0f, 0.0f) == 0.0f);
+    CHECK (simplexNoise2D (0.2f, 0.0f) == Catch::Approx (0.8188545f).margin (0.00001f));
+    CHECK (simplexNoise2D (0.0f, 0.3f) == Catch::Approx (-0.3810688f).margin (0.00001f));
+    CHECK (simplexNoise2D (-0.2f, 0.0f) == Catch::Approx (-0.8188726f).margin (0.00001f));
+    CHECK (simplexNoise2D (0.0f, -0.3f) == Catch::Approx (0.3794413f).margin (0.00001f));
+    CHECK (simplexNoise2D (1.25f, -2.75f) == Catch::Approx (-0.9296935f).margin (0.00001f));
+    CHECK (simplexNoise2D (0.125f, 0.5f) == Catch::Approx (-0.4931363f).margin (0.00001f));
+}
 
 TEST_CASE ("control-point sentinels retain float values without integer overflow", "[particle][controlpoint]") {
     using WallpaperEngine::Data::Model::DynamicValue;

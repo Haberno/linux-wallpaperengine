@@ -199,6 +199,7 @@ protected:
     InitializerFunc createRotationRandomInitializer (const RotationRandomInitializer& init);
     InitializerFunc createAngularVelocityRandomInitializer (const AngularVelocityRandomInitializer& init);
     InitializerFunc createTurbulentVelocityRandomInitializer (const TurbulentVelocityRandomInitializer& init);
+    InitializerFunc createPositionOffsetRandomInitializer (const PositionOffsetRandomInitializer& init);
     InitializerFunc
     createMapSequenceAroundControlPointInitializer (const MapSequenceAroundControlPointInitializer& init);
     InitializerFunc
