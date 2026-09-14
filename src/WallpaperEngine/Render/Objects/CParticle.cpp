@@ -999,7 +999,6 @@ EmitterFunc CParticle::createBoxEmitter (const ParticleEmitter& emitter) {
 
 		// Reset oscillator state for reused particles
 		p.oscillationRandom = -1.0f;
-		p.oscillatePosition = {};
 		p.trailHistory.clear ();
 		p.trailLastFrameValid = false;
 
@@ -1163,7 +1162,6 @@ EmitterFunc CParticle::createSphereEmitter (const ParticleEmitter& emitter) {
 
 	    // Reset oscillator state for reused particles
 	    p.oscillationRandom = -1.0f;
-	    p.oscillatePosition = {};
 	    p.trailHistory.clear ();
 	    p.trailLastFrameValid = false;
 
@@ -2231,58 +2229,45 @@ OperatorFunc CParticle::createOscillateSizeOperator (const OscillateSizeOperator
     };
 }
 
+glm::vec3 WallpaperEngine::Render::Objects::calculateParticlePositionOscillation (
+    const ParticleInstance& particle, const glm::vec2 frequencyRange, const glm::vec2 phaseRange,
+    const glm::vec2 scaleRange, const glm::vec3 mask, const glm::vec4 blendTimes, const float deltaTime
+) {
+    // Native opcodes 7/29 integrate the finite sine difference, including a
+    // negative previous age at birth. X/Z share a wave; Y offsets time by r*2pi.
+    const float random = particle.oscillationRandom;
+    const float frequency = glm::mix (frequencyRange.x, frequencyRange.y, random);
+    const float time = particle.age + glm::mix (phaseRange.x, phaseRange.y, random);
+    const float yTime = time + random * glm::two_pi<float> ();
+    const float amplitude = glm::mix (scaleRange.x, scaleRange.y, random)
+        * particleOperatorBlend (particle.getLifetimePos (), blendTimes);
+    const float xz = std::sin (time * frequency) - std::sin ((time - deltaTime) * frequency);
+    const float y = std::sin (yTime * frequency) - std::sin ((yTime - deltaTime) * frequency);
+    return glm::vec3 (xz, y, xz) * mask * amplitude;
+}
+
 OperatorFunc CParticle::createOscillatePositionOperator (const OscillatePositionOperator& op) {
-    DynamicValue* freqMinValue = op.frequencyMin->value.get ();
-    DynamicValue* freqMaxValue = op.frequencyMax->value.get ();
-    DynamicValue* scaleMinValue = op.scaleMin->value.get ();
-    DynamicValue* scaleMaxValue = op.scaleMax->value.get ();
-    DynamicValue* phaseMinValue = op.phaseMin->value.get ();
-    DynamicValue* phaseMaxValue = op.phaseMax->value.get ();
-    DynamicValue* maskValue = op.mask->value.get ();
-    DynamicValue* speedOverride = getInstanceOverride ().speed->value.get ();
-
-    return [this, freqMinValue, freqMaxValue, scaleMinValue, scaleMaxValue, phaseMinValue, phaseMaxValue, maskValue,
-	    speedOverride] (
-	       std::vector<ParticleInstance>& particles, uint32_t count, const std::vector<ControlPointData>&, float,
-	       float dt
-	   ) {
-	float freqMin = freqMinValue->getFloat ();
-	float freqMax = freqMaxValue->getFloat ();
-	float scaleMin = scaleMinValue->getFloat ();
-	float scaleMax = scaleMaxValue->getFloat ();
-	float phaseMin = phaseMinValue->getFloat ();
-	float phaseMax = phaseMaxValue->getFloat ();
-	glm::vec3 mask = maskValue->getVec3 ();
-
-	for (uint32_t i = 0; i < count; i++) {
-	    auto& p = particles[i];
-
-	    // Initialize per-particle oscillator values on first use (per axis)
-	    if (!p.oscillatePosition.initialized) {
-		for (int axis = 0; axis < 3; axis++) {
-		    p.oscillatePosition.frequency[axis] = WallpaperEngine::Maths::randomFloat (m_rng, freqMin, freqMax);
-		    p.oscillatePosition.scale[axis] = WallpaperEngine::Maths::randomFloat (m_rng, scaleMin, scaleMax);
-		    p.oscillatePosition.phase[axis]
-			= WallpaperEngine::Maths::randomFloat (m_rng, phaseMin, phaseMax + 2.0f * glm::pi<float> ());
-		}
-		p.oscillatePosition.initialized = true;
-	    }
-
-	    // Calculate position delta for each axis
-	    float t = p.age;
-	    glm::vec3 delta (0.0f);
-
-	    for (int axis = 0; axis < 3; axis++) {
-		float w = 2.0f * glm::pi<float> () * p.oscillatePosition.frequency[axis] / (2.0f * glm::pi<float> ());
-		// Derivative of cos is -sin, multiply by dt for position change
-		float move
-		    = -p.oscillatePosition.scale[axis] * w * std::sin (w * t + p.oscillatePosition.phase[axis]) * dt;
-		// Apply mask as bias multiplier for this axis
-		delta[axis] = move * mask[axis] * speedOverride->getFloat ();
-	    }
-
-	    p.position += delta;
-	}
+    const float defaultScaleMax = getScene ().getScene ().camera.projection.isPerspective ? 0.5f : 10.0f;
+    return [this, &op, defaultScaleMax] (
+        std::vector<ParticleInstance>& particles, uint32_t count, const std::vector<ControlPointData>&, float,
+        float dt
+    ) {
+        // Native updater 1401d1908 scales frequency endpoints by instance speed;
+        // particle flag 0x10 suppresses that updater, not the oscillation itself.
+        const float speed = (m_particle.flags & 16) != 0 ? 1.0f : getInstanceOverride ().speed->value->getFloat ();
+        const glm::vec2 frequencies = glm::vec2 (op.frequencyMin->value->getFloat (), op.frequencyMax->value->getFloat ()) * speed;
+        const glm::vec2 phases (op.phaseMin->value->getFloat (), op.phaseMax->value->getFloat ());
+        const glm::vec2 scales (op.scaleMin->value->getFloat (), op.scaleMax ? op.scaleMax->value->getFloat () : defaultScaleMax);
+        // Authored displacement is Y-up; particle simulation coordinates are Y-down.
+        const glm::vec3 mask = op.mask->value->getVec3 () * glm::vec3 (1.0f, -1.0f, 1.0f);
+        for (uint32_t i = 0; i < count; ++i) {
+            auto& particle = particles[i];
+            if (!particle.alive) continue;
+            if (particle.oscillationRandom < 0.0f) {
+                particle.oscillationRandom = WallpaperEngine::Maths::randomFloat (m_rng, 0.0f, 1.0f);
+            }
+            particle.position += calculateParticlePositionOscillation (particle, frequencies, phases, scales, mask, op.blendTimes, dt);
+        }
     };
 }
 

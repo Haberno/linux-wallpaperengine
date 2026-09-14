@@ -81,15 +81,8 @@ struct ParticleInstance {
     float lifetime { 1.0f }; // Total lifetime in seconds
     float age { 0.0f }; // Current age in seconds
 
-    // Native alpha and size oscillators share one stable fraction per particle.
+    // Native alpha, size and position oscillators share one stable fraction.
     float oscillationRandom { -1.0f };
-
-    struct {
-	glm::vec3 frequency { 0.0f };
-	glm::vec3 scale { 1.0f };
-	glm::vec3 phase { 0.0f };
-	bool initialized { false };
-    } oscillatePosition;
 
     // Initial values for resets/multipliers
     struct {
@@ -116,6 +109,10 @@ struct ParticleInstance {
 [[nodiscard]] float calculateParticleOscillationMultiplier (
     const ParticleInstance& particle, glm::vec2 frequencyRange, glm::vec2 phaseRange,
     glm::vec2 scaleRange, glm::vec4 blendTimes
+);
+[[nodiscard]] glm::vec3 calculateParticlePositionOscillation (
+    const ParticleInstance& particle, glm::vec2 frequencyRange, glm::vec2 phaseRange,
+    glm::vec2 scaleRange, glm::vec3 mask, glm::vec4 blendTimes, float deltaTime
 );
 
 void initializeParticleBetweenControlPoints (
