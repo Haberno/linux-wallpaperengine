@@ -1580,12 +1580,7 @@ CParticle::createMapSequenceAroundControlPointInitializer (const MapSequenceArou
 
 // ========== OPERATORS ==========
 
-glm::vec3 WallpaperEngine::Render::Objects::calculateParticleVelocityCap (
-    const glm::vec3& velocity, const float maxSpeed, const float lifetimePosition, glm::vec4 blendTimes
-) {
-    const float speed = glm::length (velocity);
-    if (speed == 0.0f) return velocity;
-
+static float particleOperatorBlend (const float lifetimePosition, glm::vec4 blendTimes) {
     // Native 1401c2a40 expands coincident endpoints and selects the blended
     // opcode only when its lifetime envelope has a meaningful duration.
     blendTimes.x = std::min (blendTimes.x, blendTimes.y - 0.0001f);
@@ -1597,9 +1592,31 @@ glm::vec3 WallpaperEngine::Render::Objects::calculateParticleVelocityCap (
 	weight = std::clamp ((lifetimePosition - blendTimes.x) / (blendTimes.y - blendTimes.x), 0.0f, 1.0f)
 	    * std::clamp ((blendTimes.w - lifetimePosition) / (blendTimes.w - blendTimes.z), 0.0f, 1.0f);
     }
+    return weight;
+}
+
+glm::vec3 WallpaperEngine::Render::Objects::calculateParticleVelocityCap (
+    const glm::vec3& velocity, const float maxSpeed, const float lifetimePosition, glm::vec4 blendTimes
+) {
+    const float speed = glm::length (velocity);
+    if (speed == 0.0f) return velocity;
+    const float weight = particleOperatorBlend (lifetimePosition, blendTimes);
     // Native 140244790 blends the velocity toward its capped value each tick;
     // it does not blend the limit or multiply by the simulation delta.
     return velocity * (1.0f + std::min (0.0f, maxSpeed / speed - 1.0f) * weight);
+}
+
+glm::vec3 WallpaperEngine::Render::Objects::calculateParticleMovementReduction (
+    const glm::vec3& velocity, const float distance, const glm::vec2 distanceRange, const glm::vec2 reductions,
+    const float deltaTime, const float lifetimePosition, const glm::vec4 blendTimes
+) {
+    const float span = distanceRange.y == distanceRange.x ? 1.0f : distanceRange.y - distanceRange.x;
+    // Native rsqrt(0)*0 followed by MINPS selects the outer endpoint at the exact center.
+    const float position = distance == 0.0f ? 1.0f : std::clamp ((distance - distanceRange.x) / span, 0.0f, 1.0f);
+    // Native parser 1401cd3d1 also uses a unit delta for equal reduction endpoints.
+    const float change = reductions.y == reductions.x ? 1.0f : reductions.y - reductions.x;
+    const float damping = std::clamp ((reductions.x + position * change) * deltaTime, 0.0f, 1.0f);
+    return velocity * (1.0f - damping * particleOperatorBlend (lifetimePosition, blendTimes));
 }
 
 void CParticle::setupOperators () {
@@ -1614,6 +1631,8 @@ void CParticle::setupOperators () {
 	    func = createMovementOperator (*op->as<MovementOperator> ());
 	} else if (op->is<CapVelocityOperator> ()) {
 	    func = createCapVelocityOperator (*op->as<CapVelocityOperator> ());
+	} else if (op->is<ReduceMovementNearControlPointOperator> ()) {
+	    func = createReduceMovementNearControlPointOperator (*op->as<ReduceMovementNearControlPointOperator> ());
 	} else if (op->is<AngularMovementOperator> ()) {
 	    func = createAngularMovementOperator (*op->as<AngularMovementOperator> ());
 	} else if (op->is<AlphaFadeOperator> ()) {
@@ -1699,6 +1718,29 @@ OperatorFunc CParticle::createCapVelocityOperator (const CapVelocityOperator& op
 		);
 	    }
 	}
+    };
+}
+
+OperatorFunc CParticle::createReduceMovementNearControlPointOperator (const ReduceMovementNearControlPointOperator& op) {
+    const bool perspective = getScene ().getScene ().camera.projection.isPerspective;
+    return [&op, perspective] (
+        std::vector<ParticleInstance>& particles, uint32_t count,
+        const std::vector<ControlPointData>& controlPoints, float, float dt
+    ) {
+        const glm::vec2 distances (
+            op.distanceInner ? op.distanceInner->value->getFloat () : (perspective ? 0.5f : 100.0f),
+            op.distanceOuter ? op.distanceOuter->value->getFloat () : (perspective ? 1.0f : 350.0f)
+        );
+        const glm::vec2 reductions (op.reductionInner->value->getFloat (), op.reductionOuter->value->getFloat ());
+        const glm::vec3 center = controlPoints[op.controlPoint].position;
+        for (uint32_t i = 0; i < count; ++i) {
+            auto& particle = particles[i];
+            if (!particle.alive) continue;
+            particle.velocity = calculateParticleMovementReduction (
+                particle.velocity, glm::length (particle.position - center), distances, reductions,
+                dt, particle.getLifetimePos (), op.blendTimes
+            );
+        }
     };
 }
 

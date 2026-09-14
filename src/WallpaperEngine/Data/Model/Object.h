@@ -402,6 +402,23 @@ public:
     glm::vec4 blendTimes;
 };
 
+class ReduceMovementNearControlPointOperator : public ParticleOperatorBase {
+public:
+    ReduceMovementNearControlPointOperator (
+        uint32_t controlPoint, UserSettingUniquePtr distanceInner, UserSettingUniquePtr distanceOuter,
+        UserSettingUniquePtr reductionInner, UserSettingUniquePtr reductionOuter, glm::vec4 blendTimes
+    ) : controlPoint (controlPoint), distanceInner (std::move (distanceInner)),
+        distanceOuter (std::move (distanceOuter)), reductionInner (std::move (reductionInner)),
+        reductionOuter (std::move (reductionOuter)), blendTimes (blendTimes) { }
+    uint32_t controlPoint;
+    /** Omitted distances use the scene's native 2D/3D defaults. */
+    UserSettingUniquePtr distanceInner;
+    UserSettingUniquePtr distanceOuter;
+    UserSettingUniquePtr reductionInner;
+    UserSettingUniquePtr reductionOuter;
+    glm::vec4 blendTimes;
+};
+
 class AngularMovementOperator : public ParticleOperatorBase {
 public:
     AngularMovementOperator (UserSettingUniquePtr drag, UserSettingUniquePtr force) :

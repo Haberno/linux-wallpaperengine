@@ -907,6 +907,15 @@ ParticleOperatorUniquePtr ObjectParser::parseParticleOperator (const JSON& it, c
 	    glm::vec4 (it.optional ("blendinstart", 0.0f), it.optional ("blendinend", 0.0f),
 		       it.optional ("blendoutstart", 1.0f), it.optional ("blendoutend", 1.0f))
 	);
+    } else if (name == "reducemovementnearcontrolpoint") {
+	return std::make_unique<ReduceMovementNearControlPointOperator> (
+	    std::min (it.optional ("controlpoint", 0u), 7u),
+	    it.optional ("distanceinner") ? it.user ("distanceinner", properties) : nullptr,
+	    it.optional ("distanceouter") ? it.user ("distanceouter", properties) : nullptr,
+	    it.user ("reductioninner", properties, 100.0f), it.user ("reductionouter", properties, 0.0f),
+	    glm::vec4 (it.optional ("blendinstart", 0.0f), it.optional ("blendinend", 0.0f),
+		       it.optional ("blendoutstart", 1.0f), it.optional ("blendoutend", 1.0f))
+	);
     } else if (name == "angularmovement") {
 	return std::make_unique<AngularMovementOperator> (
 	    it.user ("drag", properties, 0.0f), it.user ("force", properties, glm::vec3 (0.0f))
