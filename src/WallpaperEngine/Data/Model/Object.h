@@ -485,7 +485,8 @@ public:
 	UserSettingUniquePtr timeScale, UserSettingUniquePtr mask, UserSettingUniquePtr phaseMin,
 	UserSettingUniquePtr phaseMax, UserSettingUniquePtr audioProcessingMode,
 	UserSettingUniquePtr audioProcessingBounds, UserSettingUniquePtr audioProcessingExponent,
-	UserSettingUniquePtr audioProcessingFrequencyStart, UserSettingUniquePtr audioProcessingFrequencyEnd
+	UserSettingUniquePtr audioProcessingFrequencyStart, UserSettingUniquePtr audioProcessingFrequencyEnd,
+	glm::vec4 blendTimes
     ) :
 	scale (std::move (scale)), speedMin (std::move (speedMin)), speedMax (std::move (speedMax)),
 	timeScale (std::move (timeScale)), mask (std::move (mask)), phaseMin (std::move (phaseMin)),
@@ -493,7 +494,7 @@ public:
 	audioProcessingBounds (std::move (audioProcessingBounds)),
 	audioProcessingExponent (std::move (audioProcessingExponent)),
 	audioProcessingFrequencyStart (std::move (audioProcessingFrequencyStart)),
-	audioProcessingFrequencyEnd (std::move (audioProcessingFrequencyEnd)) { }
+	audioProcessingFrequencyEnd (std::move (audioProcessingFrequencyEnd)), blendTimes (blendTimes) { }
     UserSettingUniquePtr scale;
     UserSettingUniquePtr speedMin;
     UserSettingUniquePtr speedMax;
@@ -506,6 +507,7 @@ public:
     UserSettingUniquePtr audioProcessingExponent;
     UserSettingUniquePtr audioProcessingFrequencyStart;
     UserSettingUniquePtr audioProcessingFrequencyEnd;
+    glm::vec4 blendTimes;
 };
 
 class VortexOperator : public ParticleOperatorBase {

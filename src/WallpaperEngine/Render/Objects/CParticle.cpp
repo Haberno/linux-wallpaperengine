@@ -1930,7 +1930,7 @@ OperatorFunc CParticle::createTurbulenceOperator (const TurbulenceOperator& op) 
     const float turbSpeed
 	= WallpaperEngine::Maths::randomFloat (m_rng, speedMinValue->getFloat (), speedMaxValue->getFloat ());
 
-    return [scaleValue, timeScaleValue, maskValue, speedOverride, phase, turbSpeed] (
+    return [scaleValue, timeScaleValue, maskValue, speedOverride, phase, turbSpeed, blendTimes = op.blendTimes] (
 	       std::vector<ParticleInstance>& particles, uint32_t count, const std::vector<ControlPointData>&,
 	       float currentTime, float dt
 	   ) {
@@ -1960,7 +1960,9 @@ OperatorFunc CParticle::createTurbulenceOperator (const TurbulenceOperator& op) 
 	    }
 
 	    curlDir *= mask;
-	    p.velocity += curlDir * dt * speed;
+	    // Native opcode 36 weights the added force, preserving the noise sample
+	    // and existing velocity. Noise generation and force-clock parity are separate.
+	    p.velocity += curlDir * dt * speed * particleOperatorBlend (p.getLifetimePos (), blendTimes);
 	}
     };
 }
