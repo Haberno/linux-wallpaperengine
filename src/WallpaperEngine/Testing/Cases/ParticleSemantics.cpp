@@ -24,6 +24,71 @@ using WallpaperEngine::Render::Objects::calculateFixedParticleOrientation;
 using WallpaperEngine::Render::Objects::calculateBillboardParticleOrientation;
 using WallpaperEngine::Render::Objects::ParticleInstance;
 
+TEST_CASE ("angular movement parses native lifetime defaults and authored ranges", "[particle][angularmovement]") {
+    WallpaperEngine::Data::Model::Project project {};
+    const auto object = WallpaperEngine::Data::Parsers::ObjectParser::parse (
+        WallpaperEngine::Data::JSON::JSON::parse (R"({"id":22,"particle":{"operator":[
+            {"name":"angularmovement"},
+            {"name":"angularmovement","force":"40 80 -120","drag":10,
+             "blendinstart":0.2,"blendinend":0.4,"blendoutstart":0.6,"blendoutend":0.8}
+        ]}})"), project
+    );
+    const auto* particle = object->as<Particle> ();
+    REQUIRE (particle != nullptr);
+    REQUIRE (particle->operators.size () == 2);
+    const auto* defaults = particle->operators[0]->as<AngularMovementOperator> ();
+    const auto* authored = particle->operators[1]->as<AngularMovementOperator> ();
+    REQUIRE (defaults != nullptr);
+    REQUIRE (authored != nullptr);
+    CHECK (defaults->force->value->getVec3 () == glm::vec3 (0));
+    CHECK (defaults->drag->value->getFloat () == 0.0f);
+    CHECK (defaults->blendTimes == glm::vec4 (0, 0, 1, 1));
+    CHECK (authored->force->value->getVec3 () == glm::vec3 (40, 80, -120));
+    CHECK (authored->drag->value->getFloat () == 10.0f);
+    CHECK (authored->blendTimes == glm::vec4 (.2f, .4f, .6f, .8f));
+}
+
+TEST_CASE ("angular force precedes rotation while drag uses its separate clock", "[particle][angularmovement]") {
+    using WallpaperEngine::Render::Objects::applyParticleAngularMovement;
+    ParticleInstance particle;
+    particle.rotation = {.25f, -.5f, 1};
+    particle.angularVelocity = {2, -4, 6};
+    applyParticleAngularMovement (particle, {40, 80, -120}, 10, .1f, .05f, .5f);
+    CHECK (particle.rotation.x == Catch::Approx (.45f));
+    CHECK (particle.rotation.y == Catch::Approx (-.5f));
+    CHECK (particle.rotation.z == Catch::Approx (1.0f));
+    CHECK (particle.angularVelocity == glm::vec3 (3, 0, 0));
+    particle.angularVelocity = {2, -4, 6};
+    applyParticleAngularMovement (particle, {40, 80, -120}, 10, .1f, 0, .5f);
+    CHECK (particle.angularVelocity == glm::vec3 (4, 0, 0));
+    CHECK (particle.rotation.x == Catch::Approx (.65f));
+}
+
+TEST_CASE ("angular drag caps before blending and preserves native residual velocity", "[particle][angularmovement]") {
+    using WallpaperEngine::Render::Objects::applyParticleAngularMovement;
+    ParticleInstance particle;
+    particle.angularVelocity.z = 8;
+    applyParticleAngularMovement (particle, {}, 100, .05f, .05f, .5f);
+    CHECK (particle.rotation.z == Catch::Approx (.2f));
+    CHECK (particle.angularVelocity.z == Catch::Approx (4.00000048f).epsilon (0).margin (.0000001f));
+    particle.angularVelocity.z = 8;
+    applyParticleAngularMovement (particle, {}, -100, .05f, .05f, .5f);
+    CHECK (particle.angularVelocity.z == Catch::Approx (28.0f));
+}
+
+TEST_CASE ("angular pause and inactive envelopes preserve unwrapped state", "[particle][angularmovement]") {
+    using WallpaperEngine::Render::Objects::applyParticleAngularMovement;
+    ParticleInstance particle;
+    particle.rotation = {7, -8, 9};
+    particle.angularVelocity = {2, -4, 6};
+    applyParticleAngularMovement (particle, {40, 80, -120}, 10, .1f, .05f, 0);
+    CHECK (particle.rotation == glm::vec3 (7, -8, 9));
+    CHECK (particle.angularVelocity == glm::vec3 (2, -4, 6));
+    applyParticleAngularMovement (particle, {40, 80, -120}, 10, 0, 0, 1);
+    CHECK (particle.rotation == glm::vec3 (7, -8, 9));
+    CHECK (particle.angularVelocity == glm::vec3 (2, -4, 6));
+}
+
 TEST_CASE ("vortex v2 preserves its own blending and projection defaults", "[particle][vortex]") {
     WallpaperEngine::Data::Model::Project project {};
     const auto object = WallpaperEngine::Data::Parsers::ObjectParser::parse (

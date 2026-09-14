@@ -421,10 +421,11 @@ public:
 
 class AngularMovementOperator : public ParticleOperatorBase {
 public:
-    AngularMovementOperator (UserSettingUniquePtr drag, UserSettingUniquePtr force) :
-	drag (std::move (drag)), force (std::move (force)) { }
+    AngularMovementOperator (UserSettingUniquePtr drag, UserSettingUniquePtr force, glm::vec4 blendTimes) :
+	drag (std::move (drag)), force (std::move (force)), blendTimes (blendTimes) { }
     UserSettingUniquePtr drag;
     UserSettingUniquePtr force;
+    glm::vec4 blendTimes;
 };
 
 class AlphaFadeOperator : public ParticleOperatorBase {
