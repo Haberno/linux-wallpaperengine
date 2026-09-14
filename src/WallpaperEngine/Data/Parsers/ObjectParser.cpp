@@ -626,6 +626,10 @@ ParticleUniquePtr ObjectParser::parseParticle (const JSON& it, const Project& pr
 		instanceOverride.controlPointOffsets.emplace (i, Builders::UserSettingBuilder::fromValue (
 		    glm::vec3 (std::numeric_limits<float>::max (), 0.0f, 0.0f)));
 	    }
+	    if (!instanceOverride.controlPointAngles.contains (i)) {
+		instanceOverride.controlPointAngles.emplace (i, Builders::UserSettingBuilder::fromValue (
+		    glm::vec3 (std::numeric_limits<float>::max (), 0.0f, 0.0f)));
+	    }
 	}
 
 	// Parse material - particles reference materials directly, not models
@@ -795,7 +799,7 @@ ParticleEmitter ObjectParser::parseParticleEmitter (const JSON& it) {
 	    .speedMin = it.optional ("speedmin", 0.0f),
 	    .speedMax = it.optional ("speedmax", 0.0f),
 	    .rate = it.optional ("rate", 10.0f),
-	    .controlPoint = it.optional ("controlpoint", 0),
+	    .controlPoint = static_cast<int> (std::min (it.optional ("controlpoint", 0u), 7u)),
 	    .flags = it.optional ("flags", 0u),
 	    .cone = it.optional ("cone", 0.0f),
 	    .delay = it.optional ("delay", 0.0f),
@@ -1147,21 +1151,26 @@ ParticleInstanceOverride ObjectParser::parseParticleInstanceOverride (const JSON
 	.colorn = it.user ("colorn", properties, glm::vec3 (1.0f)),
     };
 
-    for (int i = 0; i < PARTICLE_CONTROL_POINT_COUNT; i++) {
-	// Native uses FLT_MAX in X to leave this system's definition offset intact.
-	auto offset = it.user ("controlpoint" + std::to_string (i), properties,
-	    glm::vec3 (std::numeric_limits<float>::max (), 0.0f, 0.0f));
-	// Native control-point curves require all three vector channels.
-	if (offset->animation != nullptr) {
-	    const auto& channels = offset->animation->channels;
-	    if (!channels.contains (0) || !channels.contains (1) || !channels.contains (2)) {
-		offset->animation.reset ();
-	    } else {
-		// For these curves native tests field presence, including explicit false.
-		offset->animation->relative = it.at ("controlpoint" + std::to_string (i)).at ("animation").contains ("relative");
+    for (const auto& [prefix, values] : {
+	    std::pair { "controlpoint", &override.controlPointOffsets },
+	    std::pair { "controlpointangle", &override.controlPointAngles } }) {
+	for (int i = 0; i < PARTICLE_CONTROL_POINT_COUNT; i++) {
+	    // Native uses FLT_MAX in X to leave the control-point transform unchanged.
+	    const std::string key = prefix + std::to_string (i);
+	    auto value = it.user (key, properties,
+		glm::vec3 (std::numeric_limits<float>::max (), 0.0f, 0.0f));
+	    // Native control-point curves require all three vector channels.
+	    if (value->animation != nullptr) {
+		const auto& channels = value->animation->channels;
+		if (!channels.contains (0) || !channels.contains (1) || !channels.contains (2)) {
+		    value->animation.reset ();
+		} else {
+		    // For these curves native tests field presence, including explicit false.
+		    value->animation->relative = it.at (key).at ("animation").contains ("relative");
+		}
 	    }
+	    values->emplace (i, std::move (value));
 	}
-	override.controlPointOffsets.emplace (i, std::move (offset));
     }
 
     return override;

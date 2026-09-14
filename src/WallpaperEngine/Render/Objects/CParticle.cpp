@@ -183,6 +183,10 @@ CParticle::CParticle (Wallpapers::CScene& scene, const Particle& particle, CPart
     this->registerProperty ("angles", *particle.angles);
     this->registerProperty ("visible", *particle.visible);
     this->registerProperty ("parallaxDepth", *particle.parallaxDepth);
+    const auto hasTimeline = [] (const auto& entry) { return entry.second->animation != nullptr; };
+    const auto& rootSettings = getInstanceOverride ();
+    m_controlPointTimelines = std::ranges::any_of (rootSettings.controlPointOffsets, hasTimeline)
+	|| std::ranges::any_of (rootSettings.controlPointAngles, hasTimeline);
     if (parent == nullptr) {
 	// Child systems consume the root's live overrides. Queue their property
 	// scripts once on that root, with the same values used by the simulation.
@@ -198,9 +202,26 @@ CParticle::CParticle (Wallpapers::CScene& scene, const Particle& particle, CPart
 	}
 	for (const auto& [id, value] : settings.controlPointOffsets) {
 	    m_controlPointSubscriptions.emplace_back (Data::Utils::ScopeGuard (value->value->listen ([this, id] (const DynamicValue&, DynamicValue::UpdateSource source) {
-		if (source != DynamicValue::UpdateSource::Initialization) m_controlPointOverridesChanged[id] = true;
+		if (source != DynamicValue::UpdateSource::Initialization) {
+		    m_controlPointOverridesChanged[id] = true;
+		    m_controlPointAnglesChanged = true;
+		}
 	    })));
 	    this->registerProperty ("instance.controlpoint" + std::to_string (id), *value, "instance.");
+	}
+	const auto subscribeAngleRefresh = [this] (const UserSetting& setting) {
+	    m_controlPointSubscriptions.emplace_back (Data::Utils::ScopeGuard (setting.value->listen ([this] (const DynamicValue&, DynamicValue::UpdateSource source) {
+		if (source != DynamicValue::UpdateSource::Initialization) m_controlPointAnglesChanged = true;
+	    })));
+	};
+	// A common native parameter refresh applies every authored angle to children.
+	for (const auto* setting : { settings.alpha.get (), settings.size.get (), settings.count.get (),
+		settings.speed.get (), settings.lifetime.get (), settings.brightness.get (), settings.colorn.get () }) {
+	    subscribeAngleRefresh (*setting);
+	}
+	for (const auto& [id, value] : settings.controlPointAngles) {
+	    subscribeAngleRefresh (*value);
+	    this->registerProperty ("instance.controlpointangle" + std::to_string (id), *value, "instance.");
 	}
     }
 
@@ -430,7 +451,7 @@ void CParticle::render () {
     // the physics stability cap. Sample even when emission/rate is paused.
     updateControlPoints (dt);
 
-    if (m_turbulenceRateDirty) {
+    if (m_turbulenceRateDirty || m_controlPointTimelines) {
 	m_turbulenceRate = std::max (0.01f, getInstanceOverride ().rate->value->getFloat ());
 	m_turbulenceRateDirty = false;
     }
@@ -579,6 +600,12 @@ void ControlPointData::sampleVelocity (const glm::vec3& simulationPosition, cons
     hasPreviousPosition = true;
 }
 
+void CParticle::includeControlPoint (const uint32_t index) {
+    // Native allocates through the highest referenced slot. Definitions alone
+    // do not make a point available for a linked child.
+    m_controlPointCount = std::max (m_controlPointCount, std::min (index, 7u) + 1);
+}
+
 void CParticle::updateControlPoints (const float frameTime) {
     const CParticle* root = this;
     while (root->m_particleParent != nullptr) root = root->m_particleParent;
@@ -608,10 +635,12 @@ void CParticle::updateControlPoints (const float frameTime) {
 	    // neither the definition offset nor an instance override is added to it.
 	    cp.position = resolveParticleControlPoint (mouseWorld, worldToLocal, true);
 	} else if ((cp.flags & 4) != 0 && m_particleParent && cp.parentControlPoint >= 0
-	    && cp.parentControlPoint < static_cast<int> (m_particleParent->m_controlPoints.size ())) {
+	    && cp.parentControlPoint < static_cast<int> (m_particleParent->m_controlPointCount)) {
 	    const auto& source = m_particleParent->m_controlPoints[cp.parentControlPoint];
 	    cp.position = (cp.flags & 8) != 0 ? source.position
 		: glm::vec3 (parentToLocal * glm::vec4 (source.position, 1.0f));
+	    cp.orientation = (cp.flags & 8) != 0 ? source.orientation
+		: glm::mat3 (parentToLocal) * source.orientation;
 	} else {
 	    glm::vec3 offset = cp.offset;
 	    // Authored root offsets stay on that system. Script/user assignments
@@ -629,6 +658,24 @@ void CParticle::updateControlPoints (const float frameTime) {
 	    // even when flagged as world. Other world points remain independent.
 	    const bool worldOffset = (cp.flags & 2) != 0 && !(worldSpace && i == 0);
 	    cp.position = resolveParticleControlPoint (offset, worldToLocal, worldOffset);
+	    const auto& angles = root->m_particle.instanceOverride.controlPointAngles;
+	    if ((cp.flags & 0x10005) == 0 && i < m_controlPointCount) {
+		if (const auto it = angles.find (static_cast<int> (i)); it != angles.end ()) {
+		    if (this == root || root->m_controlPointAnglesChanged || m_controlPointTimelines) {
+			const auto value = it->second->evaluateVec3 (getScene ().getTime ());
+			// Native stores radians, composes Z*Y*X, and retains the last
+			// applied basis when the script restores the FLT_MAX sentinel.
+			if (value.x != std::numeric_limits<float>::max ()) {
+			    const glm::mat4 rotation = glm::rotate (glm::rotate (glm::rotate (
+				glm::mat4 (1.0f), value.z, { 0.0f, 0.0f, 1.0f }),
+				value.y, { 0.0f, 1.0f, 0.0f }), value.x, { 1.0f, 0.0f, 0.0f });
+			    cp.baseOrientation = glm::mat3 (flipY * rotation * flipY);
+			}
+		    }
+		}
+	    }
+	    cp.orientation = worldOffset ? glm::mat3 (flipY * worldToLocal * flipY) * cp.baseOrientation
+		: cp.baseOrientation;
 	}
     }
     if (m_followPosition.has_value () && (m_controlPoints[0].flags & 5) == 0) {
@@ -865,18 +912,13 @@ void CParticle::setupEmitters () {
 }
 
 EmitterFunc CParticle::createBoxEmitter (const ParticleEmitter& emitter) {
+    includeControlPoint (emitter.controlPoint);
     DynamicValue* countOverride = getInstanceOverride ().count->value.get ();
 
     glm::vec3 transformedEmitterOrigin = emitter.origin;
     transformedEmitterOrigin.y = -transformedEmitterOrigin.y;
 
-    int controlPointIndex = emitter.controlPoint;
-    if (controlPointIndex == -1 && !m_particle.controlPoints.empty ()) {
-	const auto& cp0 = m_particle.controlPoints[0];
-	if ((cp0.flags & 1) != 0) {
-	    controlPointIndex = 0;
-	}
-    }
+    const int controlPointIndex = emitter.controlPoint;
 
     glm::vec3 flippedDirections = emitter.directions;
     flippedDirections.y = -flippedDirections.y;
@@ -986,6 +1028,11 @@ EmitterFunc CParticle::createBoxEmitter (const ParticleEmitter& emitter) {
 		    randomPos[axis] = dist;
 		}
 		randomPos *= flippedDirections;
+		if (controlPointIndex >= 0 && controlPointIndex < static_cast<int> (m_controlPoints.size ())
+		    && ((m_particle.flags & 1) != 0 || controlPointIndex != 0)) {
+		    // Only the sampled volume is oriented; the authored origin stays outside.
+		    randomPos = m_controlPoints[controlPointIndex].orientation * randomPos;
+		}
 
 		p.position = spawnOrigin + randomPos;
 
@@ -1025,6 +1072,7 @@ EmitterFunc CParticle::createBoxEmitter (const ParticleEmitter& emitter) {
 }
 
 EmitterFunc CParticle::createSphereEmitter (const ParticleEmitter& emitter) {
+    includeControlPoint (emitter.controlPoint);
     DynamicValue* countOverride = getInstanceOverride ().count->value.get ();
     float lifetime = 1.0f * getInstanceOverride ().lifetime->value->getFloat ();
 
@@ -1032,15 +1080,7 @@ EmitterFunc CParticle::createSphereEmitter (const ParticleEmitter& emitter) {
     glm::vec3 transformedEmitterOrigin = emitter.origin;
     transformedEmitterOrigin.y = -transformedEmitterOrigin.y;
 
-    int controlPointIndex = emitter.controlPoint;
-
-    // Auto-detect control point 0 usage if controlPoint field not specified and CP0 has linkMouse
-    if (controlPointIndex == -1 && !m_particle.controlPoints.empty ()) {
-	const auto& cp0 = m_particle.controlPoints[0];
-	if ((cp0.flags & 1) != 0) { // Bit 0: linkMouse flag
-	    controlPointIndex = 0;
-	}
-    }
+    const int controlPointIndex = emitter.controlPoint;
 
     bool limitOnePerFrame = (emitter.flags & 2) != 0;
 
@@ -1140,13 +1180,26 @@ EmitterFunc CParticle::createSphereEmitter (const ParticleEmitter& emitter) {
 		}
 		// If sign[i] == 0, leave as-is (both positive and negative possible)
 	    }
+	    if (controlPointIndex >= 0 && controlPointIndex < static_cast<int> (m_controlPoints.size ())
+		&& ((m_particle.flags & 1) != 0 || controlPointIndex != 0)) {
+		randomPos = m_controlPoints[controlPointIndex].orientation * randomPos;
+	    }
 	    p.position = spawnOrigin + randomPos;
 
 	    // Set velocity only if emitter specifies speed (otherwise use initializers)
 	    if (emitter.speedMax > 0.0f || emitter.speedMin != 0.0f) {
 		// Velocity pointing outward from ellipsoid (randomPos already includes directions scaling)
-		glm::vec3 direction
-		    = glm::length (randomPos) > 0.0f ? glm::normalize (randomPos) : glm::vec3 (0.0f, 1.0f, 0.0f);
+		glm::vec3 direction = randomPos;
+		if (glm::dot (direction, direction) < 0.0001f) {
+		    direction = WallpaperEngine::Maths::randomVec3 (m_rng, glm::vec3 (-1.0f), glm::vec3 (1.0f))
+			* emitter.directions;
+		    direction.y = -direction.y;
+		    if (controlPointIndex >= 0 && controlPointIndex < static_cast<int> (m_controlPoints.size ())
+			&& ((m_particle.flags & 1) != 0 || controlPointIndex != 0)) {
+			direction = m_controlPoints[controlPointIndex].orientation * direction;
+		    }
+		}
+		if (glm::dot (direction, direction) > 0.0f) direction = glm::normalize (direction);
 		float speed = WallpaperEngine::Maths::randomFloat (m_rng, emitter.speedMin, emitter.speedMax);
 		p.velocity = direction * speed;
 	    } else {
@@ -1307,6 +1360,7 @@ InitializerFunc CParticle::createVelocityRandomInitializer (const VelocityRandom
 InitializerFunc CParticle::createInheritControlPointVelocityInitializer (
     const InheritControlPointVelocityInitializer& init
 ) {
+    includeControlPoint (init.controlPoint);
     DynamicValue* minValue = init.min->value.get ();
     DynamicValue* maxValue = init.max->value.get ();
     DynamicValue* speedOverride = getInstanceOverride ().speed->value.get ();
@@ -1493,6 +1547,8 @@ InitializerFunc CParticle::createTurbulentVelocityRandomInitializer (const Turbu
 
 InitializerFunc
 CParticle::createMapSequenceBetweenControlPointsInitializer (const MapSequenceBetweenControlPointsInitializer& init) {
+    includeControlPoint (init.controlPointStart);
+    includeControlPoint (init.controlPointEnd);
     return [this, &init, phase = 0.0f, direction = 1.0f] (ParticleInstance& particle) mutable {
 	const auto point = [this] (const int index) {
 	    const int clamped = std::clamp (index, 0, PARTICLE_CONTROL_POINT_COUNT - 1);
@@ -1507,6 +1563,7 @@ CParticle::createMapSequenceBetweenControlPointsInitializer (const MapSequenceBe
 
 InitializerFunc
 CParticle::createMapSequenceAroundControlPointInitializer (const MapSequenceAroundControlPointInitializer& init) {
+    includeControlPoint (init.controlPoint->value->getInt ());
     DynamicValue* countValue = init.count->value.get ();
     DynamicValue* boundsValue = init.bounds->value.get ();
     DynamicValue* speedMinValue = init.speedMin->value.get ();
@@ -1737,6 +1794,7 @@ OperatorFunc CParticle::createCapVelocityOperator (const CapVelocityOperator& op
 }
 
 OperatorFunc CParticle::createReduceMovementNearControlPointOperator (const ReduceMovementNearControlPointOperator& op) {
+    includeControlPoint (op.controlPoint);
     const bool perspective = getScene ().getScene ().camera.projection.isPerspective;
     return [&op, perspective] (
         std::vector<ParticleInstance>& particles, uint32_t count,
@@ -1941,6 +1999,7 @@ OperatorFunc CParticle::createTurbulenceOperator (const TurbulenceOperator& op) 
 	    subscribe (*setting);
 	}
 	for (const auto& [id, setting] : settings.controlPointOffsets) subscribe (*setting);
+	for (const auto& [id, setting] : settings.controlPointAngles) subscribe (*setting);
     }
 
     return [this, &op, perspective, scaleValue, timeScaleValue, maskValue, speedOverride, speedMinValue, speedMaxValue,
@@ -2078,6 +2137,7 @@ OperatorFunc CParticle::createVortexV2Operator (const VortexOperator& op) {
 }
 
 OperatorFunc CParticle::createVortexOperator (const VortexOperator& op) {
+    includeControlPoint (op.controlPoint);
     if (op.nativeV2) return createVortexV2Operator (op);
     int controlPoint = op.controlPoint;
     int flags = op.flags;
@@ -2238,6 +2298,7 @@ OperatorFunc CParticle::createVortexOperator (const VortexOperator& op) {
 }
 
 OperatorFunc CParticle::createControlPointAttractOperator (const ControlPointAttractOperator& op) {
+    includeControlPoint (op.controlPoint);
     // The authored defaults use pixels in an orthographic scene and world units
     // in a perspective scene. The project is still being parsed when operators
     // are read, so resolve omitted settings here rather than guessing in the parser.
