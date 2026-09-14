@@ -2,10 +2,12 @@
 
 #include "CRenderable.h"
 #include "WallpaperEngine/Data/Model/Object.h"
+#include "WallpaperEngine/Data/Utils/ScopeGuard.h"
 #include "WallpaperEngine/Render/Objects/Effects/CPass.h"
 #include "WallpaperEngine/Render/Wallpapers/CScene.h"
 #include "WallpaperEngine/Scripting/ScriptableObject.h"
 
+#include <array>
 #include <functional>
 #include <glm/mat4x4.hpp>
 #include <glm/vec3.hpp>
@@ -233,6 +235,9 @@ protected:
 private:
     const Particle& m_particle;
     CParticle* m_particleParent = nullptr;
+    std::array<bool, PARTICLE_CONTROL_POINT_COUNT> m_controlPointOverridesChanged {};
+    std::vector<Data::Utils::ScopeGuard<std::function<void ()>>> m_controlPointSubscriptions;
+    glm::mat4 m_controlPointTransform { 1.0f };
     struct ChildSystem {
 	// The renderer holds references into the definition and must die first.
 	ObjectUniquePtr definition;
@@ -264,6 +269,8 @@ private:
     uint32_t m_particleCount { 0 };
     bool m_emitting = true;
     uint32_t m_pendingEmission = 0;
+    std::vector<ControlPointData> m_pendingControlPoints;
+    glm::mat4 m_pendingBirthTransform { 1.0f };
     uint32_t m_maxParticles { DEFAULT_MAX_PARTICLES };
 
     std::vector<EmitterFunc> m_emitters;

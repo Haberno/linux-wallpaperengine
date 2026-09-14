@@ -1340,22 +1340,43 @@ int scriptableobject_property_set (
 }
 
 static constexpr const char* particleInstanceFields[] = {
-    "enabled", "alpha", "brightness", "size", "lifetime", "rate", "speed", "count", "color", "colorn"
+    "enabled", "alpha", "brightness", "size", "lifetime", "rate", "speed", "count", "color", "colorn",
+    "controlpoint0", "controlpoint1", "controlpoint2", "controlpoint3",
+    "controlpoint4", "controlpoint5", "controlpoint6", "controlpoint7"
 };
 
 static JSValue particle_instance_field (
     JSContext* ctx, JSValueConst, int argc, JSValueConst* argv, int magic, JSValue* data
 ) {
-    const JSAtom atom = JS_NewAtom (ctx, particleInstanceFields[magic]);
+    std::string property = particleInstanceFields[magic];
+    if (property.starts_with ("controlpoint")) property.insert (0, "instance.");
+    const JSAtom atom = JS_NewAtom (ctx, property.c_str ());
     ScopeGuard guard ([=] { JS_FreeAtom (ctx, atom); });
     if (argc == 0) return scriptableobject_property_get (ctx, data[0], atom, data[0]);
     return scriptableobject_property_set (ctx, data[0], atom, argv[0], data[0], JS_PROP_THROW) < 0
 	? JS_EXCEPTION : JS_UNDEFINED;
 }
 
+static JSValue particle_instance_get_animation (
+    JSContext* ctx, JSValueConst, int argc, JSValueConst* argv, int, JSValue* data
+) {
+    auto* container = scriptable_container (data[0]);
+    if (container == nullptr || argc < 1 || !JS_IsString (argv[0])) return JS_UNDEFINED;
+    const char* name = JS_ToCString (ctx, argv[0]);
+    if (name == nullptr) return JS_EXCEPTION;
+    const std::string qualified = "instance." + std::string (name);
+    JS_FreeCString (ctx, name);
+    if (!container->object.getAnimations ().contains (qualified)) return JS_UNDEFINED;
+    JSValue key = JS_NewString (ctx, qualified.c_str ());
+    ScopeGuard release ([&] { JS_FreeValue (ctx, key); });
+    return property_animation_controller (ctx, data[0], key);
+}
+
 static JSValue create_particle_instance (JSContext* ctx, JSValueConst owner) {
     JSValue instance = JS_NewObject (ctx);
     JSValue data[] = { owner };
+    JS_SetPropertyStr (ctx, instance, "getAnimation",
+	JS_NewCFunctionData (ctx, particle_instance_get_animation, 1, 0, 1, data));
     for (int i = 0; i < static_cast<int> (std::size (particleInstanceFields)); ++i) {
 	const JSAtom atom = JS_NewAtom (ctx, particleInstanceFields[i]);
 	JS_DefinePropertyGetSet (ctx, instance, atom,

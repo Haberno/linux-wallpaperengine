@@ -7,6 +7,7 @@
 #include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
 #include <cmath>
+#include <limits>
 #include <glm/gtc/matrix_transform.hpp>
 #include "WallpaperEngine/Data/Parsers/ObjectParser.h"
 #include "WallpaperEngine/FileSystem/Container.h"
@@ -21,6 +22,29 @@ using WallpaperEngine::Render::Objects::resolveParticleControlPoint;
 using WallpaperEngine::Render::Objects::calculateFixedParticleOrientation;
 using WallpaperEngine::Render::Objects::calculateBillboardParticleOrientation;
 using WallpaperEngine::Render::Objects::ParticleInstance;
+
+TEST_CASE ("control-point sentinels retain float values without integer overflow", "[particle][controlpoint]") {
+    using WallpaperEngine::Data::Model::DynamicValue;
+    const float sentinel = std::numeric_limits<float>::max ();
+    DynamicValue value (glm::vec3 (sentinel, 20.0f, 10.0f));
+    CHECK (value.getVec3 () == glm::vec3 (sentinel, 20.0f, 10.0f));
+    CHECK (value.getInt () == std::numeric_limits<int>::max ());
+    value.update (glm::vec3 (-sentinel), DynamicValue::UpdateSource::User);
+    CHECK (value.getInt () == std::numeric_limits<int>::min ());
+    value.update (glm::vec3 (sentinel), DynamicValue::UpdateSource::Script);
+    CHECK (value.getInt () == std::numeric_limits<int>::max ());
+    value.update (glm::vec2 (sentinel), DynamicValue::UpdateSource::User);
+    CHECK (value.getInt () == std::numeric_limits<int>::max ());
+    value.update (glm::vec4 (sentinel), DynamicValue::UpdateSource::User);
+    CHECK (value.getInt () == std::numeric_limits<int>::max ());
+    value.update (sentinel, DynamicValue::UpdateSource::User);
+    CHECK (value.getInt () == std::numeric_limits<int>::max ());
+    value.update (0.75f, DynamicValue::UpdateSource::User);
+    CHECK (value.getInt () == 0);
+    CHECK_FALSE (value.getBool ());
+    value.update (-42.9f, DynamicValue::UpdateSource::User);
+    CHECK (value.getInt () == -42);
+}
 
 TEST_CASE ("particles retain the control-point velocity initializer", "[particle][inheritvelocity]") {
     WallpaperEngine::Data::Model::Project project {};

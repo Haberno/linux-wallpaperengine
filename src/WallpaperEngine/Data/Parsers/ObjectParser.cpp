@@ -15,6 +15,7 @@
 #include "WallpaperEngine/Logging/Log.h"
 
 #include <glm/gtc/constants.hpp>
+#include <limits>
 #include <sstream>
 
 using namespace WallpaperEngine::Data::Parsers;
@@ -620,6 +621,12 @@ ParticleUniquePtr ObjectParser::parseParticle (const JSON& it, const Project& pr
 	if (instanceOverrideIt.has_value ()) {
 	    instanceOverride = parseParticleInstanceOverride (*instanceOverrideIt, project.properties);
 	}
+	for (int i = 0; i < PARTICLE_CONTROL_POINT_COUNT; ++i) {
+	    if (!instanceOverride.controlPointOffsets.contains (i)) {
+		instanceOverride.controlPointOffsets.emplace (i, Builders::UserSettingBuilder::fromValue (
+		    glm::vec3 (std::numeric_limits<float>::max (), 0.0f, 0.0f)));
+	    }
+	}
 
 	// Parse material - particles reference materials directly, not models
 	ModelUniquePtr material = nullptr;
@@ -1099,11 +1106,20 @@ ParticleInstanceOverride ObjectParser::parseParticleInstanceOverride (const JSON
     };
 
     for (int i = 0; i < PARTICLE_CONTROL_POINT_COUNT; i++) {
-	const auto offset = it.optional<glm::vec3> ("controlpoint" + std::to_string (i));
-
-	if (offset.has_value ()) {
-	    override.controlPointOffsets.emplace (i, *offset);
+	// Native uses FLT_MAX in X to leave this system's definition offset intact.
+	auto offset = it.user ("controlpoint" + std::to_string (i), properties,
+	    glm::vec3 (std::numeric_limits<float>::max (), 0.0f, 0.0f));
+	// Native control-point curves require all three vector channels.
+	if (offset->animation != nullptr) {
+	    const auto& channels = offset->animation->channels;
+	    if (!channels.contains (0) || !channels.contains (1) || !channels.contains (2)) {
+		offset->animation.reset ();
+	    } else {
+		// For these curves native tests field presence, including explicit false.
+		offset->animation->relative = it.at ("controlpoint" + std::to_string (i)).at ("animation").contains ("relative");
+	    }
 	}
+	override.controlPointOffsets.emplace (i, std::move (offset));
     }
 
     return override;

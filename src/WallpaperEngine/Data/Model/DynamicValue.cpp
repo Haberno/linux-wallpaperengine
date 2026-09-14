@@ -6,8 +6,20 @@
 #include "WallpaperEngine/Scripting/ScriptEngine.h"
 
 #include <cmath>
+#include <limits>
 
 using namespace WallpaperEngine::Data::Model;
+
+namespace {
+int integerCache (float value) {
+    // Particle control-point defaults use FLT_MAX. Preserve the floating value
+    // while keeping its integer conversion cache representable.
+    if (std::isnan (value)) return 0;
+    if (static_cast<double> (value) >= std::numeric_limits<int>::max ()) return std::numeric_limits<int>::max ();
+    if (static_cast<double> (value) <= std::numeric_limits<int>::min ()) return std::numeric_limits<int>::min ();
+    return static_cast<int> (value);
+}
+}
 
 DynamicValue::DynamicValue (const DynamicValue& other) {
     this->DynamicValue::update (other, UpdateSource::Initialization);
@@ -99,8 +111,8 @@ void DynamicValue::update (const float newValue, UpdateSource source) {
     this->m_vec3 = glm::vec3 (newValue);
     this->m_vec2 = glm::vec2 (newValue);
     this->m_float = newValue;
-    this->m_int = static_cast<int> (newValue);
-    this->m_bool = static_cast<int> (newValue) != 0;
+    this->m_int = integerCache (newValue);
+    this->m_bool = this->m_int != 0;
     this->m_string = "";
     this->m_type = UnderlyingType::Float;
 
@@ -143,7 +155,7 @@ void DynamicValue::update (const glm::vec2& newValue, UpdateSource source) {
     this->m_vec3 = glm::vec3 (newValue, 0.0f);
     this->m_vec4 = glm::vec4 (newValue, 0.0f, 0.0f);
     this->m_float = newValue.x;
-    this->m_int = static_cast<int> (newValue.x);
+    this->m_int = integerCache (newValue.x);
     this->m_bool = newValue.x != 0.0f;
     this->m_string = "";
     this->m_type = UnderlyingType::Vec2;
@@ -161,7 +173,7 @@ void DynamicValue::update (const glm::vec3& newValue, UpdateSource source) {
     this->m_vec3 = newValue;
     this->m_vec4 = glm::vec4 (newValue, 0.0f);
     this->m_float = newValue.x;
-    this->m_int = static_cast<int> (newValue.x);
+    this->m_int = integerCache (newValue.x);
     this->m_bool = newValue.x != 0.0f;
     this->m_string = "";
     this->m_type = UnderlyingType::Vec3;
@@ -180,7 +192,7 @@ void DynamicValue::update (const glm::vec4& newValue, UpdateSource source) {
     this->m_vec3 = glm::vec3 (newValue);
     this->m_vec4 = newValue;
     this->m_float = newValue.x;
-    this->m_int = static_cast<int> (newValue.x);
+    this->m_int = integerCache (newValue.x);
     this->m_bool = newValue.x != 0.0f;
     this->m_string = "";
     this->m_type = UnderlyingType::Vec4;
