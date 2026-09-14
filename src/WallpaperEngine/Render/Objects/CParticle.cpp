@@ -1915,11 +1915,12 @@ OperatorFunc CParticle::createColorChangeOperator (const ColorChangeOperator& op
 }
 
 OperatorFunc CParticle::createTurbulenceOperator (const TurbulenceOperator& op) {
-    DynamicValue* scaleValue = op.scale->value.get ();
-    DynamicValue* speedMinValue = op.speedMin->value.get ();
-    DynamicValue* speedMaxValue = op.speedMax->value.get ();
-    DynamicValue* timeScaleValue = op.timeScale->value.get ();
-    DynamicValue* maskValue = op.mask->value.get ();
+    const bool perspective = getScene ().getScene ().camera.projection.isPerspective;
+    DynamicValue* scaleValue = op.scale ? op.scale->value.get () : nullptr;
+    DynamicValue* speedMinValue = op.speedMin ? op.speedMin->value.get () : nullptr;
+    DynamicValue* speedMaxValue = op.speedMax ? op.speedMax->value.get () : nullptr;
+    DynamicValue* timeScaleValue = op.timeScale ? op.timeScale->value.get () : nullptr;
+    DynamicValue* maskValue = op.mask ? op.mask->value.get () : nullptr;
     DynamicValue* phaseMinValue = op.phaseMin->value.get ();
     DynamicValue* phaseMaxValue = op.phaseMax->value.get ();
     DynamicValue* speedOverride = getInstanceOverride ().speed->value.get ();
@@ -1949,20 +1950,21 @@ OperatorFunc CParticle::createTurbulenceOperator (const TurbulenceOperator& op) 
     // DynamicValue* audioFreqStartValue = op.audioProcessingFrequencyStart->value.get ();
     // DynamicValue* audioFreqEndValue = op.audioProcessingFrequencyEnd->value.get ();
 
-    return [this, scaleValue, timeScaleValue, maskValue, speedOverride, speedMinValue, speedMaxValue,
+    return [this, perspective, scaleValue, timeScaleValue, maskValue, speedOverride, speedMinValue, speedMaxValue,
             phaseMinValue, phaseMaxValue, blendTimes = op.blendTimes] (
 	       std::vector<ParticleInstance>& particles, uint32_t count, const std::vector<ControlPointData>&,
 	       float, float dt
 	   ) {
-	const float noiseScale = scaleValue->getFloat ();
+	const float noiseScale = scaleValue ? scaleValue->getFloat () : (perspective ? 0.5f : 0.01f);
+	const float timeScale = timeScaleValue ? timeScaleValue->getFloat () : (perspective ? 1.0f : 20.0f);
 	// Native samples owner time with the cached rate, not integrated particle time.
-	const float timeOffset = (timeScaleValue->getFloat () * m_turbulenceRate) * getScene ().getTime ();
-	const glm::vec3 mask = maskValue->getVec3 ();
+	const float timeOffset = (timeScale * m_turbulenceRate) * getScene ().getTime ();
+	const glm::vec3 mask = maskValue ? maskValue->getVec3 () : glm::vec3 (1.0f, 1.0f, perspective ? 1.0f : 0.0f);
 	// Flag16 skips native's speed updater, but keeps the rate/time updater.
 	// Scale endpoints before forming the span, including negative multipliers.
 	const float speed = (m_particle.flags & 16) != 0 ? 1.0f : speedOverride->getFloat ();
-	const float speedMin = speedMinValue->getFloat () * speed;
-	const float speedSpan = speedMaxValue->getFloat () * speed - speedMin;
+	const float speedMin = (speedMinValue ? speedMinValue->getFloat () : (perspective ? 1.0f : 500.0f)) * speed;
+	const float speedSpan = (speedMaxValue ? speedMaxValue->getFloat () : (perspective ? 5.0f : 1000.0f)) * speed - speedMin;
 	const float phaseSpan = phaseMaxValue->getFloat () - phaseMinValue->getFloat ();
 
 	for (size_t i = 0; i < count; ++i) {

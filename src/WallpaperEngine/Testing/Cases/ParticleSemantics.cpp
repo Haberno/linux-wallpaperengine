@@ -72,6 +72,42 @@ TEST_CASE ("turbulence parses native lifetime defaults and authored ranges", "[p
     CHECK (authored->blendTimes == glm::vec4 (.2f, .4f, .6f, .8f));
 }
 
+TEST_CASE ("turbulence keeps absent projection settings distinct from explicit zero and null", "[particle][turbulence]") {
+    WallpaperEngine::Data::Model::Project project {};
+    const auto object = WallpaperEngine::Data::Parsers::ObjectParser::parse (
+        WallpaperEngine::Data::JSON::JSON::parse (R"({"id":24,"particle":{"operator":[
+            {"name":"turbulence"},
+            {"name":"turbulence","scale":0,"timescale":0,"speedmin":0,"speedmax":0,"mask":"0 0 0"},
+            {"name":"turbulence","scale":null,"timescale":null,"speedmin":null,"speedmax":null,"mask":null},
+            {"name":"turbulence","scale":{"value":-0.25},"timescale":2,"speedmin":-3,"speedmax":4,"mask":"1 -2 3"}
+        ]}})"), project
+    );
+    const auto* particle = object->as<Particle> ();
+    REQUIRE (particle != nullptr);
+    REQUIRE (particle->operators.size () == 4);
+    const auto* absent = particle->operators[0]->as<TurbulenceOperator> ();
+    REQUIRE (absent != nullptr);
+    CHECK (absent->scale == nullptr);
+    CHECK (absent->timeScale == nullptr);
+    CHECK (absent->speedMin == nullptr);
+    CHECK (absent->speedMax == nullptr);
+    CHECK (absent->mask == nullptr);
+    for (size_t i = 1; i <= 3; ++i) {
+        const auto* op = particle->operators[i]->as<TurbulenceOperator> ();
+        REQUIRE (op != nullptr);
+        REQUIRE (op->scale != nullptr);
+        REQUIRE (op->timeScale != nullptr);
+        REQUIRE (op->speedMin != nullptr);
+        REQUIRE (op->speedMax != nullptr);
+        REQUIRE (op->mask != nullptr);
+        CHECK (op->scale->value->getFloat () == (i == 3 ? -.25f : 0.0f));
+        CHECK (op->timeScale->value->getFloat () == (i == 3 ? 2.0f : 0.0f));
+        CHECK (op->speedMin->value->getFloat () == (i == 3 ? -3.0f : 0.0f));
+        CHECK (op->speedMax->value->getFloat () == (i == 3 ? 4.0f : 0.0f));
+        CHECK (op->mask->value->getVec3 () == (i == 3 ? glm::vec3 (1, -2, 3) : glm::vec3 (0)));
+    }
+}
+
 TEST_CASE ("angular movement parses native lifetime defaults and authored ranges", "[particle][angularmovement]") {
     WallpaperEngine::Data::Model::Project project {};
     const auto object = WallpaperEngine::Data::Parsers::ObjectParser::parse (

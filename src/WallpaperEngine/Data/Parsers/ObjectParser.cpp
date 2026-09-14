@@ -943,9 +943,13 @@ ParticleOperatorUniquePtr ObjectParser::parseParticleOperator (const JSON& it, c
 	);
     } else if (name == "turbulence") {
 	return std::make_unique<TurbulenceOperator> (
-	    it.user ("scale", properties, 0.005f), it.user ("speedmin", properties, 500.0f),
-	    it.user ("speedmax", properties, 1000.0f), it.user ("timescale", properties, 0.01f),
-	    it.user ("mask", properties, glm::vec3 (1.0f, 1.0f, 0.0f)), it.user ("phasemin", properties, 0.0f),
+	    // Only absent keys use projection defaults; explicit null is native zero.
+	    it.contains ("scale") ? it.user ("scale", properties, 0.0f) : nullptr,
+	    it.contains ("speedmin") ? it.user ("speedmin", properties, 0.0f) : nullptr,
+	    it.contains ("speedmax") ? it.user ("speedmax", properties, 0.0f) : nullptr,
+	    it.contains ("timescale") ? it.user ("timescale", properties, 0.0f) : nullptr,
+	    it.contains ("mask") ? it.user ("mask", properties, glm::vec3 (0.0f)) : nullptr,
+	    it.user ("phasemin", properties, 0.0f),
 	    it.user ("phasemax", properties, 0.0f), it.user ("audioprocessingmode", properties, 0),
 	    it.user ("audioprocessingbounds", properties, glm::vec2 (0.0f, 1.0f)),
 	    it.user ("audioprocessingexponent", properties, 1.0f),
