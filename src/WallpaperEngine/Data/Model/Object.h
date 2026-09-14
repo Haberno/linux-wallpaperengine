@@ -597,11 +597,11 @@ public:
     OscillatePositionOperator (
 	UserSettingUniquePtr frequencyMin, UserSettingUniquePtr frequencyMax, UserSettingUniquePtr scaleMin,
 	UserSettingUniquePtr scaleMax, UserSettingUniquePtr phaseMin, UserSettingUniquePtr phaseMax,
-	UserSettingUniquePtr mask
+	UserSettingUniquePtr mask, glm::vec4 blendTimes
     ) :
 	frequencyMin (std::move (frequencyMin)), frequencyMax (std::move (frequencyMax)),
 	scaleMin (std::move (scaleMin)), scaleMax (std::move (scaleMax)), phaseMin (std::move (phaseMin)),
-	phaseMax (std::move (phaseMax)), mask (std::move (mask)) { }
+	phaseMax (std::move (phaseMax)), mask (std::move (mask)), blendTimes (blendTimes) { }
     UserSettingUniquePtr frequencyMin;
     UserSettingUniquePtr frequencyMax;
     UserSettingUniquePtr scaleMin;
@@ -609,6 +609,7 @@ public:
     UserSettingUniquePtr phaseMin;
     UserSettingUniquePtr phaseMax;
     UserSettingUniquePtr mask;
+    glm::vec4 blendTimes;
 };
 
 using ParticleOperatorUniquePtr = std::unique_ptr<ParticleOperatorBase>;

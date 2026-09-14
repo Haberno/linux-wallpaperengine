@@ -987,10 +987,13 @@ ParticleOperatorUniquePtr ObjectParser::parseParticleOperator (const JSON& it, c
 	);
     } else if (name == "oscillateposition") {
 	return std::make_unique<OscillatePositionOperator> (
-	    it.user ("frequencymin", properties, 0.0f), it.user ("frequencymax", properties, 5.0f),
-	    it.user ("scalemin", properties, 0.0f), it.user ("scalemax", properties, 10.0f),
+	    it.user ("frequencymin", properties, 1.0f), it.user ("frequencymax", properties, 5.0f),
+	    it.user ("scalemin", properties, 0.0f),
+	    it.optional ("scalemax") ? it.user ("scalemax", properties) : nullptr,
 	    it.user ("phasemin", properties, 0.0f), it.user ("phasemax", properties, glm::two_pi<float> ()),
-	    it.user ("mask", properties, glm::vec3 (1.0f, 1.0f, 0.0f))
+	    it.user ("mask", properties, glm::vec3 (1.0f, 1.0f, 0.0f)),
+	    glm::vec4 (it.optional ("blendinstart", 0.0f), it.optional ("blendinend", 0.0f),
+		       it.optional ("blendoutstart", 1.0f), it.optional ("blendoutend", 1.0f))
 	);
     }
 

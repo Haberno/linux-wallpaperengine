@@ -24,6 +24,55 @@ using WallpaperEngine::Render::Objects::calculateFixedParticleOrientation;
 using WallpaperEngine::Render::Objects::calculateBillboardParticleOrientation;
 using WallpaperEngine::Render::Objects::ParticleInstance;
 
+TEST_CASE ("position oscillation preserves native defaults and lifetime blending", "[particle][oscillateposition]") {
+    WallpaperEngine::Data::Model::Project project {};
+    const auto object = WallpaperEngine::Data::Parsers::ObjectParser::parse (
+        WallpaperEngine::Data::JSON::JSON::parse (R"({"id":19,"particle":{"operator":[
+            {"name":"oscillateposition"},
+            {"name":"oscillateposition","scalemax":20,"blendinstart":0.2,"blendinend":0.4,
+             "blendoutstart":0.6,"blendoutend":0.8}
+        ]}})"), project
+    );
+    const auto* particle = object->as<WallpaperEngine::Data::Model::Particle> ();
+    REQUIRE (particle != nullptr);
+    REQUIRE (particle->operators.size () == 2);
+    const auto* defaults = particle->operators[0]->as<OscillatePositionOperator> ();
+    const auto* authored = particle->operators[1]->as<OscillatePositionOperator> ();
+    REQUIRE (defaults != nullptr);
+    REQUIRE (authored != nullptr);
+    CHECK (defaults->frequencyMin->value->getFloat () == 1.0f);
+    CHECK (defaults->frequencyMax->value->getFloat () == 5.0f);
+    CHECK (defaults->scaleMin->value->getFloat () == 0.0f);
+    CHECK (defaults->scaleMax == nullptr); // Resolve the projection-dependent default at runtime.
+    CHECK (defaults->phaseMin->value->getFloat () == 0.0f);
+    CHECK (defaults->phaseMax->value->getFloat () == Catch::Approx (glm::two_pi<float> ()));
+    CHECK (defaults->mask->value->getVec3 () == glm::vec3 (1, 1, 0));
+    CHECK (defaults->blendTimes == glm::vec4 (0, 0, 1, 1));
+    CHECK (authored->scaleMax->value->getFloat () == 20.0f);
+    CHECK (authored->blendTimes == glm::vec4 (.2f, .4f, .6f, .8f));
+}
+
+TEST_CASE ("position oscillation integrates native waves with a shared random fraction", "[particle][oscillateposition]") {
+    using WallpaperEngine::Render::Objects::calculateParticlePositionOscillation;
+    ParticleInstance p;
+    p.age = .3f;
+    p.lifetime = 1;
+    p.oscillationRandom = .25f;
+    const glm::vec4 fullLifetime (0, 0, 1, 1);
+    const auto delta = calculateParticlePositionOscillation (p, {2, 4}, {.1f, .5f}, {20, 60}, {1, 1, 1}, fullLifetime, .05f);
+    CHECK (delta.x == Catch::Approx (1.40151076f).margin (.00002f));
+    CHECK (delta.y == Catch::Approx (1.46661999f).margin (.00002f));
+    CHECK (delta.z == delta.x);
+    const auto masked = calculateParticlePositionOscillation (p, {2, 4}, {.1f, .5f}, {20, 60}, {-.5f, 0, 2}, fullLifetime, .05f);
+    CHECK (masked.x == Catch::Approx (-.70075538f).margin (.00002f));
+    CHECK (masked.y == 0);
+    CHECK (masked.z == Catch::Approx (2.80302152f).margin (.00004f));
+    CHECK (calculateParticlePositionOscillation (p, {2, 4}, {.1f, .5f}, {20, 60}, {1, 1, 1}, fullLifetime, 0) == glm::vec3 (0));
+    CHECK (calculateParticlePositionOscillation (p, {2, 4}, {.1f, .5f}, {20, 60}, {1, 1, 1}, {.4f, .6f, 1, 1}, .05f) == glm::vec3 (0));
+    const auto blended = calculateParticlePositionOscillation (p, {2, 4}, {.1f, .5f}, {20, 60}, {1, 1, 1}, {0, .6f, 1, 1}, .05f);
+    CHECK (blended.x == Catch::Approx (.70075538f).margin (.00002f));
+}
+
 TEST_CASE ("size oscillation retains native defaults and authored blending", "[particle][oscillatesize]") {
     WallpaperEngine::Data::Model::Project project {};
     const auto object = WallpaperEngine::Data::Parsers::ObjectParser::parse (
