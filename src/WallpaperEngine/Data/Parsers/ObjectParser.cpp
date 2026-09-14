@@ -951,10 +951,10 @@ ParticleOperatorUniquePtr ObjectParser::parseParticleOperator (const JSON& it, c
 	    it.contains ("mask") ? it.user ("mask", properties, glm::vec3 (0.0f)) : nullptr,
 	    it.user ("phasemin", properties, 0.0f),
 	    it.user ("phasemax", properties, 0.0f), it.user ("audioprocessingmode", properties, 0),
-	    it.user ("audioprocessingbounds", properties, glm::vec2 (0.0f, 1.0f)),
-	    it.user ("audioprocessingexponent", properties, 1.0f),
+	    it.user ("audioprocessingbounds", properties, it.contains ("audioprocessingbounds") ? glm::vec2 (0.0f) : glm::vec2 (.8f, 1.0f)),
+	    it.user ("audioprocessingexponent", properties, it.contains ("audioprocessingexponent") ? 0.0f : 2.0f),
 	    it.user ("audioprocessingfrequencystart", properties, 0),
-	    it.user ("audioprocessingfrequencyend", properties, 15),
+	    it.user ("audioprocessingfrequencyend", properties, it.contains ("audioprocessingfrequencyend") ? 0 : 1),
 	    glm::vec4 (it.optional ("blendinstart", 0.0f), it.optional ("blendinend", 0.0f),
 		       it.optional ("blendoutstart", 1.0f), it.optional ("blendoutend", 1.0f))
 	);

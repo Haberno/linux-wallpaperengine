@@ -1943,14 +1943,7 @@ OperatorFunc CParticle::createTurbulenceOperator (const TurbulenceOperator& op) 
 	for (const auto& [id, setting] : settings.controlPointOffsets) subscribe (*setting);
     }
 
-    // TODO: Audio processing support
-    // DynamicValue* audioModeValue = op.audioProcessingMode->value.get ();
-    // DynamicValue* audioBoundsValue = op.audioProcessingBounds->value.get ();
-    // DynamicValue* audioExponentValue = op.audioProcessingExponent->value.get ();
-    // DynamicValue* audioFreqStartValue = op.audioProcessingFrequencyStart->value.get ();
-    // DynamicValue* audioFreqEndValue = op.audioProcessingFrequencyEnd->value.get ();
-
-    return [this, perspective, scaleValue, timeScaleValue, maskValue, speedOverride, speedMinValue, speedMaxValue,
+    return [this, &op, perspective, scaleValue, timeScaleValue, maskValue, speedOverride, speedMinValue, speedMaxValue,
             phaseMinValue, phaseMaxValue, blendTimes = op.blendTimes] (
 	       std::vector<ParticleInstance>& particles, uint32_t count, const std::vector<ControlPointData>&,
 	       float, float dt
@@ -1963,8 +1956,19 @@ OperatorFunc CParticle::createTurbulenceOperator (const TurbulenceOperator& op) 
 	// Flag16 skips native's speed updater, but keeps the rate/time updater.
 	// Scale endpoints before forming the span, including negative multipliers.
 	const float speed = (m_particle.flags & 16) != 0 ? 1.0f : speedOverride->getFloat ();
-	const float speedMin = (speedMinValue ? speedMinValue->getFloat () : (perspective ? 1.0f : 500.0f)) * speed;
-	const float speedSpan = (speedMaxValue ? speedMaxValue->getFloat () : (perspective ? 5.0f : 1000.0f)) * speed - speedMin;
+	float speedMin = (speedMinValue ? speedMinValue->getFloat () : (perspective ? 1.0f : 500.0f)) * speed;
+	float speedSpan = (speedMaxValue ? speedMaxValue->getFloat () : (perspective ? 5.0f : 1000.0f)) * speed - speedMin;
+	const auto& recorder = getScene ().getAudioContext ().getRecorder ();
+	auto firstBand = std::min (static_cast<uint32_t> (op.audioProcessingFrequencyStart->value->getInt ()), 15u);
+	auto lastBand = std::min (static_cast<uint32_t> (op.audioProcessingFrequencyEnd->value->getInt ()), 15u);
+	if (firstBand > lastBand) std::swap (firstBand, lastBand);
+	const float audio = calculateParticleAudioResponse (
+	    recorder.audio16Left, recorder.audio16Right, op.audioProcessingMode->value->getInt (),
+	    op.audioProcessingBounds->value->getVec2 (), op.audioProcessingExponent->value->getFloat (), firstBand, lastBand
+	);
+	// Native scales the minimum and span before particle interpolation, without changing phase/time.
+	speedMin *= audio;
+	speedSpan *= audio;
 	const float phaseSpan = phaseMaxValue->getFloat () - phaseMinValue->getFloat ();
 
 	for (size_t i = 0; i < count; ++i) {
