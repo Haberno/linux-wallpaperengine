@@ -81,15 +81,17 @@ struct ParticleInstance {
     float lifetime { 1.0f }; // Total lifetime in seconds
     float age { 0.0f }; // Current age in seconds
 
-    // Oscillator state (per-particle random values)
-    // base is updated by alphafade/sizechange operators so oscillation combines properly
+    // Native alpha oscillators share one stable random fraction per particle.
+    float alphaOscillationRandom { -1.0f };
+
+    // Size oscillator state; sizechange updates its base each frame.
     struct {
 	float frequency { 0.0f };
 	float scale { 1.0f };
 	float phase { 0.0f };
 	float base { 1.0f };
 	bool initialized { false };
-    } oscillateAlpha, oscillateSize;
+    } oscillateSize;
 
     struct {
 	glm::vec3 frequency { 0.0f };
@@ -119,6 +121,11 @@ struct ParticleInstance {
 
     bool isAlive () const { return alive && age < lifetime; }
 };
+
+[[nodiscard]] float calculateParticleAlphaOscillation (
+    const ParticleInstance& particle, glm::vec2 frequencyRange, glm::vec2 phaseRange,
+    glm::vec2 scaleRange, glm::vec4 blendTimes
+);
 
 void initializeParticleBetweenControlPoints (
     ParticleInstance& particle, const MapSequenceBetweenControlPointsInitializer& initializer,
@@ -282,6 +289,7 @@ private:
     std::vector<EmitterFunc> m_emitters;
     std::vector<InitializerFunc> m_initializers;
     std::vector<OperatorFunc> m_operators;
+    bool m_hasAlphaOperators { false };
 
     std::vector<ControlPointData> m_controlPoints;
     bool m_initializingManualEmission { false };
