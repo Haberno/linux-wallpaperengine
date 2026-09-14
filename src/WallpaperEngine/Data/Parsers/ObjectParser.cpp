@@ -965,9 +965,11 @@ ParticleOperatorUniquePtr ObjectParser::parseParticleOperator (const JSON& it, c
 	);
     } else if (name == "controlpointattract") {
 	return std::make_unique<ControlPointAttractOperator> (
-	    it.optional ("controlpoint", 0), it.user ("origin", properties, glm::vec3 (0.0f)),
+	    std::min (static_cast<uint32_t> (it.optional ("controlpoint", 0)), 7u), it.optional ("flags", 2),
 	    it.optional ("scale") ? it.user ("scale", properties) : nullptr,
-	    it.optional ("threshold") ? it.user ("threshold", properties) : nullptr
+	    it.optional ("threshold") ? it.user ("threshold", properties) : nullptr,
+	    glm::vec4 (it.optional ("blendinstart", 0.0f), it.optional ("blendinend", 0.0f),
+		       it.optional ("blendoutstart", 1.0f), it.optional ("blendoutend", 1.0f))
 	);
     } else if (name == "oscillatealpha") {
 	return std::make_unique<OscillateAlphaOperator> (

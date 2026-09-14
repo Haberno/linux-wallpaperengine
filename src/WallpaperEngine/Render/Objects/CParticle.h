@@ -40,7 +40,8 @@ constexpr uint32_t DEFAULT_MAX_PARTICLES = 1000;
 [[nodiscard]] glm::vec3 convertParticleRotationForRender (const glm::vec3& rotation, bool preserveZ = false);
 [[nodiscard]] float calculateRopeTrailVisualValue (float currentValue, float trailPosition, bool fadeAlongTrail);
 [[nodiscard]] glm::vec3 calculateControlPointAttraction (
-    const glm::vec3& toCenter, float strength, float radius, float deltaTime
+    const glm::vec3& toCenter, float strength, float radius, float deltaTime,
+    bool limitToDistance = true, float lifetimeWeight = 1.0f
 );
 [[nodiscard]] glm::vec3 resolveParticleControlPoint (
     const glm::vec3& offset, const glm::mat4& worldToLocal, bool worldSpace

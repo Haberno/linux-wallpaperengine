@@ -24,6 +24,47 @@ using WallpaperEngine::Render::Objects::calculateFixedParticleOrientation;
 using WallpaperEngine::Render::Objects::calculateBillboardParticleOrientation;
 using WallpaperEngine::Render::Objects::ParticleInstance;
 
+TEST_CASE ("attraction parses lifetime blending and native point selection", "[particle][attraction]") {
+    WallpaperEngine::Data::Model::Project project {};
+    const auto object = WallpaperEngine::Data::Parsers::ObjectParser::parse (
+        WallpaperEngine::Data::JSON::JSON::parse (R"({"id":20,"particle":{"operator":[
+            {"name":"controlpointattract"},
+            {"name":"controlpointattract","controlpoint":-1,"flags":0,"scale":-200,"threshold":100,
+             "blendinstart":0.2,"blendinend":0.4,"blendoutstart":0.6,"blendoutend":0.8}
+        ]}})"), project
+    );
+    const auto* particle = object->as<WallpaperEngine::Data::Model::Particle> ();
+    REQUIRE (particle != nullptr);
+    REQUIRE (particle->operators.size () == 2);
+    const auto* defaults = particle->operators[0]->as<ControlPointAttractOperator> ();
+    const auto* authored = particle->operators[1]->as<ControlPointAttractOperator> ();
+    REQUIRE (defaults != nullptr);
+    REQUIRE (authored != nullptr);
+    CHECK (defaults->controlPoint == 0);
+    CHECK (defaults->flags == 2);
+    CHECK (defaults->scale == nullptr);
+    CHECK (defaults->threshold == nullptr);
+    CHECK (defaults->blendTimes == glm::vec4 (0, 0, 1, 1));
+    CHECK (authored->controlPoint == 7);
+    CHECK (authored->flags == 0);
+    CHECK (authored->scale->value->getFloat () == -200.0f);
+    CHECK (authored->threshold->value->getFloat () == 100.0f);
+    CHECK (authored->blendTimes == glm::vec4 (.2f, .4f, .6f, .8f));
+}
+
+TEST_CASE ("attraction caps the signed step before lifetime weight", "[particle][attraction]") {
+    CHECK (calculateControlPointAttraction ({40, 0, 0}, 5000, 100, .05f, true, .5f).x
+           == Catch::Approx (20.0f));
+    CHECK (calculateControlPointAttraction ({40, 0, 0}, 5000, 100, .05f, false, .5f).x
+           == Catch::Approx (75.0f));
+    CHECK (calculateControlPointAttraction ({40, 0, 0}, -5000, 100, .05f, true, .5f).x
+           == Catch::Approx (-75.0f));
+    CHECK (calculateControlPointAttraction ({40, 0, 0}, 5000, 100, .05f, true, 0) == glm::vec3 (0));
+    CHECK (calculateControlPointAttraction ({40, 0, 0}, 5000, 100, 0) == glm::vec3 (0));
+    CHECK (calculateControlPointAttraction ({.0001f, 0, 0}, 100, 1, .05f).x
+           == Catch::Approx (.0001f).margin (.00000001f));
+}
+
 TEST_CASE ("position oscillation preserves native defaults and lifetime blending", "[particle][oscillateposition]") {
     WallpaperEngine::Data::Model::Project project {};
     const auto object = WallpaperEngine::Data::Parsers::ObjectParser::parse (
