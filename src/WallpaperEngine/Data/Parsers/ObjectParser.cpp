@@ -979,9 +979,11 @@ ParticleOperatorUniquePtr ObjectParser::parseParticleOperator (const JSON& it, c
 	);
     } else if (name == "oscillatesize") {
 	return std::make_unique<OscillateSizeOperator> (
-	    it.user ("frequencymin", properties, 0.0f), it.user ("frequencymax", properties, 10.0f),
+	    it.user ("frequencymin", properties, 1.0f), it.user ("frequencymax", properties, 10.0f),
 	    it.user ("scalemin", properties, 0.8f), it.user ("scalemax", properties, 1.2f),
-	    it.user ("phasemin", properties, 0.0f), it.user ("phasemax", properties, glm::two_pi<float> ())
+	    it.user ("phasemin", properties, 0.0f), it.user ("phasemax", properties, glm::two_pi<float> ()),
+	    glm::vec4 (it.optional ("blendinstart", 0.0f), it.optional ("blendinend", 0.0f),
+		       it.optional ("blendoutstart", 1.0f), it.optional ("blendoutend", 1.0f))
 	);
     } else if (name == "oscillateposition") {
 	return std::make_unique<OscillatePositionOperator> (

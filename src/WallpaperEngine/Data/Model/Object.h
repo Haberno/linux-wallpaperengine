@@ -577,17 +577,19 @@ class OscillateSizeOperator : public ParticleOperatorBase {
 public:
     OscillateSizeOperator (
 	UserSettingUniquePtr frequencyMin, UserSettingUniquePtr frequencyMax, UserSettingUniquePtr scaleMin,
-	UserSettingUniquePtr scaleMax, UserSettingUniquePtr phaseMin, UserSettingUniquePtr phaseMax
+	UserSettingUniquePtr scaleMax, UserSettingUniquePtr phaseMin, UserSettingUniquePtr phaseMax,
+	glm::vec4 blendTimes
     ) :
 	frequencyMin (std::move (frequencyMin)), frequencyMax (std::move (frequencyMax)),
 	scaleMin (std::move (scaleMin)), scaleMax (std::move (scaleMax)), phaseMin (std::move (phaseMin)),
-	phaseMax (std::move (phaseMax)) { }
+	phaseMax (std::move (phaseMax)), blendTimes (blendTimes) { }
     UserSettingUniquePtr frequencyMin;
     UserSettingUniquePtr frequencyMax;
     UserSettingUniquePtr scaleMin;
     UserSettingUniquePtr scaleMax;
     UserSettingUniquePtr phaseMin;
     UserSettingUniquePtr phaseMax;
+    glm::vec4 blendTimes;
 };
 
 class OscillatePositionOperator : public ParticleOperatorBase {

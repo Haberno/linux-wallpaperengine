@@ -696,10 +696,11 @@ void CParticle::update (float dt) {
 	operatorControlPoints = &worldControlPoints;
     }
 
-    // Native 14023fc75 restores birth alpha before the ordered operator chain.
-    // Reset once, so multiple oscillators multiply without accumulating per frame.
-    if (m_hasAlphaOperators) {
-        for (uint32_t i = 0; i < m_particleCount; ++i) m_particles[i].alpha = m_particles[i].initial.alpha;
+    // Native 14023fc75/14023fc99 restore birth alpha/size before the ordered
+    // operator chain. Reset once, so oscillators do not accumulate per frame.
+    for (uint32_t i = 0; i < m_particleCount; ++i) {
+        if (m_hasAlphaOperators) m_particles[i].alpha = m_particles[i].initial.alpha;
+        m_particles[i].size = m_particles[i].initial.size;
     }
 
     // Apply operators to living particles (including alphafade)
@@ -997,8 +998,7 @@ EmitterFunc CParticle::createBoxEmitter (const ParticleEmitter& emitter) {
 		p.initial.lifetime = p.lifetime;
 
 		// Reset oscillator state for reused particles
-		p.alphaOscillationRandom = -1.0f;
-		p.oscillateSize = {};
+		p.oscillationRandom = -1.0f;
 		p.oscillatePosition = {};
 		p.trailHistory.clear ();
 		p.trailLastFrameValid = false;
@@ -1162,8 +1162,7 @@ EmitterFunc CParticle::createSphereEmitter (const ParticleEmitter& emitter) {
 	    p.initial.lifetime = p.lifetime;
 
 	    // Reset oscillator state for reused particles
-	    p.alphaOscillationRandom = -1.0f;
-	    p.oscillateSize = {};
+	    p.oscillationRandom = -1.0f;
 	    p.oscillatePosition = {};
 	    p.trailHistory.clear ();
 	    p.trailLastFrameValid = false;
@@ -1853,10 +1852,7 @@ OperatorFunc CParticle::createSizeChangeOperator (const SizeChangeOperator& op) 
 
 		float life = p.getLifetimePos ();
 		float multiplier = WallpaperEngine::Maths::fadeValue (life, startTime, endTime, startValue, endValue);
-		p.size = p.initial.size * multiplier;
-
-		// Update oscillator base so oscillateSize combines properly
-		p.oscillateSize.base = p.size;
+		p.size *= multiplier;
 	    }
 	};
 }
@@ -2182,20 +2178,20 @@ OperatorFunc CParticle::createControlPointAttractOperator (const ControlPointAtt
     };
 }
 
-float WallpaperEngine::Render::Objects::calculateParticleAlphaOscillation (
+float WallpaperEngine::Render::Objects::calculateParticleOscillationMultiplier (
     const ParticleInstance& particle, const glm::vec2 frequencyRange, const glm::vec2 phaseRange,
     const glm::vec2 scaleRange, const glm::vec4 blendTimes
 ) {
-    // Native opcodes 8/30 use the same particle random fraction for frequency,
+    // Native opcodes 8/30 (alpha) and 9/31 (size) use the same particle random fraction for frequency,
     // phase and amplitude. Phase offsets age before multiplication by frequency.
-    const float random = particle.alphaOscillationRandom;
+    const float random = particle.oscillationRandom;
     const float frequency = glm::mix (frequencyRange.x, frequencyRange.y, random);
     const float phase = glm::mix (phaseRange.x, phaseRange.y, random);
     const float minimum = scaleRange.x;
     const float amplitude = (scaleRange.y - minimum) * random;
     const float multiplier = minimum + amplitude * 0.5f * (1.0f + std::sin ((particle.age + phase) * frequency));
     const float weight = particleOperatorBlend (particle.getLifetimePos (), blendTimes);
-    return particle.alpha * (1.0f + (multiplier - 1.0f) * weight);
+    return 1.0f + (multiplier - 1.0f) * weight;
 }
 
 OperatorFunc CParticle::createOscillateAlphaOperator (const OscillateAlphaOperator& op) {
@@ -2209,56 +2205,30 @@ OperatorFunc CParticle::createOscillateAlphaOperator (const OscillateAlphaOperat
         for (uint32_t i = 0; i < count; ++i) {
             auto& particle = particles[i];
             if (!particle.alive) continue;
-            if (particle.alphaOscillationRandom < 0.0f) {
-                particle.alphaOscillationRandom = WallpaperEngine::Maths::randomFloat (m_rng, 0.0f, 1.0f);
+            if (particle.oscillationRandom < 0.0f) {
+                particle.oscillationRandom = WallpaperEngine::Maths::randomFloat (m_rng, 0.0f, 1.0f);
             }
-            particle.alpha = calculateParticleAlphaOscillation (particle, frequencies, phases, scales, op.blendTimes);
+            particle.alpha *= calculateParticleOscillationMultiplier (particle, frequencies, phases, scales, op.blendTimes);
         }
     };
 }
 
 OperatorFunc CParticle::createOscillateSizeOperator (const OscillateSizeOperator& op) {
-    DynamicValue* freqMinValue = op.frequencyMin->value.get ();
-    DynamicValue* freqMaxValue = op.frequencyMax->value.get ();
-    DynamicValue* scaleMinValue = op.scaleMin->value.get ();
-    DynamicValue* scaleMaxValue = op.scaleMax->value.get ();
-    DynamicValue* phaseMinValue = op.phaseMin->value.get ();
-    DynamicValue* phaseMaxValue = op.phaseMax->value.get ();
-
-    return
-	[this, freqMinValue, freqMaxValue, scaleMinValue, scaleMaxValue, phaseMinValue, phaseMaxValue] (
-	    std::vector<ParticleInstance>& particles, uint32_t count, const std::vector<ControlPointData>&, float, float
-	) {
-	    float freqMin = freqMinValue->getFloat ();
-	    float freqMax = freqMaxValue->getFloat ();
-	    float scaleMin = scaleMinValue->getFloat ();
-	    float scaleMax = scaleMaxValue->getFloat ();
-	    float phaseMin = phaseMinValue->getFloat ();
-	    float phaseMax = phaseMaxValue->getFloat ();
-
-	    for (uint32_t i = 0; i < count; i++) {
-		auto& p = particles[i];
-
-		// Initialize per-particle oscillator values on first use
-		if (!p.oscillateSize.initialized) {
-		    p.oscillateSize.frequency = WallpaperEngine::Maths::randomFloat (m_rng, freqMin, freqMax);
-		    p.oscillateSize.scale = WallpaperEngine::Maths::randomFloat (m_rng, scaleMin, scaleMax);
-		    p.oscillateSize.phase
-			= WallpaperEngine::Maths::randomFloat (m_rng, phaseMin, phaseMax + 2.0f * glm::pi<float> ());
-		    p.oscillateSize.base = p.size; // Capture initial base
-		    p.oscillateSize.initialized = true;
-		}
-
-		// Calculate oscillation: interpolate between scaleMin and scaleMax using cosine wave
-		float w = p.oscillateSize.frequency;
-		float t = p.age;
-		float cosVal = (std::cos (w * t + p.oscillateSize.phase) + 1.0f) * 0.5f;
-		float multiplier = glm::mix (scaleMin, scaleMax, cosVal);
-
-		// Apply to base value (sizeChange updates base each frame if present)
-		p.size = p.oscillateSize.base * multiplier;
-	    }
-	};
+    return [this, &op] (
+        std::vector<ParticleInstance>& particles, uint32_t count, const std::vector<ControlPointData>&, float, float
+    ) {
+        const glm::vec2 frequencies (op.frequencyMin->value->getFloat (), op.frequencyMax->value->getFloat ());
+        const glm::vec2 phases (op.phaseMin->value->getFloat (), op.phaseMax->value->getFloat ());
+        const glm::vec2 scales (op.scaleMin->value->getFloat (), op.scaleMax->value->getFloat ());
+        for (uint32_t i = 0; i < count; ++i) {
+            auto& particle = particles[i];
+            if (!particle.alive) continue;
+            if (particle.oscillationRandom < 0.0f) {
+                particle.oscillationRandom = WallpaperEngine::Maths::randomFloat (m_rng, 0.0f, 1.0f);
+            }
+            particle.size *= calculateParticleOscillationMultiplier (particle, frequencies, phases, scales, op.blendTimes);
+        }
+    };
 }
 
 OperatorFunc CParticle::createOscillatePositionOperator (const OscillatePositionOperator& op) {
