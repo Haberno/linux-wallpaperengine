@@ -81,17 +81,8 @@ struct ParticleInstance {
     float lifetime { 1.0f }; // Total lifetime in seconds
     float age { 0.0f }; // Current age in seconds
 
-    // Native alpha oscillators share one stable random fraction per particle.
-    float alphaOscillationRandom { -1.0f };
-
-    // Size oscillator state; sizechange updates its base each frame.
-    struct {
-	float frequency { 0.0f };
-	float scale { 1.0f };
-	float phase { 0.0f };
-	float base { 1.0f };
-	bool initialized { false };
-    } oscillateSize;
+    // Native alpha and size oscillators share one stable fraction per particle.
+    float oscillationRandom { -1.0f };
 
     struct {
 	glm::vec3 frequency { 0.0f };
@@ -122,7 +113,7 @@ struct ParticleInstance {
     bool isAlive () const { return alive && age < lifetime; }
 };
 
-[[nodiscard]] float calculateParticleAlphaOscillation (
+[[nodiscard]] float calculateParticleOscillationMultiplier (
     const ParticleInstance& particle, glm::vec2 frequencyRange, glm::vec2 phaseRange,
     glm::vec2 scaleRange, glm::vec4 blendTimes
 );

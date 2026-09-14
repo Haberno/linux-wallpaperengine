@@ -24,6 +24,32 @@ using WallpaperEngine::Render::Objects::calculateFixedParticleOrientation;
 using WallpaperEngine::Render::Objects::calculateBillboardParticleOrientation;
 using WallpaperEngine::Render::Objects::ParticleInstance;
 
+TEST_CASE ("size oscillation retains native defaults and authored blending", "[particle][oscillatesize]") {
+    WallpaperEngine::Data::Model::Project project {};
+    const auto object = WallpaperEngine::Data::Parsers::ObjectParser::parse (
+        WallpaperEngine::Data::JSON::JSON::parse (R"({"id":19,"particle":{"operator":[
+            {"name":"oscillatesize"},
+            {"name":"oscillatesize","blendinstart":0.2,"blendinend":0.4,
+             "blendoutstart":0.6,"blendoutend":0.8}
+        ]}})"), project
+    );
+    const auto* particle = object->as<WallpaperEngine::Data::Model::Particle> ();
+    REQUIRE (particle != nullptr);
+    REQUIRE (particle->operators.size () == 2);
+    const auto* defaults = particle->operators[0]->as<OscillateSizeOperator> ();
+    const auto* authored = particle->operators[1]->as<OscillateSizeOperator> ();
+    REQUIRE (defaults != nullptr);
+    REQUIRE (authored != nullptr);
+    CHECK (defaults->frequencyMin->value->getFloat () == 1.0f);
+    CHECK (defaults->frequencyMax->value->getFloat () == 10.0f);
+    CHECK (defaults->scaleMin->value->getFloat () == Catch::Approx (.8f));
+    CHECK (defaults->scaleMax->value->getFloat () == Catch::Approx (1.2f));
+    CHECK (defaults->phaseMin->value->getFloat () == 0.0f);
+    CHECK (defaults->phaseMax->value->getFloat () == Catch::Approx (glm::two_pi<float> ()));
+    CHECK (defaults->blendTimes == glm::vec4 (0, 0, 1, 1));
+    CHECK (authored->blendTimes == glm::vec4 (.2f, .4f, .6f, .8f));
+}
+
 TEST_CASE ("alpha oscillation preserves native defaults and lifetime blending", "[particle][oscillatealpha]") {
     WallpaperEngine::Data::Model::Project project {};
     const auto object = WallpaperEngine::Data::Parsers::ObjectParser::parse (
@@ -55,14 +81,14 @@ TEST_CASE ("alpha oscillation shares one random fraction and multiplies the inco
     p.alpha = .8f;
     p.age = .3f;
     p.lifetime = 1;
-    p.alphaOscillationRandom = .25f;
-    using WallpaperEngine::Render::Objects::calculateParticleAlphaOscillation;
+    p.oscillationRandom = .25f;
+    using WallpaperEngine::Render::Objects::calculateParticleOscillationMultiplier;
     // Frequency 2.5, phase .2, amplitude .2 all use the same fraction.
-    CHECK (calculateParticleAlphaOscillation (p, {2, 4}, {.1f, .5f}, {.2f, 1}, {0, 0, 1, 1}) == Catch::Approx (.31591877f));
-    p.alphaOscillationRandom = 0;
-    CHECK (calculateParticleAlphaOscillation (p, {2, 4}, {.1f, .5f}, {.2f, 1}, {0, 0, 1, 1}) == Catch::Approx (.16f));
-    p.alphaOscillationRandom = 1;
-    CHECK (calculateParticleAlphaOscillation (p, {2, 4}, {.1f, .5f}, {.2f, 1}, {0, 0, 1, 1}) == Catch::Approx (.46132026f));
+    CHECK (p.alpha * calculateParticleOscillationMultiplier (p, {2, 4}, {.1f, .5f}, {.2f, 1}, {0, 0, 1, 1}) == Catch::Approx (.31591877f));
+    p.oscillationRandom = 0;
+    CHECK (p.alpha * calculateParticleOscillationMultiplier (p, {2, 4}, {.1f, .5f}, {.2f, 1}, {0, 0, 1, 1}) == Catch::Approx (.16f));
+    p.oscillationRandom = 1;
+    CHECK (p.alpha * calculateParticleOscillationMultiplier (p, {2, 4}, {.1f, .5f}, {.2f, 1}, {0, 0, 1, 1}) == Catch::Approx (.46132026f));
 }
 
 TEST_CASE ("particles retain the fractal position-offset initializer", "[particle][positionoffset]") {
