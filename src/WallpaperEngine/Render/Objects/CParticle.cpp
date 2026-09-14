@@ -1752,52 +1752,37 @@ OperatorFunc CParticle::createReduceMovementNearControlPointOperator (const Redu
     };
 }
 
+void WallpaperEngine::Render::Objects::applyParticleAngularMovement (
+    ParticleInstance& particle, const glm::vec3& force, const float drag,
+    const float rawDelta, const float forceDelta, const float lifetimeWeight
+) {
+    // Native opcodes 2/28 accelerate before integrating rotation, then damp
+    // velocity. The envelope therefore weights this step's force contribution
+    // to rotation twice. Angular force/rotation use raw time; drag uses force time.
+    particle.angularVelocity += force * (rawDelta * lifetimeWeight);
+    particle.rotation += particle.angularVelocity * (rawDelta * lifetimeWeight);
+    const float damping = std::min (drag * forceDelta, 1.0f - std::numeric_limits<float>::epsilon ());
+    particle.angularVelocity *= 1.0f - lifetimeWeight * damping;
+    // Native preserves accumulated angles; wrapping here changes shader inputs.
+}
+
 OperatorFunc CParticle::createAngularMovementOperator (const AngularMovementOperator& op) {
-    DynamicValue* dragValue = op.drag->value.get ();
-    DynamicValue* forceValue = op.force->value.get ();
-    DynamicValue* speedOverride = getInstanceOverride ().speed->value.get ();
-
-    return [dragValue, forceValue, speedOverride] (
-	       std::vector<ParticleInstance>& particles, uint32_t count, const std::vector<ControlPointData>&, float,
-	       float dt
-	   ) {
-	float drag = dragValue->getFloat ();
-	float speed = speedOverride->getFloat ();
-	glm::vec3 force = forceValue->getVec3 ();
-
-	for (uint32_t i = 0; i < count; i++) {
-	    auto& p = particles[i];
-	    if (!p.alive) {
-		continue;
-	    }
-
-	    // Update rotation using current angular velocity
-	    p.rotation += p.angularVelocity * dt;
-
-	    // Apply force (angular acceleration)
-	    p.angularVelocity += force * dt * speed;
-
-	    // Apply drag (angular velocity decay)
-	    // Positive drag slows down, negative drag speeds up
-	    // Clamp to prevent velocity reversal if drag*dt > 1.0
-	    float dragFactor = 1.0f - (drag * dt);
-	    if (dragFactor < 0.0f) {
-		dragFactor = 0.0f;
-	    }
-	    p.angularVelocity *= dragFactor;
-
-	    // Wrap rotation to prevent floating-point precision issues
-	    const float pi = glm::pi<float> ();
-	    const float two_pi = glm::two_pi<float> ();
-	    for (int j = 0; j < 3; j++) {
-		while (p.rotation[j] > pi) {
-		    p.rotation[j] -= two_pi;
-		}
-		while (p.rotation[j] < -pi) {
-		    p.rotation[j] += two_pi;
-		}
-	    }
-	}
+    return [this, &op] (
+        std::vector<ParticleInstance>& particles, uint32_t count, const std::vector<ControlPointData>&,
+        float, float dt
+    ) {
+        const float speed = (m_particle.flags & 16) != 0 ? 1.0f : getInstanceOverride ().speed->value->getFloat ();
+        const glm::vec3 force = op.force->value->getVec3 () * speed;
+        const float drag = op.drag->value->getFloat ();
+        for (uint32_t i = 0; i < count; ++i) {
+            auto& particle = particles[i];
+            if (!particle.alive) continue;
+            // The fork currently supplies one delta; native force-clock mapping
+            // and the half-step scheduler remain separate parity work.
+            applyParticleAngularMovement (
+                particle, force, drag, dt, dt, particleOperatorBlend (particle.getLifetimePos (), op.blendTimes)
+            );
+        }
     };
 }
 

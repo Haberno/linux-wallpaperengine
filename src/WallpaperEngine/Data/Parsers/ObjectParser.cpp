@@ -918,7 +918,9 @@ ParticleOperatorUniquePtr ObjectParser::parseParticleOperator (const JSON& it, c
 	);
     } else if (name == "angularmovement") {
 	return std::make_unique<AngularMovementOperator> (
-	    it.user ("drag", properties, 0.0f), it.user ("force", properties, glm::vec3 (0.0f))
+	    it.user ("drag", properties, 0.0f), it.user ("force", properties, glm::vec3 (0.0f)),
+	    glm::vec4 (it.optional ("blendinstart", 0.0f), it.optional ("blendinend", 0.0f),
+		       it.optional ("blendoutstart", 1.0f), it.optional ("blendoutend", 1.0f))
 	);
     } else if (name == "alphafade") {
 	return std::make_unique<AlphaFadeOperator> (

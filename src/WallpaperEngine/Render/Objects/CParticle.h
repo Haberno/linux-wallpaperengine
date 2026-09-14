@@ -112,6 +112,11 @@ struct ParticleInstance {
     bool isAlive () const { return alive && age < lifetime; }
 };
 
+void applyParticleAngularMovement (
+    ParticleInstance& particle, const glm::vec3& force, float drag,
+    float rawDelta, float forceDelta, float lifetimeWeight
+);
+
 [[nodiscard]] float calculateParticleOscillationMultiplier (
     const ParticleInstance& particle, glm::vec2 frequencyRange, glm::vec2 phaseRange,
     glm::vec2 scaleRange, glm::vec4 blendTimes
