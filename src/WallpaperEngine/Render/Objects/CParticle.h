@@ -43,6 +43,11 @@ constexpr uint32_t DEFAULT_MAX_PARTICLES = 1000;
     const glm::vec3& toCenter, float strength, float radius, float deltaTime,
     bool limitToDistance = true, float lifetimeWeight = 1.0f
 );
+[[nodiscard]] glm::vec3 calculateParticleVortexV2 (
+    const glm::vec3& displacement, const glm::vec3& velocity, const glm::vec3& axis, int flags,
+    glm::vec2 distances, glm::vec2 speeds, float centerForce, glm::vec4 ring,
+    float rawDt, float forceDt, float lifetimeWeight
+);
 [[nodiscard]] glm::vec3 resolveParticleControlPoint (
     const glm::vec3& offset, const glm::mat4& worldToLocal, bool worldSpace
 );
@@ -215,6 +220,7 @@ protected:
     OperatorFunc createAlphaChangeOperator (const AlphaChangeOperator& op);
     OperatorFunc createColorChangeOperator (const ColorChangeOperator& op);
     OperatorFunc createTurbulenceOperator (const TurbulenceOperator& op);
+    OperatorFunc createVortexV2Operator (const VortexOperator& op);
     OperatorFunc createVortexOperator (const VortexOperator& op);
     OperatorFunc createControlPointAttractOperator (const ControlPointAttractOperator& op);
     OperatorFunc createOscillateAlphaOperator (const OscillateAlphaOperator& op);

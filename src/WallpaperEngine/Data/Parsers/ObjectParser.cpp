@@ -951,17 +951,24 @@ ParticleOperatorUniquePtr ObjectParser::parseParticleOperator (const JSON& it, c
 	    it.user ("audioprocessingfrequencyend", properties, 15)
 	);
     } else if (name == "vortex" || name == "vortex_v2") {
+	const bool v2 = name == "vortex_v2";
 	return std::make_unique<VortexOperator> (
-	    it.optional ("controlpoint", 0),
-	    it.optional ("flags", 0), // 1 = infinite axis, 2 = maintain distance, 4 = ring shape
+	    v2 ? std::min (static_cast<uint32_t> (it.optional ("controlpoint", 0)), 7u)
+	       : it.optional ("controlpoint", 0),
+	    it.optional ("flags", 0) & (v2 ? 255 : -1), // 1 = infinite axis, 2 = maintain distance, 4 = ring shape
 	    it.user ("axis", properties, glm::vec3 (0.0f, 0.0f, 1.0f)),
-	    it.user ("offset", properties, glm::vec3 (0.0f)), it.user ("distanceinner", properties, 500.0f),
-	    it.user ("distanceouter", properties, 650.0f), it.user ("speedinner", properties, 2500.0f),
+	    it.user ("offset", properties, glm::vec3 (0.0f)), v2 && !it.optional ("distanceinner") ? nullptr : it.user ("distanceinner", properties, 500.0f),
+	    v2 && !it.optional ("distanceouter") ? nullptr : it.user ("distanceouter", properties, 650.0f), v2 && !it.optional ("speedinner") ? nullptr : it.user ("speedinner", properties, 2500.0f),
 	    it.user ("speedouter", properties, 0.0f), it.user ("centerforce", properties, 1.0f),
-	    it.user ("ringradius", properties, 300.0f), it.user ("ringwidth", properties, 50.0f),
-	    it.user ("ringpulldistance", properties, 50.0f), it.user ("ringpullforce", properties, 10.0f),
+	    v2 && !it.optional ("ringradius") ? nullptr : it.user ("ringradius", properties, 300.0f), v2 && !it.optional ("ringwidth") ? nullptr : it.user ("ringwidth", properties, 50.0f),
+	    v2 && !it.optional ("ringpulldistance") ? nullptr : it.user ("ringpulldistance", properties, 50.0f), v2 && !it.optional ("ringpullforce") ? nullptr : it.user ("ringpullforce", properties, 10.0f),
 	    it.user ("audioprocessingmode", properties, 0),
-	    it.user ("audioprocessingbounds", properties, glm::vec2 (0.0f, 1.0f))
+	    it.user ("audioprocessingbounds", properties, glm::vec2 (v2 ? .8f : 0.0f, 1.0f)), v2,
+	    glm::vec4 (it.optional ("blendinstart", 0.0f), it.optional ("blendinend", 0.0f),
+		       it.optional ("blendoutstart", 1.0f), it.optional ("blendoutend", 1.0f)),
+	    it.user ("audioprocessingexponent", properties, 2.0f),
+	    it.user ("audioprocessingfrequencystart", properties, 0),
+	    it.user ("audioprocessingfrequencyend", properties, 1)
 	);
     } else if (name == "controlpointattract") {
 	return std::make_unique<ControlPointAttractOperator> (
