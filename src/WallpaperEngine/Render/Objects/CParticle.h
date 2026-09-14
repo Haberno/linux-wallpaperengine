@@ -250,6 +250,9 @@ private:
     CParticle* m_particleParent = nullptr;
     std::array<bool, PARTICLE_CONTROL_POINT_COUNT> m_controlPointOverridesChanged {};
     std::vector<Data::Utils::ScopeGuard<std::function<void ()>>> m_controlPointSubscriptions;
+    std::vector<Data::Utils::ScopeGuard<std::function<void ()>>> m_turbulenceRateSubscriptions;
+    float m_turbulenceRate = 1.0f;
+    bool m_turbulenceRateDirty = false;
     glm::mat4 m_controlPointTransform { 1.0f };
     struct ChildSystem {
 	// The renderer holds references into the definition and must die first.
