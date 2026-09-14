@@ -950,7 +950,9 @@ ParticleOperatorUniquePtr ObjectParser::parseParticleOperator (const JSON& it, c
 	    it.user ("audioprocessingbounds", properties, glm::vec2 (0.0f, 1.0f)),
 	    it.user ("audioprocessingexponent", properties, 1.0f),
 	    it.user ("audioprocessingfrequencystart", properties, 0),
-	    it.user ("audioprocessingfrequencyend", properties, 15)
+	    it.user ("audioprocessingfrequencyend", properties, 15),
+	    glm::vec4 (it.optional ("blendinstart", 0.0f), it.optional ("blendinend", 0.0f),
+		       it.optional ("blendoutstart", 1.0f), it.optional ("blendoutend", 1.0f))
 	);
     } else if (name == "vortex" || name == "vortex_v2") {
 	const bool v2 = name == "vortex_v2";

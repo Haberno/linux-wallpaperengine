@@ -24,6 +24,25 @@ using WallpaperEngine::Render::Objects::calculateFixedParticleOrientation;
 using WallpaperEngine::Render::Objects::calculateBillboardParticleOrientation;
 using WallpaperEngine::Render::Objects::ParticleInstance;
 
+TEST_CASE ("turbulence parses native lifetime defaults and authored ranges", "[particle][turbulence]") {
+    WallpaperEngine::Data::Model::Project project {};
+    const auto object = WallpaperEngine::Data::Parsers::ObjectParser::parse (
+        WallpaperEngine::Data::JSON::JSON::parse (R"({"id":23,"particle":{"operator":[
+            {"name":"turbulence"},
+            {"name":"turbulence","blendinstart":0.2,"blendinend":0.4,"blendoutstart":0.6,"blendoutend":0.8}
+        ]}})"), project
+    );
+    const auto* particle = object->as<Particle> ();
+    REQUIRE (particle != nullptr);
+    REQUIRE (particle->operators.size () == 2);
+    const auto* defaults = particle->operators[0]->as<TurbulenceOperator> ();
+    const auto* authored = particle->operators[1]->as<TurbulenceOperator> ();
+    REQUIRE (defaults != nullptr);
+    REQUIRE (authored != nullptr);
+    CHECK (defaults->blendTimes == glm::vec4 (0, 0, 1, 1));
+    CHECK (authored->blendTimes == glm::vec4 (.2f, .4f, .6f, .8f));
+}
+
 TEST_CASE ("angular movement parses native lifetime defaults and authored ranges", "[particle][angularmovement]") {
     WallpaperEngine::Data::Model::Project project {};
     const auto object = WallpaperEngine::Data::Parsers::ObjectParser::parse (
