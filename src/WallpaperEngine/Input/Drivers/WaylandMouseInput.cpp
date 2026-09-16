@@ -3,7 +3,6 @@
 #include <chrono>
 #include <cstdlib>
 #include <cstring>
-#include <glm/common.hpp>
 #include <regex>
 #include <string>
 #include <sys/socket.h>
@@ -18,14 +17,11 @@ WaylandMouseInput::WaylandMouseInput (const WallpaperEngine::Render::Drivers::Wa
 
 void WaylandMouseInput::update () {
     if (!this->m_waylandDriver.getApp ().getContext ().settings.mouse.enabled) {
-	this->m_pos = { 0, 0 };
-	this->m_hasPosition = false;
 	return;
     }
 
-    if (m_waylandDriver.viewportInFocus && m_waylandDriver.viewportInFocus->rendering) {
-	this->m_pos = m_waylandDriver.viewportInFocus->mousePos;
-	this->m_hasPosition = true;
+    // Surface events already update that output, including between frame callbacks.
+    if (m_waylandDriver.viewportInFocus) {
 	return;
     }
 
@@ -37,29 +33,29 @@ void WaylandMouseInput::update () {
 
     const auto globalCursor = this->queryHyprlandCursorPosition ();
     if (!globalCursor.has_value ()) {
-	this->m_pos = { 0, 0 };
-	this->m_hasPosition = false;
 	return;
     }
 
-    for (const auto* viewport : this->m_waylandDriver.m_screens) {
-	if (!viewport || viewport->size.x <= 0 || viewport->size.y <= 0) {
+    for (auto* viewport : this->m_waylandDriver.m_screens) {
+	if (!viewport || !viewport->layerSurface || viewport->logicalSize.x <= 0 || viewport->logicalSize.y <= 0) {
 	    continue;
 	}
 
-	const double localX = globalCursor->x - viewport->position.x;
-	const double localY = globalCursor->y - viewport->position.y;
-	if (localX < 0.0 || localY < 0.0 || localX > viewport->size.x || localY > viewport->size.y) {
+	const double localX = globalCursor->x - viewport->globalPosition.x;
+	const double localY = globalCursor->y - viewport->globalPosition.y;
+	if (localX < 0.0 || localY < 0.0 || localX >= viewport->logicalSize.x || localY >= viewport->logicalSize.y) {
 	    continue;
 	}
 
-	this->m_pos = { localX * viewport->scale, (viewport->size.y - localY) * viewport->scale };
-	this->m_hasPosition = true;
+	// Keep positions per output: other wallpapers retain their last cursor position.
+	// Hyprland reports logical desktop coordinates; renderers consume framebuffer pixels.
+	viewport->mousePos = {
+	    localX / viewport->logicalSize.x * viewport->viewport.z,
+	    (1.0 - localY / viewport->logicalSize.y) * viewport->viewport.w,
+	};
+	viewport->hasMousePosition = true;
 	return;
     }
-
-    this->m_pos = { 0, 0 };
-    this->m_hasPosition = false;
 }
 
 glm::dvec2 WaylandMouseInput::position () const {
@@ -73,15 +69,7 @@ glm::dvec2 WaylandMouseInput::position () const {
 	return { 0, 0 };
     }
 
-    if (viewport == m_waylandDriver.viewportInFocus) {
-	return viewport->mousePos;
-    }
-
-    if (this->m_hasPosition) {
-	return this->m_pos;
-    }
-
-    if (viewport->mousePos.x != 0 || viewport->mousePos.y != 0) {
+    if (viewport->hasMousePosition) {
 	return viewport->mousePos;
     }
 
@@ -93,7 +81,7 @@ glm::dvec2 WaylandMouseInput::position () const {
 
 WallpaperEngine::Input::MouseClickStatus WaylandMouseInput::leftClick () const {
     const auto* viewport = this->getActiveOutputViewport ();
-    if (viewport) {
+    if (viewport && viewport == this->m_waylandDriver.viewportInFocus) {
 	return viewport->leftClick;
     }
 
@@ -102,10 +90,6 @@ WallpaperEngine::Input::MouseClickStatus WaylandMouseInput::leftClick () const {
 
 const WallpaperEngine::Render::Drivers::Output::WaylandOutputViewport*
 WaylandMouseInput::getActiveOutputViewport () const {
-    if (this->m_waylandDriver.viewportInFocus && this->m_waylandDriver.viewportInFocus->rendering) {
-	return this->m_waylandDriver.viewportInFocus;
-    }
-
     for (const auto* viewport : this->m_waylandDriver.m_screens) {
 	if (viewport && viewport->rendering) {
 	    return viewport;
@@ -183,7 +167,7 @@ std::optional<glm::dvec2> WaylandMouseInput::queryHyprlandCursorPosition () cons
 WallpaperEngine::Input::MouseClickStatus WaylandMouseInput::rightClick () const {
     const auto* viewport = this->getActiveOutputViewport ();
 
-    if (viewport) {
+    if (viewport && viewport == this->m_waylandDriver.viewportInFocus) {
 	return viewport->rightClick;
     }
 
