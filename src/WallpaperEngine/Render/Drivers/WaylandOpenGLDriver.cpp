@@ -32,6 +32,11 @@ static void handlePointerEnter (
     const auto driver = static_cast<WaylandOpenGLDriver*> (data);
     const auto viewport = driver->surfaceToViewport (surface);
     driver->viewportInFocus = viewport;
+    viewport->mousePos = {
+	wl_fixed_to_double (surface_x) * viewport->scale,
+	(viewport->size.y - wl_fixed_to_double (surface_y)) * viewport->scale,
+    };
+    viewport->hasMousePosition = true;
     wl_surface_set_buffer_scale (viewport->cursorSurface, viewport->scale);
     wl_surface_attach (viewport->cursorSurface, wl_cursor_image_get_buffer (viewport->pointer->images[0]), 0, 0);
     wl_pointer_set_cursor (
@@ -45,6 +50,8 @@ static void
 handlePointerLeave (void* data, struct wl_pointer* wl_pointer, uint32_t serial, struct wl_surface* surface) {
     const auto driver = static_cast<WaylandOpenGLDriver*> (data);
     if (driver->viewportInFocus && driver->viewportInFocus->surface == surface) {
+	driver->viewportInFocus->leftClick = WallpaperEngine::Input::MouseClickStatus::Released;
+	driver->viewportInFocus->rightClick = WallpaperEngine::Input::MouseClickStatus::Released;
 	driver->viewportInFocus = nullptr;
     }
 }
@@ -68,6 +75,7 @@ static void handlePointerMotion (
     y = viewportHeight - y;
 
     driver->viewportInFocus->mousePos = { x * driver->viewportInFocus->scale, y * driver->viewportInFocus->scale };
+    driver->viewportInFocus->hasMousePosition = true;
 }
 
 static void handlePointerButton (
