@@ -185,6 +185,38 @@ CParticle::CParticle (Wallpapers::CScene& scene, const Particle& particle, CPart
     this->registerProperty ("parallaxDepth", *particle.parallaxDepth);
     const auto hasTimeline = [] (const auto& entry) { return entry.second->animation != nullptr; };
     const auto& rootSettings = getInstanceOverride ();
+    if (parent == nullptr) {
+	// Native root setup clamps the exposed field before script init callbacks.
+	rootSettings.rate->value->update (std::max (0.01f, rootSettings.rate->value->getFloat ()),
+	    DynamicValue::UpdateSource::Initialization);
+    }
+    m_turbulenceRate = rootSettings.rate->value->getFloat ();
+    const auto subscribeParameters = [this] (const UserSetting& setting, const int channels) {
+	m_instanceParameterSubscriptions.emplace_back (Data::Utils::ScopeGuard (setting.value->listen (
+	    [this] (const DynamicValue&, DynamicValue::UpdateSource source) {
+		if (source != DynamicValue::UpdateSource::Initialization) m_instanceParametersDirty = true;
+	    }
+	)));
+	if (setting.animation != nullptr) {
+	    bool complete = true;
+	    for (int channel = 0; channel < channels; ++channel) {
+		const auto curve = setting.animation->channels.find (channel);
+		complete &= curve != setting.animation->channels.end () && !curve->second.empty ();
+	    }
+	    m_instanceParameterTimelines |= complete;
+	}
+    };
+    // These native setters dirty common parameters even for equal values.
+    // Rate alone does not. Paused complete timelines still invoke the setter.
+    if (parent == nullptr) {
+	for (const auto* setting : { rootSettings.alpha.get (), rootSettings.size.get (), rootSettings.count.get (),
+		rootSettings.speed.get (), rootSettings.lifetime.get (), rootSettings.brightness.get () }) {
+	    subscribeParameters (*setting, 1);
+	}
+	subscribeParameters (*rootSettings.colorn, 3);
+	for (const auto& [id, setting] : rootSettings.controlPointOffsets) subscribeParameters (*setting, 3);
+	for (const auto& [id, setting] : rootSettings.controlPointAngles) subscribeParameters (*setting, 3);
+    }
     m_controlPointTimelines = std::ranges::any_of (rootSettings.controlPointOffsets, hasTimeline)
 	|| std::ranges::any_of (rootSettings.controlPointAngles, hasTimeline);
     if (parent == nullptr) {
@@ -433,10 +465,32 @@ void CParticle::setupChildren () {
     }
 }
 
+void CParticle::refreshInstanceParameters () {
+    m_turbulenceRate = getInstanceOverride ().rate->value->getFloat ();
+    m_instanceParametersDirty = false;
+    // Native common refresh also visits permanent and pooled children while
+    // hidden. Deferring their cache read until drawing would sample later writes.
+    for (auto& child : m_children) child.renderer->refreshInstanceParameters ();
+    for (auto& child : m_followChildren) {
+	for (auto& instance : child.instances) instance.renderer->refreshInstanceParameters ();
+    }
+}
+
 void CParticle::render () {
-    if (!m_initialized || !m_particle.visible->value->getBool ()) {
+    if (!m_initialized) {
 	return;
     }
+    if (m_instanceParametersDirty || m_instanceParameterTimelines) {
+	auto& rate = *getInstanceOverride ().rate->value;
+	if (m_particleParent == nullptr) {
+	    // Native 1402307f1 writes back only on the root common refresh.
+	    // Child activation samples raw root rate without clamping it again.
+	    rate.update (std::max (0.01f, rate.getFloat ()), DynamicValue::UpdateSource::Initialization);
+	    if (m_instanceParameterTimelines) m_controlPointAnglesChanged = true;
+	}
+	refreshInstanceParameters ();
+    }
+    if (!m_particle.visible->value->getBool ()) return;
 
     // All children start with the parent, including systems with no root emitter.
     if (m_time == 0.0) {
@@ -451,11 +505,7 @@ void CParticle::render () {
     // the physics stability cap. Sample even when emission/rate is paused.
     updateControlPoints (dt);
 
-    if (m_turbulenceRateDirty || m_controlPointTimelines) {
-	m_turbulenceRate = std::max (0.01f, getInstanceOverride ().rate->value->getFloat ());
-	m_turbulenceRateDirty = false;
-    }
-
+    bool simulated = false;
     if (dt > 0.0f) {
 	// Cap dt to prevent simulation instability
 	// Also provides more consistent behavior across different FPS
@@ -464,8 +514,11 @@ void CParticle::render () {
 	if (dt > 0.0f) {
 	    m_simulationTime += dt;
 	    update (dt);
+	    simulated = true;
 	}
     }
+    // Script bursts run initializers even while particle integration is held.
+    if (!simulated && m_pendingEmission > 0) update (0.0f);
 
     // Render particles
     if (m_particleCount > 0 && m_particle.material) {
@@ -561,8 +614,8 @@ void CParticle::updateFollowChildren (const uint32_t firstNewParticle) {
 	    slot->parentSerial = particle.serial;
 	    slot->renderer->stop ();
 	    slot->renderer->m_simulationTime = 0.0f;
-	    // Native child activation rebuilds derived parameters from root overrides.
-	    slot->renderer->m_turbulenceRateDirty = true;
+	    // Refresh this renderer's derived parameters from the raw root overrides.
+	    slot->renderer->m_instanceParametersDirty = true;
 	    slot->renderer->m_time = g_Time;
 	    slot->renderer->play ();
 	}
@@ -699,7 +752,7 @@ void CParticle::update (float dt) {
     // Reclaim this frame's expired slots before emitting. A full one-particle
     // glow otherwise rejects its replacement, then disappears for one frame.
     uint32_t writeIdx = 0;
-    for (uint32_t readIdx = 0; readIdx < m_particleCount; ++readIdx) {
+    for (uint32_t readIdx = 0; dt > 0.0f && readIdx < m_particleCount; ++readIdx) {
 	auto& particle = m_particles[readIdx];
 	particle.age += dt;
 	if (particle.isAlive ()) {
@@ -707,11 +760,11 @@ void CParticle::update (float dt) {
 	    ++writeIdx;
 	}
     }
-    m_particleCount = writeIdx;
+    if (dt > 0.0f) m_particleCount = writeIdx;
 
     // Pausing stops new emission; bubbles already released keep moving and aging.
     const uint32_t firstNewParticle = m_particleCount;
-    if (m_emitting) {
+    if (m_emitting && dt > 0.0f) {
 	for (auto& emitter : m_emitters) {
 	    emitter (m_particles, m_particleCount, dt, 0);
 	}
@@ -753,6 +806,22 @@ void CParticle::update (float dt) {
 	    point.position = glm::vec3 (localToWorld * glm::vec4 (point.position, 1.0f));
 	}
 	operatorControlPoints = &worldControlPoints;
+    }
+
+    if (dt <= 0.0f) {
+	// Native emitParticles() invokes birth initializers and children, not the
+	// simulation operators (some of which change alpha/size even at zero dt).
+	// Birth size is separate from the working half-size: the first positive
+	// simulation step copies it, while a held new particle still displays .5.
+	for (uint32_t i = firstNewParticle; i < m_particleCount; ++i) {
+	    auto& particle = m_particles[i];
+	    particle.size = 0.5f;
+	    // Native separates working alpha/color only when an operator needs it.
+	    if (m_hasAlphaOperators) particle.alpha = getInstanceOverride ().alpha->value->getFloat ();
+	    if (m_hasColorOperators) particle.color = getInstanceOverride ().colorn->value->getVec3 ();
+	}
+	updateFollowChildren (firstNewParticle);
+	return;
     }
 
     // Native 14023fc75/14023fc99 restore birth alpha/size before the ordered
@@ -1940,6 +2009,7 @@ OperatorFunc CParticle::createAlphaChangeOperator (const AlphaChangeOperator& op
 }
 
 OperatorFunc CParticle::createColorChangeOperator (const ColorChangeOperator& op) {
+    m_hasColorOperators = true;
     DynamicValue* startTimeValue = op.startTime->value.get ();
     DynamicValue* endTimeValue = op.endTime->value.get ();
     DynamicValue* startValueValue = op.startValue->value.get ();
@@ -1982,25 +2052,6 @@ OperatorFunc CParticle::createTurbulenceOperator (const TurbulenceOperator& op) 
     DynamicValue* phaseMinValue = op.phaseMin->value.get ();
     DynamicValue* phaseMaxValue = op.phaseMax->value.get ();
     DynamicValue* speedOverride = getInstanceOverride ().speed->value.get ();
-    DynamicValue* rateOverride = getInstanceOverride ().rate->value.get ();
-
-    if (m_turbulenceRateSubscriptions.empty ()) {
-	m_turbulenceRate = std::max (0.01f, rateOverride->getFloat ());
-	const auto subscribe = [this] (const UserSetting& setting) {
-	    m_turbulenceRateSubscriptions.emplace_back (Data::Utils::ScopeGuard (setting.value->listen (
-		[this] (const DynamicValue&, DynamicValue::UpdateSource) { m_turbulenceRateDirty = true; }
-	    )));
-	};
-	const auto& settings = getInstanceOverride ();
-	// Native rate setters do not invalidate derived parameters. These setters
-	// do, even for unchanged values; read the final rate when simulation runs.
-	for (const auto* setting : { settings.alpha.get (), settings.size.get (), settings.count.get (),
-		settings.speed.get (), settings.lifetime.get (), settings.brightness.get (), settings.colorn.get () }) {
-	    subscribe (*setting);
-	}
-	for (const auto& [id, setting] : settings.controlPointOffsets) subscribe (*setting);
-	for (const auto& [id, setting] : settings.controlPointAngles) subscribe (*setting);
-    }
 
     return [this, &op, perspective, scaleValue, timeScaleValue, maskValue, speedOverride, speedMinValue, speedMaxValue,
             phaseMinValue, phaseMaxValue, blendTimes = op.blendTimes] (

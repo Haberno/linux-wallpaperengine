@@ -247,6 +247,7 @@ protected:
     void applyParallaxToModelMatrix ();
     void updateParticleViewProjection ();
     void updateParticleRenderVars ();
+    void refreshInstanceParameters ();
 
 private:
     const Particle& m_particle;
@@ -256,9 +257,10 @@ private:
     bool m_controlPointTimelines = false;
     uint32_t m_controlPointCount = 0;
     std::vector<Data::Utils::ScopeGuard<std::function<void ()>>> m_controlPointSubscriptions;
-    std::vector<Data::Utils::ScopeGuard<std::function<void ()>>> m_turbulenceRateSubscriptions;
+    std::vector<Data::Utils::ScopeGuard<std::function<void ()>>> m_instanceParameterSubscriptions;
     float m_turbulenceRate = 1.0f;
-    bool m_turbulenceRateDirty = false;
+    bool m_instanceParametersDirty = false;
+    bool m_instanceParameterTimelines = false;
     glm::mat4 m_controlPointTransform { 1.0f };
     struct ChildSystem {
 	// The renderer holds references into the definition and must die first.
@@ -299,6 +301,7 @@ private:
     std::vector<InitializerFunc> m_initializers;
     std::vector<OperatorFunc> m_operators;
     bool m_hasAlphaOperators { false };
+    bool m_hasColorOperators { false };
 
     std::vector<ControlPointData> m_controlPoints;
     bool m_initializingManualEmission { false };
