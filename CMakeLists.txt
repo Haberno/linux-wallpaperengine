@@ -147,7 +147,23 @@ add_subdirectory(src/External/SPIRV-Cross-WallpaperEngine spirv-cross)
 add_subdirectory(src/External/kissfft kissfft)
 add_subdirectory(src/External/argparse argparse)
 set(QJS_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
-add_subdirectory(src/External/quickjs quickjs)
+option(WPENGINE_SCENESCRIPT_JIT "Use JavaScriptCore for JIT-compiled SceneScript" ON)
+if(WPENGINE_SCENESCRIPT_JIT)
+    pkg_check_modules(JAVASCRIPTCORE QUIET IMPORTED_TARGET javascriptcoregtk-4.1)
+endif()
+if(WPENGINE_SCENESCRIPT_JIT AND JAVASCRIPTCORE_FOUND)
+    add_library(scenescript-runtime STATIC src/WallpaperEngine/Scripting/JavaScriptCoreRuntime.cpp)
+    set_target_properties(scenescript-runtime PROPERTIES POSITION_INDEPENDENT_CODE ON)
+    target_include_directories(scenescript-runtime PUBLIC src/External/quickjs)
+    target_link_libraries(scenescript-runtime PUBLIC PkgConfig::JAVASCRIPTCORE)
+    target_compile_definitions(scenescript-runtime PUBLIC WPENGINE_JAVASCRIPTCORE=1)
+    set(WPENGINE_SCRIPT_RUNTIME scenescript-runtime)
+    message(STATUS "SceneScript runtime: JavaScriptCore (JIT)")
+else()
+    add_subdirectory(src/External/quickjs quickjs)
+    set(WPENGINE_SCRIPT_RUNTIME qjs)
+    message(STATUS "SceneScript runtime: QuickJS (interpreter)")
+endif()
 if(BUILD_TESTING)
     add_subdirectory(src/External/Catch2)
 endif()
@@ -268,12 +284,14 @@ PRINT_CEF_CONFIG()
 set(WPENGINE_GENERATED_DIR "${CMAKE_CURRENT_BINARY_DIR}/generated")
 set(WPENGINE_BUILTINS_JS "${CMAKE_CURRENT_SOURCE_DIR}/src/WallpaperEngine/Scripting/resources/builtins.js")
 file(READ "${WPENGINE_BUILTINS_JS}" WPENGINE_SCRIPT_BUILTINS)
+set(WPENGINE_VECTORS_JS "${CMAKE_CURRENT_SOURCE_DIR}/src/WallpaperEngine/Scripting/resources/vectors.js")
+file(READ "${WPENGINE_VECTORS_JS}" WPENGINE_SCRIPT_VECTORS)
 configure_file(
     "${CMAKE_CURRENT_SOURCE_DIR}/src/WallpaperEngine/Scripting/resources/Builtins.generated.h.in"
     "${WPENGINE_GENERATED_DIR}/WallpaperEngine/Scripting/Builtins.generated.h"
     @ONLY)
 # re-run configuration (regenerating the header) whenever the .js changes
-set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${WPENGINE_BUILTINS_JS}")
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${WPENGINE_BUILTINS_JS}" "${WPENGINE_VECTORS_JS}")
 
 # Invalidate persistent shader results automatically when processing code, bundled
 # translators or build options change, including uncommitted source edits.
@@ -641,6 +659,7 @@ if(BUILD_TESTING)
         src/WallpaperEngine/Testing/Cases/LightState.cpp
         src/WallpaperEngine/Testing/Cases/PropertyParser.cpp
         src/WallpaperEngine/Testing/Cases/LocalStorage.cpp
+        src/WallpaperEngine/Testing/Cases/ScriptRuntime.cpp
         src/WallpaperEngine/Testing/Cases/Utf8Text.cpp
         src/WallpaperEngine/Testing/Cases/JsonTolerance.cpp
         src/WallpaperEngine/Testing/Cases/EffectConditions.cpp
@@ -694,7 +713,7 @@ target_link_libraries (linux-wallpaperengine-lib PUBLIC
     libcef_lib
     libcef_dll_wrapper
     argparse
-    qjs)
+    ${WPENGINE_SCRIPT_RUNTIME})
 
 if (BUILD_TESTING)
     target_link_libraries (tests PRIVATE
@@ -721,7 +740,7 @@ if (BUILD_TESTING)
         libcef_lib
         libcef_dll_wrapper
         argparse
-        qjs)
+        ${WPENGINE_SCRIPT_RUNTIME})
 endif()
 
 target_compile_definitions(linux-wallpaperengine-lib PUBLIC ERRORONLY=${ERRORONLY})

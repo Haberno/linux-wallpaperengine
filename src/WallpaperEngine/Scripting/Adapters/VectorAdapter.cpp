@@ -1050,6 +1050,21 @@ template <int components> VectorAdapter<components>::~VectorAdapter () {
     vectorAdapterInstances<components>.erase (this->m_instanceId);
 
     JS_FreeValue (this->m_engine.getContext (), m_prototype);
+    JS_FreeValue (this->m_engine.getContext (), m_scriptConstructor);
+}
+
+template <int components> void VectorAdapter<components>::useScriptConstructor () {
+    auto* ctx = m_engine.getContext ();
+    m_scriptConstructor = JS_GetPropertyStr (ctx, m_engine.getGlobalThis (), m_name.c_str ());
+    JS_FreeValue (ctx, m_prototype);
+    m_prototype = JS_GetPropertyStr (ctx, m_scriptConstructor, "prototype");
+    JS_SetClassProto (ctx, m_classId, JS_DupValue (ctx, m_prototype));
+}
+
+template <int components> bool VectorAdapter<components>::isInstance (JSValueConst value) const {
+    return JS_GetClassID (value) == m_classId
+        || (!JS_IsUndefined (m_scriptConstructor) && JS_IsObject (value)
+            && JS_IsInstanceOf (m_engine.getContext (), value, m_scriptConstructor) > 0);
 }
 
 template <int components> JSValue VectorAdapter<components>::instantiate (ScriptableObject& object) {
@@ -1074,6 +1089,13 @@ template <int components> JSValue VectorAdapter<components>::instantiate (Dynami
 }
 
 template <int components> JSValue VectorAdapter<components>::instantiate (DynamicValue& source, bool temporal) {
+    if (!JS_IsUndefined (m_scriptConstructor)) {
+        auto* ctx = m_engine.getContext ();
+        const auto vector = vector_get<components> (source);
+        JSValue args[components];
+        for (int i = 0; i < components; ++i) args[i] = JS_NewFloat64 (ctx, vector[i]);
+        return JS_CallConstructor (ctx, m_scriptConstructor, components, args);
+    }
     auto value = std::make_unique<DynamicValue> (source);
     auto& valueRef = *value;
     uint32_t id = ++VectorInstanceId;
@@ -1094,6 +1116,9 @@ template <int components> JSValue VectorAdapter<components>::instantiate (Dynami
 }
 
 template <int components> JSValue VectorAdapter<components>::instantiate () {
+    if (!JS_IsUndefined (m_scriptConstructor)) {
+        return JS_CallConstructor (m_engine.getContext (), m_scriptConstructor, 0, nullptr);
+    }
     auto value = std::make_unique<DynamicValue> (vector_new<components> ());
     auto& valueRef = *value;
     uint32_t id = ++VectorInstanceId;

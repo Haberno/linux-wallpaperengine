@@ -91,9 +91,10 @@ JSValue wecolor_rgb2hsv (JSContext* ctx, JSValueConst this_val, int argc, JSValu
     } else {
 	s = (max - min) / max;
 
-	if (max == xVal) {
+	// Extrema are floats, while script-owned vector components are doubles.
+	if (max == static_cast<float> (xVal)) {
 	    h = 60 * ((yVal - zVal) / (max - min)) + 0;
-	} else if (max == yVal) {
+	} else if (max == static_cast<float> (yVal)) {
 	    h = 60 * ((zVal - xVal) / (max - min)) + 120;
 	} else {
 	    h = 60 * ((xVal - yVal) / (max - min)) + 240;

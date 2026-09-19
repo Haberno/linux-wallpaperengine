@@ -7,8 +7,8 @@ globalThis.MediaPlaybackEvent = globalThis.MediaPlaybackEvent || {
 
 // ===========================================================================
 // SceneScript API parity layer (pure JS, runs once at script-engine startup).
-// Vec2/Vec3/Vec4 are C++-backed; here we only ADD the methods the engine does
-// not already provide, computing strictly from .x/.y/.z/.w components.
+// vectors.js provides owned vectors and methods shared with borrowed C++ values.
+// Add the remaining helpers using their .x/.y/.z/.w components.
 // Mat3/Mat4 are implemented in JS; localStorage uses a persistent native bridge.
 // ===========================================================================
 (function () {

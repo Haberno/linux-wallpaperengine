@@ -1798,9 +1798,10 @@ void WallpaperApplication::update (Render::Drivers::Output::OutputViewport* view
     m_renderContext->render (viewport);
 }
 
-void WallpaperApplication::signal (int signal) {
-    sLog.out ("Stop requested by signal ", signal);
-    this->m_context.state.general.keepRunning = false;
+void WallpaperApplication::signal (int) {
+    // Logging allocates and converts timestamps, which can deadlock if the
+    // signal interrupted either operation. Only publish the stop request here.
+    this->m_context.state.general.keepRunning.store (false, std::memory_order_relaxed);
 }
 
 const std::map<std::string, ProjectUniquePtr>& WallpaperApplication::getBackgrounds () const {

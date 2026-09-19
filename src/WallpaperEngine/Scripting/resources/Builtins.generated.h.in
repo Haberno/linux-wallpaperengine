@@ -2,6 +2,8 @@
 #pragma once
 
 namespace WallpaperEngine::Scripting {
+inline constexpr const char* SCENE_SCRIPT_VECTORS = R"JS(
+@WPENGINE_SCRIPT_VECTORS@)JS";
 inline constexpr const char* SCENE_SCRIPT_BUILTINS = R"JS(
 @WPENGINE_SCRIPT_BUILTINS@)JS";
 } // namespace WallpaperEngine::Scripting

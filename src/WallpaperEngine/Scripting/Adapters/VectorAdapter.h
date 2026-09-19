@@ -11,7 +11,8 @@ public:
     ~VectorAdapter () override;
 
     int length () { return components; }
-    bool isInstance (JSValueConst value) const { return JS_GetClassID (value) == m_classId; }
+    bool isInstance (JSValueConst value) const;
+    void useScriptConstructor ();
     int componentIndex (JSAtom atom) const {
         for (int index = 0; index < components; ++index) {
             if (m_componentAtoms[index] == atom) return index;
@@ -28,6 +29,7 @@ public:
 
 private:
     JSValue m_prototype;
+    JSValue m_scriptConstructor = JS_UNDEFINED;
     uint32_t m_instanceId;
     std::string m_name;
     JSClassExoticMethods m_exoticMethods;

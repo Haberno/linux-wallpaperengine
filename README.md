@@ -123,6 +123,12 @@ linux-wallpaperengine --assets-dir /path/to/assets
 
 ### 2. Build from Source
 
+SceneScript uses JavaScriptCore JIT when the `javascriptcoregtk-4.1` development
+package is available through pkg-config. This substantially improves script-heavy
+wallpapers, including physics simulations. Without it, the bundled QuickJS
+interpreter remains available. Configure with `-DWPENGINE_SCENESCRIPT_JIT=OFF`
+to explicitly select QuickJS.
+
 > ⚠️ If you installed the AUR package mentioned before, you can skip this step.
 
 Clone the repo:

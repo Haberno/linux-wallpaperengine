@@ -495,6 +495,18 @@ void ScriptEngine::installBuiltins () {
     }
 
     JSValue result = JS_Eval (
+        m_context, SCENE_SCRIPT_VECTORS, strlen (SCENE_SCRIPT_VECTORS), "<scene-script-vectors>", JS_EVAL_TYPE_GLOBAL
+    );
+    if (JS_IsException (result)) {
+        logJSException (m_context, "installVectors");
+    } else {
+        m_adapters.vec2->useScriptConstructor ();
+        m_adapters.vec3->useScriptConstructor ();
+        m_adapters.vec4->useScriptConstructor ();
+    }
+    JS_FreeValue (m_context, result);
+
+    result = JS_Eval (
 	this->m_context, SCENE_SCRIPT_BUILTINS, strlen (SCENE_SCRIPT_BUILTINS), "<scene-script-builtins>",
 	JS_EVAL_TYPE_GLOBAL
     );
@@ -506,10 +518,17 @@ void ScriptEngine::installBuiltins () {
     // Property scripts run through the lowered wrapper, so their removed
     // imports never instantiate C modules. Publish the real color module once
     // per context and let the wrapper bind its namespace like WEMath/WEVector.
+#ifdef WPENGINE_JAVASCRIPTCORE
+    result = JS_GetModuleNamespace (m_context, m_modules.at ("WEColor")->getDefinition ());
+    if (!JS_IsException (result)) {
+        JS_SetPropertyStr (m_context, m_globalThis, "WEColor", JS_DupValue (m_context, result));
+    }
+#else
     constexpr char colorModule[] = "import * as WEColor from 'WEColor'; globalThis.WEColor = WEColor;";
     result = JS_Eval (
 	this->m_context, colorModule, sizeof (colorModule) - 1, "<scene-script-color-module>", JS_EVAL_TYPE_MODULE
     );
+#endif
     if (JS_IsException (result)) {
 	logJSException (this->m_context, "installColorModule");
     }
