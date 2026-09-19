@@ -4,9 +4,13 @@
 #include "WallpaperEngine/Render/RenderContext.h"
 
 #include <GL/glew.h>
+#include <deque>
 #include <mpv/client.h>
 #include <mpv/render.h>
+#include <mutex>
 #include <string>
+#include <thread>
+#include <vector>
 
 namespace WallpaperEngine::VideoPlayback::MPV {
 class GLPlayer : public Helpers::ContextAware {
@@ -72,7 +76,10 @@ private:
     void setSource (MemoryStreamProtocolUniquePtr source);
     void setSource (const std::filesystem::path& file);
     void stop ();
-    void applyPendingSeek () const;
+    uint64_t queueCommand (std::vector<std::string> arguments, bool seek = false) const;
+    void submitCommand () const;
+    void processEvent (const mpv_event& event) const;
+    void completeCommand (int error) const;
 
 protected:
     bool m_doWeOwnFramebuffer;
@@ -91,6 +98,22 @@ protected:
     bool m_scriptControlled = false;
     mutable bool m_loaded = false;
     mutable std::optional<double> m_pendingSeek;
+    mutable double m_currentTime = 0.0;
+    mutable double m_duration = 0.0;
+    mutable bool m_ended = false;
+    std::optional<double> m_pausedSeek;
+    struct Command {
+	uint64_t id;
+	std::vector<std::string> arguments;
+	bool seek;
+    };
+    mutable std::deque<Command> m_commands;
+    mutable uint64_t m_nextCommandId = 0;
+    mutable uint64_t m_pendingSeekId = 0;
+    mutable bool m_commandInFlight = false;
+    mutable bool m_dimensionsChanged = false;
+    mutable std::recursive_mutex m_playbackMutex;
+    std::jthread m_eventThread;
     std::optional<std::filesystem::path> m_file;
     std::optional<MemoryStreamProtocolUniquePtr> m_stream;
     uint32_t m_usageCount = 0;

@@ -102,6 +102,7 @@ public:
 
     void setup () override;
     void render () override;
+    void prepareRenderEffects () { updateEffectVisibility (); }
 
 private:
     // Rebuilds the glyph texture (and matching quad VBO) from the given string.

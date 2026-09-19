@@ -66,6 +66,11 @@ public:
     [[nodiscard]] const glm::vec2& getOutputSize () const;
     /** Previous completed scene, before bloom; allocated only when a material requests it. */
     [[nodiscard]] std::shared_ptr<CFBO> getMipMappedFramebuffer ();
+    /** Retain hidden layer outputs referenced by material/shader texture inputs. */
+    void retainRenderTarget (const CFBO& target) { m_sampledRenderTargets.insert (target.getName ()); }
+    [[nodiscard]] bool isRenderTargetRetained (const CFBO& target) const {
+	return m_sampledRenderTargets.contains (target.getName ());
+    }
     [[nodiscard]] glm::ivec2 getFramebufferSize () const override;
     [[nodiscard]] WallpaperState::TextureUVs getPresentationUVs () const override;
 
@@ -254,6 +259,7 @@ protected:
     friend class CWallpaper;
 
 private:
+    std::set<std::string> m_sampledRenderTargets;
     /** Release raw-owned render objects, including during constructor unwinding. */
     void destroyObjects () noexcept;
     void destroyQueuedLayers ();

@@ -28,6 +28,9 @@ void CRenderable::detectTexture () {
 	    if (this->m_texture == nullptr && textureName == "_rt_MipMappedFrameBuffer") {
 		this->m_texture = this->getScene ().getMipMappedFramebuffer ();
 	    }
+	    if (const auto target = std::dynamic_pointer_cast<const CFBO> (this->m_texture)) {
+		this->getScene ().retainRenderTarget (*target);
+	    }
 	} else {
 	    this->m_texture = this->getScene ().resolveTexture (textureName);
 	}

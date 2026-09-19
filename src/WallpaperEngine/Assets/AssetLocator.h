@@ -10,7 +10,8 @@ public:
     explicit AssetLocator (ContainerUniquePtr filesystem, std::vector<std::filesystem::path> textureFallbackRoots = {});
 
     std::string vertexShader (const std::filesystem::path& filename) const;
-    std::string fragmentShader (const std::filesystem::path& filename) const;
+    /** Reports whether the stock ripple shader needs floating-point feedback targets. */
+    std::string fragmentShader (const std::filesystem::path& filename, bool* floatFeedback = nullptr) const;
     std::string includeShader (const std::filesystem::path& filename) const;
     ReadStreamSharedPtr texture (const std::filesystem::path& filename) const;
     std::string readString (const std::filesystem::path& filename) const;

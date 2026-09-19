@@ -49,6 +49,7 @@ public:
 
     void setup () override;
     void render () override;
+    void prepareRenderEffects ();
 
     [[nodiscard]] const Image& getImage () const;
     [[nodiscard]] bool isCompositionLayer () const;

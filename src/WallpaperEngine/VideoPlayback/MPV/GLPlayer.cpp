@@ -81,106 +81,220 @@ void GLPlayer::clearNonBlocking () {
 }
 
 void GLPlayer::setMuted () {
+    const std::lock_guard lock (this->m_playbackMutex);
+    if (this->m_muted) {
+	return;
+    }
     this->m_muted = true;
-
     if (this->m_handle) {
-	mpv_set_property_string (this->m_handle, "mute", "yes");
+	this->queueCommand ({ "set", "mute", "yes" });
     }
 }
 
 void GLPlayer::clearMuted () {
+    const std::lock_guard lock (this->m_playbackMutex);
+    if (!this->m_muted) {
+	return;
+    }
     this->m_muted = false;
-
     if (this->m_handle) {
-	mpv_set_property_string (this->m_handle, "mute", "no");
+	this->queueCommand ({ "set", "mute", "no" });
     }
 }
 
 void GLPlayer::setVolume (double volume) {
+    const std::lock_guard lock (this->m_playbackMutex);
+    if (this->m_volume == volume) {
+	return;
+    }
     this->m_volume = volume;
-
     if (this->m_handle) {
-	mpv_set_property (this->m_handle, "volume", MPV_FORMAT_DOUBLE, &this->m_volume);
+	this->queueCommand ({ "set", "volume", std::to_string (volume) });
     }
 }
 
 void GLPlayer::setPaused () {
+    const std::lock_guard lock (this->m_playbackMutex);
+    if (this->m_paused) {
+	return;
+    }
     this->m_paused = true;
-
     if (this->m_handle) {
-	mpv_set_property_string (this->m_handle, "pause", "yes");
+	this->queueCommand ({ "set", "pause", "yes" });
     }
 }
 
 void GLPlayer::clearPaused () {
+    const std::lock_guard lock (this->m_playbackMutex);
+    if (!this->m_paused) {
+	return;
+    }
     this->m_paused = false;
-
+    this->m_pausedSeek.reset ();
     if (this->m_handle) {
-	mpv_set_property_string (this->m_handle, "pause", "no");
+	this->queueCommand ({ "set", "pause", "no" });
     }
 }
 
 void GLPlayer::enableScriptControl () {
+    const std::lock_guard lock (this->m_playbackMutex);
     // Playback remains timed, including while scripts control rate and seeking.
+    if (this->m_scriptControlled) {
+	return;
+    }
     this->m_scriptControlled = true;
     if (this->m_handle) {
-	mpv_set_property_string (this->m_handle, "keep-open", "yes");
+	this->queueCommand ({ "set", "keep-open", "yes" });
     }
 }
 
 void GLPlayer::resumePlayback () {
-    int ended = 0;
-    if (this->m_handle && mpv_get_property (this->m_handle, "eof-reached", MPV_FORMAT_FLAG, &ended) >= 0 && ended) {
+    const std::lock_guard lock (this->m_playbackMutex);
+    if (this->m_ended && !this->m_pendingSeek.has_value ()) {
 	this->setCurrentTime (0.0);
     }
-    this->clearPaused ();
+    // keep-open may pause mpv at EOF without a script pause request. An explicit
+    // play must clear that internal pause even when our requested state is playing.
+    this->m_paused = false;
+    this->m_pausedSeek.reset ();
+    if (this->m_handle) {
+	this->queueCommand ({ "set", "pause", "no" });
+    }
 }
 
 void GLPlayer::stopPlayback () {
+    const std::lock_guard lock (this->m_playbackMutex);
     this->setPaused ();
     this->setCurrentTime (0.0);
 }
 
 bool GLPlayer::isPlaying () const {
-    if (this->m_paused) return false;
-    int ended = 0;
-    if (this->m_handle) mpv_get_property (this->m_handle, "eof-reached", MPV_FORMAT_FLAG, &ended);
-    return !ended;
+    const std::lock_guard lock (this->m_playbackMutex);
+    return !this->m_paused && (this->m_pendingSeek.has_value () || !this->m_ended);
 }
 
 double GLPlayer::getDuration () const {
-    double duration = 0.0;
-    if (this->m_handle) mpv_get_property (this->m_handle, "duration", MPV_FORMAT_DOUBLE, &duration);
-    return duration;
+    const std::lock_guard lock (this->m_playbackMutex);
+    return this->m_duration;
 }
 
 double GLPlayer::getCurrentTime () const {
-    if (this->m_pendingSeek.has_value ()) return *this->m_pendingSeek;
-    double time = 0.0;
-    if (this->m_handle) mpv_get_property (this->m_handle, "time-pos", MPV_FORMAT_DOUBLE, &time);
-    return time;
+    const std::lock_guard lock (this->m_playbackMutex);
+    return this->m_pendingSeek.value_or (this->m_currentTime);
 }
 
 void GLPlayer::setCurrentTime (const double time) {
+    const std::lock_guard lock (this->m_playbackMutex);
+    // A stopped texture is often reset on every script tick. Do not enqueue the
+    // same seek while paused, but allow repeated seeks during active playback.
+    if (this->m_paused && this->m_pausedSeek == time) {
+	return;
+    }
+    this->m_pausedSeek = this->m_paused ? std::optional<double> (time) : std::nullopt;
     this->m_pendingSeek = time;
-    this->applyPendingSeek ();
-}
-
-void GLPlayer::applyPendingSeek () const {
-    if (!this->m_handle || !this->m_loaded || !this->m_pendingSeek.has_value ()) return;
-    const std::string time = std::to_string (*this->m_pendingSeek);
-    const char* command[] = { "seek", time.c_str (), "absolute+exact", nullptr };
-    if (mpv_command (this->m_handle, command) >= 0) this->m_pendingSeek.reset ();
+    this->m_pendingSeekId = this->m_nextCommandId + 1;
+    this->queueCommand ({ "seek", std::to_string (time), "absolute+exact" }, true);
 }
 
 void GLPlayer::setRate (const double rate) {
+    const std::lock_guard lock (this->m_playbackMutex);
+    if (this->m_rate == rate) {
+	return;
+    }
     this->m_rate = rate;
-    if (this->m_handle) mpv_set_property (this->m_handle, "speed", MPV_FORMAT_DOUBLE, &this->m_rate);
+    if (this->m_handle) {
+	this->queueCommand ({ "set", "speed", std::to_string (rate) });
+    }
 }
 
 void GLPlayer::setLoop (const bool loop) {
+    const std::lock_guard lock (this->m_playbackMutex);
+    if (this->m_loop == loop) {
+	return;
+    }
     this->m_loop = loop;
-    if (this->m_handle) mpv_set_property_string (this->m_handle, "loop-file", loop ? "inf" : "no");
+    if (this->m_handle) {
+	this->queueCommand ({ "set", "loop-file", loop ? "inf" : "no" });
+    }
+}
+
+uint64_t GLPlayer::queueCommand (std::vector<std::string> arguments, const bool seek) const {
+    const uint64_t id = ++this->m_nextCommandId;
+    this->m_commands.push_back ({ id, std::move (arguments), seek });
+    if (this->m_handle) {
+	mpv_wakeup (this->m_handle);
+    }
+    return id;
+}
+
+void GLPlayer::submitCommand () const {
+    // libmpv's synchronous client API can wait for this very render thread.
+    // Only one async request may be outstanding: libmpv does not promise order
+    // between concurrent requests (in particular pause -> seek -> play).
+    while (!this->m_commandInFlight && !this->m_commands.empty ()) {
+	const auto& command = this->m_commands.front ();
+	if (command.seek && !this->m_loaded) {
+	    return;
+	}
+	std::vector<const char*> arguments;
+	for (const auto& argument : command.arguments) {
+	    arguments.push_back (argument.c_str ());
+	}
+	arguments.push_back (nullptr);
+	const int error = mpv_command_async (this->m_handle, command.id, arguments.data ());
+	if (error >= 0) {
+	    this->m_commandInFlight = true;
+	} else {
+	    this->completeCommand (error);
+	}
+    }
+}
+
+void GLPlayer::completeCommand (const int error) const {
+    const auto& command = this->m_commands.front ();
+    if (error < 0) {
+	sLog.error ("Video command ", command.arguments.front (), ": ", mpv_error_string (error));
+    }
+    if (command.id == this->m_pendingSeekId) {
+	if (error >= 0 && this->m_pendingSeek.has_value ()) {
+	    this->m_currentTime = *this->m_pendingSeek;
+	    this->m_ended = false;
+	}
+	this->m_pendingSeek.reset ();
+    }
+    this->m_commands.pop_front ();
+    this->m_commandInFlight = false;
+}
+
+void GLPlayer::processEvent (const mpv_event& event) const {
+    if (event.event_id == MPV_EVENT_FILE_LOADED) {
+	this->m_loaded = true;
+    } else if (
+	event.event_id == MPV_EVENT_COMMAND_REPLY && !this->m_commands.empty ()
+	&& event.reply_userdata == this->m_commands.front ().id
+    ) {
+	this->completeCommand (event.error);
+    } else if (event.event_id == MPV_EVENT_PROPERTY_CHANGE) {
+	const auto* property = static_cast<mpv_event_property*> (event.data);
+	if (property->format == MPV_FORMAT_DOUBLE && property->data != nullptr) {
+	    const double value = *static_cast<double*> (property->data);
+	    if (std::string_view (property->name) == "time-pos") {
+		this->m_currentTime = value;
+	    }
+	    if (std::string_view (property->name) == "duration") {
+		this->m_duration = value;
+	    }
+	} else if (property->format == MPV_FORMAT_FLAG && property->data != nullptr) {
+	    this->m_ended = *static_cast<int*> (property->data) != 0;
+	} else if (property->format == MPV_FORMAT_INT64 && property->data != nullptr) {
+	    const int64_t value = *static_cast<int64_t*> (property->data);
+	    if (value > 0) {
+		auto& dimension = std::string_view (property->name) == "dwidth" ? this->m_width : this->m_height;
+		this->m_dimensionsChanged |= dimension != value;
+		dimension = value;
+	    }
+	}
+    }
 }
 
 void GLPlayer::render () const {
@@ -189,48 +303,25 @@ void GLPlayer::render () const {
 	return;
     }
 
-    // read all the events available
-    while (true) {
-	const mpv_event* event = mpv_wait_event (this->m_handle, 0);
-
-	if (event == nullptr || event->event_id == MPV_EVENT_NONE) {
-	    break;
-	}
-	if (event->event_id == MPV_EVENT_FILE_LOADED) {
-	    this->m_loaded = true;
-	    this->applyPendingSeek ();
-	}
-
-	if (event->event_id != MPV_EVENT_VIDEO_RECONFIG) {
-	    continue;
-	}
-
-	int64_t width, height;
-
-	if (mpv_get_property (this->m_handle, "dwidth", MPV_FORMAT_INT64, &width) < 0) {
-	    continue;
-	}
-
-	if (mpv_get_property (this->m_handle, "dheight", MPV_FORMAT_INT64, &height) < 0) {
-	    continue;
-	}
-
-	if (width < 0 || height < 0) {
-	    continue;
-	}
-
-	this->m_width = width;
-	this->m_height = height;
-	// reconfigure the texture
+    int64_t width, height;
+    bool dimensionsChanged;
+    {
+	const std::lock_guard lock (this->m_playbackMutex);
+	width = this->m_width;
+	height = this->m_height;
+	dimensionsChanged = this->m_dimensionsChanged;
+	this->m_dimensionsChanged = false;
+    }
+    if (dimensionsChanged) {
 	glBindTexture (GL_TEXTURE_2D, this->m_outputTexture);
-	glTexImage2D (GL_TEXTURE_2D, 0, GL_RGBA8, this->m_width, this->m_height, 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
+	glTexImage2D (GL_TEXTURE_2D, 0, GL_RGBA8, width, height, 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
     }
 
     // render the next
-    glViewport (0, 0, this->m_width, this->m_height);
+    glViewport (0, 0, width, height);
 
-    mpv_opengl_fbo fbo { static_cast<int> (this->m_fbo), static_cast<int> (this->m_width),
-			 static_cast<int> (this->m_height), GL_RGBA8 };
+    mpv_opengl_fbo fbo { static_cast<int> (this->m_fbo), static_cast<int> (width), static_cast<int> (height),
+			 GL_RGBA8 };
 
     // no need to flip as it'll be handled by the wallpaper rendering code
     int flip_y = 0;
@@ -244,8 +335,14 @@ void GLPlayer::render () const {
     mpv_render_context_render (this->m_renderContext, params);
 }
 
-int GLPlayer::getWidth () const { return this->m_width; }
-int GLPlayer::getHeight () const { return this->m_height; }
+int GLPlayer::getWidth () const {
+    const std::lock_guard lock (this->m_playbackMutex);
+    return this->m_width;
+}
+int GLPlayer::getHeight () const {
+    const std::lock_guard lock (this->m_playbackMutex);
+    return this->m_height;
+}
 
 void GLPlayer::prepareGL () {
     if (!this->m_doWeOwnFramebuffer || this->m_fbo != GL_NONE) {
@@ -311,6 +408,12 @@ void GLPlayer::init () {
     if (this->m_scriptControlled) mpv_set_property_string (this->m_handle, "keep-open", "yes");
     mpv_set_property (this->m_handle, "volume", MPV_FORMAT_DOUBLE, &this->m_volume);
 
+    mpv_observe_property (this->m_handle, 0, "time-pos", MPV_FORMAT_DOUBLE);
+    mpv_observe_property (this->m_handle, 0, "duration", MPV_FORMAT_DOUBLE);
+    mpv_observe_property (this->m_handle, 0, "eof-reached", MPV_FORMAT_FLAG);
+    mpv_observe_property (this->m_handle, 0, "dwidth", MPV_FORMAT_INT64);
+    mpv_observe_property (this->m_handle, 0, "dheight", MPV_FORMAT_INT64);
+
     // initialize gl context for mpv
     mpv_opengl_init_params gl_init_params { get_proc_address, this };
     mpv_render_param params[] { { MPV_RENDER_PARAM_API_TYPE, const_cast<char*> (MPV_RENDER_API_TYPE_OPENGL) },
@@ -359,10 +462,36 @@ void GLPlayer::play () {
 	    sLog.exception ("Cannot load video texture to play");
 	}
     }
+
+    // Service acknowledgements independently of scene FPS. Otherwise each
+    // ordered control waits an entire render frame before the next can start.
+    // The worker never calls OpenGL or waits for the render thread under a lock.
+    this->m_eventThread = std::jthread ([this] (const std::stop_token stop) {
+	while (!stop.stop_requested ()) {
+	    const mpv_event* event = mpv_wait_event (this->m_handle, -1);
+	    const std::lock_guard lock (this->m_playbackMutex);
+	    if (event != nullptr) {
+		this->processEvent (*event);
+	    }
+	    this->submitCommand ();
+	}
+    });
 }
 
 void GLPlayer::stop () {
+    if (this->m_eventThread.joinable ()) {
+	this->m_eventThread.request_stop ();
+	mpv_wakeup (this->m_handle);
+	this->m_eventThread.join ();
+    }
     this->m_loaded = false;
+    this->m_commands.clear ();
+    this->m_commandInFlight = false;
+    this->m_pendingSeek.reset ();
+    this->m_pausedSeek.reset ();
+    this->m_currentTime = 0.0;
+    this->m_duration = 0.0;
+    this->m_ended = false;
     // clean up mpv and get it ready to start again at some point
     if (this->m_renderContext) {
 	mpv_render_context_free (this->m_renderContext);

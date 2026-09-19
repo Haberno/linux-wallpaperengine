@@ -860,6 +860,22 @@ void CScene::renderFrame (const glm::ivec4& viewport) {
     const GLbitfield colorClear = this->getScene ().clearEnabled->value->getBool () ? GL_COLOR_BUFFER_BIT : 0;
     glClear (colorClear | GL_DEPTH_BUFFER_BIT);
 
+    // Discover newly enabled shader inputs before an earlier hidden source is
+    // considered for culling. Retention is conservative for the scene lifetime:
+    // disabled consumers may become visible again without a stale first frame.
+    for (const auto& [id, object] : this->m_objects) {
+	if (auto* image = dynamic_cast<Objects::CImage*> (object)) {
+	    image->prepareRenderEffects ();
+	}
+	if (auto* text = dynamic_cast<Objects::CText*> (object)) {
+	    text->prepareRenderEffects ();
+	}
+	for (const int dependency : object->getObject ().dependencies) {
+	    m_sampledRenderTargets.insert ("_rt_imageLayerComposite_" + std::to_string (dependency) + "_a");
+	    m_sampledRenderTargets.insert ("_rt_imageLayerComposite_" + std::to_string (dependency) + "_b");
+	}
+    }
+
     const std::vector<FrameRenderEntry> renderOrder = this->buildFrameRenderOrder ();
     const auto& debug = this->getContext ().getApp ().getContext ().settings.render.debug;
     const auto enabledByDebug = [this, &debug] (const CObject* object) {

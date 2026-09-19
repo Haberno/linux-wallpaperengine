@@ -4,6 +4,42 @@
 
 using namespace WallpaperEngine::Assets;
 
+namespace {
+bool normalizeCursorRipple (const std::filesystem::path& filename, std::string& source) {
+    std::string from, to, outputFrom, outputTo;
+    if (filename == "effects/cursorripple_apply_force.frag") {
+	if (source.find ("float timeAmt = min(1.0 / 30.0, g_Frametime) / 0.02;") == std::string::npos) {
+	    return false;
+	}
+	// Pointer displacement already contains dt. Normalize its extra time
+	// factor to the stock shader's 30 Hz reference without changing the path.
+	from = "float pointerMoveAmt = v_PointDelta.x;";
+	to = "float pointerMoveAmt = v_PointDelta.x * max(1.0, 1.0 / (30.0 * max(g_Frametime, 0.0001)));";
+	outputFrom = "gl_FragColor = albedo + colorAdd;";
+	outputTo = "gl_FragColor = saturate(albedo + colorAdd);";
+    } else if (filename == "effects/cursorripple_simulate_force.frag") {
+	// The stock one-byte minimum decay otherwise drains the wave once per
+	// rendered frame. Float feedback retains these smaller time-based steps.
+	from = "float drop = max(1.001 / 255.0, decay / 255.0 * (g_Frametime / 0.02) * g_RippleDecay);";
+	to = "float drop = max(1.001 / 255.0 * min(1.0, max(0.0, g_Frametime * 30.0)), "
+	     "decay / 255.0 * (g_Frametime / 0.02) * g_RippleDecay);";
+	outputFrom = "albedo = force;";
+	outputTo = "albedo = saturate(force);";
+    } else {
+	return false;
+    }
+    // Leave customized equations alone. Clamp both writes to retain the original
+    // normalized buffer range now that storage no longer provides that clamp.
+    const auto position = source.find (from);
+    if (position == std::string::npos || source.find (outputFrom) == std::string::npos) {
+	return false;
+    }
+    source.replace (position, from.size (), to);
+    source.replace (source.find (outputFrom), outputFrom.size (), outputTo);
+    return true;
+}
+}
+
 AssetLocator::AssetLocator (ContainerUniquePtr filesystem, std::vector<std::filesystem::path> textureFallbackRoots) :
     m_filesystem (std::move (filesystem)), m_textureFallbackRoots (std::move (textureFallbackRoots)) { }
 
@@ -41,12 +77,17 @@ std::string AssetLocator::shader (const std::filesystem::path& filename) const {
     }
 }
 
-std::string AssetLocator::fragmentShader (const std::filesystem::path& filename) const {
+std::string AssetLocator::fragmentShader (const std::filesystem::path& filename, bool* floatFeedback) const {
     auto final = filename;
 
     final.replace_extension ("frag");
 
-    return this->shader (final);
+    auto source = this->shader (final);
+    const bool normalized = normalizeCursorRipple (final, source);
+    if (floatFeedback != nullptr) {
+	*floatFeedback = normalized;
+    }
+    return source;
 }
 
 std::string AssetLocator::vertexShader (const std::filesystem::path& filename) const {

@@ -1,5 +1,6 @@
 #include "EffectParser.h"
 #include "MaterialParser.h"
+#include "WallpaperEngine/Assets/AssetLoadException.h"
 
 #include <algorithm>
 #include <cstdlib>
@@ -86,6 +87,34 @@ EffectUniquePtr EffectParser::parse (const JSON& it, const Project& project, con
 	.passes = parseEffectPasses (it.require ("passes", "Effect file must have passes"), project, combos),
 	.fbos = fbos.has_value () ? parseFBOs (*fbos, combos) : std::vector<FBOUniquePtr> {},
     });
+    // Only the recognized cursor-ripple equations need sub-byte history. Keep
+    // authored formats for every other target, including customized ripple shaders.
+    for (const auto& pass : result->passes) {
+	if (!pass->material.has_value () || !pass->target.has_value ()) {
+	    continue;
+	}
+	for (const auto& materialPass : pass->material.value ()->passes) {
+	    if (materialPass->shader != "effects/cursorripple_apply_force"
+		&& materialPass->shader != "effects/cursorripple_simulate_force") {
+		continue;
+	    }
+	    bool floatFeedback = false;
+	    try {
+		project.assetLocator->fragmentShader (materialPass->shader, &floatFeedback);
+	    } catch (const WallpaperEngine::Assets::AssetLoadException&) {
+		// Preserve deferred shader failure handling for missing assets.
+		continue;
+	    }
+	    if (!floatFeedback) {
+		continue;
+	    }
+	    for (const auto& fbo : result->fbos) {
+		if (fbo->name == *pass->target && fbo->format == "rgba8888") {
+		    fbo->format = "rgba16161616f";
+		}
+	    }
+	}
+    }
     const auto functions = it.optional ("functions");
     if (functions.has_value ()) result->functions = parseFunctions (*functions, result->fbos);
     return result;

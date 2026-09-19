@@ -1991,6 +1991,12 @@ void CImage::updateSceneTargets () const {
     }
 }
 
+void CImage::prepareRenderEffects () {
+    if (this->m_initialized) {
+	updateEffectVisibility ();
+    }
+}
+
 void CImage::render () {
     // do not try to render something that did not initialize successfully
     if (!this->m_initialized) {
@@ -2002,6 +2008,26 @@ void CImage::render () {
     // still update their composite textures for model faces and effect inputs;
     // the dress in 3761619125 samples sources inside a hidden parent group.
     this->updateFinalPassVisibility ();
+    size_t renderPassCount = this->m_passes.size ();
+    if (!this->m_finalPassDrawsToScene && !this->m_hasPuppetMesh && this->m_compositionFBO == nullptr
+	&& !this->getScene ().isRenderTargetRetained (*this->m_mainFBO)
+	&& !this->getScene ().isRenderTargetRetained (*this->m_subFBO)) {
+	// Keep the complete prefix feeding persistent targets and swap commands.
+	// Only the unused presentation tail can be dropped: a hidden fluid/ripple
+	// simulation must still see the same inputs and advance every frame.
+	renderPassCount = 0;
+	for (size_t index = 0; index < this->m_passes.size (); ++index) {
+	    if (this->m_passes[index]->getTarget ().has_value ()) {
+		renderPassCount = index + 1;
+	    }
+	}
+	for (const auto& command : this->m_swapCommands) {
+	    renderPassCount = std::max (renderPassCount, command.beforePass);
+	}
+	if (renderPassCount == 0 && this->m_swapCommands.empty ()) {
+	    return;
+	}
+    }
     this->updateSceneTargets ();
 
     // Image opacity can be keyframed independently of its texture animation.
@@ -2038,11 +2064,13 @@ void CImage::render () {
     auto cur = this->m_activePasses.begin ();
     const auto end = this->m_activePasses.end ();
     auto command = m_swapCommands.begin ();
-    for (size_t index = 0; index <= m_passes.size (); ++index) {
+    for (size_t index = 0; index <= renderPassCount; ++index) {
 	for (; command != m_swapCommands.end () && command->beforePass == index; ++command) {
 	    if (!m_failedEffects.contains (command->visible)) command->execute ();
 	}
-	if (index == m_passes.size ()) break;
+	if (index == renderPassCount) {
+	    break;
+	}
 	if (cur == end || *cur != m_passes[index]) continue;
 	auto* pass = *cur++;
 	glColorMask (true, true, true, true);
@@ -2066,7 +2094,7 @@ void CImage::render () {
     // see the penultimate result (Lucy's clouds stay still while the land scrolls).
     // Preserve the working-buffer routes: visible layers and explicit effect
     // bindings may also depend on them. No additional texture allocation is needed.
-    if (!m_finalPassDrawsToScene && m_finalPassRouting.has_value ()) {
+    if (renderPassCount == m_passes.size () && !m_finalPassDrawsToScene && m_finalPassRouting.has_value ()) {
 	const auto& result = m_finalPassRouting->offscreenTarget;
 	if (result != m_mainFBO) {
 	    GLint readFramebuffer, drawFramebuffer;

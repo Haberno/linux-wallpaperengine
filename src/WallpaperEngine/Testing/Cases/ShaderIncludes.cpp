@@ -823,3 +823,47 @@ TEST_CASE ("conditional function signatures preserve output arguments", "[shader
         CHECK_FALSE (translated.second.empty ());
     }
 }
+
+TEST_CASE ("cursor ripple input and decay use elapsed time with bounded float history", "[shader][cursor-ripple]") {
+    const std::string apply =
+        "uniform float g_Frametime;\nvarying vec2 v_PointDelta;\nvoid main() {\n"
+        "vec4 albedo = vec4(0.0);\n"
+        "float timeAmt = min(1.0 / 30.0, g_Frametime) / 0.02;\n"
+        "float pointerMoveAmt = v_PointDelta.x;\n"
+        "vec4 colorAdd = vec4(timeAmt * pointerMoveAmt);\n"
+        "gl_FragColor = albedo + colorAdd;\n}\n";
+    const std::string simulate =
+        "uniform float g_Frametime;\nuniform float g_RippleDecay;\nvoid main() {\n"
+        "vec4 albedo = vec4(0.0);\nvec4 force = vec4(0.5);\nfloat decay = 1.5;\n"
+        "float drop = max(1.001 / 255.0, decay / 255.0 * (g_Frametime / 0.02) * g_RippleDecay);\n"
+        "force -= drop;\nalbedo = force;\ngl_FragColor = albedo;\n}\n";
+    for (const auto& [name, source] : std::vector<std::pair<std::string, std::string>> {
+        { "effects/cursorripple_apply_force", apply }, { "effects/cursorripple_simulate_force", simulate }
+    }) {
+        CAPTURE (name);
+        auto container = std::make_unique<Container> ();
+        container->getVFS ().add ("shaders/" + name + ".frag", source);
+        container->getVFS ().add ("shaders/custom.frag", source);
+        AssetLocator assets (std::move (container));
+        const auto normalized = assets.fragmentShader (name);
+        CHECK (normalized != source);
+        CHECK (assets.fragmentShader ("custom") == source);
+        CHECK_THAT (normalized, Catch::Matchers::ContainsSubstring ("saturate("));
+        if (name.ends_with ("apply_force")) {
+            CHECK_THAT (normalized, Catch::Matchers::ContainsSubstring ("30.0 * max(g_Frametime, 0.0001)"));
+        } else {
+            CHECK_THAT (normalized, Catch::Matchers::ContainsSubstring ("g_Frametime * 30.0"));
+        }
+        const auto linked = compileLinked (
+            "varying vec2 v_PointDelta;\nvoid main() { v_PointDelta = vec2(1); gl_Position = vec4(0); }",
+            normalized, {}
+        );
+        CHECK_FALSE (GLSLContext::get ().toGlsl (linked.first, linked.second).second.empty ());
+    }
+    // A customized shader at a stock path must retain its own equations.
+    auto container = std::make_unique<Container> ();
+    const std::string custom = "void main() { gl_FragColor = vec4(0.25); }";
+    container->getVFS ().add ("shaders/effects/cursorripple_simulate_force.frag", custom);
+    AssetLocator assets (std::move (container));
+    CHECK (assets.fragmentShader ("effects/cursorripple_simulate_force") == custom);
+}

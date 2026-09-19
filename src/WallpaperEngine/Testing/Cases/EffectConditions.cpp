@@ -5,6 +5,7 @@
 #include "WallpaperEngine/Data/Model/Project.h"
 #include "WallpaperEngine/Data/Model/Wallpaper.h"
 #include "WallpaperEngine/Data/Parsers/ObjectParser.h"
+#include "WallpaperEngine/Data/Parsers/EffectParser.h"
 #include "WallpaperEngine/FileSystem/Container.h"
 
 using WallpaperEngine::Data::JSON::JSON;
@@ -122,4 +123,36 @@ TEST_CASE ("disabled effect passes retain original slots without loading their m
     CHECK_FALSE (effect->effect->passes[3]->command.has_value ());
     REQUIRE (effect->passOverrides.size () == 4);
     CHECK (effect->passOverrides[2]->id == 12);
+}
+
+TEST_CASE ("only normalized cursor ripple targets receive float feedback", "[effect][cursor-ripple]") {
+    for (const bool customized : { false, true }) {
+        for (const std::string shader : { "effects/cursorripple_apply_force", "effects/cursorripple_simulate_force" }) {
+            CAPTURE (customized, shader);
+            auto filesystem = std::make_unique<WallpaperEngine::FileSystem::Container> ();
+            filesystem->getVFS ().add ("materials/ripple.json", JSON {
+                { "passes", JSON::array ({ { { "shader", shader } } }) }
+            }.dump ());
+            const std::string equations = customized ? "void main() { gl_FragColor = vec4(0); }" :
+                "float timeAmt = min(1.0 / 30.0, g_Frametime) / 0.02;\n"
+                "float pointerMoveAmt = v_PointDelta.x;\ngl_FragColor = albedo + colorAdd;\n"
+                "float drop = max(1.001 / 255.0, decay / 255.0 * (g_Frametime / 0.02) * g_RippleDecay);\n"
+                "albedo = force;\n";
+            filesystem->getVFS ().add ("shaders/" + shader + ".frag", equations);
+            filesystem->getVFS ().add ("effects/ripple.json", R"({
+                "passes":[{"material":"materials/ripple.json","target":"history"},
+                          {"material":"materials/ripple.json","target":"explicit"}],
+                "fbos":[{"name":"history","format":"rgba8888"},
+                        {"name":"unrelated","format":"rgba8888"},
+                        {"name":"explicit","format":"rg1616f"}]
+            })");
+            Project project {};
+            project.assetLocator = std::make_unique<WallpaperEngine::Assets::AssetLocator> (std::move (filesystem));
+            const auto effect = WallpaperEngine::Data::Parsers::EffectParser::load (project, "effects/ripple.json");
+            REQUIRE (effect->fbos.size () == 3);
+            CHECK (effect->fbos[0]->format == (customized ? "rgba8888" : "rgba16161616f"));
+            CHECK (effect->fbos[1]->format == "rgba8888");
+            CHECK (effect->fbos[2]->format == "rg1616f");
+        }
+    }
 }
