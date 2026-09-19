@@ -44,6 +44,7 @@ void RenderContext::render (Drivers::Output::OutputViewport* viewport) {
 	    if (progress >= 1.0f) {
 		this->m_transitions.erase (transition);
 	    } else {
+		transition->second.from->setFpsOverlay (-1.0f);
 		transition->second.from->render (
 		    viewport->viewport, this->getOutput ().renderVFlip (), viewport->globalPosition,
 		    viewport->logicalSize, false
@@ -52,6 +53,16 @@ void RenderContext::render (Drivers::Output::OutputViewport* viewport) {
 	    }
 	}
 
+        float fps = -1.0f;
+        if (this->m_app.getContext ().settings.render.showFps) {
+            auto& counter = this->m_frameRates[viewport->name];
+            const double now = std::chrono::duration<double> (
+                std::chrono::steady_clock::now ().time_since_epoch ()
+            ).count ();
+            counter.frame (now);
+            fps = counter.fps ();
+        }
+        ref->second->setFpsOverlay (fps);
 	ref->second->render (
 	    viewport->viewport, this->getOutput ().renderVFlip (), viewport->globalPosition, viewport->logicalSize
 	);

@@ -114,6 +114,8 @@ public:
      * @param framebuffer
      */
     void setDestinationFramebuffer (GLuint framebuffer);
+    /** Negative FPS hides the overlay; nonnegative values are measured per output. */
+    void setFpsOverlay (float fps) { m_fps = fps; }
 
     /**
      * Transition state for the final on-screen composite; while progress < 1.0 the
@@ -200,6 +202,9 @@ private:
     GLint g_SceneFadeAlpha = GL_NONE;
     GLint g_Contrast = GL_NONE;
     GLint g_Saturation = GL_NONE;
+    GLint g_Fps = GL_NONE;
+    GLint g_FpsOutput = GL_NONE;
+    float m_fps = -1.0f;
     GLint a_Position = GL_NONE;
     GLint a_TexCoord = GL_NONE;
     /** The framebuffer to draw the background to */

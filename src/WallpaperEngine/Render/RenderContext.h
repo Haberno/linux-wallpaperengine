@@ -7,6 +7,7 @@
 #include <vector>
 
 #include "TextureCache.h"
+#include "FrameRateCounter.h"
 #include "Shaders/ShaderProgramCache.h"
 #include "WallpaperEngine/Application/WallpaperApplication.h"
 #include "WallpaperEngine/Input/InputContext.h"
@@ -113,6 +114,7 @@ namespace Render {
 	std::map<std::string, std::shared_ptr<CWallpaper>> m_wallpapers = {};
 	/** Screens with a crossfade in progress, keeping the outgoing wallpaper alive */
 	std::map<std::string, Transition> m_transitions = {};
+	std::map<std::string, FrameRateCounter> m_frameRates;
 	/** App that holds the render context */
 	WallpaperApplication& m_app;
 	/** Source for the media playback information */

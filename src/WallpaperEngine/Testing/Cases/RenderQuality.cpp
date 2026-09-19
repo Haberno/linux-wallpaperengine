@@ -1,6 +1,7 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include "WallpaperEngine/Render/FBOProvider.h"
+#include "WallpaperEngine/Render/FrameRateCounter.h"
 #include "WallpaperEngine/Render/WallpaperState.h"
 #include <catch2/catch_approx.hpp>
 
@@ -50,4 +51,25 @@ TEST_CASE ("protocol-sized render targets ignore supersampling", "[render][quali
     CHECK (
 	FBOProvider::calculateTargetSize ({ 2048.0f, 2048.0f }, 2.0f, false) == glm::uvec2 (2048, 2048)
     );
+}
+
+TEST_CASE ("FPS measurements are independent for each paced output", "[fps]") {
+    WallpaperEngine::Render::FrameRateCounter fast, slow;
+    CHECK (fast.fps () == 0.0f);
+    fast.frame (10.0);
+    slow.frame (10.0);
+    for (int i = 1; i <= 60; ++i) fast.frame (10.0 + i / 60.0);
+    for (int i = 1; i <= 30; ++i) slow.frame (10.0 + i / 30.0);
+    CHECK (fast.fps () == Catch::Approx (60.0));
+    CHECK (slow.fps () == Catch::Approx (30.0));
+}
+
+TEST_CASE ("FPS measurements include rendering stalls in elapsed time", "[fps]") {
+    WallpaperEngine::Render::FrameRateCounter counter;
+    counter.frame (0.0);
+    for (int i = 1; i <= 10; ++i) counter.frame (i * 0.01);
+    counter.frame (1.0);
+    CHECK (counter.fps () == Catch::Approx (11.0));
+    for (int i = 1; i <= 30; ++i) counter.frame (1.0 + i / 30.0);
+    CHECK (counter.fps () == Catch::Approx (30.0));
 }

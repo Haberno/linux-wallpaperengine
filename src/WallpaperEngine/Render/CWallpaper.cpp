@@ -125,6 +125,8 @@ void CWallpaper::setupShaders () {
 		    "uniform float g_SceneFadeAlpha;\n"
 		    "uniform float g_Contrast;\n"
 		    "uniform float g_Saturation;\n"
+		    "uniform float g_Fps;\n"
+		    "uniform vec3 g_FpsOutput;\n"
 		    "in vec2 v_TexCoord;\n"
 		    "in vec2 v_ScreenPos;\n"
 		    "out vec4 out_FragColor;\n"
@@ -228,6 +230,25 @@ void CWallpaper::setupShaders () {
 		    "}\n"
 		    "return 1.0;\n"
 		    "}\n"
+		    "// The HUD is part of the existing final composite: no extra window, texture or draw pass.\n"
+		    "void fpsOverlay () {\n"
+		    "    if (g_Fps < 0.0) return;\n"
+		    "    vec2 pixel = vec2 (v_ScreenPos.x, 1.0 - v_ScreenPos.y) * g_FpsOutput.xy / g_FpsOutput.z;\n"
+		    "    vec2 panel = pixel - vec2 (12.0, 52.0);\n"
+		    "    if (any (lessThan (panel, vec2 (0.0))) || any (greaterThanEqual (panel, vec2 (136.0, 31.0)))) return;\n"
+		    "    out_FragColor = vec4 (out_FragColor.rgb * 0.2, 1.0);\n"
+		    "    ivec2 p = ivec2 (floor ((panel - vec2 (8.0)) / 3.0));\n"
+		    "    if (any (lessThan (p, ivec2 (0))) || p.y >= 5 || p.x >= 40 || p.x % 4 == 3) return;\n"
+		    "    int value = int (clamp (g_Fps, 0.0, 9999.9) * 10.0 + 0.5);\n"
+		    "    int chars[10] = int[10] (10, 11, 12, 13,\n"
+		    "        value >= 10000 ? value / 10000 : 13,\n"
+		    "        value >= 1000 ? value / 1000 % 10 : 13,\n"
+		    "        value >= 100 ? value / 100 % 10 : 13,\n"
+		    "        value / 10 % 10, 14, value % 10);\n"
+		    "    int glyphs[15] = int[15] (31599, 29850, 29671, 31207, 18925, 31183, 31695, 18727, 31727, 31215, 4815, 4843, 31183, 0, 8192);\n"
+		    "    if ((glyphs[chars[p.x / 4]] & (1 << (p.y * 3 + p.x % 4))) != 0)\n"
+		    "        out_FragColor = vec4 (0.65, 1.0, 0.65, 1.0);\n"
+		    "}\n"
 		    "void main () {\n"
 		    "vec3 sceneColor = texture (g_Texture0, v_TexCoord).rgb;\n"
 		    // materials/util/fade.json uses the fade shader's default tint (0.315,
@@ -242,6 +263,7 @@ void CWallpaper::setupShaders () {
 		    "sceneColor = mix (vec3 (luminance), sceneColor, g_Saturation);\n"
 		    "sceneColor = (sceneColor - vec3 (0.5)) * g_Contrast + vec3 (0.5);\n"
 		    "out_FragColor = vec4 (sceneColor, transitionAlpha ());\n"
+		    "fpsOverlay ();\n"
 		    "}";
 
     glShaderSource (fragmentShaderID, 1, &sourcePointer, nullptr);
@@ -310,6 +332,8 @@ void CWallpaper::setupShaders () {
     this->g_SceneFadeAlpha = glGetUniformLocation (this->m_shader, "g_SceneFadeAlpha");
     this->g_Contrast = glGetUniformLocation (this->m_shader, "g_Contrast");
     this->g_Saturation = glGetUniformLocation (this->m_shader, "g_Saturation");
+    this->g_Fps = glGetUniformLocation (this->m_shader, "g_Fps");
+    this->g_FpsOutput = glGetUniformLocation (this->m_shader, "g_FpsOutput");
     this->a_Position = glGetAttribLocation (this->m_shader, "a_Position");
     this->a_TexCoord = glGetAttribLocation (this->m_shader, "a_TexCoord");
 }
@@ -468,6 +492,9 @@ void CWallpaper::render (
     glUniform1f (this->g_SceneFadeAlpha, this->getSceneFadeAlpha ());
     glUniform1f (this->g_Contrast, this->m_contrast);
     glUniform1f (this->g_Saturation, this->m_saturation);
+    glUniform1f (this->g_Fps, this->m_fps);
+    const float outputScale = logicalSize.x > 0 ? static_cast<float> (viewport.z) / logicalSize.x : 1.0f;
+    glUniform3f (this->g_FpsOutput, viewport.z, viewport.w, outputScale);
     // write the framebuffer as is to the screen
     glBindBuffer (GL_ARRAY_BUFFER, this->m_texCoordBuffer);
     glDrawArrays (GL_TRIANGLES, 0, 6);

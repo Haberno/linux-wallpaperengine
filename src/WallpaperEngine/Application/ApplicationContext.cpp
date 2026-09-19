@@ -544,6 +544,11 @@ void ApplicationContext::loadSettingsFromArgv () {
 	.default_value (30)
 	.store_into (this->settings.render.maximumFPS);
 
+    performanceGroup.add_argument ("--show-fps")
+        .help ("Show measured rendering FPS in the top-left corner of each wallpaper output")
+        .flag ()
+        .store_into (this->settings.render.showFps);
+
     performanceGroup.add_argument ("--render-scale")
 	.help (
 	    "Scene supersampling factor (1.0 = native). Values above 1.0 improve edge quality at increased GPU "

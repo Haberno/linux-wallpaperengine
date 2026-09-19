@@ -116,6 +116,8 @@ public:
 	    WINDOW_MODE mode;
 	    /** Maximum FPS */
 	    int maximumFPS;
+	    /** Show measured rendering FPS on each output */
+	    bool showFps;
 	    /** Scene render-target scale (1.0 = native, >1.0 = supersampling) */
 	    float renderScale;
 	    /** Scene geometry multisample count (1 = off) */
@@ -216,6 +218,7 @@ public:
         .render = {
             .mode = NORMAL_WINDOW,
             .maximumFPS = 30,
+            .showFps = false,
 	    .renderScale = 1.0f,
 	    .msaaSamples = 2,
 	    .postProcessing = PostProcessing::Enabled,
