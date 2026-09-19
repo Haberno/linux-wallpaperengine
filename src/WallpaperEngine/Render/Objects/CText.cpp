@@ -1266,6 +1266,10 @@ void CText::render () {
     const auto& current = m_text.text->value->getString ();
     const std::string renderedText = current.empty () ? std::string (" ") : current;
 
+    const glm::vec2 previousSurface = m_effectSurface;
+    const glm::vec2 previousRasterOffset = m_effectRasterOffset;
+    const glm::vec2 previousCompositeOffset = m_effectCompositeOffset;
+    const glm::vec2 previousQuadOffset = m_quadOffset;
     bool rebuiltGlyphs = false;
     const unsigned int pixelSize = computeEffectivePixelSize ();
     if (pixelSize != m_lastPixelSize) {
@@ -1279,10 +1283,14 @@ void CText::render () {
 	rebuiltGlyphs = true;
     }
 
-    // Native text regenerates its tight effect target when dynamic glyph metrics change.
-    // Rebuilding here keeps scripted clocks at native resolution instead of reserving a
-    // larger editor-size surface whose UV scale changes authored effects.
-    if ((rebuiltGlyphs && m_effectsEnabled) || m_text.colorBlendMode->value->getInt () != m_colorBlendMode) {
+    // Glyph pixels and their quad are already refreshed. Keep programs, bindings and
+    // simulation targets when their tight surface and cached transforms still match.
+    // Changed metrics must rebuild so the native target size and effect UVs stay exact.
+    const bool effectLayoutChanged = previousSurface != m_effectSurface
+	|| previousRasterOffset != m_effectRasterOffset || previousCompositeOffset != m_effectCompositeOffset
+	|| previousQuadOffset != m_quadOffset;
+    if ((rebuiltGlyphs && m_effectsEnabled && effectLayoutChanged)
+	|| m_text.colorBlendMode->value->getInt () != m_colorBlendMode) {
 	destroyEffectChain ();
 	try {
 	    setupEffectChain ();

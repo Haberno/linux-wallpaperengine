@@ -2,6 +2,8 @@
 
 #ifdef ENABLE_WAYLAND
 
+#include <chrono>
+
 #include <EGL/egl.h>
 #include <EGL/eglext.h>
 #include <GL/glew.h>
@@ -41,6 +43,11 @@ namespace Output {
 	int scale = 1;
 	bool initialized = false;
 	bool rendering = false;
+	// New surfaces need a first frame before the compositor can send a callback.
+	int frameCredits = 1;
+	int refreshRate = 0; // Current output mode, in millihertz; zero means unknown.
+	std::chrono::steady_clock::time_point nextFrameTime {};
+	std::chrono::steady_clock::duration lastRenderDuration {};
 
 	wl_egl_window* eglWindow = nullptr;
 	EGLSurface eglSurface = nullptr;
@@ -69,6 +76,8 @@ namespace Output {
 	 * Swaps buffers to present data on the viewport
 	 */
 	void swapOutput () override;
+
+	int frameBudget () const;
 
 	/**
 	 * Updates the viewport size

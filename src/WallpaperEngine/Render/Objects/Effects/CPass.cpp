@@ -345,8 +345,14 @@ void CPass::bindTextureUnit (int index, const std::shared_ptr<const TextureProvi
 	return;
     }
 
-    glActiveTexture (GL_TEXTURE0 + index);
-    glBindTexture (GL_TEXTURE_2D, texture->getTextureID (frame));
+    // Metadata can describe samplers in disabled shader branches. Fetching an FBO's
+    // texture resolves its full multisampled surface, even when no shader reads it.
+    const std::string sampler = "g_Texture" + std::to_string (index);
+    if (m_uniforms.contains (sampler) || m_referenceUniforms.contains (sampler)) {
+	glActiveTexture (GL_TEXTURE0 + index);
+	glBindTexture (GL_TEXTURE_2D, texture->getTextureID (frame));
+    }
+    // Resolution/texel/mipmap uniforms can be active without the sampler itself.
     if (const auto resolution = m_effectTextureResolutions.find (index); resolution != m_effectTextureResolutions.end ()) {
 	resolution->second = *texture->getResolution ();
     }

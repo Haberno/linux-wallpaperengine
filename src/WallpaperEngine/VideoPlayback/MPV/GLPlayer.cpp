@@ -64,20 +64,20 @@ void GLPlayer::decrementUsageCount () {
     }
 }
 
-void GLPlayer::setUntimed () {
+void GLPlayer::setNonBlocking () {
     if (this->m_handle) {
-	sLog.exception ("Cannot set untimed mode after playback has started");
+	sLog.exception ("Cannot set nonblocking mode after playback has started");
     }
 
-    this->m_untimed = true;
+    this->m_nonBlocking = true;
 }
 
-void GLPlayer::clearUntimed () {
+void GLPlayer::clearNonBlocking () {
     if (this->m_handle) {
-	sLog.exception ("Cannot set untimed mode after playback has started");
+	sLog.exception ("Cannot set nonblocking mode after playback has started");
     }
 
-    this->m_untimed = false;
+    this->m_nonBlocking = false;
 }
 
 void GLPlayer::setMuted () {
@@ -121,12 +121,9 @@ void GLPlayer::clearPaused () {
 }
 
 void GLPlayer::enableScriptControl () {
-    // Script time is measured in seconds, independent of the render FPS.
-    // Untimed playback would consume one video frame per render invocation.
+    // Playback remains timed, including while scripts control rate and seeking.
     this->m_scriptControlled = true;
-    this->m_untimed = false;
     if (this->m_handle) {
-	mpv_set_property_string (this->m_handle, "untimed", "no");
 	mpv_set_property_string (this->m_handle, "keep-open", "yes");
     }
 }
@@ -237,7 +234,7 @@ void GLPlayer::render () const {
 
     // no need to flip as it'll be handled by the wallpaper rendering code
     int flip_y = 0;
-    int block = this->m_scriptControlled ? 0 : 1;
+    int block = this->m_nonBlocking || this->m_scriptControlled ? 0 : 1;
 
     mpv_render_param params[] = { { MPV_RENDER_PARAM_OPENGL_FBO, &fbo },
 				  { MPV_RENDER_PARAM_FLIP_Y, &flip_y },
@@ -293,7 +290,15 @@ void GLPlayer::init () {
     mpv_set_option_string (this->m_handle, "fbo-format", "rgba8");
     mpv_set_option_string (this->m_handle, "vo", "libmpv");
     mpv_set_option_string (this->m_handle, "profile", "fast");
-    mpv_set_option_string (this->m_handle, "untimed", this->m_untimed ? "yes" : "no");
+    // Untimed playback consumes frames at the scene render rate when a clip has
+    // no audio clock. Keep mpv's real-time scheduler even for nonblocking textures.
+    mpv_set_option_string (this->m_handle, "untimed", "no");
+    if (this->m_nonBlocking) {
+	// With BLOCK_FOR_TARGET_TIME=0, ask mpv to deliver frames at their target
+	// time instead of its default early render lead. Standalone videos keep
+	// their normal blocking presentation and audio/video synchronization.
+	mpv_set_option_string (this->m_handle, "video-timing-offset", "0");
+    }
 
     if (mpv_initialize (this->m_handle) < 0) {
 	sLog.exception ("Could not initialize mpv context");

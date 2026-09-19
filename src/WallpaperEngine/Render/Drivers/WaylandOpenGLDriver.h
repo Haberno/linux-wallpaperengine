@@ -109,6 +109,7 @@ private:
     void finishEGL () const;
 
     uint32_t m_frameCounter = 0;
+    std::chrono::steady_clock::time_point m_nextFrameToken {};
     ApplicationContext& m_context;
     WaylandMouseInput m_mouseInput;
 

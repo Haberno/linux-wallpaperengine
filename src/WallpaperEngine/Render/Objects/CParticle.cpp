@@ -2879,39 +2879,24 @@ void CParticle::renderSprites () {
 	    }
 	}
 
-	auto addVertex = [&] (float u, float v) {
-	    const uint32_t base = vertexIndex * SPRITE_FLOATS_PER_VERTEX;
-	    // a_Position (vec3)
-	    m_vertices[base + 0] = p.position.x;
-	    m_vertices[base + 1] = p.position.y;
-	    m_vertices[base + 2] = p.position.z;
-	    // a_TexCoordVec4 (vec4: uv.x, uv.y, rotZ, size)
-	    m_vertices[base + 3] = u;
-	    m_vertices[base + 4] = v;
-	    m_vertices[base + 5] = renderRotation.z;
-	    m_vertices[base + 6] = p.size;
-	    // a_Color (vec4: r, g, b, a)
-	    m_vertices[base + 7] = p.color.r * brightness;
-	    m_vertices[base + 8] = p.color.g * brightness;
-	    m_vertices[base + 9] = p.color.b * brightness;
-	    m_vertices[base + 10] = p.alpha;
-	    // a_TexCoordVec4C1 (vec4: vel.x, vel.y, vel.z, lifetime)
-	    m_vertices[base + 11] = p.velocity.x;
-	    m_vertices[base + 12] = p.velocity.y;
-	    m_vertices[base + 13] = p.velocity.z;
-	    m_vertices[base + 14] = lifetime;
-	    // a_TexCoordC2 (vec2: rotX, rotY)
-	    m_vertices[base + 15] = renderRotation.x;
-	    m_vertices[base + 16] = renderRotation.y;
-	    vertexIndex++;
+	// All four corners share the same particle attributes. Pack them once,
+	// then change only the UV coordinates in each copy.
+	const float vertex[SPRITE_FLOATS_PER_VERTEX] = {
+	    p.position.x, p.position.y, p.position.z,
+	    0.0f, 0.0f, renderRotation.z, p.size,
+	    p.color.r * brightness, p.color.g * brightness, p.color.b * brightness, p.alpha,
+	    p.velocity.x, p.velocity.y, p.velocity.z, lifetime,
+	    renderRotation.x, renderRotation.y,
 	};
-
-	// 4 vertices for quad corners
-	uint32_t baseVertex = vertexIndex;
-	addVertex (0.0f, 1.0f); // 0: Bottom-left
-	addVertex (1.0f, 1.0f); // 1: Bottom-right
-	addVertex (1.0f, 0.0f); // 2: Top-right
-	addVertex (0.0f, 0.0f); // 3: Top-left
+	constexpr float corners[4][2] = { { 0.0f, 1.0f }, { 1.0f, 1.0f }, { 1.0f, 0.0f }, { 0.0f, 0.0f } };
+	const uint32_t baseVertex = vertexIndex;
+	for (const auto& uv : corners) {
+	    float* destination = m_vertices.data () + vertexIndex * SPRITE_FLOATS_PER_VERTEX;
+	    std::copy_n (vertex, SPRITE_FLOATS_PER_VERTEX, destination);
+	    destination[3] = uv[0];
+	    destination[4] = uv[1];
+	    vertexIndex++;
+	}
 
 	// 6 indices forming 2 triangles
 	m_indices[indexOffset++] = baseVertex + 0;

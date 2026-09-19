@@ -18,12 +18,12 @@ extern "C" {
 
 #include <algorithm>
 #include <cerrno>
-#include <cmath>
 #include <poll.h>
 #include <string.h>
-#include <unistd.h>
 
 using namespace WallpaperEngine::Render::Drivers;
+
+extern float g_Time;
 
 static void handlePointerEnter (
     void* data, struct wl_pointer* wl_pointer, uint32_t serial, struct wl_surface* surface, wl_fixed_t surface_x,
@@ -335,6 +335,14 @@ void WaylandOpenGLDriver::finishEGL () const {
 void WaylandOpenGLDriver::onLayerClose (Output::WaylandOutputViewport* viewport) {
     sLog.error ("Compositor closed our LS, freeing data...");
 
+    if (viewport->frameCallback) {
+	wl_callback_destroy (viewport->frameCallback);
+	viewport->frameCallback = nullptr;
+    }
+    if (this->viewportInFocus == viewport) {
+	this->viewportInFocus = nullptr;
+    }
+
     if (viewport->eglSurface) {
 	eglDestroySurface (m_eglContext.display, viewport->eglSurface);
     }
@@ -513,18 +521,38 @@ WaylandOpenGLDriver::~WaylandOpenGLDriver () {
 }
 
 void WaylandOpenGLDriver::dispatchEventQueue () {
-    static bool initialized = false;
+    using Clock = std::chrono::steady_clock;
+    const auto frameInterval = std::max (
+	Clock::duration (1), std::chrono::duration_cast<Clock::duration> (
+	    std::chrono::duration<double> (1.0 / std::max (1, this->m_context.settings.render.maximumFPS))
+	)
+    );
 
-    if (!initialized) {
-	initialized = true;
-
+    const auto pacingOutput = [&] {
+	Output::WaylandOutputViewport* first = nullptr;
 	for (const auto& viewport : this->getOutput ().getViewports () | std::views::values) {
-	    this->getApp ().update (viewport);
+	    auto* output = static_cast<Output::WaylandOutputViewport*> (viewport);
+	    if (output->frameCredits > 0 && output->frameBudget () > 1
+		&& (!first || output->nextFrameTime < first->nextFrameTime)) {
+		first = output;
+	    }
 	}
-    }
-
-    static float startTime, endTime, minimumTime = 1.0f / this->m_context.settings.render.maximumFPS;
-    startTime = this->getRenderTime ();
+	return first;
+    };
+    const auto deadline = [&] (
+	const Output::WaylandOutputViewport* output, const Output::WaylandOutputViewport* first,
+	Clock::time_point firstDeadline, Clock::time_point now
+    ) {
+	// Avoid starting a slower output just before a faster output is due.
+	// Defer only when both measured draws fit in one interval, and only
+	// until that fixed deadline; the slower output still runs in this batch.
+	if (first && output->frameBudget () == 1 && firstDeadline > now
+	    && firstDeadline - now < output->lastRenderDuration
+	    && output->lastRenderDuration + first->lastRenderDuration < frameInterval) {
+	    return std::max (output->nextFrameTime, firstDeadline);
+	}
+	return output->nextFrameTime;
+    };
 
     // A hidden or powered-off output may stop sending frame callbacks indefinitely.
     // Keep the application loop ticking so IPC and prepared switches still run.
@@ -545,10 +573,24 @@ void WaylandOpenGLDriver::dispatchEventQueue () {
 	return;
     }
     pollfd events { wl_display_get_fd (display), static_cast<short> (POLLIN | (flushed < 0 ? POLLOUT : 0)), 0 };
-    const int timeout = std::max (0, static_cast<int> (std::ceil (
-	(minimumTime - (this->getRenderTime () - startTime)) * 1000.0f
-    )));
-    const int ready = poll (&events, 1, timeout);
+    // Bookkeeping events must not spend a frame's FPS budget. Wait for events
+    // or the earliest ready output's deadline, with a bounded idle heartbeat
+    // for IPC/CEF even when all outputs are hidden or the FPS cap is very low.
+    auto wait = std::chrono::duration_cast<Clock::duration> (std::chrono::milliseconds (16));
+    const auto now = Clock::now ();
+    const auto* waitFirst = pacingOutput ();
+    const auto waitFirstDeadline = waitFirst ? waitFirst->nextFrameTime : Clock::time_point {};
+    for (const auto& viewport : this->getOutput ().getViewports () | std::views::values) {
+	const auto* output = static_cast<Output::WaylandOutputViewport*> (viewport);
+	if (output->frameCredits > 0) {
+	    wait = std::min (
+		wait, std::max (Clock::duration::zero (), deadline (output, waitFirst, waitFirstDeadline, now) - now)
+	    );
+	}
+    }
+    const auto nanoseconds = std::chrono::duration_cast<std::chrono::nanoseconds> (wait).count ();
+    const timespec timeout { nanoseconds / 1000000000, nanoseconds % 1000000000 };
+    const int ready = ppoll (&events, 1, &timeout, nullptr);
     const int pollError = errno;
     if (ready > 0 && (events.revents & POLLIN)) {
 	if (wl_display_read_events (display) < 0) {
@@ -569,13 +611,53 @@ void WaylandOpenGLDriver::dispatchEventQueue () {
 	m_requestedExit = true;
     }
 
-    m_frameCounter++;
+    if (m_requestedExit) {
+	return;
+    }
 
-    endTime = this->getRenderTime ();
-
-    // ensure the frame time is correct to not overrun FPS
-    if ((endTime - startTime) < minimumTime) {
-	usleep ((minimumTime - (endTime - startTime)) * CLOCKS_PER_SEC);
+    auto* first = pacingOutput ();
+    const auto firstDeadline = first ? first->nextFrameTime : Clock::time_point {};
+    bool rendered = false;
+    const auto renderOutput = [&] (Output::WaylandOutputViewport* output) {
+	const auto frameStart = Clock::now ();
+	if (output->frameCredits <= 0 || frameStart < deadline (output, first, firstDeadline, frameStart)) {
+	    return;
+	}
+	const bool newFrame = frameStart >= m_nextFrameToken;
+	if (!rendered || newFrame) {
+	    // Polling can outlive the application's time sample, and a slow draw
+	    // can carry the next output into another frame interval.
+	    g_Time = this->getRenderTime ();
+	}
+	if (newFrame) {
+	    // Reuse shared scenes/textures across staggered output callbacks in
+	    // the same interval. Empty event wakes never consume screenshot frames.
+	    m_frameCounter++;
+	    if (m_nextFrameToken == Clock::time_point {}) {
+		m_nextFrameToken = frameStart + frameInterval;
+	    } else {
+		// Keep a shared schedule instead of accumulating each wake's lateness.
+		// Skip missed intervals after a stall; never queue catch-up frames.
+		m_nextFrameToken += frameInterval * ((frameStart - m_nextFrameToken) / frameInterval + 1);
+	    }
+	}
+	--output->frameCredits;
+	output->nextFrameTime = m_nextFrameToken;
+	output->rendering = true;
+	this->getApp ().update (output);
+	output->lastRenderDuration = Clock::now () - frameStart;
+	output->rendering = false;
+	rendered = true;
+    };
+    // Connector names need not sort in refresh/deadline order.
+    if (first) {
+	renderOutput (first);
+    }
+    for (const auto& viewport : this->getOutput ().getViewports () | std::views::values) {
+	auto* output = static_cast<Output::WaylandOutputViewport*> (viewport);
+	if (output != first) {
+	    renderOutput (output);
+	}
     }
 }
 

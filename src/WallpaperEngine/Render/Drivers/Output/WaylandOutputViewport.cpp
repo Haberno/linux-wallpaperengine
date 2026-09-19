@@ -47,6 +47,12 @@ static void geometry (
 static void mode (void* data, wl_output* output, uint32_t flags, int32_t width, int32_t height, int32_t refresh) {
     const auto viewport = static_cast<WaylandOutputViewport*> (data);
 
+    if (!(flags & WL_OUTPUT_MODE_CURRENT)) {
+	return;
+    }
+    viewport->refreshRate = std::max (0, refresh);
+    viewport->frameCredits = std::min (viewport->frameCredits, viewport->frameBudget ());
+
     // update viewport size (physical pixels; logicalSize comes from xdg-output or layer shell configure)
     viewport->size = { width, height };
     viewport->viewport = { 0, 0, viewport->size.x * viewport->scale, viewport->size.y * viewport->scale };
@@ -97,9 +103,7 @@ static void surfaceFrameCallback (void* data, struct wl_callback* cb, uint32_t t
     wl_callback_destroy (cb);
 
     viewport->frameCallback = nullptr;
-    viewport->rendering = true;
-    viewport->getDriver ()->getApp ().update (viewport);
-    viewport->rendering = false;
+    viewport->frameCredits = viewport->frameBudget ();
 }
 
 constexpr struct wl_callback_listener frameListener = { .done = surfaceFrameCallback };
@@ -245,6 +249,12 @@ void WaylandOutputViewport::setupLS () {
 	sLog.exception ("Failed to make egl current");
     }
 
+    // Surface frame callbacks already pace each output. A blocking swap on a
+    // slower monitor would also stall every other scene on the shared thread.
+    if (eglSwapInterval (m_driver->getEGLContext ()->display, 0) == EGL_FALSE) {
+	sLog.error ("Couldn't disable blocking EGL swaps for output ", name);
+    }
+
     this->m_driver->getOutput ().reset ();
 }
 
@@ -271,10 +281,19 @@ void WaylandOutputViewport::swapOutput () {
 	frameCallback = wl_surface_frame (surface);
 	wl_callback_add_listener (frameCallback, &frameListener, this);
     }
-    eglSwapBuffers (m_driver->getEGLContext ()->display, this->eglSurface);
+    // EGL commits the new buffer. Apply its scale and damage in that same
+    // commit instead of issuing a second, bufferless commit after the swap.
     wl_surface_set_buffer_scale (surface, scale);
     wl_surface_damage_buffer (surface, 0, 0, INT32_MAX, INT32_MAX);
-    wl_surface_commit (surface);
+    eglSwapBuffers (m_driver->getEGLContext ()->display, this->eglSurface);
+}
+
+int WaylandOutputViewport::frameBudget () const {
+    // Below the output refresh rate, allow one frame to be prepared while its
+    // callback is in flight. If callbacks stop, this finite budget runs out.
+    // Unknown/slow modes retain callback pacing; mode refresh is not an FPS cap.
+    const auto fps = std::max (1, m_driver->getApp ().getContext ().settings.render.maximumFPS);
+    return static_cast<int64_t> (refreshRate) > static_cast<int64_t> (fps) * 1000 ? 2 : 1;
 }
 
 void WaylandOutputViewport::resize () {

@@ -38,8 +38,9 @@ public:
      */
     void decrementUsageCount ();
 
-    void setUntimed ();
-    void clearUntimed ();
+    /** Scene textures retain real-time playback without blocking the scene renderer. */
+    void setNonBlocking ();
+    void clearNonBlocking ();
     void setMuted ();
     void clearMuted ();
     void setVolume (double volume);
@@ -83,7 +84,7 @@ protected:
     mpv_render_context* m_renderContext = nullptr;
     double m_volume = 0.0f;
     bool m_muted = false;
-    bool m_untimed = false;
+    bool m_nonBlocking = false;
     bool m_paused = false;
     double m_rate = 1.0;
     bool m_loop = true;
