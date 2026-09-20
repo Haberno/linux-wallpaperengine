@@ -1858,7 +1858,12 @@ void CImage::updateFinalPassVisibility (const bool force) {
     this->m_finalPassDrawsToScene = visible;
     // A hidden layer publishes RGBA, including transparent pixels. Blending
     // against an earlier ping-pong result resurrects keyed-out backgrounds.
-    pass->setBlendingMode (visible ? route.sceneBlending : BlendingMode_Normal);
+    // Native linear dodge applies addition only once. Its generated shader
+    // already includes the background; the base additive blend would add it again.
+    const bool additiveColorBlend = this->m_materials.colorBlending.material != nullptr
+        && this->m_image.colorBlendMode->value->getInt () == 31
+        && route.sceneBlending == BlendingMode_Additive;
+    pass->setBlendingMode (visible && !additiveColorBlend ? route.sceneBlending : BlendingMode_Normal);
     if (!visible) {
 	pass->setDestination (route.offscreenTarget);
 	pass->setPosition (route.offscreenPosition);
