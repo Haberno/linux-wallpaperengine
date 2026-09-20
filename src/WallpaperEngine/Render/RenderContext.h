@@ -96,9 +96,9 @@ namespace Render {
     private:
 	/** Crossfade between the previous and the current wallpaper of a screen */
 	struct Transition {
-	    std::shared_ptr<CWallpaper> from;
-	    /** Keeps the outgoing wallpaper's backing data (Project) alive during the animation */
+	    /** Outlives from, including renderer teardown which still uses Project data. */
 	    std::shared_ptr<void> keepAlive;
+	    std::shared_ptr<CWallpaper> from;
 	    TransitionMode mode;
 	    float startTime;
 	    /** Normalized origin for point-based transitions (e.g. disc), randomized per switch */

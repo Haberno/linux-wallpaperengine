@@ -89,6 +89,7 @@ void HdrBloom::draw (const Program kind, const CFBO& source, const CFBO& target,
     glDrawArrays (GL_TRIANGLES, 0, 3);
     glDisableVertexAttribArray (position);
     if (uv >= 0) glDisableVertexAttribArray (uv);
+    m_scene.loadingCheckpoint ();
 }
 
 void HdrBloom::render (const bool bloomEnabled) {

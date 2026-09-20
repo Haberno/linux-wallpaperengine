@@ -694,6 +694,7 @@ void CPass::render () {
     // Refresh only Wallpaper Engine's dedicated mipmapped target. Ordinary
     // _rt_imageLayerComposite_* targets intentionally remain single-level.
     drawTo->generateMipmaps ();
+    this->m_renderable.getScene ().loadingCheckpoint ();
 }
 
 std::shared_ptr<const FBOProvider> CPass::getFBOProvider () const { return this->m_fboProvider; }

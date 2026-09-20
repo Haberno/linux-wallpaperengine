@@ -1036,6 +1036,7 @@ void ScriptEngine::initializeQueuedScripts (ScriptableObject* target) {
 	    module.lastOutputSize = this->m_scene.getOutputSize ();
 	    started.emplace_back (&key, &module);
 	    this->callLifecycleHook (key, module, "init");
+	    this->m_scene.loadingCheckpoint ();
 	}
 
 	// Wallpaper Engine hands the scripts their user properties once, after every init() and before
@@ -1065,6 +1066,7 @@ void ScriptEngine::initializeQueuedScripts (ScriptableObject* target) {
 	for (const auto& [key, module] : this->m_scriptModuleOrder) {
 	    if (module->initialized && module->updateEnabled)
 		this->callLifecycleHook (*key, *module, "update");
+	    this->m_scene.loadingCheckpoint ();
 	}
     }
 }
@@ -1165,6 +1167,7 @@ void ScriptEngine::tick () {
 
     // run intervals
     this->m_engineObject->tick ();
+    this->m_scene.loadingCheckpoint ();
 
     // Dispatch layer cursor events before update() so click handlers that change
     // shared state are visible to property scripts in the same frame.
@@ -1226,6 +1229,7 @@ void ScriptEngine::tick () {
 	} else {
 	    jsToDynamicValue (this->m_context, result, module.value);
 	}
+	this->m_scene.loadingCheckpoint ();
     }
 }
 
@@ -1375,7 +1379,15 @@ void ScriptEngine::dispatchCursorEvents () {
     this->m_lastCursorWorldPosition = worldPosition;
 }
 
+void ScriptEngine::finishLoading (std::chrono::steady_clock::duration timerOffset) {
+    this->m_engineObject->rebaseTimers (timerOffset);
+    this->notifyMediaUpdate (this->m_mediaSource.getMediaInfo ());
+}
+
 void ScriptEngine::notifyMediaUpdate (const Media::MediaSource::MediaInfo& media, LoadedModule* target) {
+    // Initialization may explicitly seed one complete module; global media events
+    // from outgoing frames must never reenter a partially constructed candidate.
+    if (this->m_scene.isLoading () && target == nullptr) return;
     JSContext* ctx = this->m_context;
 
     DynamicValue primaryColorValue (glm::vec3 (0.12f, 0.12f, 0.12f));

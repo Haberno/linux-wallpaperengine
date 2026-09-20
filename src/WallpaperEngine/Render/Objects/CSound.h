@@ -21,6 +21,7 @@ public:
     ~CSound () override;
 
     void render () override;
+    void activate ();
     void play ();
     void pause ();
     void stop ();

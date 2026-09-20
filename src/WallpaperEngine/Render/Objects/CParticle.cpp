@@ -476,6 +476,14 @@ void CParticle::refreshInstanceParameters () {
     }
 }
 
+void CParticle::rebaseRenderTime (float offset) {
+    CRenderable::rebaseRenderTime (offset);
+    if (this->m_time != 0.0) this->m_time += offset;
+    for (auto& child : this->m_children) child.renderer->rebaseRenderTime (offset);
+    for (auto& child : this->m_followChildren)
+	for (auto& instance : child.instances) instance.renderer->rebaseRenderTime (offset);
+}
+
 void CParticle::render () {
     if (!m_initialized) {
 	return;

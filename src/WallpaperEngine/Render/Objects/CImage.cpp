@@ -1569,6 +1569,7 @@ void CImage::setup () {
 			this->m_passes.push_back (
 			    new CPass (*this, fboProvider, *pass, override, (*curEffect)->binds, target, {}, deferShaderSetup, effectBindings)
 			);
+			this->getScene ().loadingCheckpoint ();
 		    }
 		}
 	    }
@@ -1723,6 +1724,7 @@ void CImage::updateEffectVisibility () {
 	if (!enabled (pass)) continue;
 	try {
 	    pass->initialize ();
+	    this->getScene ().loadingCheckpoint ();
 	} catch (const std::exception& error) {
 	    const auto entry = m_passVisibility.find (pass);
 	    if (entry == m_passVisibility.end ()) throw;

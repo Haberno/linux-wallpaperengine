@@ -109,6 +109,7 @@ public:
 
     /** Run init/first-update after the scene has registered every authored layer. */
     void initializeQueuedScripts (ScriptableObject* target = nullptr);
+    void finishLoading (std::chrono::steady_clock::duration timerOffset);
 
     /**
      * Drop every queued script bound to a scriptable object that is going away.

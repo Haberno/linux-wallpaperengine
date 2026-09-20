@@ -24,6 +24,7 @@ public:
     void clearInterval (uint32_t id);
 
     void tick ();
+    void rebaseTimers (std::chrono::steady_clock::duration offset);
 
 protected:
     struct Timeout {

@@ -361,17 +361,14 @@ void CWallpaper::updateUVs (const glm::ivec4& viewport, const bool vflip) {
 }
 
 void CWallpaper::render (
-    const glm::ivec4& viewport, const bool vflip, const glm::ivec2& globalPosition, const glm::ivec2& logicalSize,
-    const bool updateScene
+    const glm::ivec4& viewport, const bool vflip, const glm::ivec2& globalPosition, const glm::ivec2& logicalSize
 ) {
     // Get current frame counter from the driver to avoid redundant scene renders
     const uint32_t currentFrame = this->getContext ().getDriver ().getFrameCounter ();
-    // During a transition the outgoing wallpaper is visually frozen. Reuse the scene
-    // framebuffer it rendered immediately before the switch instead of running a third
-    // full scene at the engine frame rate. An outgoing scene that has never rendered
-    // still gets one initialization frame.
-    const bool needsSceneRender
-	= this->m_lastRenderedFrame == UINT32_MAX || (updateScene && currentFrame != this->m_lastRenderedFrame);
+    // Both sides of a transition advance normally; shared/span scenes still update
+    // only once per driver frame.
+    const bool needsSceneRender = !this->m_firstFramePrepared
+	&& (this->m_lastRenderedFrame == UINT32_MAX || currentFrame != this->m_lastRenderedFrame);
     const glm::ivec4 sceneViewport = this->m_spanInfo.has_value ()
 	? glm::ivec4 { 0, 0, this->m_spanInfo->totalBounds.z, this->m_spanInfo->totalBounds.w }
 	: viewport;
@@ -381,6 +378,12 @@ void CWallpaper::render (
 #if !NDEBUG
     glPushDebugGroup (GL_DEBUG_SOURCE_APPLICATION, 0, -1, "Rendering scene");
 #endif /* !NDEBUG */
+    // A prepared scene's first draw is already complete, including feedback/history.
+    // Present it once rather than advancing that state in an extra hidden frame.
+    if (this->m_firstFramePrepared) {
+	this->m_firstFramePrepared = false;
+	this->m_lastRenderedFrame = currentFrame;
+    }
     if (needsSceneRender) {
 	this->renderFrame (sceneViewport);
 	this->m_lastRenderedFrame = currentFrame;

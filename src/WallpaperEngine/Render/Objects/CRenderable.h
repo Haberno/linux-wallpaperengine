@@ -43,6 +43,7 @@ public:
     [[nodiscard]] double getTextureAnimationTime (const std::shared_ptr<const TextureProvider>& texture) const;
 
     void setup () override;
+    virtual void rebaseRenderTime (float offset);
 
     [[nodiscard]] virtual const float& getBrightness () const = 0;
     [[nodiscard]] virtual const float& getUserAlpha () const = 0;

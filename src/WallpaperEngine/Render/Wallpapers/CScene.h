@@ -7,6 +7,8 @@
 #include "WallpaperEngine/Scripting/ScriptEngine.h"
 
 #include <array>
+#include <chrono>
+#include <functional>
 #include <set>
 #include <optional>
 #include <random>
@@ -38,10 +40,20 @@ public:
     CScene (
 	const Wallpaper& wallpaper, RenderContext& context, AudioContext& audioContext,
 	const WallpaperState::TextureUVsScaling& scalingMode, const uint32_t& clampMode,
-	const std::string& screenName = "default"
+	const std::string& screenName = "default", std::function<void (bool)> loadingCheckpoint = {}
     );
 
     ~CScene () override;
+
+    /** Cooperative preparation runs on the render thread. Only enclosing, fully owned
+     * construction boundaries may allow cancellation to unwind the scene. */
+    void loadingCheckpoint (bool canCancel = false) const;
+    [[nodiscard]] bool isLoading () const { return static_cast<bool> (m_loadingCheckpoint); }
+    [[nodiscard]] float getRenderTime () const;
+    [[nodiscard]] std::chrono::steady_clock::time_point getTimerTime () const;
+    void prepareFirstFrame ();
+    void finishLoading ();
+
 
     [[nodiscard]] Scripting::ScriptEngine& getScriptEngine () const;
     [[nodiscard]] Camera& getCamera () const;
@@ -311,6 +323,9 @@ private:
     glm::vec2 m_parallaxDisplacement = {};
     /** Parallax position fed to shaders via g_ParallaxPosition, 0.5,0.5 = centered */
     glm::vec2 m_parallaxPosition = { 0.5f, 0.5f };
+    std::function<void (bool)> m_loadingCheckpoint;
+    float m_loadingRenderTime = 0.0f;
+    std::chrono::steady_clock::time_point m_loadingTimerTime;
     std::optional<float> m_previousSceneTime = std::nullopt;
     float m_sceneDeltaTime = 0.0f;
     float m_sceneElapsedTime = 0.0f;

@@ -465,7 +465,7 @@ uint32_t EngineObject::reserveNextTimeoutId (JSValue function, uint64_t duration
 
     this->m_timeouts[id] = Timeout { .callback = function,
 				     .duration = std::chrono::milliseconds (duration),
-				     .next = std::chrono::steady_clock::now () + std::chrono::milliseconds (duration) };
+				     .next = this->m_scene.getTimerTime () + std::chrono::milliseconds (duration) };
 
     return id;
 }
@@ -476,7 +476,7 @@ uint32_t EngineObject::reserveNextIntervalId (JSValue function, uint64_t duratio
     this->m_intervals[id]
 	= Timeout { .callback = function,
 		    .duration = std::chrono::milliseconds (duration),
-		    .next = std::chrono::steady_clock::now () + std::chrono::milliseconds (duration) };
+		    .next = this->m_scene.getTimerTime () + std::chrono::milliseconds (duration) };
 
     return id;
 }
@@ -505,8 +505,13 @@ void EngineObject::clearTimeout (uint32_t id) {
     this->m_timeouts.erase (id);
 }
 
+void EngineObject::rebaseTimers (std::chrono::steady_clock::duration offset) {
+    for (auto& [id, timer] : this->m_timeouts) timer.next += offset;
+    for (auto& [id, timer] : this->m_intervals) timer.next += offset;
+}
+
 void EngineObject::tick () {
-    const auto now = std::chrono::steady_clock::now ();
+    const auto now = this->m_scene.getTimerTime ();
 
     JSContext* ctx = this->m_engine.getContext ();
 

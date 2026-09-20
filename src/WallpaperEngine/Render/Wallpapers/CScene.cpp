@@ -32,8 +32,11 @@ using namespace WallpaperEngine::Render::Wallpapers;
 
 CScene::CScene (
     const Wallpaper& wallpaper, RenderContext& context, AudioContext& audioContext,
-    const WallpaperState::TextureUVsScaling& scalingMode, const uint32_t& clampMode, const std::string& screenName
-) : CWallpaper (wallpaper, context, audioContext, scalingMode, clampMode) {
+    const WallpaperState::TextureUVsScaling& scalingMode, const uint32_t& clampMode, const std::string& screenName,
+    std::function<void (bool)> loadingCheckpoint
+) : CWallpaper (wallpaper, context, audioContext, scalingMode, clampMode),
+    m_loadingCheckpoint (std::move (loadingCheckpoint)), m_loadingRenderTime (g_Time),
+    m_loadingTimerTime (std::chrono::steady_clock::now ()) {
     // Optional supersampling is independent from scene MSAA and post-processing quality.
     this->setRenderScale (context.getApp ().getContext ().settings.render.renderScale);
 
@@ -371,6 +374,7 @@ CScene::CScene (
     // create all objects based off their dependencies
     for (const auto& object : scene->objects) {
 	this->createObject (*object);
+	this->loadingCheckpoint (true);
     }
 
     // copy over objects by render order
@@ -384,6 +388,7 @@ CScene::CScene (
     // follow dependency order rather than authored order, so wait until both registries are
     // complete before allowing those hooks to cache their targets.
     this->m_scriptEngine->initializeQueuedScripts ();
+    this->loadingCheckpoint (true);
 
     // Native bloom truncates divided raster dimensions, with a two-pixel minimum.
     // The main target already includes render scale; don't scale these twice.
@@ -401,10 +406,62 @@ CScene::CScene (
     this->updateBloomState ();
     sLog.out ("Scene post-processing: hdr=", this->m_hdrEnabled ? 1 : 0);
 
+    this->loadingCheckpoint (true);
     constructionGuard.cancel ();
 }
 
 CScene::~CScene () { this->destroyObjects (); }
+
+void CScene::loadingCheckpoint (bool canCancel) const {
+    if (!this->m_loadingCheckpoint) return;
+    if (!canCancel) {
+	// CPU submission time alone is not a GPU budget: hundreds of quick draw
+	// submissions can queue a long stall ahead of the outgoing wallpaper.
+	// Keep just one owned loading unit in flight. Bounded waits still let the
+	// application service outgoing frames while that unit reaches the GPU.
+	const GLsync fence = glFenceSync (GL_SYNC_GPU_COMMANDS_COMPLETE, 0);
+	WallpaperEngine::Data::Utils::ScopeGuard releaseFence ([fence] { glDeleteSync (fence); });
+	while (glClientWaitSync (fence, GL_SYNC_FLUSH_COMMANDS_BIT, 1000000) == GL_TIMEOUT_EXPIRED)
+	    this->m_loadingCheckpoint (false);
+    }
+    this->m_loadingCheckpoint (canCancel);
+}
+
+float CScene::getRenderTime () const {
+    return this->isLoading () ? this->m_loadingRenderTime : this->getContext ().getDriver ().getRenderTime ();
+}
+
+std::chrono::steady_clock::time_point CScene::getTimerTime () const {
+    return this->isLoading () ? this->m_loadingTimerTime : std::chrono::steady_clock::now ();
+}
+
+void CScene::prepareFirstFrame () {
+    // Render the normal initial frame at time zero into private targets. CWallpaper
+    // will present it once; drawing it again would advance feedback/uncleared layers.
+    const glm::ivec4 viewport { 0, 0, this->m_outputSize.x, this->m_outputSize.y };
+    this->updateUVs (viewport, this->getContext ().getOutput ().renderVFlip ());
+    this->renderFrame (viewport);
+    // Include resolves, retained-history copies and post-processing in readiness.
+    this->loadingCheckpoint ();
+    this->m_firstFramePrepared = true;
+    this->loadingCheckpoint (true);
+}
+
+void CScene::finishLoading () {
+    const float renderOffset = this->getContext ().getDriver ().getRenderTime () - this->m_loadingRenderTime;
+    const auto timerOffset = std::chrono::steady_clock::now () - this->m_loadingTimerTime;
+    for (const auto& [id, object] : this->m_objects) {
+	if (auto* renderable = dynamic_cast<Objects::CRenderable*> (object))
+	    renderable->rebaseRenderTime (renderOffset);
+    }
+    this->m_previousSceneTime = this->getContext ().getDriver ().getRenderTime ();
+    this->m_sceneDeltaTime = 0.0f;
+    this->m_loadingCheckpoint = {};
+    this->m_scriptEngine->finishLoading (timerOffset);
+    for (const auto& [id, object] : this->m_objects) {
+	if (auto* sound = dynamic_cast<Objects::CSound*> (object)) sound->activate ();
+    }
+}
 
 void CScene::initializeBloom () {
     const uint32_t sceneWidth = this->getWidth ();
@@ -1640,6 +1697,7 @@ void CScene::renderShadowAtlas () {
 	for (auto* object : this->m_objectsByRenderOrder) {
 	    if (auto* model = dynamic_cast<Objects::CModel*> (object); model != nullptr) {
 		model->renderShadow (this->m_lights.shadowMatrices[feature]);
+		this->loadingCheckpoint ();
 	    }
 	}
     }
@@ -1655,6 +1713,7 @@ void CScene::renderShadowAtlas () {
 	    for (auto* object : this->m_objectsByRenderOrder) {
 		if (auto* model = dynamic_cast<Objects::CModel*> (object); model != nullptr) {
 		    model->renderShadow (this->m_lights.pointShadowMatrices[point][face]);
+		    this->loadingCheckpoint ();
 		}
 	    }
 	}

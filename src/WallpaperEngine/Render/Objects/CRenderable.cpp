@@ -70,7 +70,11 @@ double CRenderable::getTextureAnimationDuration () const { return this->m_animat
 
 float CRenderable::getTextureAnimationRate () const { return this->m_textureAnimationPlayback.rate; }
 
-float CRenderable::getTextureAnimationRenderTime () const { return this->getContext ().getDriver ().getRenderTime (); }
+float CRenderable::getTextureAnimationRenderTime () const { return this->getScene ().getRenderTime (); }
+
+void CRenderable::rebaseRenderTime (float offset) {
+    this->m_textureAnimationPlayback.anchorRenderTime += offset;
+}
 
 namespace {
 double wrapAnimationTime (const double time, const double duration) {

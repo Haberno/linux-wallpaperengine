@@ -108,9 +108,11 @@ glm::ivec2 GLFWOpenGLDriver::getFramebufferSize () const {
 uint32_t GLFWOpenGLDriver::getFrameCounter () const { return this->m_frameCounter; }
 
 void GLFWOpenGLDriver::dispatchEventQueue () {
-    static float startTime, endTime, minimumTime = 1.0f / this->m_context.settings.render.maximumFPS;
-    // get the start time of the frame
-    startTime = this->getRenderTime ();
+    static float previousFrameEnd = 0.0f;
+    const float minimumTime = 1.0f / this->m_context.settings.render.maximumFPS;
+    // Cooperative loading does useful work between dispatches. Include that work
+    // in the frame budget instead of sleeping for a whole extra frame after it.
+    const float startTime = previousFrameEnd > 0.0f ? previousFrameEnd : this->getRenderTime ();
     // clear the screen
     glClear (GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
@@ -152,12 +154,13 @@ void GLFWOpenGLDriver::dispatchEventQueue () {
     // increase frame counter
     this->m_frameCounter++;
     // get the end time of the frame
-    endTime = this->getRenderTime ();
+    const float endTime = this->getRenderTime ();
 
     // ensure the frame time is correct to not overrun FPS
     if ((endTime - startTime) < minimumTime) {
 	usleep ((minimumTime - (endTime - startTime)) * CLOCKS_PER_SEC);
     }
+    previousFrameEnd = this->getRenderTime ();
 }
 
 void* GLFWOpenGLDriver::getProcAddress (const char* name) const {

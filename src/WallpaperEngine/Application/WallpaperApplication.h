@@ -278,6 +278,7 @@ private:
     uint64_t m_switchIdCounter = 0;
     /** Set under m_switchMutex to make the loader thread exit */
     bool m_switchWorkerStop = false;
+    bool m_buildingSwitch = false;
     /** When set, malloc_trim runs at this point to return post-switch allocator slack to the OS */
     std::chrono::steady_clock::time_point m_pendingMallocTrim {};
 

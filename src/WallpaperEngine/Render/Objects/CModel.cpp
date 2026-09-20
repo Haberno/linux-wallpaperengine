@@ -204,6 +204,7 @@ void CModel::setup () {
 	    this->setupGeometryCallback (pass, submeshIndex);
 
 	    this->m_passes.push_back (pass);
+	    this->getScene ().loadingCheckpoint ();
 	}
     }
 

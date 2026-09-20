@@ -21,6 +21,8 @@
 #include "WallpaperEngine/Data/Utils/BinaryReader.h"
 #include "WallpaperEngine/Render/CTexture.h"
 #include "WallpaperEngine/Render/CFBO.h"
+#include "LoadingGLState.h"
+#include "WallpaperEngine/Data/Utils/ScopeGuard.h"
 
 #include "WallpaperEngine/Data/Model/Property.h"
 #include "WallpaperEngine/Data/Model/Wallpaper.h"
@@ -1029,16 +1031,72 @@ void WallpaperApplication::processPreparedSwitches () {
 }
 
 bool WallpaperApplication::applyPreparedSwitch (PreparedSwitch& job) {
-    // everything in here runs on the render thread, so it is a visible stall
+    // GL/QuickJS construction stays on the render thread, interleaved with ordinary frames.
     const auto applyStart = std::chrono::steady_clock::now ();
     const auto requested = job.requested;
     auto buildMs = std::chrono::duration<double, std::milli>::zero ();
 
+    struct CancelledSwitch {};
     try {
 	if (!this->makeAnyViewportCurrent ()) {
 	    sLog.error ("Cannot switch wallpaper on ", job.screen, ": no active viewport");
 	    throw std::runtime_error ("No viewport available");
 	}
+
+	this->m_buildingSwitch = true;
+	float liveTime = g_Time, liveTimeLast = g_TimeLast;
+	const float loadingTime = this->m_videoDriver->getRenderTime ();
+	g_Time = g_TimeLast = loadingTime;
+	// Uploads bind index buffers before objects have their own VAOs. Do not let
+	// those binds overwrite a cached outgoing model/puppet VAO's element buffer.
+	GLint previousVao = 0;
+	glGetIntegerv (GL_VERTEX_ARRAY_BINDING, &previousVao);
+	GLuint loadingVao;
+	glGenVertexArrays (1, &loadingVao);
+	glBindVertexArray (loadingVao);
+	Data::Utils::ScopeGuard finishPreparation ([&] {
+	    // GLFW also clears at the start of the outer frame after publication.
+	    // Leave that clear pointing at the output, never at the warmed scene.
+	    glBindFramebuffer (GL_FRAMEBUFFER, this->getDestinationFramebuffer ());
+	    glBindVertexArray (glIsVertexArray (previousVao) ? previousVao : 0);
+	    glDeleteVertexArrays (1, &loadingVao);
+	    g_Time = liveTime;
+	    g_TimeLast = liveTimeLast;
+	    this->m_buildingSwitch = false;
+	});
+	// Give loading at most a quarter of a requested frame, capped at 2 ms.
+	// High-refresh outputs must not inherit an 8 ms / 60 Hz loading slice.
+	const auto loadingBudget = std::chrono::duration<double, std::milli> (
+	    std::min (2.0, 250.0 / std::max (1, this->m_context.settings.render.maximumFPS))
+	);
+	auto lastYield = std::chrono::steady_clock::now ();
+	double longestUnitMs = 0.0;
+	size_t yields = 0;
+	const auto cancelled = [&] {
+	    std::lock_guard lock (this->m_switchMutex);
+	    return !this->m_context.state.general.keepRunning || this->m_latestSwitchIds[job.screen] != job.id;
+	};
+	const auto checkpoint = [&] (bool canCancel) {
+	    const auto now = std::chrono::steady_clock::now ();
+	    const std::chrono::duration<double, std::milli> elapsed = now - lastYield;
+	    if (elapsed >= loadingBudget) {
+		longestUnitMs = std::max (longestUnitMs, elapsed.count ());
+		LoadingGLState state;
+		state.prepareOutgoingFrame (this->getDestinationFramebuffer (), loadingVao);
+		g_Time = liveTime;
+		g_TimeLast = liveTimeLast;
+		this->render ();
+		liveTime = g_Time;
+		liveTimeLast = g_TimeLast;
+		g_Time = g_TimeLast = loadingTime;
+		// Event dispatch may select another surface. All viewport rendering shares
+		// this context; resolve a current surface again without retaining a raw pointer.
+		this->makeAnyViewportCurrent ();
+		lastYield = std::chrono::steady_clock::now ();
+		++yields;
+	    }
+	    if (canCancel && cancelled ()) throw CancelledSwitch {};
+	};
 
 	this->setupPropertiesForProject (*job.project);
 	this->ensureBrowserForProject (*job.project);
@@ -1073,13 +1131,27 @@ bool WallpaperApplication::applyPreparedSwitch (PreparedSwitch& job) {
 		    name, assetLocator,
 		    std::make_shared<Render::CTexture> (*this->m_renderContext, std::move (texture))
 		);
+		checkpoint (true);
 	    }
 
 	    const auto buildStart = std::chrono::steady_clock::now ();
-	    auto renderWallpaper = WallpaperEngine::Render::CWallpaper::fromWallpaper (
-		*nextProject.wallpaper, *this->m_renderContext, *this->m_audioContext,
-		this->m_browserContext.get (), scaling, clamp, job.screen
-	    );
+	    std::unique_ptr<Render::CWallpaper> renderWallpaper;
+	    if (nextProject.wallpaper->is<Scene> ()) {
+		auto scene = std::make_unique<Render::Wallpapers::CScene> (
+		    *nextProject.wallpaper, *this->m_renderContext, *this->m_audioContext,
+		    scaling, clamp, job.screen, checkpoint
+		);
+		scene->prepareFirstFrame ();
+		checkpoint (true);
+		scene->finishLoading ();
+		renderWallpaper = std::move (scene);
+	    } else {
+		renderWallpaper = Render::CWallpaper::fromWallpaper (
+		    *nextProject.wallpaper, *this->m_renderContext, *this->m_audioContext,
+		    this->m_browserContext.get (), scaling, clamp, job.screen
+		);
+	    }
+	    if (cancelled ()) throw CancelledSwitch {};
 	    buildMs = std::chrono::steady_clock::now () - buildStart;
 
 	    // A replacement built while fullscreen-paused must inherit the pause state.
@@ -1107,11 +1179,15 @@ bool WallpaperApplication::applyPreparedSwitch (PreparedSwitch& job) {
 	    const std::chrono::duration<double, std::milli> applyMs = now - applyStart;
 	    const std::chrono::duration<double, std::milli> totalMs = now - requested;
 	    std::ostringstream detail;
-	    detail << "stall " << applyMs.count () << " ms (scene build " << buildMs.count ()
-		   << "), request to visible " << totalMs.count () << " ms";
+	    detail << "elapsed " << applyMs.count () << " ms (scene build/warmup " << buildMs.count ()
+		   << "), yields " << yields << ", longest loading unit " << longestUnitMs
+		   << " ms, request to ready " << totalMs.count () << " ms";
 	    Debug::RenderHealth::record ("switch.apply", detail.str ());
 	}
 
+	return true;
+    } catch (const CancelledSwitch&) {
+	// A newer request (or shutdown) superseded this candidate; it is not a bad playlist item.
 	return true;
     } catch (const std::exception& e) {
 	sLog.error ("Failed to switch wallpaper on ", job.screen, ": ", e.what ());
@@ -1635,7 +1711,7 @@ void WallpaperApplication::render () {
     // IPC must remain serviceable while fullscreen-paused or waiting for an output
     // to resume frame callbacks. A queued switch is application work, not a frame.
     this->processControlSocket ();
-    this->processPreparedSwitches ();
+    if (!this->m_buildingSwitch) this->processPreparedSwitches ();
 
     static time_t seconds;
     static struct tm* timeinfo;

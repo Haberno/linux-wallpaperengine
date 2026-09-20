@@ -49,13 +49,10 @@ public:
 
     /**
      * Performs a render pass of the wallpaper.
-     *
-     * @param updateScene false composites the last completed scene framebuffer without
-     *                    advancing the scene, used to freeze outgoing transitions
      */
     void render (
 	const glm::ivec4& viewport, const bool vflip, const glm::ivec2& globalPosition = { 0, 0 },
-	const glm::ivec2& logicalSize = { 0, 0 }, bool updateScene = true
+	const glm::ivec2& logicalSize = { 0, 0 }
     );
 
     /**
@@ -185,6 +182,7 @@ protected:
     std::shared_ptr<const CFBO> m_sceneFBO = nullptr;
 
     GLuint m_vaoBuffer = GL_NONE;
+    bool m_firstFramePrepared = false;
 
     /** Optional scene-local fade composited over the rendered wallpaper. */
     [[nodiscard]] virtual float getSceneFadeAlpha () const;

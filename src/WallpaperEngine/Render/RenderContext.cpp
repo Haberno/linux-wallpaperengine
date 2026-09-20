@@ -47,7 +47,7 @@ void RenderContext::render (Drivers::Output::OutputViewport* viewport) {
 		transition->second.from->setFpsOverlay (-1.0f);
 		transition->second.from->render (
 		    viewport->viewport, this->getOutput ().renderVFlip (), viewport->globalPosition,
-		    viewport->logicalSize, false
+		    viewport->logicalSize
 		);
 		ref->second->setTransition (transition->second.mode, progress, transition->second.center);
 	    }
@@ -97,12 +97,15 @@ void RenderContext::setWallpaper (
 		center = { position (generator), position (generator) };
 	    }
 
+	    // Destroy the old renderer before its Project even for a rapid second switch.
+	    // Member-wise assignment would replace keepAlive before releasing from.
+	    this->m_transitions.erase (display);
 	    // startTime is stamped on the first rendered frame (see render above)
-	    this->m_transitions.insert_or_assign (
+	    this->m_transitions.emplace (
 		display,
 		Transition {
-		    .from = previous->second,
 		    .keepAlive = std::move (keepAlive),
+		    .from = previous->second,
 		    .mode = transition,
 		    .startTime = -1.0f,
 		    .center = center,
@@ -119,6 +122,9 @@ void RenderContext::setWallpaper (
 void RenderContext::setPause (const bool newState) const {
     for (const auto& wallpaper : this->m_wallpapers | std::views::values) {
 	wallpaper->setPause (newState);
+    }
+    for (const auto& transition : this->m_transitions | std::views::values) {
+	transition.from->setPause (newState);
     }
 }
 
