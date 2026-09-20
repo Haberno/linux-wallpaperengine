@@ -1,6 +1,7 @@
 #pragma once
 
 #include "CRenderable.h"
+#include "ModelBounds.h"
 #include "WallpaperEngine/Render/Objects/Effects/CPass.h"
 #include "WallpaperEngine/Scripting/ScriptableObject.h"
 
@@ -23,6 +24,8 @@ public:
     ~CModel () override;
 
     void setup () override;
+    /** Refresh pose and transforms once, after the scene scripts and camera update. */
+    void prepareRender ();
     void render () override;
     /** Submit one material class when a perspective scene sorts model passes. */
     void render (RenderSortClass renderClass);
@@ -79,6 +82,9 @@ private:
 	GLuint vertexBuffer = GL_NONE;
 	GLuint indexBuffer = GL_NONE;
 	GLsizei indexCount = 0;
+	GLuint shadowVao = GL_NONE;
+	bool castsShadow = false;
+	bool shadowCulling = false;
     };
 
     void setupGeometryCallback (Effects::CPass* pass, size_t submeshIndex);
@@ -115,7 +121,10 @@ private:
     std::vector<Effects::CPass*> m_passes = {};
     std::vector<RenderSortClass> m_renderSortClasses = {};
     GLuint m_shadowProgram = GL_NONE;
-    GLuint m_shadowVao = GL_NONE;
+    std::shared_ptr<const Shaders::ShaderProgramCache::SharedProgram> m_sharedShadowProgram;
+    ModelBounds m_shadowBounds;
+    ModelBounds::Box m_posedShadowBounds;
+    bool m_frameVisible = false;
     GLint m_shadowLightViewProjection = -1;
     GLint m_shadowModel = -1;
     GLint m_shadowBones = -1;

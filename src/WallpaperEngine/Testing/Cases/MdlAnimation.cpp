@@ -763,3 +763,24 @@ TEST_CASE ("masked blink bone tracks preserve motion from earlier layers", "[mdl
     });
     CHECK (unmasked.worldBones[1][3].x == Catch::Approx (40));
 }
+
+TEST_CASE ("Full weight model clips preserve rotations and masked reference bones", "[mdl][animation]") {
+    MdlAnimationData data;
+    const auto reference = glm::translate (glm::mat4 (1.0f), glm::vec3 (7, 8, 9));
+    data.bones = { { .name = "moving", .bindLocal = reference }, { .name = "masked", .bindLocal = reference } };
+    MdlBoneFrame sample { .translation = { 2, 3, 4 },
+	.rotation = glm::angleAxis (2.0f, glm::normalize (glm::vec3 (1, 2, 3))), .scale = { -2, 0.5f, 3 } };
+    MdlAnimationClip clip { .fps = 1, .frameCount = 1, .boneFlags = { 0, 1 },
+	.boneFrames = { { sample, sample }, { sample, sample } } };
+    const auto expected = glm::translate (glm::mat4 (1.0f), sample.translation)
+	* glm::mat4_cast (sample.rotation) * glm::scale (glm::mat4 (1.0f), sample.scale);
+    for (const float weight : { 1.0f, 2.0f }) {
+	const auto pose = MdlAnimationEvaluator::evaluate (data, { { .animation = &clip, .time = 0.4f, .weight = weight } });
+	for (int column = 0; column < 4; ++column) {
+	    for (int row = 0; row < 4; ++row) {
+		CHECK (pose.worldBones[0][column][row] == Catch::Approx (expected[column][row]).margin (1e-5f));
+		CHECK (pose.worldBones[1][column][row] == Catch::Approx (reference[column][row]).margin (1e-5f));
+	    }
+	}
+    }
+}

@@ -245,6 +245,7 @@ void CPass::setupRenderTexture () {
 	    }
 	}
     }
+    this->refreshUniformBindings ();
     // use the shader we have registered
     glUseProgram (this->m_sharedProgram ? this->m_sharedProgram->id : this->m_programID);
 
@@ -348,8 +349,11 @@ void CPass::bindTextureUnit (int index, const std::shared_ptr<const TextureProvi
 
     // Metadata can describe samplers in disabled shader branches. Fetching an FBO's
     // texture resolves its full multisampled surface, even when no shader reads it.
-    const std::string sampler = "g_Texture" + std::to_string (index);
-    if (m_uniforms.contains (sampler) || m_referenceUniforms.contains (sampler)) {
+    const bool samplerActive = index >= 0 && index < static_cast<int> (m_activeSamplers.size ())
+	? m_activeSamplers[index]
+	: m_uniforms.contains ("g_Texture" + std::to_string (index))
+	    || m_referenceUniforms.contains ("g_Texture" + std::to_string (index));
+    if (samplerActive) {
 	glActiveTexture (GL_TEXTURE0 + index);
 	glBindTexture (GL_TEXTURE_2D, texture->getTextureID (frame));
     }
@@ -407,9 +411,44 @@ void CPass::bindTextureOverrides (uint32_t currentTexture, std::shared_ptr<const
     }
 }
 
-void CPass::setupRenderReferenceUniforms () {
-    // add reference uniforms
+void CPass::refreshUniformBindings () {
+    if (!this->m_uniformBindingsDirty) return;
+    this->m_drawUniforms.clear ();
+    this->m_drawReferenceUniforms.clear ();
+    std::set<GLint> writtenLocations;
+    this->m_cacheUniformValues = true;
+    for (const auto& value : this->m_uniforms | std::views::values) {
+	static constexpr size_t sizes[] = { sizeof (float), 9 * sizeof (float), 16 * sizeof (float),
+	    12 * sizeof (float), sizeof (int), 2 * sizeof (float), 3 * sizeof (float),
+	    4 * sizeof (float), sizeof (double) };
+	const int count = value->type == Vector2 || value->type == Matrix3 ? 1 : value->count;
+	this->m_drawUniforms.push_back ({ value.get (), sizes[value->type] * static_cast<size_t> (std::max (count, 0)) });
+	if (count <= 0) this->m_cacheUniformValues = false;
+	for (int element = 0; element < count; ++element) {
+	    if (!writtenLocations.insert (value->id + element).second) this->m_cacheUniformValues = false;
+	}
+    }
+    // Aliased array writes or values written by another upload path cannot use
+    // independent snapshots. Retain the original ordered uploads for that layout.
     for (const auto& value : this->m_referenceUniforms | std::views::values) {
+	if (writtenLocations.contains (value->id)) this->m_cacheUniformValues = false;
+    }
+    if (writtenLocations.contains (this->g_Texture0Rotation)
+	|| writtenLocations.contains (this->g_Texture0Translation)) this->m_cacheUniformValues = false;
+    for (const auto& value : this->m_referenceUniforms | std::views::values) {
+	this->m_drawReferenceUniforms.push_back (value.get ());
+    }
+    for (size_t index = 0; index < this->m_activeSamplers.size (); ++index) {
+	const auto name = "g_Texture" + std::to_string (index);
+	this->m_activeSamplers[index] = m_uniforms.contains (name) || m_referenceUniforms.contains (name);
+    }
+    this->m_uniformBindingsDirty = false;
+}
+
+void CPass::setupRenderReferenceUniforms () {
+    this->refreshUniformBindings ();
+    // add reference uniforms
+    for (const auto* value : this->m_drawReferenceUniforms) {
 	switch (value->type) {
 	    case Double:
 		glUniform1d (value->id, *static_cast<const double*> (*value->value));
@@ -449,6 +488,7 @@ void CPass::setupRenderReferenceUniforms () {
 }
 
 void CPass::setupRenderUniforms () {
+    this->refreshUniformBindings ();
     if (m_usesLayerModelMatrix) m_layerModelMatrix = m_renderable.resolveLayerModelMatrix ();
     const float time = m_renderable.getScene ().getTime ();
     for (auto& [name, uniform] : m_animatedUniforms) {
@@ -461,8 +501,15 @@ void CPass::setupRenderUniforms () {
 	}
 	uniform.sampled->update (value, DynamicValue::UpdateSource::Initialization);
     }
-    // add uniforms
-    for (const auto& value : this->m_uniforms | std::views::values) {
+    // The snapshot belongs to the shared GL program, never an individual material.
+    size_t offset = 0;
+    for (const auto& binding : this->m_drawUniforms) {
+	const auto* value = binding.entry;
+	if (this->m_sharedProgram && this->m_cacheUniformValues) {
+	    const bool changed = this->m_sharedProgram->updateUniform (offset, value->value, binding.bytes);
+	    offset += binding.bytes;
+	    if (!changed) continue;
+	}
 	switch (value->type) {
 	    case Double:
 		glUniform1dv (value->id, value->count, static_cast<const double*> (value->value));
@@ -916,6 +963,7 @@ void CPass::updateFogShader () {
     // and newly active uniforms wrong. GLSL/program caches reuse prior variants.
     this->releaseShaders ();
     this->m_shaderInitialized = false;
+    this->m_uniformBindingsDirty = true;
     this->m_uniforms.clear ();
     this->m_referenceUniforms.clear ();
     this->m_animatedUniforms.clear ();
@@ -946,7 +994,7 @@ void CPass::setupProgramSharing () {
     if (!this->m_programSharingGroup) {
 	return;
     }
-    // Every entry is uploaded before every draw. Including names, locations,
+    // Every entry is supplied before every draw. Including names, locations,
     // types and array counts prevents a pass from inheriting another pass's
     // extra uniforms or array tail. Unregistered uniforms retain GLSL defaults.
     std::ostringstream layout;
@@ -973,10 +1021,10 @@ void CPass::leaveProgramSharing () {
     GLint previous = 0;
     glGetIntegerv (GL_CURRENT_PROGRAM, &previous);
     glUseProgram (this->m_programID);
+    const auto shared = std::move (this->m_sharedProgram);
     this->setupRenderUniforms ();
     this->setupRenderReferenceUniforms ();
     glUseProgram (previous);
-    this->m_sharedProgram.reset ();
     this->m_programSharingGroup.reset ();
 }
 
@@ -1365,6 +1413,7 @@ template <typename T> void CPass::addUniform (const std::string& name, UniformTy
     auto newValue = std::make_shared<T> (value);
 
     // uniform found, add it to the list
+    this->m_uniformBindingsDirty = true;
     this->m_referenceUniforms.erase (name);
     this->m_uniforms.insert_or_assign (
 	name, std::make_unique<UniformEntry> (id, name, type, std::move (newValue), 1)
@@ -1385,6 +1434,7 @@ template <typename T> void CPass::addUniform (const std::string& name, UniformTy
     this->leaveProgramSharing ();
 
     // uniform found, add it to the list
+    this->m_uniformBindingsDirty = true;
     this->m_referenceUniforms.erase (name);
     this->m_uniforms.insert_or_assign (name, std::make_unique<UniformEntry> (id, name, type, value, count));
 }
@@ -1400,6 +1450,7 @@ template <typename T> void CPass::addUniform (const std::string& name, UniformTy
     this->leaveProgramSharing ();
 
     // uniform found, add it to the list
+    this->m_uniformBindingsDirty = true;
     this->m_uniforms.erase (name);
     this->m_referenceUniforms.insert_or_assign (
 	name, std::make_unique<ReferenceUniformEntry> (

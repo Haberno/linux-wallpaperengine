@@ -257,8 +257,12 @@ MdlPose MdlAnimationEvaluator::evaluate (
 	// A clip's first frame can already reposition atlas parts; subtracting it
 	// instead makes an idle additive layer displace the dragon's eye (3233141951).
 	const auto& skeletonBone = animationData.bones[bone];
-	const MdlBoneFrame reference = matrixPose (skeletonBone.referenceLocal.value_or (skeletonBone.bindLocal));
-	MdlBoneFrame local = reference;
+	std::optional<MdlBoneFrame> reference;
+	std::optional<MdlBoneFrame> local;
+	const auto referencePose = [&] () -> const MdlBoneFrame& {
+	    if (!reference) reference = matrixPose (skeletonBone.referenceLocal.value_or (skeletonBone.bindLocal));
+	    return *reference;
+	};
 
 	for (size_t layerIndex = 0; layerIndex < activeAnimations.size (); layerIndex++) {
 	    const auto& layer = activeAnimations[layerIndex];
@@ -275,12 +279,21 @@ MdlPose MdlAnimationEvaluator::evaluate (
 		continue;
 	    }
 
-	    // Every layer uses the same reference and composes T/R/S separately.
-	    composeLayer (local, reference, samplePose (layer, frames), layer);
+	    const auto sampled = samplePose (layer, frames);
+	    if (!layer.additive && layer.weight >= 1.0f) {
+		// A full replacement needs neither the reference decomposition nor a
+		// second spherical interpolation whose result is already the sample.
+		local = sampled;
+		local->rotation = glm::normalize (local->rotation);
+	    } else {
+		if (!local) local = referencePose ();
+		// Every partial/additive layer uses the same reference and separate T/R/S.
+		composeLayer (*local, referencePose (), sampled, layer);
+	    }
 	}
 
 	const auto parent = animationData.bones[bone].parent;
-	const glm::mat4 localMatrix = poseMatrix (local);
+	const glm::mat4 localMatrix = poseMatrix (local ? *local : referencePose ());
 	if (!locals.empty ()) locals[bone] = localMatrix;
 	pose.worldBones[bone] = parent >= 0 ? pose.worldBones[parent] * localMatrix : localMatrix;
 	pose.skinBones[bone] = pose.worldBones[bone] * animationData.bones[bone].inverseBindWorld;

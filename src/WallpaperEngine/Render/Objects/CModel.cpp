@@ -1,6 +1,7 @@
 #include "CModel.h"
 
 #include <algorithm>
+#include <array>
 #include <numeric>
 #include <ranges>
 #include <sstream>
@@ -99,11 +100,9 @@ CModel::~CModel () {
     for (const auto& submesh : this->m_submeshes) {
 	glDeleteBuffers (1, &submesh.vertexBuffer);
 	glDeleteBuffers (1, &submesh.indexBuffer);
+	if (submesh.shadowVao != GL_NONE) glDeleteVertexArrays (1, &submesh.shadowVao);
     }
 
-    if (this->m_shadowVao != GL_NONE) {
-	glDeleteVertexArrays (1, &this->m_shadowVao);
-    }
     if (this->m_shadowProgram != GL_NONE) {
 	glDeleteProgram (this->m_shadowProgram);
     }
@@ -159,6 +158,12 @@ void CModel::setup () {
 	buffers.indexCount = submesh.vertexTag == this->m_model.mesh.vertexTag
 	    ? static_cast<GLsizei> (submesh.indices.size ())
 	    : 0;
+	const auto& material = this->m_model.materials[submeshIndex];
+	const auto opaquePass = std::find_if (material->passes.begin (), material->passes.end (), [] (const auto& pass) {
+	    return pass->blending == BlendingMode_Normal;
+	});
+	buffers.castsShadow = opaquePass != material->passes.end ();
+	buffers.shadowCulling = buffers.castsShadow && (*opaquePass)->cullmode == CullingMode_Normal;
 	this->m_submeshes.push_back (buffers);
 
 	for (const auto& cur : this->m_model.materials[submeshIndex]->passes) {
@@ -224,6 +229,7 @@ void CModel::setup () {
 
     if (this->getScene ().getLights ().shadowViewCount > 0) {
 	this->setupShadowProgram ();
+	this->m_shadowBounds = ModelBounds (this->m_model.mesh, this->m_skinningEnabled ? this->m_gpuSkinBones.size () : 0);
     }
 
     this->m_initialized = true;
@@ -266,8 +272,13 @@ void CModel::setupShadowProgram () {
 	      "}\n";
 
     static const std::string fragment = "#version 330 core\nvoid main() {}\n";
+    std::shared_ptr<Shaders::ShaderProgramCache::SharingGroup> group;
     this->m_shadowProgram = this->getScene ().getContext ().getShaderProgramCache ().createProgram (
-	vertex.str (), fragment
+	vertex.str (), fragment, &group
+    );
+    // Identical depth shaders upload their complete matrix/bone layout on every draw.
+    this->m_sharedShadowProgram = Shaders::ShaderProgramCache::shareProgram (
+	this->m_shadowProgram, group, "model-shadow"
     );
 
     this->m_shadowLightViewProjection = glGetUniformLocation (this->m_shadowProgram, "u_LightViewProjection");
@@ -279,7 +290,14 @@ void CModel::setupGeometryCallback (Effects::CPass* pass, size_t submeshIndex) {
     const auto stride = static_cast<GLsizei> (this->m_model.mesh.strideBytes);
 
     pass->setGeometryCallback (
-	[this, pass, stride, submeshIndex] () {
+	[this, pass, stride, submeshIndex, revision = uint64_t (0),
+	 locations = std::array<GLint, 6> { -1, -1, -1, -1, -1, -1 }] () mutable {
+	    if (revision == pass->getShaderRevision ()) return;
+	    revision = pass->getShaderRevision ();
+	    // Each pass owns its VAO. Rebuild its layout only after a shader reload.
+	    for (const auto location : locations) {
+		if (location >= 0) glDisableVertexAttribArray (location);
+	    }
 	    const auto& mesh = this->m_model.mesh;
 	    const GLint position = glGetAttribLocation (pass->getProgramID (), "a_Position");
 	    const GLint normal = glGetAttribLocation (pass->getProgramID (), "a_Normal");
@@ -288,6 +306,8 @@ void CModel::setupGeometryCallback (Effects::CPass* pass, size_t submeshIndex) {
 	    const GLint blendIndices = glGetAttribLocation (pass->getProgramID (), "a_BlendIndices");
 	    const GLint blendWeights = glGetAttribLocation (pass->getProgramID (), "a_BlendWeights");
 
+	    locations = { position, normal, tangent, texCoord, blendIndices, blendWeights };
+	    glBindBuffer (GL_ELEMENT_ARRAY_BUFFER, this->m_submeshes[submeshIndex].indexBuffer);
 	    glBindBuffer (GL_ARRAY_BUFFER, this->m_submeshes[submeshIndex].vertexBuffer);
 
 	    if (position >= 0) {
@@ -344,16 +364,7 @@ void CModel::setupGeometryCallback (Effects::CPass* pass, size_t submeshIndex) {
 	    glDrawElements (GL_TRIANGLES, this->m_submeshes[submeshIndex].indexCount, GL_UNSIGNED_INT, nullptr);
 	    glFrontFace (GL_CCW);
 	},
-	[pass] () {
-	    for (const auto* name :
-		 { "a_Position", "a_Normal", "a_Tangent4", "a_TexCoord", "a_BlendIndices", "a_BlendWeights" }) {
-		const GLint location = glGetAttribLocation (pass->getProgramID (), name);
-
-		if (location >= 0) {
-		    glDisableVertexAttribArray (location);
-		}
-	    }
-	}
+	[] () {}
     );
 }
 
@@ -551,19 +562,18 @@ void CModel::render () { this->renderPasses (std::nullopt); }
 
 void CModel::render (const RenderSortClass renderClass) { this->renderPasses (renderClass); }
 
-void CModel::renderPasses (const std::optional<RenderSortClass> renderClass) {
-    if (!this->m_initialized) {
-	return;
-    }
-
-    // a hidden container hides its whole subtree; scenes routinely park always-visible models
-    // under a group that is toggled off (3737268876 gates every mask on its `Masks` group)
-    if (!this->m_model.groupVisible->value->getBool () || !this->isVisibleThroughParents ()) {
-	return;
-    }
-
+void CModel::prepareRender () {
+    // A hidden container hides its whole subtree.
+    this->m_frameVisible = this->m_initialized && this->m_model.groupVisible->value->getBool ()
+	&& this->isVisibleThroughParents ();
+    if (!this->m_frameVisible) return;
     this->updateAnimationPose ();
     this->updateMatrices ();
+    this->m_posedShadowBounds = this->m_shadowBounds.evaluate (this->m_gpuSkinBones);
+}
+
+void CModel::renderPasses (const std::optional<RenderSortClass> renderClass) {
+    if (!this->m_frameVisible) return;
 
 #if !NDEBUG
     const std::string debugName
@@ -589,20 +599,13 @@ void CModel::renderPasses (const std::optional<RenderSortClass> renderClass) {
 }
 
 void CModel::renderShadow (const glm::mat4& lightViewProjection) {
-    if (!this->m_initialized || this->m_shadowProgram == GL_NONE
+    if (!this->m_frameVisible || this->m_shadowProgram == GL_NONE
 	|| !this->m_model.castShadow->value->getBool ()
-	|| !this->m_model.groupVisible->value->getBool () || !this->isVisibleThroughParents ()) {
+	|| !this->m_posedShadowBounds.intersects (lightViewProjection * this->m_modelMatrix)) {
 	return;
     }
 
-    this->updateAnimationPose ();
-    this->m_modelMatrix = this->resolveModelMatrix ();
-
-    if (this->m_shadowVao == GL_NONE) {
-	glGenVertexArrays (1, &this->m_shadowVao);
-    }
-    glBindVertexArray (this->m_shadowVao);
-    glUseProgram (this->m_shadowProgram);
+    glUseProgram (this->m_sharedShadowProgram ? this->m_sharedShadowProgram->id : this->m_shadowProgram);
     glUniformMatrix4fv (
 	this->m_shadowLightViewProjection, 1, GL_FALSE, glm::value_ptr (lightViewProjection)
     );
@@ -616,17 +619,9 @@ void CModel::renderShadow (const glm::mat4& lightViewProjection) {
 
     const GLsizei stride = static_cast<GLsizei> (this->m_model.mesh.strideBytes);
     for (size_t submeshIndex = 0; submeshIndex < this->m_submeshes.size (); submeshIndex++) {
-	const auto& material = this->m_model.materials[submeshIndex];
-	const auto opaquePass = std::find_if (
-	    material->passes.begin (), material->passes.end (), [] (const auto& pass) {
-		return pass->blending == BlendingMode_Normal;
-	    }
-	);
-	if (opaquePass == material->passes.end ()) {
-	    continue;
-	}
-
-	if ((*opaquePass)->cullmode == CullingMode_Normal) {
+	auto& buffers = this->m_submeshes[submeshIndex];
+	if (!buffers.castsShadow || buffers.indexCount == 0) continue;
+	if (buffers.shadowCulling) {
 	    glEnable (GL_CULL_FACE);
 	} else {
 	    glDisable (GL_CULL_FACE);
@@ -634,35 +629,34 @@ void CModel::renderShadow (const glm::mat4& lightViewProjection) {
 	// Shadows have no output flip; retain authored winding changes here too.
 	glFrontFace (this->getScene ().getCamera ().isOrthogonal () ? GL_CW : GL_CCW);
 
-	glBindBuffer (GL_ARRAY_BUFFER, this->m_submeshes[submeshIndex].vertexBuffer);
-	glEnableVertexAttribArray (0);
-	glVertexAttribPointer (
-	    0, 3, GL_FLOAT, GL_FALSE, stride, reinterpret_cast<void*> (this->m_model.mesh.positionOffset)
-	);
-	if (this->m_skinningEnabled) {
-	    glEnableVertexAttribArray (1);
-	    glVertexAttribIPointer (
-		1, 4, GL_UNSIGNED_INT, stride,
-		reinterpret_cast<void*> (this->m_model.mesh.blendIndicesOffset)
-	    );
-	    glEnableVertexAttribArray (2);
+	if (buffers.shadowVao == GL_NONE) {
+	    glGenVertexArrays (1, &buffers.shadowVao);
+	    glBindVertexArray (buffers.shadowVao);
+	    glBindBuffer (GL_ARRAY_BUFFER, buffers.vertexBuffer);
+	    glEnableVertexAttribArray (0);
 	    glVertexAttribPointer (
-		2, 4, GL_FLOAT, GL_FALSE, stride,
-		reinterpret_cast<void*> (this->m_model.mesh.blendWeightsOffset)
+		0, 3, GL_FLOAT, GL_FALSE, stride, reinterpret_cast<void*> (this->m_model.mesh.positionOffset)
 	    );
+	    if (this->m_skinningEnabled) {
+		glEnableVertexAttribArray (1);
+		glVertexAttribIPointer (
+		    1, 4, GL_UNSIGNED_INT, stride,
+		    reinterpret_cast<void*> (this->m_model.mesh.blendIndicesOffset)
+		);
+		glEnableVertexAttribArray (2);
+		glVertexAttribPointer (
+		    2, 4, GL_FLOAT, GL_FALSE, stride,
+		    reinterpret_cast<void*> (this->m_model.mesh.blendWeightsOffset)
+		);
+	    }
+	    glBindBuffer (GL_ELEMENT_ARRAY_BUFFER, buffers.indexBuffer);
 	}
-
-	glBindBuffer (GL_ELEMENT_ARRAY_BUFFER, this->m_submeshes[submeshIndex].indexBuffer);
+	glBindVertexArray (buffers.shadowVao);
 	glDrawElements (
 	    GL_TRIANGLES, this->m_submeshes[submeshIndex].indexCount, GL_UNSIGNED_INT, nullptr
 	);
     }
 
-    glDisableVertexAttribArray (0);
-    if (this->m_skinningEnabled) {
-	glDisableVertexAttribArray (1);
-	glDisableVertexAttribArray (2);
-    }
     glFrontFace (GL_CCW);
 }
 

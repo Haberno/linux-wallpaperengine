@@ -218,8 +218,18 @@ TEST_CASE ("Live shader sharing isolates write layouts and releases programs wit
 	    CHECK (pixel[i] == (i == channel || i == 3 ? 255 : 0));
 	}
     };
-    draw (red->id, redValues, 2, 0);
-    draw (green->id, greenValues, 2, 1);
+    const auto cachedDraw = [&] (const auto& program, const float* values, int channel) {
+	glUseProgram (program->id);
+	if (program->updateUniform (0, values, sizeof (redValues))) glUniform4fv (colors, 2, values);
+	glDrawArrays (GL_TRIANGLES, 0, 3);
+	unsigned char pixel[4] = {};
+	glReadPixels (0, 0, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, pixel);
+	for (int i = 0; i < 4; ++i) CHECK (pixel[i] == (i == channel || i == 3 ? 255 : 0));
+    };
+    cachedDraw (red, redValues, 0);
+    cachedDraw (red, redValues, 0); // Identical uploads can be skipped.
+    cachedDraw (green, greenValues, 1);
+    cachedDraw (red, redValues, 0); // Another material overwrote the shared program.
     draw (partial->id, blueValues, 1, 2); // Its unwritten array tail must stay zero.
     draw (red->id, redValues, 2, 0);
     float privateValues[4] = { -1, -1, -1, -1 };

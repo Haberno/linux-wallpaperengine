@@ -2,6 +2,7 @@
 
 #include <GL/glew.h>
 #include <cstddef>
+#include <cstring>
 #include <memory>
 #include <string>
 #include <unordered_map>
@@ -10,7 +11,7 @@
 namespace WallpaperEngine::Render::Shaders {
 /**
  * Reuses linked binaries for private programs, with opt-in live program sharing
- * for callers that guarantee compatible uniform uploads before each draw.
+ * for callers that guarantee compatible uniform values before each draw.
  * Owned by a RenderContext and used on its render thread with a current GL context.
  * The cache retains only CPU data; callers own private and shared GL programs.
  */
@@ -22,6 +23,18 @@ public:
 	SharedProgram (const SharedProgram&) = delete;
 	SharedProgram& operator= (const SharedProgram&) = delete;
 	const GLuint id;
+	/** Call in layout order before uploading; all users of this program share the snapshot. */
+	bool updateUniform (size_t offset, const void* value, size_t bytes) const {
+	    const bool initialized = offset + bytes <= uniformValues.size ();
+	    if (!initialized) uniformValues.resize (offset + bytes);
+	    auto* previous = uniformValues.data () + offset;
+	    if (initialized && std::memcmp (previous, value, bytes) == 0) return false;
+	    std::memcpy (previous, value, bytes);
+	    return true;
+	}
+
+    private:
+	mutable std::vector<std::byte> uniformValues;
     };
     struct SharingGroup {
 	// Weak references let the last material release the GL object immediately.
@@ -32,7 +45,7 @@ public:
 	const std::string& vertex, const std::string& fragment, std::shared_ptr<SharingGroup>* group = nullptr
     );
     /**
-     * Opt-in sharing for passes that upload the same uniform locations/types/counts
+     * Opt-in sharing for passes that supply the same uniform locations/types/counts
      * before EVERY draw. Layout must describe all writes, including array extents.
      * The private program stays untouched and owned by the caller. Returns null
      * when cloning is unsupported/rejected or the linked interface differs.

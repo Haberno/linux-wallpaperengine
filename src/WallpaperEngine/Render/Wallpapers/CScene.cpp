@@ -822,6 +822,11 @@ void CScene::renderFrame (const glm::ivec4& viewport) {
     // refresh light uniform state after scripts have moved the lights
     this->updateLightState ();
 
+    // Pose, visibility and model transforms are shared by every light and material pass.
+    for (const auto& object : this->m_objectsByRenderOrder) {
+	if (auto* model = dynamic_cast<Objects::CModel*> (object)) model->prepareRender ();
+    }
+
     // Render light-space depth before any material pass samples _rt_shadowAtlas.
     this->renderShadowAtlas ();
 

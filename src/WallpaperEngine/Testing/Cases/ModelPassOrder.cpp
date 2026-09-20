@@ -1,4 +1,7 @@
 #include "WallpaperEngine/Render/Objects/CModel.h"
+#include "WallpaperEngine/Render/Objects/ModelBounds.h"
+#include <glm/gtc/matrix_transform.hpp>
+#include <bit>
 
 // CEF exposes its own CHECK macro through CModel's renderer includes.
 #ifdef CHECK
@@ -21,4 +24,87 @@ TEST_CASE ("Model passes render opaque before blended while preserving authored 
     };
 
     CHECK (CModel::calculatePassRenderPermutation (modes) == std::vector<size_t> { 1, 3, 5, 0, 2, 4 });
+}
+
+TEST_CASE ("Model bounds retain clip intersections and reject wholly outside geometry") {
+    using WallpaperEngine::Render::Objects::ModelBounds;
+    ModelBounds::Box box;
+    box.include (glm::vec3 (-0.5f));
+    box.include (glm::vec3 (0.5f));
+    CHECK (box.intersects (glm::mat4 (1.0f)));
+    CHECK (box.intersects (glm::translate (glm::mat4 (1.0f), glm::vec3 (1.5f, 0, 0))));
+    CHECK_FALSE (box.intersects (glm::translate (glm::mat4 (1.0f), glm::vec3 (1.6f, 0, 0))));
+    const auto perspective = glm::perspective (glm::radians (60.0f), 1.0f, 0.1f, 100.0f);
+    CHECK (box.intersects (perspective * glm::translate (glm::mat4 (1.0f), glm::vec3 (0, 0, -2))));
+    CHECK_FALSE (box.intersects (perspective * glm::translate (glm::mat4 (1.0f), glm::vec3 (0, 0, 2))));
+    CHECK (box.intersects (perspective)); // Crossing the eye/near plane cannot be discarded.
+    CHECK (ModelBounds::Box {}.intersects (glm::mat4 (1.0f))); // Unknown bounds stay visible.
+}
+
+TEST_CASE ("Skinned model bounds follow weighted bones instead of authored rest bounds") {
+    using namespace WallpaperEngine::Data::Model;
+    using WallpaperEngine::Render::Objects::ModelBounds;
+    MdlMesh mesh;
+    mesh.vertexTag = 1;
+    mesh.strideBytes = 44;
+    mesh.blendIndicesOffset = 12;
+    mesh.blendWeightsOffset = 28;
+    MdlSubmesh part;
+    part.vertexTag = 1;
+    part.vertices = { 0, 0, 0, std::bit_cast<float> (0u), std::bit_cast<float> (1u), 0, 0,
+                      0.25f, 0.75f, 0, 0 };
+    part.indices = { 0, 0, 0 };
+    mesh.submeshes.push_back (part);
+    ModelBounds bounds (mesh, 2);
+    std::vector<glm::mat4x3> bones {
+        glm::mat4x3 (glm::translate (glm::mat4 (1.0f), glm::vec3 (-4, 0, 0))),
+        glm::mat4x3 (glm::translate (glm::mat4 (1.0f), glm::vec3 (4, 0, 0))) };
+    const auto posed = bounds.evaluate (bones);
+    CHECK (posed.minimum.x <= 2.0f);
+    CHECK (posed.maximum.x >= 2.0f);
+    CHECK (posed.intersects (glm::translate (glm::mat4 (1.0f), glm::vec3 (-2, 0, 0))));
+    CHECK_FALSE (posed.intersects (glm::translate (glm::mat4 (1.0f), glm::vec3 (20, 0, 0))));
+    mesh.submeshes[0].vertices[7] = -0.25f;
+    CHECK (ModelBounds (mesh, 2).evaluate (bones).intersects (
+        glm::translate (glm::mat4 (1.0f), glm::vec3 (20, 0, 0))));
+}
+
+TEST_CASE ("Skinned bounds contain GPU blended positions with nonunit weights and reflected bones") {
+    using namespace WallpaperEngine::Data::Model;
+    using WallpaperEngine::Render::Objects::ModelBounds;
+    MdlMesh mesh;
+    mesh.vertexTag = 1;
+    mesh.strideBytes = 44;
+    mesh.blendIndicesOffset = 12;
+    mesh.blendWeightsOffset = 28;
+    MdlSubmesh part;
+    part.vertexTag = 1;
+    for (int vertex = 0; vertex < 12; ++vertex) {
+	part.vertices.insert (part.vertices.end (), {
+	    float (vertex - 6), float (vertex % 3 - 1), float (vertex % 5 - 2),
+	    std::bit_cast<float> (0u), std::bit_cast<float> (1u), std::bit_cast<float> (2u),
+	    std::bit_cast<float> (3u), vertex == 0 ? 0.0f : 0.1f, float (vertex % 3) * 0.2f,
+	    float (vertex % 4) * 0.3f, float (vertex % 2) * 0.5f });
+	part.indices.push_back (vertex);
+    }
+    mesh.submeshes.push_back (part);
+    ModelBounds bounds (mesh, 4);
+    for (int frame = 0; frame < 40; ++frame) {
+	std::vector<glm::mat4x3> bones;
+	for (int bone = 0; bone < 4; ++bone) {
+	    auto transform = glm::translate (glm::mat4 (1.0f), glm::vec3 (bone * 7 - 10, frame * 0.3f, -bone));
+	    transform = glm::rotate (transform, frame * 0.17f + bone, glm::normalize (glm::vec3 (1, 2, 3)));
+	    bones.emplace_back (glm::scale (transform, glm::vec3 (bone % 2 ? -2 : 1, 0.5f, 3)));
+	}
+	const auto box = bounds.evaluate (bones);
+	REQUIRE (box.valid ());
+	for (size_t vertex = 0; vertex < part.vertices.size (); vertex += 11) {
+	    const glm::vec4 position (part.vertices[vertex], part.vertices[vertex + 1], part.vertices[vertex + 2], 1);
+	    glm::mat4x3 skin (0.0f);
+	    for (size_t bone = 0; bone < 4; ++bone) skin += bones[bone] * part.vertices[vertex + 7 + bone];
+	    const auto posed = skin * position;
+	    CHECK (glm::all (glm::greaterThanEqual (posed, box.minimum - glm::vec3 (0.0001f))));
+	    CHECK (glm::all (glm::lessThanEqual (posed, box.maximum + glm::vec3 (0.0001f))));
+	}
+    }
 }

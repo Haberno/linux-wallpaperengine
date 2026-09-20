@@ -204,6 +204,7 @@ private:
     void bindTextureUnit (int index, const std::shared_ptr<const TextureProvider>& texture, uint32_t frame);
     void bindTextureOverrides (uint32_t currentTexture, std::shared_ptr<const TextureProvider>& texture0);
     void setupRenderUniforms ();
+    void refreshUniformBindings ();
     void setupRenderReferenceUniforms ();
     void setupRenderAttributes () const;
     void renderGeometry () const;
@@ -229,6 +230,16 @@ private:
     std::vector<std::unique_ptr<AttribEntry>> m_attribs = {};
     std::map<std::string, std::unique_ptr<UniformEntry>> m_uniforms = {};
     std::map<std::string, std::unique_ptr<ReferenceUniformEntry>> m_referenceUniforms = {};
+    // Stable draw lists avoid traversing string-keyed trees on every model draw.
+    struct DrawUniform {
+	const UniformEntry* entry;
+	size_t bytes;
+    };
+    std::vector<DrawUniform> m_drawUniforms;
+    bool m_cacheUniformValues = false;
+    std::vector<const ReferenceUniformEntry*> m_drawReferenceUniforms;
+    std::array<bool, 32> m_activeSamplers = {};
+    bool m_uniformBindingsDirty = true;
     struct ExternalUniform {
 	UniformType type;
 	const void* value;
