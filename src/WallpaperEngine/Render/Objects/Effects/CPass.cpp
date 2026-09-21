@@ -387,13 +387,12 @@ void CPass::bindTextureUnit (int index, const std::shared_ptr<const TextureProvi
 	    // The cookie overrides wrapping only. Native retains point/linear and mip
 	    // filtering of the source, including textures also used by ordinary layers.
 	    GLint minFilter, magFilter;
-	    GLfloat anisotropy;
 	    glGetTexParameteriv (GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, &minFilter);
 	    glGetTexParameteriv (GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, &magFilter);
-	    glGetTexParameterfv (GL_TEXTURE_2D, GL_TEXTURE_MAX_ANISOTROPY, &anisotropy);
 	    glSamplerParameteri (sampler, GL_TEXTURE_MIN_FILTER, minFilter);
 	    glSamplerParameteri (sampler, GL_TEXTURE_MAG_FILTER, magFilter);
-	    glSamplerParameterf (sampler, GL_TEXTURE_MAX_ANISOTROPY, anisotropy);
+	    // Native alias sampling disables source anisotropy (140099980 mode1).
+	    glSamplerParameterf (sampler, GL_TEXTURE_MAX_ANISOTROPY, 1.0f);
 	    glBindSampler (index, sampler);
 	}
     }

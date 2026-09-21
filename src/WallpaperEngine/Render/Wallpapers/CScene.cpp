@@ -1927,6 +1927,7 @@ Render::CObject* CScene::createLayer (JSON layer, const std::string& workshopId)
 	    return nullptr;
 	}
 
+	if (auto* light = dynamic_cast<Objects::CLight*> (renderObject)) light->initializeCookie ();
 	this->m_objectsByRenderOrder.push_back (renderObject);
 	this->m_objectsByCursorOrder.push_back (renderObject);
 	if (auto* scriptable = dynamic_cast<Scripting::ScriptableObject*> (renderObject))

@@ -16,8 +16,8 @@ public:
 
 private:
     void resize ();
-    GLuint frontProgram (bool shadow, bool fullscreen);
-    void draw (GLuint program, bool fullscreen);
+    GLuint frontProgram (bool shadow, bool fullscreen, bool cookie);
+    void draw (GLuint program, bool fullscreen, bool cookie = false);
     CScene& m_scene;
     std::map<int, GLuint> m_frontPrograms;
     GLuint m_backProgram = GL_NONE;

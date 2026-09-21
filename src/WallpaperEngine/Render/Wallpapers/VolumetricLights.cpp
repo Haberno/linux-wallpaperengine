@@ -24,7 +24,15 @@ GLuint compile (CScene& scene, const std::string& name, const ComboMap& combos, 
         vertex += "\nvoid main() { volumeMain(); gl_Position.y = -gl_Position.y;"
                   " gl_Position.z = gl_Position.z * 2.0 - gl_Position.w; }\n";
     }
-    const auto [vert, frag] = Shaders::GLSLContext::get ().toGlsl (vertex, shader.fragment ());
+    std::string fragment = shader.fragment ();
+    if (combos.contains ("COOKIE") && combos.at ("SHADOW") != 0) {
+        // Cookie UVs retain native texture Y. Only the GL shadow atlas needs
+        // the opposite Y orientation after the cookie has been sampled.
+        const std::string transform = "uvs.xy *= VAR_SHADOWMAP_TRANSFORMS.zw;";
+        const auto offset = fragment.find (transform);
+        if (offset != std::string::npos) fragment.insert (offset, "uvs.y = 1.0 - uvs.y;\n");
+    }
+    const auto [vert, frag] = Shaders::GLSLContext::get ().toGlsl (vertex, fragment);
     return scene.getContext ().getShaderProgramCache ().createProgram (vert, frag);
 }
 
@@ -109,17 +117,20 @@ void VolumetricLights::resize () {
         size.x, size.y, 0, GL_DEPTH_COMPONENT, GL_FLOAT, nullptr);
 }
 
-GLuint VolumetricLights::frontProgram (bool shadow, bool fullscreen) {
+GLuint VolumetricLights::frontProgram (bool shadow, bool fullscreen, bool cookie) {
     const auto& fog = m_scene.getFog ();
-    const int key = shadow | (fullscreen << 1) | (fog.distanceEnabled << 2) | (fog.heightEnabled << 3);
+    const int key = shadow | (fullscreen << 1) | (fog.distanceEnabled << 2) | (fog.heightEnabled << 3) | (cookie << 4);
     if (const auto found = m_frontPrograms.find (key); found != m_frontPrograms.end ()) return found->second;
-    return m_frontPrograms[key] = compile (m_scene, "volumetricsfront", {
+    ComboMap combos {
         { "SHADOW", shadow }, { "FULLSCREEN", fullscreen }, { "QUALITY", 4 },
         { "FOG", 1 }, { "FOG_DIST", fog.distanceEnabled }, { "FOG_HEIGHT", fog.heightEnabled }
-    }, true);
+    };
+    // The stock sampler declaration uses #ifdef COOKIE, so omit disabled keys.
+    if (cookie) combos.emplace ("COOKIE", 1);
+    return m_frontPrograms[key] = compile (m_scene, "volumetricsfront", combos, true);
 }
 
-void VolumetricLights::draw (GLuint program, bool fullscreen) {
+void VolumetricLights::draw (GLuint program, bool fullscreen, bool cookie) {
     const GLint position = glGetAttribLocation (program, "a_Position");
     const GLint uv = glGetAttribLocation (program, "a_TexCoord");
     glBindBuffer (GL_ARRAY_BUFFER, m_vertexBuffer);
@@ -129,7 +140,7 @@ void VolumetricLights::draw (GLuint program, bool fullscreen) {
         glEnableVertexAttribArray (uv);
         glVertexAttribPointer (uv, 2, GL_FLOAT, GL_FALSE, 5 * sizeof (float), reinterpret_cast<void*> (3 * sizeof (float)));
     }
-    glDrawArrays (GL_TRIANGLES, fullscreen ? 384 : 0, fullscreen ? 3 : 384);
+    glDrawArrays (GL_TRIANGLES, fullscreen ? 420 : cookie ? 384 : 0, fullscreen ? 3 : cookie ? 36 : 384);
     glDisableVertexAttribArray (position);
     if (uv >= 0) glDisableVertexAttribArray (uv);
 }
@@ -155,6 +166,17 @@ void VolumetricLights::render (
             vertex ({ .5f, .5f, 0 }); vertex (q); vertex (p);
             vertex ({ .5f, .5f, 1 }); vertex (r); vertex (s);
         }
+        // Cookie lights fill a square frustum, including corners outside the
+        // circular cone used by ordinary spotlights (native 140196ce0).
+        const glm::vec3 corners[] = { {-1,-1,0}, {1,-1,0}, {1,1,0}, {-1,1,0} };
+        for (int i = 0; i < 4; ++i) {
+            const auto p = corners[i], q = corners[(i + 1) % 4];
+            const auto r = p + glm::vec3 (0, 0, 1), s = q + glm::vec3 (0, 0, 1);
+            vertex (r); vertex (p); vertex (q); vertex (r); vertex (q); vertex (s);
+        }
+        vertex (corners[0]); vertex (corners[2]); vertex (corners[1]);
+        vertex (corners[0]); vertex (corners[3]); vertex (corners[2]);
+        for (int index : {0,1,2,0,2,3}) vertex (corners[index] + glm::vec3 (0, 0, 1));
         vertex ({ -1,-1,0 }, { 0,0 }); vertex ({ 3,-1,0 }, { 2,0 }); vertex ({ -1,3,0 }, { 0,2 });
         glGenVertexArrays (1, &m_vertexArray);
         glGenBuffers (1, &m_vertexBuffer);
@@ -207,8 +229,10 @@ void VolumetricLights::render (
         const auto origin = light->getWorldPosition (), direction = light->getWorldDirection ();
         const float radius = data.radius->evaluateFloat (time);
         if (radius <= 0) continue;
-        const auto lightProjection = nativeClip () * Objects::CLight::calculateSpotShadowViewProjection (
-            origin, direction, data.outerCone->evaluateFloat (time), radius);
+        const bool cookie = data.useCookie;
+        const auto lightProjection = nativeClip () * (cookie ? light->getCookieProjection ()
+            : Objects::CLight::calculateSpotShadowViewProjection (
+                origin, direction, data.outerCone->evaluateFloat (time), radius));
         const auto inverseLight = glm::inverse (lightProjection);
         glViewport (0, 0, m_back->getRealWidth (), m_back->getRealHeight ());
         glBindFramebuffer (GL_FRAMEBUFFER, m_back->getFramebuffer ());
@@ -224,17 +248,20 @@ void VolumetricLights::render (
         glUseProgram (m_backProgram);
         matrix (m_backProgram, "g_ViewProjectionMatrix", viewProjection);
         matrix (m_backProgram, "g_AltViewProjectionMatrix", inverseLight);
-        draw (m_backProgram, false);
-        const auto cameraPoint = camera.getEye () + glm::normalize (camera.getCenter () - camera.getEye ()) * camera.getNearZ ();
+        draw (m_backProgram, false, cookie);
+        const auto cameraPoint = camera.getEye () + glm::normalize (camera.getCenter () - camera.getEye ()) * (cookie ? 0.1f : camera.getNearZ ());
         const auto delta = cameraPoint - origin;
         const float axial = glm::dot (delta, direction);
-        const bool inside = axial >= 0 && axial <= radius
+        const glm::vec4 clipPoint = lightProjection * glm::vec4 (cameraPoint, 1.0f);
+        const bool inside = cookie ? clipPoint.w > 0 && std::abs (clipPoint.x) <= clipPoint.w
+            && std::abs (clipPoint.y) <= clipPoint.w && clipPoint.z >= 0 && clipPoint.z <= clipPoint.w
+            : axial >= 0 && axial <= radius
             && glm::length (delta - direction * axial) <= axial * std::tan (glm::radians (data.outerCone->evaluateFloat (time)));
         // Script-created lights can outnumber the scene's load-time shadow slots.
         const int feature = index < lights.spotShadowFeatures.size () ? lights.spotShadowFeatures[index] : -1;
         const bool shadow = feature >= 0 && index < lights.spotShadowEnabled.size ()
             && lights.spotShadowEnabled[index] > .5f;
-        const GLuint program = frontProgram (shadow, inside);
+        const GLuint program = frontProgram (shadow, inside, cookie);
         glBindFramebuffer (GL_FRAMEBUFFER, m_lightBuffer->getFramebuffer ());
         glDisable (GL_DEPTH_TEST);
         glDepthMask (GL_FALSE);
@@ -247,7 +274,10 @@ void VolumetricLights::render (
         matrix (program, "g_ViewProjectionMatrix", viewProjection);
         matrix (program, "g_AltViewProjectionMatrix", inverseLight);
         matrix (program, "g_EffectModelMatrix", glm::inverse (viewProjection));
-        matrix (program, "g_AltModelMatrix", shadow ? nativeClip () * lights.shadowMatrices[feature] : lightProjection);
+        auto samplingProjection = shadow ? nativeClip () * lights.shadowMatrices[feature] : lightProjection;
+        // Raster/depth reconstruction uses flipped clip Y, image cookies do not.
+        if (cookie) for (int column = 0; column < 4; ++column) samplingProjection[column][1] *= -1;
+        matrix (program, "g_AltModelMatrix", samplingProjection);
         vector (program, "g_RenderVar0", shadow ? lights.shadowTransforms[feature] : glm::vec4 (0));
         const auto cones = Objects::CLight::calculateSpotConeCosines (data.innerCone->evaluateFloat (time), data.outerCone->evaluateFloat (time));
         vector (program, "g_RenderVar1", { radius * .99f, cones.x, cones.y, data.intensity->evaluateFloat (time) });
@@ -267,7 +297,15 @@ void VolumetricLights::render (
             glBindTexture (GL_TEXTURE_2D, textures[unit]);
             glUniform1i (glGetUniformLocation (program, ("g_Texture" + std::to_string (unit)).c_str ()), unit);
         }
-        draw (program, inside);
+        if (cookie) {
+            glActiveTexture (GL_TEXTURE2);
+            glBindTexture (GL_TEXTURE_2D, light->getCookie () ? light->getCookie ()->getTextureID (0) : 0);
+            // Volumes use each light's own provider and its ordinary sampler,
+            // not the shared surface alias's border override.
+            glBindSampler (2, 0);
+            glUniform1i (glGetUniformLocation (program, "g_Texture2"), 2);
+        }
+        draw (program, inside, cookie);
     }
     glBindFramebuffer (GL_FRAMEBUFFER, target->getDrawFramebuffer ());
     glViewport (0, 0, m_size.x, m_size.y);

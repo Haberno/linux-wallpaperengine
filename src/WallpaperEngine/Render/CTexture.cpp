@@ -290,7 +290,8 @@ void CTexture::setupOpenGLParameters (const uint32_t textureID) const {
 	glTexParameteri (GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
     }
 
-    glTexParameterf (GL_TEXTURE_2D, GL_TEXTURE_MAX_ANISOTROPY, this->m_header->anisotropy);
+    glTexParameterf (GL_TEXTURE_2D, GL_TEXTURE_MAX_ANISOTROPY,
+	this->m_header->flags & TextureFlags_NoInterpolation ? 1.0f : this->m_header->anisotropy);
 }
 
 GLuint CTexture::getTextureID (const uint32_t imageIndex) const {
