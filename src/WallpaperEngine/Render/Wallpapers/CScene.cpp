@@ -1662,10 +1662,12 @@ void CScene::updateLightState () {
 	    this->m_lights.pointShadowEnabled[point] = 0.0f;
 	    if (data.castShadow && point < 32 && (this->m_lights.pointShadowMask & (uint32_t (1) << point)) != 0) {
 		const float radius = data.radius->value->getFloat ();
+		const float sourceSize = data.sourceSize->evaluateFloat (this->getTime ());
+		const bool orthographic = this->getCamera ().isOrthogonal ();
 		this->m_lights.pointShadowProjections[point]
-		    = Objects::CLight::calculatePointShadowProjectionInfo (radius);
+		    = Objects::CLight::calculatePointShadowProjectionInfo (radius, sourceSize, orthographic);
 		this->m_lights.pointShadowMatrices[point]
-		    = Objects::CLight::calculatePointShadowViewProjections (light->getWorldPosition (), radius);
+		    = Objects::CLight::calculatePointShadowViewProjections (light->getWorldPosition (), radius, sourceSize, orthographic);
 		this->m_lights.pointShadowEnabled[point]
 		    = data.groupVisible->value->getBool () && light->isVisibleThroughParents () ? 1.0f : 0.0f;
 	    }

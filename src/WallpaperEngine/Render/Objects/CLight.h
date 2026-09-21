@@ -49,9 +49,11 @@ public:
     );
     /** Six +X/-X/+Y/-Y/+Z/-Z view-projections used by the native 2x3 point atlas block. */
     [[nodiscard]] static std::array<glm::mat4, 6>
-    calculatePointShadowViewProjections (const glm::vec3& origin, float radius);
+    calculatePointShadowViewProjections (const glm::vec3& origin, float radius, float sourceSize = 0.0f,
+	bool orthographic = false);
     /** Compact perspective coefficients consumed by CalculateProjectedCoordsPoint. */
-    [[nodiscard]] static glm::vec4 calculatePointShadowProjectionInfo (float radius);
+    [[nodiscard]] static glm::vec4 calculatePointShadowProjectionInfo (float radius, float sourceSize = 0.0f,
+	bool orthographic = false);
     /** Transform a tube's authored local control point into its world-space endpoint. */
     [[nodiscard]] static glm::vec3
     calculateTubeEndPosition (const glm::mat4& worldMatrix, const glm::vec3& controlPoint);

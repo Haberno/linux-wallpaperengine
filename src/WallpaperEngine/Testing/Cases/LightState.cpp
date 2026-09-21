@@ -139,12 +139,40 @@ TEST_CASE ("Point shadow projections cover all six native atlas faces") {
 
 TEST_CASE ("Point shadow projection info reconstructs the raster depth projection") {
     const glm::vec4 info = CLight::calculatePointShadowProjectionInfo (20.0f);
-    const glm::mat4 expected = glm::perspective (glm::half_pi<float> (), 1.0f, 0.02f, 20.0f);
+    const glm::mat4 expected = glm::perspective (glm::half_pi<float> (), 1.0f, 0.05f, 20.0f);
 
     CHECK (info.x == Catch::Approx (expected[2][2]));
     CHECK (info.y == Catch::Approx (expected[3][2]));
     CHECK (info.z == Catch::Approx (expected[2][3]));
     CHECK (info.w == Catch::Approx (expected[3][3]));
+}
+
+TEST_CASE ("Point source size preserves native defaults and near clipping", "[lighting][source-size]") {
+    using namespace WallpaperEngine::Data::Model;
+    using WallpaperEngine::Data::Parsers::ObjectParser;
+    using WallpaperEngine::Data::JSON::JSON;
+    const Project project {};
+    const auto defaults = ObjectParser::parse (JSON::parse (R"({"id":2,"light":"lpoint"})"), project);
+    CHECK (defaults->as<Light> ()->sourceSize->evaluateFloat (0) == 0.0f);
+    const auto authored = ObjectParser::parse (JSON::parse (
+	R"({"id":2,"light":"lpoint","lightsourcesize":0.53})"
+    ), project);
+    CHECK (authored->as<Light> ()->sourceSize->evaluateFloat (0) == Catch::Approx (0.53f));
+
+    for (const bool orthographic : { false, true }) {
+	for (const float size : { -2.0f, 0.0f, 0.3f, 2.0f }) {
+	    const float nearPlane = orthographic ? 1.0f : std::max (size, 0.05f);
+	    const float farPlane = std::max (0.5f, nearPlane + 0.01f);
+	    const auto matrices = CLight::calculatePointShadowViewProjections (glm::vec3 (0), 0.5f, size, orthographic);
+	    const auto info = CLight::calculatePointShadowProjectionInfo (0.5f, size, orthographic);
+	    for (const float distance : { nearPlane, farPlane }) {
+		const auto clip = matrices[0] * glm::vec4 (distance, 0, 0, 1);
+		const float reconstructed = (info.x * -distance + info.y) / (info.z * -distance + info.w);
+		CHECK (clip.z / clip.w == Catch::Approx (distance == nearPlane ? -1.0f : 1.0f).margin (0.0001f));
+		CHECK (clip.z / clip.w == Catch::Approx (reconstructed).margin (0.0001f));
+	    }
+	}
+    }
 }
 
 TEST_CASE ("Vertical spot shadow projections remain finite") {

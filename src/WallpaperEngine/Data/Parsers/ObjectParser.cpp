@@ -269,6 +269,7 @@ ObjectParser::parseLight (const JSON& it, const Project& project, ObjectData bas
 	    .color = it.user ("color", properties, glm::vec3 (1.0f)),
 	    .intensity = it.user ("intensity", properties, 1.0f),
 	    .radius = it.user ("radius", properties, 100.0f),
+	    .sourceSize = it.user ("lightsourcesize", properties, 0.0f),
 	    .exponent = it.user ("exponent", properties, 2.0f),
 	    .innerCone = it.user ("innercone", properties, 20.0f),
 	    .outerCone = it.user ("outercone", properties, 30.0f),

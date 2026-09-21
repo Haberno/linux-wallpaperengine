@@ -823,6 +823,8 @@ struct LightData {
     UserSettingUniquePtr color;
     UserSettingUniquePtr intensity;
     UserSettingUniquePtr radius;
+    /** Point-shadow source exclusion distance; independent of attenuation radius. */
+    UserSettingUniquePtr sourceSize;
     /** Falloff exponent for local (point, spot, and tube) lights */
     UserSettingUniquePtr exponent;
     /** Spot cone angles in degrees, packed as cosines for the shader */

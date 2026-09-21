@@ -17,6 +17,7 @@ CLight::CLight (Wallpapers::CScene& scene, const Light& light) :
     this->registerProperty ("color", *light.color);
     this->registerProperty ("intensity", *light.intensity);
     this->registerProperty ("radius", *light.radius);
+    this->registerProperty ("lightsourcesize", *light.sourceSize);
     this->registerProperty ("exponent", *light.exponent);
     this->registerProperty ("innercone", *light.innerCone);
     this->registerProperty ("outercone", *light.outerCone);
@@ -252,9 +253,12 @@ glm::mat4 CLight::calculateDirectionalShadowViewProjection (
 }
 
 std::array<glm::mat4, 6>
-CLight::calculatePointShadowViewProjections (const glm::vec3& origin, const float radius) {
-    const float farPlane = std::max (std::abs (radius), 1.01f);
-    const float nearPlane = std::clamp (farPlane * 0.001f, 0.01f, farPlane * 0.1f);
+CLight::calculatePointShadowViewProjections (
+    const glm::vec3& origin, const float radius, const float sourceSize, const bool orthographic
+) {
+    // Native excludes geometry within the point source from its shadow map.
+    const float nearPlane = orthographic ? 1.0f : std::max (sourceSize, 0.05f);
+    const float farPlane = std::max (radius, nearPlane + 0.01f);
     const glm::mat4 projection = glm::perspective (glm::half_pi<float> (), 1.0f, nearPlane, farPlane);
 
     // This is the face order hard-coded by CalculateProjectedCoordsPoint:
@@ -277,9 +281,11 @@ CLight::calculatePointShadowViewProjections (const glm::vec3& origin, const floa
     return result;
 }
 
-glm::vec4 CLight::calculatePointShadowProjectionInfo (const float radius) {
-    const float farPlane = std::max (std::abs (radius), 1.01f);
-    const float nearPlane = std::clamp (farPlane * 0.001f, 0.01f, farPlane * 0.1f);
+glm::vec4 CLight::calculatePointShadowProjectionInfo (
+    const float radius, const float sourceSize, const bool orthographic
+) {
+    const float nearPlane = orthographic ? 1.0f : std::max (sourceSize, 0.05f);
+    const float farPlane = std::max (radius, nearPlane + 0.01f);
     const glm::mat4 projection = glm::perspective (glm::half_pi<float> (), 1.0f, nearPlane, farPlane);
     return glm::vec4 (projection[2][2], projection[3][2], projection[2][3], projection[3][3]);
 }
