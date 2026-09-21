@@ -587,6 +587,11 @@ void CScene::updateBloomState () {
 }
 
 void CScene::destroyObjects () noexcept {
+    // Also runs during constructor unwinding. Cached textures can outlive this scene.
+    for (const auto& [provider, activity] : this->m_videoActivity) {
+	if (const auto texture = activity.texture.lock ()) texture->getVideoPlayer ()->removeSceneActivity (*this);
+    }
+    this->m_videoActivity.clear ();
     // bloom object is in the objects list, so no need to explicitly delete it
     this->m_bloomObject = nullptr;
 
@@ -835,6 +840,8 @@ void CScene::updateOutputSize (const glm::ivec4& viewport) {
 
 void CScene::renderFrame (const glm::ivec4& viewport) {
     this->destroyQueuedLayers ();
+    ++this->m_sceneFrame;
+    this->updateVideoActivity ();
     this->updateOutputSize (viewport);
     // Frame callbacks are per-output on Wayland. A 60 Hz scene can therefore render only once
     // while a 165 Hz output advances the application loop several times. Deriving dt only from
@@ -2006,7 +2013,34 @@ void CScene::moveLayerToScriptableIndex (CObject* layer, int index) {
 }
 
 std::shared_ptr<const TextureProvider> CScene::resolveTexture (const std::string& name) const {
-    return this->getContext ().resolveTexture (name, this->getAssetLocator (), this->getScene ().project.properties);
+    auto provider = this->getContext ().resolveTexture (name, this->getAssetLocator (), this->getScene ().project.properties);
+    if (auto texture = std::dynamic_pointer_cast<const CTexture> (provider); texture && texture->getVideoPlayer ()) {
+	auto [entry, inserted] = this->m_videoActivity.try_emplace (provider.get (), VideoActivity { texture });
+	if (inserted || entry->second.texture.expired ()) {
+	    entry->second = { texture };
+	    // Native initializes last use to frame zero, even for a texture created later.
+	    texture->getVideoPlayer ()->setSceneActive (*this, this->m_sceneFrame <= 30);
+	}
+    }
+    return provider;
+}
+
+void CScene::markTextureUsed (const TextureProvider& provider) const {
+    if (const auto entry = this->m_videoActivity.find (&provider); entry != this->m_videoActivity.end ()) {
+	if (const auto texture = entry->second.texture.lock ()) {
+	    entry->second.lastUsedFrame = this->m_sceneFrame;
+	    texture->getVideoPlayer ()->setSceneActive (*this, true);
+	}
+    }
+}
+
+void CScene::updateVideoActivity () {
+    std::erase_if (this->m_videoActivity, [this] (const auto& entry) {
+	const auto texture = entry.second.texture.lock ();
+	if (!texture) return true;
+	texture->getVideoPlayer ()->setSceneActive (*this, this->m_sceneFrame - entry.second.lastUsedFrame <= 30);
+	return false;
+    });
 }
 
 void CScene::registerUserTexturePass (Objects::Effects::CPass* pass) { m_userTexturePasses.push_back (pass); }

@@ -298,6 +298,7 @@ void VolumetricLights::render (
             glUniform1i (glGetUniformLocation (program, ("g_Texture" + std::to_string (unit)).c_str ()), unit);
         }
         if (cookie) {
+            if (light->getCookie ()) m_scene.markTextureUsed (*light->getCookie ());
             glActiveTexture (GL_TEXTURE2);
             glBindTexture (GL_TEXTURE_2D, light->getCookie () ? light->getCookie ()->getTextureID (0) : 0);
             // Volumes use each light's own provider and its ordinary sampler,

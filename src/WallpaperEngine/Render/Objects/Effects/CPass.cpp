@@ -374,6 +374,7 @@ void CPass::bindTextureUnit (int index, const std::shared_ptr<const TextureProvi
     const auto bound = cookie && scene.getLightCookie () && scene.getLightCookie ()->isReady ()
 	? scene.getLightCookie () : texture;
     if (samplerActive) {
+	scene.markTextureUsed (*bound);
 	glActiveTexture (GL_TEXTURE0 + index);
 	glBindTexture (GL_TEXTURE_2D, bound->getTextureID (frame));
 	if (cookie) {

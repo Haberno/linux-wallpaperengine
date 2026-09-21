@@ -22,6 +22,7 @@ enum class RenderSortClass {
 
 class Camera;
 class CObject;
+class CTexture;
 }
 
 namespace WallpaperEngine::Render::Objects {
@@ -75,6 +76,7 @@ public:
     [[nodiscard]] GLuint getWallpaperTexture () const override;
     /** Authored textures resolve against this scene's assets and user properties. */
     [[nodiscard]] std::shared_ptr<const TextureProvider> resolveTexture (const std::string& name) const;
+    void markTextureUsed (const TextureProvider& texture) const;
     [[nodiscard]] std::shared_ptr<const TextureProvider>
     resolveUserTexture (const std::string& name, uint32_t flags, float aspect) const;
     void registerUserTexturePass (Objects::Effects::CPass* pass);
@@ -285,6 +287,13 @@ protected:
     friend class CWallpaper;
 
 private:
+    struct VideoActivity {
+	std::weak_ptr<const CTexture> texture;
+	uint32_t lastUsedFrame = 0;
+    };
+    mutable std::map<const TextureProvider*, VideoActivity> m_videoActivity;
+    uint32_t m_sceneFrame = 0;
+    void updateVideoActivity ();
     mutable std::map<std::string, std::shared_ptr<const TextureProvider>> m_userTextures;
     std::vector<Objects::Effects::CPass*> m_userTexturePasses;
     std::set<std::string> m_sampledRenderTargets;

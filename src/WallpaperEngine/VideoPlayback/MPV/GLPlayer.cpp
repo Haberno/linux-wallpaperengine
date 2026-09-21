@@ -2,6 +2,7 @@
 
 #include "WallpaperEngine/Logging/Log.h"
 
+#include <algorithm>
 #include <mpv/render_gl.h>
 #include <mpv/stream_cb.h>
 
@@ -131,8 +132,30 @@ void GLPlayer::clearPaused () {
     }
     this->m_paused = false;
     this->m_pausedSeek.reset ();
-    if (this->m_handle) {
+    if (this->m_handle && !this->m_activitySuspended) {
 	this->queueCommand ({ "set", "pause", "no" });
+    }
+}
+
+void GLPlayer::setSceneActive (const Render::Wallpapers::CScene& scene, const bool active) {
+    const std::lock_guard lock (this->m_playbackMutex);
+    this->m_sceneActivity.insert_or_assign (&scene, active);
+    this->updateActivityPause ();
+}
+
+void GLPlayer::removeSceneActivity (const Render::Wallpapers::CScene& scene) {
+    const std::lock_guard lock (this->m_playbackMutex);
+    this->m_sceneActivity.erase (&scene);
+    this->updateActivityPause ();
+}
+
+void GLPlayer::updateActivityPause () {
+    const bool suspended = !this->m_sceneActivity.empty ()
+	&& std::ranges::none_of (this->m_sceneActivity, [] (const auto& entry) { return entry.second; });
+    if (suspended == this->m_activitySuspended) return;
+    this->m_activitySuspended = suspended;
+    if (this->m_handle && !this->m_paused) {
+	this->queueCommand ({ "set", "pause", suspended ? "yes" : "no" });
     }
 }
 
@@ -154,10 +177,11 @@ void GLPlayer::resumePlayback () {
 	this->setCurrentTime (0.0);
     }
     // keep-open may pause mpv at EOF without a script pause request. An explicit
-    // play must clear that internal pause even when our requested state is playing.
+    // play must clear that internal pause even when our requested state is playing,
+    // unless scene sampling has independently suspended the decoder.
     this->m_paused = false;
     this->m_pausedSeek.reset ();
-    if (this->m_handle) {
+    if (this->m_handle && !this->m_activitySuspended) {
 	this->queueCommand ({ "set", "pause", "no" });
     }
 }
@@ -427,7 +451,7 @@ void GLPlayer::init () {
     // mute the video if required
     mpv_set_property_string (this->m_handle, "mute", this->m_muted ? "yes" : "no");
     // ensure play/pause status is respected too
-    mpv_set_property_string (this->m_handle, "pause", this->m_paused ? "yes" : "no");
+    mpv_set_property_string (this->m_handle, "pause", this->m_paused || this->m_activitySuspended ? "yes" : "no");
 }
 
 void GLPlayer::setSource (const std::filesystem::path& file) { this->m_file = file; }

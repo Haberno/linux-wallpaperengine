@@ -5,12 +5,17 @@
 
 #include <GL/glew.h>
 #include <deque>
+#include <map>
 #include <mpv/client.h>
 #include <mpv/render.h>
 #include <mutex>
 #include <string>
 #include <thread>
 #include <vector>
+
+namespace WallpaperEngine::Render::Wallpapers {
+class CScene;
+}
 
 namespace WallpaperEngine::VideoPlayback::MPV {
 class GLPlayer : public Helpers::ContextAware {
@@ -50,6 +55,9 @@ public:
     void setVolume (double volume);
     void setPaused ();
     void clearPaused ();
+    /** Scene sampling demand suspends decoding without changing script playback state. */
+    void setSceneActive (const Render::Wallpapers::CScene& scene, bool active);
+    void removeSceneActivity (const Render::Wallpapers::CScene& scene);
 
     /** SceneScript playback controls retain the decoder when stopped. */
     void enableScriptControl ();
@@ -80,6 +88,7 @@ private:
     void submitCommand () const;
     void processEvent (const mpv_event& event) const;
     void completeCommand (int error) const;
+    void updateActivityPause ();
 
 protected:
     bool m_doWeOwnFramebuffer;
@@ -93,6 +102,8 @@ protected:
     bool m_muted = false;
     bool m_nonBlocking = false;
     bool m_paused = false;
+    bool m_activitySuspended = false;
+    std::map<const Render::Wallpapers::CScene*, bool> m_sceneActivity;
     double m_rate = 1.0;
     bool m_loop = true;
     bool m_scriptControlled = false;
