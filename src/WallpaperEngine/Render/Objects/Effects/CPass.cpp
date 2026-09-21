@@ -62,22 +62,30 @@ CPass::CPass (
     Helpers::ContextAware (renderable), m_renderable (renderable), m_fboProvider (std::move (fboProvider)),
     m_pass (pass), m_binds (binds.has_value () ? binds.value ().get () : DEFAULT_BINDS),
     m_override (override.has_value () ? override.value ().get () : DEFAULT_OVERRIDE),
+    m_userTextureEntries (mergedTextures (m_pass.usertextures, m_override.usertextures)),
     m_runtimeCombos (std::move (runtimeCombos)), m_target (target),
     m_effectFBOBindings (std::move (effectFBOBindings)),
     m_blendingmode (pass.blending), m_depthtestmode (pass.depthtest), m_depthwritemode (pass.depthwrite) {
     if (!deferShaderSetup) this->initialize ();
+    if (!m_userTextureEntries.empty ()) {
+	m_renderable.getScene ().registerUserTexturePass (this);
+    }
     // NOTE: m_vao is created lazily in render(): VAOs are not shared between GL
     // contexts, so it cannot be created here when built on the async switch worker
 }
 
 void CPass::initialize () {
     if (m_shaderInitialized) return;
+    m_userTextureValues = userTextureValues ();
     setupShaders ();
     m_shaderInitialized = true;
     ++m_shaderRevision;
 }
 
 CPass::~CPass () {
+    if (!m_userTextureEntries.empty ()) {
+	m_renderable.getScene ().unregisterUserTexturePass (this);
+    }
     this->releaseShaders ();
 
     glDeleteVertexArrays (1, &m_vao);
@@ -897,9 +905,9 @@ void CPass::setupShaders () {
 	  };
 
     const auto registerUserTextures = [&] (const TextureMap& textures) {
-	for (const auto& [index, entry] : textures) {
+	for (const auto index : textures | std::views::keys) {
 	    try {
-		registerTextureMetadata (index, resolveUserTexture (index, entry));
+		registerTextureMetadata (index, resolveUserTexture (index));
 	    } catch (const std::runtime_error&) {
 		// Report unavailable selections during setup; retain authored metadata.
 	    }
@@ -908,6 +916,16 @@ void CPass::setupShaders () {
     registerTextureMetadata (0, texture0);
     registerAuthoredTextures (mergedTextures (m_pass.textures, m_override.textures));
     registerUserTextures (mergedTextures (m_pass.usertextures, m_override.usertextures));
+    // Native refreshes selected pixels without changing the initial TEXnFORMAT
+    // branch, even when clearing an RGBA selection exposes an authored R8 image.
+    for (const auto index : m_userTextureEntries | std::views::keys) {
+	const std::string combo = "TEX" + std::to_string (index) + "FORMAT";
+	if (const auto initial = m_userTextureFormats.find (index); initial != m_userTextureFormats.end ()) {
+	    m_combos.insert_or_assign (combo, initial->second);
+	} else if (const auto current = m_combos.find (combo); current != m_combos.end ()) {
+	    m_userTextureFormats.emplace (index, current->second);
+	}
+    }
 
     // TODO: REVIEW THE SHADER TEXTURES HERE, THE ONES PASSED ON TO THE SHADER SHOULD NOT BE IN THE LIST
     // TODO: USED TO BUILD THE TEXTURES LATER
@@ -975,7 +993,14 @@ void CPass::updateFogShader () {
     // Scene scripts update these flags after construction. Re-select the actual
     // shader branches; zeroing density alone would leave authored #if behavior
     // and newly active uniforms wrong. GLSL/program caches reuse prior variants.
+    this->rebuildShaders ();
+}
+
+void CPass::rebuildShaders () {
     this->releaseShaders ();
+    // Keep authored/default providers resident until their replacement chains
+    // have been built. Cache pressure must not turn a rebind into a cold decode.
+    const auto previousTextures = std::move (this->m_textures);
     this->m_shaderInitialized = false;
     this->m_uniformBindingsDirty = true;
     this->m_uniforms.clear ();
@@ -983,7 +1008,6 @@ void CPass::updateFogShader () {
     this->m_animatedUniforms.clear ();
     this->m_constantUniforms.clear ();
     this->m_attribs.clear ();
-    this->m_textures.clear ();
     this->m_textureTexels.clear ();
     this->m_combos.clear ();
     this->initialize ();
@@ -996,6 +1020,34 @@ void CPass::updateFogShader () {
 	    name, std::make_unique<UniformEntry> (id, name, binding.type, binding.value, binding.count)
 	);
     }
+}
+
+const std::string& CPass::userTextureValue (const std::string& entry) const {
+    static const std::string empty;
+    const auto& properties = m_renderable.getScene ().getScene ().project.properties;
+    if (const auto property = properties.find (entry); property != properties.end ()) {
+	return property->second->getType () == DynamicValue::String ? property->second->getString () : empty;
+    }
+    return entry;
+}
+
+TextureMap CPass::userTextureValues () const {
+    auto values = m_userTextureEntries;
+    for (auto& [index, entry] : values) entry = userTextureValue (entry);
+    return values;
+}
+
+bool CPass::updateUserTextures () {
+    // Deferred effects read the latest selection when first initialized. Equal
+    // paths do not reload changed file contents, matching native property updates.
+    if (!m_shaderInitialized) return false;
+    for (const auto& [index, entry] : m_userTextureEntries) {
+	if (m_userTextureValues.at (index) != userTextureValue (entry)) {
+	    rebuildShaders ();
+	    return true;
+	}
+    }
+    return false;
 }
 
 void CPass::setupAttributes () {
@@ -1042,13 +1094,9 @@ void CPass::leaveProgramSharing () {
     this->m_programSharingGroup.reset ();
 }
 
-std::shared_ptr<const TextureProvider> CPass::resolveUserTexture (int index, const std::string& entry) const {
+std::shared_ptr<const TextureProvider> CPass::resolveUserTexture (int index) const {
     const auto& scene = m_renderable.getScene ();
-    const auto& properties = scene.getScene ().project.properties;
-    std::string name = entry;
-    if (const auto property = properties.find (entry); property != properties.end ()) {
-	name = property->second->getString ();
-    }
+    const auto& name = m_userTextureValues.at (index);
     if (name.empty ()) return nullptr;
     const auto& originals = m_override.textures.contains (index) ? m_override.textures : m_pass.textures;
     const auto authored = originals.find (index);
@@ -1069,7 +1117,7 @@ std::shared_ptr<const TextureProvider> CPass::resolveUserTexture (int index, con
 
 void CPass::setupUserTexture (int index, const std::string& entry) {
     try {
-	const auto texture = resolveUserTexture (index, entry);
+	const auto texture = resolveUserTexture (index);
 	if (!texture) return;
 	const auto it = m_textures.find (index);
 	m_textures[index] = std::make_shared<TextureChainEntry> (TextureChainEntry {

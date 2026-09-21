@@ -40,6 +40,8 @@ public:
     /** Build an initially hidden effect only when it first enters the active chain. */
     void initialize ();
     void render ();
+    /** Refresh initialized user-image materials, including currently hidden passes. */
+    bool updateUserTextures ();
 
     /** Copy commands remap their explicit source together with effect binds. */
     void setCopySource (const std::string& source);
@@ -87,7 +89,7 @@ public:
     void addUniform (const std::string& name, const glm::mat4x3* value, int count = 1);
 
 private:
-    [[nodiscard]] std::shared_ptr<const TextureProvider> resolveUserTexture (int index, const std::string& entry) const;
+    [[nodiscard]] std::shared_ptr<const TextureProvider> resolveUserTexture (int index) const;
     void setupUserTexture (int index, const std::string& entry);
     struct TextureChainEntry {
 	std::shared_ptr<const TextureProvider> texture;
@@ -163,7 +165,10 @@ private:
 
     void setupShaders ();
     void releaseShaders ();
+    void rebuildShaders ();
     void updateFogShader ();
+    [[nodiscard]] const std::string& userTextureValue (const std::string& entry) const;
+    [[nodiscard]] TextureMap userTextureValues () const;
     [[nodiscard]] glm::ivec2 fogCombos () const;
     void setupProgramSharing ();
     void leaveProgramSharing ();
@@ -222,6 +227,9 @@ private:
     const MaterialPass& m_pass;
     const TextureMap& m_binds;
     const ImageEffectPassOverride& m_override;
+    const TextureMap m_userTextureEntries;
+    TextureMap m_userTextureValues;
+    std::map<int, int> m_userTextureFormats;
     ComboMap m_runtimeCombos = {};
     std::optional<std::reference_wrapper<std::string>> m_target;
     std::shared_ptr<const EffectFBOBindings> m_effectFBOBindings;

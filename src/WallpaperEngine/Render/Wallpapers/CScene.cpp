@@ -879,6 +879,18 @@ void CScene::renderFrame (const glm::ivec4& viewport) {
     // Fog colors and ranges can be SceneScript- or user-property-driven.
     this->updateFogState ();
 
+    // Refresh all initialized materials before drawing, so hidden consumers and
+    // shared user images observe the same selection. Retire old images only
+    // after every affected pass has rebound; sampling stays first-load-wins.
+    bool changedUserTextures = false;
+    // Resolving a newly selected layer target can create/register its material.
+    for (size_t index = 0; index < m_userTexturePasses.size (); ++index) {
+	changedUserTextures |= m_userTexturePasses[index]->updateUserTextures ();
+    }
+    if (changedUserTextures) {
+	std::erase_if (m_userTextures, [] (const auto& entry) { return entry.second.use_count () == 1; });
+    }
+
     // refresh light uniform state after scripts have moved the lights
     this->updateLightState ();
 
@@ -1950,6 +1962,9 @@ void CScene::moveLayerToScriptableIndex (CObject* layer, int index) {
 std::shared_ptr<const TextureProvider> CScene::resolveTexture (const std::string& name) const {
     return this->getContext ().resolveTexture (name, this->getAssetLocator (), this->getScene ().project.properties);
 }
+
+void CScene::registerUserTexturePass (Objects::Effects::CPass* pass) { m_userTexturePasses.push_back (pass); }
+void CScene::unregisterUserTexturePass (Objects::Effects::CPass* pass) { std::erase (m_userTexturePasses, pass); }
 
 std::shared_ptr<const TextureProvider> CScene::resolveUserTexture (const std::string& filename, uint32_t flags, float aspect) const {
     const std::filesystem::path path (filename);

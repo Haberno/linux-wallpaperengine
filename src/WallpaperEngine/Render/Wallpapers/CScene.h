@@ -27,6 +27,9 @@ class CObject;
 namespace WallpaperEngine::Render::Objects {
 class CLight;
 class CImage;
+namespace Effects {
+class CPass;
+}
 }
 
 namespace WallpaperEngine::Render::Wallpapers {
@@ -74,6 +77,8 @@ public:
     [[nodiscard]] std::shared_ptr<const TextureProvider> resolveTexture (const std::string& name) const;
     [[nodiscard]] std::shared_ptr<const TextureProvider>
     resolveUserTexture (const std::string& name, uint32_t flags, float aspect) const;
+    void registerUserTexturePass (Objects::Effects::CPass* pass);
+    void unregisterUserTexturePass (Objects::Effects::CPass* pass);
 
     [[nodiscard]] int getWidth () const override;
     [[nodiscard]] int getHeight () const override;
@@ -274,6 +279,7 @@ protected:
 
 private:
     mutable std::map<std::string, std::shared_ptr<const TextureProvider>> m_userTextures;
+    std::vector<Objects::Effects::CPass*> m_userTexturePasses;
     std::set<std::string> m_sampledRenderTargets;
     /** Release raw-owned render objects, including during constructor unwinding. */
     void destroyObjects () noexcept;
