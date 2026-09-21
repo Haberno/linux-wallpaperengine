@@ -119,6 +119,7 @@ private:
     unsigned int computeEffectivePixelSize () const;
     TextLayoutLimits currentLayoutLimits () const;
     glm::vec2 currentSpacing () const;
+    bool depthTestEnabled () const;
 
     // text-effect chain (rebuilt when dynamic glyph metrics change, like the native renderer)
     void setupEffectChain ();

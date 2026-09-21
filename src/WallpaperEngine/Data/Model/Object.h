@@ -752,6 +752,8 @@ struct TextData {
     UserSettingUniquePtr parallaxDepth;
     /** Whether the text is visible */
     UserSettingUniquePtr visible;
+    /** Native string enum: enabled by default, ignored in orthographic scenes. */
+    UserSettingUniquePtr depthTest;
     /** Horizontal alignment: "left", "center", "right" */
     std::string alignment;
     /** Vertical alignment: "top", "center", "bottom" */

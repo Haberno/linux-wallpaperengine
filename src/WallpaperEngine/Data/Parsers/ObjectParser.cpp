@@ -165,6 +165,33 @@ SoundUniquePtr ObjectParser::parseSound (const JSON& it, const Project& project,
 
 TextUniquePtr ObjectParser::parseText (const JSON& it, const Project& project, ObjectData base) {
     const auto& effects = it.optional ("effects");
+    // Unlike an omitted property, an explicit null/invalid enum selects disabled.
+    auto depthTest = it.find ("depthtest") != it.end ()
+	? it.user ("depthtest", project.properties)
+	: it.user ("depthtest", project.properties, std::string ("enabled"));
+    // Evaluate conditional bindings before enum conversion. Rewriting a value
+    // with an attached condition would convert the canonical string back to bool.
+    std::shared_ptr<DynamicValue> conditionalSource;
+    if (depthTest->property && depthTest->condition) {
+	conditionalSource = std::move (depthTest->value);
+	depthTest->value = std::make_unique<DynamicValue> ();
+	if (const auto& script = conditionalSource->getScriptSource ()) {
+	    depthTest->value->setScriptSource (*script);
+	}
+	depthTest->value->setProperties (std::move (conditionalSource->getProperties ()));
+	depthTest->value->connect (conditionalSource.get ());
+    }
+    const auto normalizeDepthTest = [value = depthTest->value.get (), conditionalSource] (
+	const DynamicValue&, const DynamicValue::UpdateSource source
+    ) {
+	if (value->getType () != DynamicValue::String
+	    || (value->getString () != "enabled" && value->getString () != "disabled")) {
+	    value->update (std::string ("disabled"), source);
+	}
+    };
+    normalizeDepthTest (*depthTest->value, DynamicValue::Initialization);
+    // Keep the condition source alive until the enum value disconnects from it.
+    depthTest->value->listen (normalizeDepthTest);
 
     return std::make_unique<Text> (
 	std::move (base),
@@ -178,6 +205,7 @@ TextUniquePtr ObjectParser::parseText (const JSON& it, const Project& project, O
 	    .alpha = it.user ("alpha", project.properties, 1.0f),
 	    .parallaxDepth = it.user ("parallaxDepth", project.properties, glm::vec2 (0.0f)),
 	    .visible = it.user ("visible", project.properties, true),
+	    .depthTest = std::move (depthTest),
 	    .alignment = it.optional ("horizontalalign", it.optional ("alignment", std::string ("center"))),
 	    .verticalalign = it.optional ("verticalalign", std::string ("center")),
 	    // padding is authored as a single number by older scenes and as an "x y" vector

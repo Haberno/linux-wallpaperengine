@@ -55,6 +55,59 @@ TEST_CASE ("text parses authored width and row limits") {
     REQUIRE_FALSE (text->limitUseEllipsis->value->getBool ());
 }
 
+TEST_CASE ("text depth defaults enabled and normalizes authored and live enum values") {
+    const Project project {};
+    auto data = JSON::parse (R"({"id":1,"name":"Depth text","text":"M"})");
+    const auto omitted = ObjectParser::parse (data, project);
+    CHECK (omitted->as<Text> ()->depthTest->value->getString () == "enabled");
+    for (const JSON authored : { JSON ("enabled"), JSON ("disabled"), JSON ("bogus"), JSON (true), JSON (nullptr) }) {
+	data["depthtest"] = authored;
+	const auto object = ObjectParser::parse (data, project);
+	auto& value = *object->as<Text> ()->depthTest->value;
+	CHECK (value.getType () == DynamicValue::String);
+	CHECK (value.getString () == (authored == "enabled" ? "enabled" : "disabled"));
+	value.update (std::string ("enabled"), DynamicValue::Script);
+	CHECK (value.getString () == "enabled");
+	value.update (true, DynamicValue::Script);
+	CHECK (value.getType () == DynamicValue::String);
+	CHECK (value.getString () == "disabled");
+    }
+}
+
+TEST_CASE ("conditional text depth bindings normalize once and release their subscription") {
+    Project project {};
+    const auto choice = std::make_shared<PropertyCombo> (
+	PropertyData { .name = "choice", .text = "Choice" },
+	ComboData { .values = { { "enabled", "On" }, { "disabled", "Off" } } }, "enabled"
+    );
+    project.properties.emplace ("choice", choice);
+    {
+	const auto object = ObjectParser::parse (JSON::parse (R"({
+	    "id":1,"name":"Depth text","text":"M",
+	    "depthtest":{"value":"enabled","user":{"name":"choice","condition":"enabled"},
+	      "script":"export function update(value) { return value; }",
+	      "scriptproperties":{"label":{"value":"kept"}}}
+	})"), project);
+	auto& value = *object->as<Text> ()->depthTest->value;
+	REQUIRE (value.getType () == DynamicValue::String);
+	CHECK (value.getString () == "disabled");
+	CHECK (value.getScriptSource ().has_value ());
+	CHECK (value.getProperties ().at ("label")->value->getString () == "kept");
+	for (const std::string selected : { "disabled", "enabled" }) {
+	    choice->update (selected, DynamicValue::User);
+	    CHECK (value.getType () == DynamicValue::String);
+	    CHECK (value.getString () == "disabled");
+	    value.update (std::string ("enabled"), DynamicValue::Script);
+	    CHECK (value.getString () == "enabled");
+	    value.update (true, DynamicValue::Script);
+	    CHECK (value.getType () == DynamicValue::String);
+	    CHECK (value.getString () == "disabled");
+	}
+    }
+    choice->update (std::string ("disabled"), DynamicValue::User);
+    CHECK (choice->getString () == "disabled");
+}
+
 TEST_CASE ("image instances replace material texture defaults without changing sibling instances") {
     auto filesystem = std::make_unique<Container> ();
     filesystem->getVFS ().add (

@@ -334,6 +334,7 @@ CText::CText (Wallpapers::CScene& scene, const Text& text) :
     this->registerProperty ("origin", *text.origin);
     this->registerProperty ("scale", *text.scale);
     this->registerProperty ("visible", *text.visible);
+    this->registerProperty ("depthtest", *text.depthTest);
     this->registerProperty ("pointSize", *text.pointSize);
     this->registerProperty ("text", *text.text);
     this->registerProperty ("spacing", *text.spacing);
@@ -588,7 +589,7 @@ void CText::setupEffectChain () {
     glBufferData (GL_ARRAY_BUFFER, sizeof (quad), quad, GL_STATIC_DRAW);
 
     m_colorBlendMode = m_text.colorBlendMode->value->getInt ();
-    if (m_colorBlendMode > 0) {
+    if (m_colorBlendMode > 0 && m_colorBlendMode != 31) {
 	m_colorBlendProvider = std::make_shared<FBOProvider> (&getScene ());
 	// All text draws are sequential. Share one scene snapshot instead of keeping
 	// a full-resolution copy for every clock/date/media label.
@@ -824,8 +825,16 @@ void CText::renderEffectChain (const glm::mat4& mvp, const float brightness, con
 	m_colorBlendMVP = mvp
 	    * glm::translate (glm::mat4 (1.0f), glm::vec3 (m_effectCompositeOffset, 0.0f))
 	    * glm::scale (glm::mat4 (1.0f), glm::vec3 (m_effectSurface * 0.5f, 1.0f));
+	// Only the forced color-blend passthrough has this legacy version gate.
+	m_colorBlendPass->setDepthtestMode (depthTestEnabled () && getScene ().getScene ().version > 1
+	    ? DepthtestMode_Enabled : DepthtestMode_Disabled);
+	m_colorBlendPass->setDepthwriteMode (DepthwriteMode_Disabled);
 	m_colorBlendPass->render ();
     } else if (drawToScene) {
+        if (depthTestEnabled ()) glEnable (GL_DEPTH_TEST);
+        else glDisable (GL_DEPTH_TEST);
+        glDepthFunc (GL_LESS);
+        glDepthMask (GL_FALSE);
         glEnable (GL_BLEND);
         glBlendFunc (GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
         glUniformMatrix4fv (m_cuMVP, 1, GL_FALSE, glm::value_ptr (mvp));
@@ -837,7 +846,14 @@ void CText::renderEffectChain (const glm::mat4& mvp, const float brightness, con
     glClearColor (previousClearColor[0], previousClearColor[1], previousClearColor[2], previousClearColor[3]);
     if (depthWasEnabled == GL_TRUE) {
 	glEnable (GL_DEPTH_TEST);
+    } else {
+	glDisable (GL_DEPTH_TEST);
     }
+}
+
+bool CText::depthTestEnabled () const {
+    return getScene ().getScene ().camera.projection.isPerspective
+	&& m_text.depthTest->value->getString () == "enabled";
 }
 
 bool CText::initFreeType () {
@@ -1315,6 +1331,11 @@ void CText::render () {
     // Glyph plates are double-sided, including the mirrored 2D path and the
     // initial raster pass of an effect chain. Never inherit image-material culling.
     glDisable (GL_CULL_FACE);
+    if (depthTestEnabled ()) glEnable (GL_DEPTH_TEST);
+    else glDisable (GL_DEPTH_TEST);
+    glDepthFunc (GL_LESS);
+    // Native font materials are translucent: they read depth but never write it.
+    glDepthMask (GL_FALSE);
 
     // 3D scenes: no screen-space centering or parallax; the world matrix carries the
     // transform chain (origin, parents, text scale)

@@ -40,6 +40,8 @@ public:
 };
 
 struct SceneData {
+    /** Authored format version; legacy scenes omit it. */
+    int version = 0;
     /** Authored HDR bloom mode; text overbrightness is disabled in ordinary LDR scenes. */
     bool hdr = false;
     /** Automatically order blended 3D models from back to front. */
