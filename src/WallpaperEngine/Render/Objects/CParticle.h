@@ -200,6 +200,7 @@ protected:
     [[nodiscard]] glm::mat4 particleWorldMatrix ();
 
     // Emitter creators
+    [[nodiscard]] glm::vec3 resolveEmitterOrigin (const glm::vec3& origin) const;
     EmitterFunc createBoxEmitter (const ParticleEmitter& emitter);
     EmitterFunc createSphereEmitter (const ParticleEmitter& emitter);
 

@@ -996,6 +996,15 @@ void CParticle::setupEmitters () {
     }
 }
 
+glm::vec3 CParticle::resolveEmitterOrigin (const glm::vec3& origin) const {
+    if ((m_particle.flags & 1) == 0 || origin == glm::vec3 (0.0f)) return origin;
+    const glm::mat3 basis (m_initializingManualEmission ? m_pendingBirthTransform : m_controlPointTransform);
+    // World emitter offsets bypass the layer basis. Undo it before initializers
+    // sample the birth position; the common birth path applies it afterward.
+    // A collapsed basis cannot represent this offset in local coordinates.
+    return glm::determinant (basis) == 0.0f ? origin : glm::inverse (basis) * origin;
+}
+
 EmitterFunc CParticle::createBoxEmitter (const ParticleEmitter& emitter) {
     includeControlPoint (emitter.controlPoint);
     DynamicValue* countOverride = getInstanceOverride ().count->value.get ();
@@ -1089,11 +1098,12 @@ EmitterFunc CParticle::createBoxEmitter (const ParticleEmitter& emitter) {
 		}
 
 	    }
+	    const glm::vec3 emitterOrigin = resolveEmitterOrigin (transformedEmitterOrigin);
 	    // Emit particles
 	    for (uint32_t i = 0; i < toEmit && count < particles.size (); i++) {
 		auto& p = particles[count];
 
-		glm::vec3 spawnOrigin = transformedEmitterOrigin;
+		glm::vec3 spawnOrigin = emitterOrigin;
 		if (controlPointIndex >= 0 && controlPointIndex < static_cast<int> (m_controlPoints.size ())) {
 		    spawnOrigin += m_controlPoints[controlPointIndex].position;
 		}
@@ -1205,11 +1215,12 @@ EmitterFunc CParticle::createSphereEmitter (const ParticleEmitter& emitter) {
 	    }
 	}
 
+	const glm::vec3 emitterOrigin = resolveEmitterOrigin (transformedEmitterOrigin);
 	for (uint32_t i = 0; i < toEmit && count < particles.size (); i++) {
 	    auto& p = particles[count];
 
 	    // Determine spawn origin (control point or emitter origin)
-	    glm::vec3 spawnOrigin = transformedEmitterOrigin;
+	    glm::vec3 spawnOrigin = emitterOrigin;
 	    if (controlPointIndex >= 0 && controlPointIndex < static_cast<int> (m_controlPoints.size ())) {
 		spawnOrigin += m_controlPoints[controlPointIndex].position;
 	    }
