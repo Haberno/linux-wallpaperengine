@@ -590,6 +590,10 @@ void CParticle::stop () {
     }
     for (auto& child : m_followChildren) {
 	for (auto& instance : child.instances) {
+	    // Native stop discards active children but keeps already-free pool slots.
+	    // Our renderers stay allocated; the next use of an active slot is fresh.
+	    if (instance.parentSerial != 0 || instance.renderer->hasLivingParticles ())
+		instance.hasStarted = false;
 	    instance.parentSerial = 0;
 	    instance.renderer->stop ();
 	}
@@ -622,8 +626,12 @@ void CParticle::updateFollowChildren (const uint32_t firstNewParticle) {
 	    slot->parentSerial = particle.serial;
 	    slot->renderer->stop ();
 	    slot->renderer->m_simulationTime = 0.0f;
-	    // Refresh this renderer's derived parameters from the raw root overrides.
-	    slot->renderer->m_instanceParametersDirty = true;
+	    // Native samples raw overrides on first activation. Recycling retains
+	    // the cache, including any explicit root refresh since the previous use.
+	    if (!slot->hasStarted) {
+		slot->renderer->m_instanceParametersDirty = true;
+		slot->hasStarted = true;
+	    }
 	    slot->renderer->m_time = g_Time;
 	    slot->renderer->play ();
 	}

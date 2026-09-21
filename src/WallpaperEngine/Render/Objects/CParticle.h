@@ -275,6 +275,7 @@ private:
 	struct Instance {
 	    std::unique_ptr<CParticle> renderer;
 	    uint64_t parentSerial = 0;
+	    bool hasStarted = false;
 	};
 	std::vector<Instance> instances;
     };
