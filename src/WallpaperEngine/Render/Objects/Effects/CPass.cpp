@@ -296,7 +296,9 @@ std::shared_ptr<const TextureProvider> CPass::resolveTexture0 () {
 	return texture0;
     }
 
-    auto& chain = it->second;
+    // An unavailable system image may become ready later. Walking the stored
+    // head would permanently discard it when selecting this frame's fallback.
+    auto chain = it->second;
 
     do {
 	texture0 = chain->texture;
