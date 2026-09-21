@@ -294,6 +294,7 @@ private:
     std::map<int, std::shared_ptr<TextureChainEntry>> m_textures = {};
     /** Stable pointer-backed {1/w, 1/h, w, h} uniforms for every resolved texture slot. */
     std::map<int, glm::vec4> m_textureTexels = {};
+    std::vector<std::pair<int, GLint>> m_cookieSamplerBindings;
     /** Whether this pass currently holds usage counts on m_textures, see adjustTextureUsageCounts */
     mutable bool m_texturesUsageCounted = false;
 

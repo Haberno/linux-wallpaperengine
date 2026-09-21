@@ -272,6 +272,8 @@ ObjectParser::parseLight (const JSON& it, const Project& project, ObjectData bas
 	    .exponent = it.user ("exponent", properties, 2.0f),
 	    .innerCone = it.user ("innercone", properties, 20.0f),
 	    .outerCone = it.user ("outercone", properties, 30.0f),
+	    .useCookie = it.optional ("usecookie", false),
+	    .cookie = it.optional ("cookie", std::string {}),
 	    .controlPoint = it.user ("controlpoint", properties, glm::vec3 (2.0f, 0.0f, 0.0f)),
 	    .cascadeDistances = glm::vec3 (
 		it.optional ("cascadedistance0", 3.0f), it.optional ("cascadedistance1", 10.0f),

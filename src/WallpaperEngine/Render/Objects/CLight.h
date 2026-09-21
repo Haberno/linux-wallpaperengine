@@ -17,6 +17,12 @@ using namespace WallpaperEngine::Scripting;
 class CLight final : public ScriptableObject {
 public:
     CLight (Wallpapers::CScene& scene, const Light& light);
+    ~CLight () override;
+
+    /** Resolve after layer composites exist; retain video and dynamic providers. */
+    void initializeCookie ();
+    [[nodiscard]] const std::shared_ptr<const TextureProvider>& getCookie () const { return m_cookie; }
+    [[nodiscard]] glm::mat4 getCookieProjection () const;
 
     [[nodiscard]] const Light& getLight () const;
 
@@ -53,5 +59,6 @@ public:
 private:
     [[nodiscard]] glm::mat4 resolveLightMatrix () const;
     const Light& m_light;
+    std::shared_ptr<const TextureProvider> m_cookie;
 };
 } // namespace WallpaperEngine::Render::Objects

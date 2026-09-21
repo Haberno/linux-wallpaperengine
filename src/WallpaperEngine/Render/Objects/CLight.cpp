@@ -1,4 +1,5 @@
 #include "CLight.h"
+#include "WallpaperEngine/Render/CTexture.h"
 
 #include <algorithm>
 #include <array>
@@ -26,6 +27,67 @@ CLight::CLight (Wallpapers::CScene& scene, const Light& light) :
 }
 
 const Light& CLight::getLight () const { return this->m_light; }
+
+CLight::~CLight () {
+    if (m_cookie) m_cookie->decrementUsageCount ();
+}
+
+void CLight::initializeCookie () {
+    if (m_cookie || m_light.type != LightData::Type_Spot || !m_light.useCookie) return;
+    const auto& name = m_light.cookie;
+    if (!name.empty ()) {
+	if (name.starts_with ("_rt_") || name.starts_with ("_alias_")) {
+	    m_cookie = getScene ().find (name);
+	    if (const auto target = std::dynamic_pointer_cast<const CFBO> (m_cookie)) {
+		getScene ().retainRenderTarget (*target);
+	    }
+	} else {
+	    try { m_cookie = getScene ().resolveTexture (name); }
+	    catch (const std::runtime_error& error) {
+		sLog.error ("Cannot load light cookie ", name, ": ", error.what ());
+	    }
+	}
+    }
+    if (!name.empty () && !m_cookie) {
+	// Native keeps a missing named texture distinct from an empty selection:
+	// a nearest-filtered 6x6 black/yellow checker, not the flashlight default.
+	auto texture = std::make_unique<Texture> ();
+	texture->format = TextureFormat_ARGB8888;
+	texture->flags = TextureFlags_NoInterpolation;
+	texture->width = texture->height = texture->textureWidth = texture->textureHeight = 6;
+	texture->imageCount = 1;
+	auto mip = std::make_shared<Mipmap> ();
+	mip->width = mip->height = 6;
+	mip->uncompressedSize = 6 * 6 * 4;
+	mip->uncompressedData = std::make_unique<char[]> (mip->uncompressedSize);
+	for (int y = 0; y < 6; ++y) for (int x = 0; x < 6; ++x) {
+	    auto* pixel = mip->uncompressedData.get () + (y * 6 + x) * 4;
+	    pixel[0] = pixel[1] = (x + y) % 2 ? static_cast<char> (255) : 0;
+	    pixel[2] = 0;
+	    pixel[3] = static_cast<char> (255);
+	}
+	texture->images[0].push_back (std::move (mip));
+	m_cookie = std::make_shared<CTexture> (getScene ().getContext (), std::move (texture));
+    }
+    if (!m_cookie) m_cookie = getScene ().resolveTexture ("cookie/flashlight1");
+    m_cookie->incrementUsageCount ();
+}
+
+glm::mat4 CLight::getCookieProjection () const {
+    const glm::mat4 world = resolveLightMatrix ();
+    const glm::vec3 right = glm::normalize (glm::vec3 (world[2]));
+    const glm::vec3 up = glm::normalize (glm::vec3 (world[1]));
+    const glm::vec3 back = -glm::normalize (glm::vec3 (world[0]));
+    const glm::vec3 origin (world[3]);
+    const glm::mat4 view (
+	glm::vec4 (right.x, up.x, back.x, 0), glm::vec4 (right.y, up.y, back.y, 0),
+	glm::vec4 (right.z, up.z, back.z, 0),
+	glm::vec4 (-glm::dot (right, origin), -glm::dot (up, origin), -glm::dot (back, origin), 1)
+    );
+    const float nearPlane = getScene ().getCamera ().isOrthogonal () ? 1.0f : 0.05f;
+    return glm::perspective (glm::radians (2.0f * m_light.outerCone->value->getFloat ()),
+	1.0f, nearPlane, std::max (m_light.radius->value->getFloat (), nearPlane + 0.01f)) * view;
+}
 
 glm::mat4 CLight::resolveLightMatrix () const {
     glm::mat4 world = this->resolveWorldMatrix ();

@@ -369,9 +369,33 @@ void CPass::bindTextureUnit (int index, const std::shared_ptr<const TextureProvi
 	? m_activeSamplers[index]
 	: m_uniforms.contains ("g_Texture" + std::to_string (index))
 	    || m_referenceUniforms.contains ("g_Texture" + std::to_string (index));
+    const auto& scene = this->m_renderable.getScene ();
+    const bool cookie = scene.isLightCookieAlias (texture.get ());
+    const auto bound = cookie && scene.getLightCookie () && scene.getLightCookie ()->isReady ()
+	? scene.getLightCookie () : texture;
     if (samplerActive) {
 	glActiveTexture (GL_TEXTURE0 + index);
-	glBindTexture (GL_TEXTURE_2D, texture->getTextureID (frame));
+	glBindTexture (GL_TEXTURE_2D, bound->getTextureID (frame));
+	if (cookie) {
+	    if (std::ranges::find (m_cookieSamplerBindings, index, &std::pair<int, GLint>::first)
+		== m_cookieSamplerBindings.end ()) {
+		GLint previous;
+		glGetIntegeri_v (GL_SAMPLER_BINDING, index, &previous);
+		m_cookieSamplerBindings.emplace_back (index, previous);
+	    }
+	    const GLuint sampler = this->m_renderable.getScene ().getLightCookieSampler ();
+	    // The cookie overrides wrapping only. Native retains point/linear and mip
+	    // filtering of the source, including textures also used by ordinary layers.
+	    GLint minFilter, magFilter;
+	    GLfloat anisotropy;
+	    glGetTexParameteriv (GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, &minFilter);
+	    glGetTexParameteriv (GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, &magFilter);
+	    glGetTexParameterfv (GL_TEXTURE_2D, GL_TEXTURE_MAX_ANISOTROPY, &anisotropy);
+	    glSamplerParameteri (sampler, GL_TEXTURE_MIN_FILTER, minFilter);
+	    glSamplerParameteri (sampler, GL_TEXTURE_MAG_FILTER, magFilter);
+	    glSamplerParameterf (sampler, GL_TEXTURE_MAX_ANISOTROPY, anisotropy);
+	    glBindSampler (index, sampler);
+	}
     }
     // Resolution/texel/mipmap uniforms can be active without the sampler itself.
     if (const auto resolution = m_effectTextureResolutions.find (index); resolution != m_effectTextureResolutions.end ()) {
@@ -599,6 +623,8 @@ void CPass::renderGeometry () const {
 }
 
 void CPass::cleanupRenderSetup () {
+    for (const auto& [index, sampler] : m_cookieSamplerBindings) glBindSampler (index, sampler);
+    m_cookieSamplerBindings.clear ();
     if (this->m_cleanupAttribsCallback) {
 	this->m_cleanupAttribsCallback ();
     } else {
@@ -847,6 +873,10 @@ void CPass::setupShaders () {
 
     if (lights.spotCount > 0) {
 	this->m_combos.insert_or_assign ("LIGHTS_SPOT", lights.spotCount);
+    }
+    if (lights.spotCookieMask != 0) {
+	this->m_combos.insert_or_assign ("LIGHTS_COOKIE", 1);
+	this->m_combos.insert_or_assign ("LIGHTS_SPOT_COOKIE_MASK", static_cast<int> (lights.spotCookieMask));
     }
 
     if (lights.spotShadowCount > 0) {
@@ -1352,6 +1382,9 @@ void CPass::setupUniforms () {
 	this->addUniform ("g_LSpot_Direction", lights.spotDirections.data (), lights.spotCount);
 	this->addUniform ("g_LSpot_Color", lights.spotColors.data (), lights.spotCount);
 	this->addUniform ("g_LSpot_Exponent", lights.spotExponents.data (), lights.spotCount);
+	if (lights.spotCookieMask != 0) {
+	    this->addUniform ("g_LSpot_CookieProjection", lights.spotCookieMatrices.data (), lights.spotCount);
+	}
 	if (lights.spotShadowCount > 0) {
 	    this->addUniform ("g_LSpot_ShadowEnabled", lights.spotShadowEnabled.data (), lights.spotCount);
 	}

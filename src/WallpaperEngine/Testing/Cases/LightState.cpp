@@ -17,6 +17,21 @@ using WallpaperEngine::Data::Model::LightData;
 using WallpaperEngine::Render::Objects::CLight;
 using WallpaperEngine::Render::Wallpapers::CScene;
 
+TEST_CASE ("Spotlights retain authored cookie selection", "[lighting][cookie]") {
+    using namespace WallpaperEngine::Data::Model;
+    using WallpaperEngine::Data::Parsers::ObjectParser;
+    using WallpaperEngine::Data::JSON::JSON;
+    const Project project {};
+    const auto defaults = ObjectParser::parse (JSON::parse (R"({"id":2,"name":"spot","light":"lspot"})"), project);
+    CHECK_FALSE (defaults->as<Light> ()->useCookie);
+    CHECK (defaults->as<Light> ()->cookie.empty ());
+    const auto authored = ObjectParser::parse (JSON::parse (
+        R"({"id":2,"name":"spot","light":"lspot","usecookie":true,"cookie":"_rt_imageLayerComposite_4_a"})"
+    ), project);
+    CHECK (authored->as<Light> ()->useCookie);
+    CHECK (authored->as<Light> ()->cookie == "_rt_imageLayerComposite_4_a");
+}
+
 TEST_CASE ("Light volumes preserve native defaults and authored settings", "[lighting][volumetrics]") {
     using namespace WallpaperEngine::Data::Model;
     using WallpaperEngine::Data::Parsers::ObjectParser;

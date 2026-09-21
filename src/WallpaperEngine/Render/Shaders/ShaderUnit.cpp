@@ -842,6 +842,7 @@ std::string ShaderUnit::generateLightingV1 () const {
 	= static_cast<uint32_t> (comboValue ("LIGHTS_DIRECTIONAL_SHADOW_MASK"));
     const uint32_t pointShadowMask = static_cast<uint32_t> (comboValue ("LIGHTS_POINT_SHADOW_MASK"));
     const uint32_t spotShadowMask = static_cast<uint32_t> (comboValue ("LIGHTS_SPOT_SHADOW_MASK"));
+    const uint32_t spotCookieMask = static_cast<uint32_t> (comboValue ("LIGHTS_SPOT_COOKIE_MASK"));
 
     std::vector<std::array<int, 3>> directionalFeatureIndices (
 	directionalLights, std::array<int, 3> { -1, -1, -1 }
@@ -886,6 +887,9 @@ std::string ShaderUnit::generateLightingV1 () const {
 	code += "uniform vec4 g_LSpot_Direction[" + std::to_string (spotLights) + "];\n";
 	code += "uniform vec4 g_LSpot_Color[" + std::to_string (spotLights) + "];\n";
 	code += "uniform vec4 g_LSpot_Exponent[" + std::to_string (spotLights) + "];\n";
+	if (spotCookieMask != 0) {
+	    code += "uniform mat4 g_LSpot_CookieProjection[" + std::to_string (spotLights) + "];\n";
+	}
 	if (spotShadowLights > 0) {
 	    code += "uniform float g_LSpot_ShadowEnabled[" + std::to_string (spotLights) + "];\n";
 	}
@@ -947,10 +951,15 @@ std::string ShaderUnit::generateLightingV1 () const {
 	const int shadowFeature = spotFeatureIndices[i];
 
 	code += "    {\n"
-		"        vec3 lightDelta = g_LSpot_Origin[" + index + "].xyz - worldPos;\n"
-		"        float spotCookie = -dot(normalize(lightDelta), g_LSpot_Direction[" + index + "].xyz);\n"
-		"        spotCookie = smoothstep(g_LSpot_Direction[" + index + "].w,\n"
-		"            g_LSpot_Origin[" + index + "].w, spotCookie);\n";
+		"        vec3 lightDelta = g_LSpot_Origin[" + index + "].xyz - worldPos;\n";
+	if (i < 32 && (spotCookieMask & (uint32_t (1) << i)) != 0) {
+	    code += "        vec3 cookieCoords = CalculateProjectedCoords(worldPos, g_LSpot_CookieProjection[" + index + "]);\n"
+		    "        vec3 spotCookie = texSample2D(COOKIE_SAMPLER, cookieCoords.xy).rgb;\n";
+	} else {
+	    code += "        float spotCookie = -dot(normalize(lightDelta), g_LSpot_Direction[" + index + "].xyz);\n"
+		    "        spotCookie = smoothstep(g_LSpot_Direction[" + index + "].w,\n"
+		    "            g_LSpot_Origin[" + index + "].w, spotCookie);\n";
+	}
 	if (shadowFeature >= 0) {
 	    const std::string featureIndex = std::to_string (shadowFeature);
 	    code += "        float shadowFactor = 1.0;\n"

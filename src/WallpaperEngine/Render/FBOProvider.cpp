@@ -13,7 +13,7 @@ FBOProvider::FBOProvider (const FBOProvider* parent) :
 bool FBOProvider::isFixedSizeTarget (const std::string_view name) {
     // These sizes are part of the renderer protocol rather than scene resolution.
     // Shadow viewport transforms are expressed against SHADOW_ATLAS_SIZE, and a
-    // light cookie is deliberately a single neutral texel.
+    // light cookie alias retains the native diagnostic texture's initial dimensions.
     return name == "_rt_shadowAtlas" || name == "_alias_lightCookie";
 }
 

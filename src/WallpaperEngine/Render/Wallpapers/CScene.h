@@ -79,6 +79,11 @@ public:
     resolveUserTexture (const std::string& name, uint32_t flags, float aspect) const;
     void registerUserTexturePass (Objects::Effects::CPass* pass);
     void unregisterUserTexturePass (Objects::Effects::CPass* pass);
+    [[nodiscard]] bool isLightCookieAlias (const TextureProvider* texture) const {
+	return texture == m_lightCookieAlias.get ();
+    }
+    [[nodiscard]] const std::shared_ptr<const TextureProvider>& getLightCookie () const { return m_lightCookie; }
+    [[nodiscard]] GLuint getLightCookieSampler ();
 
     [[nodiscard]] int getWidth () const override;
     [[nodiscard]] int getHeight () const override;
@@ -225,6 +230,8 @@ public:
 	std::vector<glm::vec4> spotColors = {};
 	/** x = falloff exponent, yzw unused */
 	std::vector<glm::vec4> spotExponents = {};
+	uint32_t spotCookieMask = 0;
+	std::vector<glm::mat4> spotCookieMatrices = {};
 	/** Atlas feature index per spotlight, or -1 when the light does not cast shadows. */
 	std::vector<int> spotShadowFeatures = {};
 	std::vector<float> spotShadowEnabled = {};
@@ -349,6 +356,9 @@ private:
     std::shared_ptr<const CFBO> _rt_8FrameBuffer = nullptr;
     std::shared_ptr<const CFBO> _rt_Bloom = nullptr;
     std::shared_ptr<const CFBO> _rt_shadowAtlas = nullptr;
+    std::shared_ptr<const CFBO> m_lightCookieAlias;
+    std::shared_ptr<const TextureProvider> m_lightCookie;
+    GLuint m_lightCookieSampler = GL_NONE;
     std::shared_ptr<const CFBO> m_compositionRenderTarget = nullptr;
 
     static constexpr int SHADOW_ATLAS_SIZE = 2048;

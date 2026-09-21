@@ -828,6 +828,8 @@ struct LightData {
     /** Spot cone angles in degrees, packed as cosines for the shader */
     UserSettingUniquePtr innerCone;
     UserSettingUniquePtr outerCone;
+    bool useCookie;
+    std::string cookie;
     /** Tube light's second endpoint in the light's local coordinate system */
     UserSettingUniquePtr controlPoint;
     /** Far distances of the three nested directional-light shadow cascades. */

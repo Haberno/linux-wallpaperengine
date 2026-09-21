@@ -185,6 +185,7 @@ CScene::CScene (
 	this->m_lights.spotDirections.resize (this->m_lights.spotCount, glm::vec4 (0.0f));
 	this->m_lights.spotColors.resize (this->m_lights.spotCount, glm::vec4 (0.0f));
 	this->m_lights.spotExponents.resize (this->m_lights.spotCount, glm::vec4 (0.0f));
+	this->m_lights.spotCookieMatrices.resize (this->m_lights.spotCount, glm::mat4 (1.0f));
 	this->m_lights.spotShadowFeatures.resize (this->m_lights.spotCount, -1);
 	this->m_lights.spotShadowEnabled.resize (this->m_lights.spotCount, 0.0f);
 	this->m_lights.shadowMatrices.resize (this->m_lights.shadowFeatureCount, glm::mat4 (1.0f));
@@ -222,6 +223,7 @@ CScene::CScene (
 		}
 		point++;
 	    } else if (light->type == LightData::Type_Spot) {
+		if (light->useCookie && spot < 32) this->m_lights.spotCookieMask |= uint32_t (1) << spot;
 		if (light->castShadow) {
 		    this->m_lights.spotShadowFeatures[spot] = spotFeature++;
 		    if (spot < 32) {
@@ -364,10 +366,20 @@ CScene::CScene (
 	    { sceneWidth, sceneHeight }, { sceneWidth, sceneHeight }
 	);
     }
-    // Cookies are ordinary color textures and cannot alias the depth-comparison atlas.
-    this->create (
-	"_alias_lightCookie", TextureFormat_ARGB8888, TextureFlags_ClampUVs, 1.0, { 1, 1 }, { 1, 1 }
+    // Native creates the alias from its 6x6 diagnostic texture. Material
+    // resolution uniforms retain this initial size when the selected pixels change.
+    this->m_lightCookieAlias = this->create (
+	"_alias_lightCookie", TextureFormat_ARGB8888, TextureFlags_NoInterpolation | TextureFlags_ClampUVs,
+	1.0, { 6, 6 }, { 6, 6 }
     );
+    std::array<unsigned char, 6 * 6 * 4> cookieFallback {};
+    for (int y = 0; y < 6; ++y) for (int x = 0; x < 6; ++x) {
+	const int pixel = (y * 6 + x) * 4;
+	cookieFallback[pixel] = cookieFallback[pixel + 1] = (x + y) % 2 ? 255 : 0;
+	cookieFallback[pixel + 3] = 255;
+    }
+    glBindTexture (GL_TEXTURE_2D, m_lightCookieAlias->getTextureID (0));
+    glTexSubImage2D (GL_TEXTURE_2D, 0, 0, 0, 6, 6, GL_RGBA, GL_UNSIGNED_BYTE, cookieFallback.data ());
 
     // set clear color
     const glm::vec3 clearColor = scene->colors.clear->value->getVec3 ();
@@ -380,6 +392,16 @@ CScene::CScene (
 	this->loadingCheckpoint (true);
     }
 
+    // Shader light slots are assigned in authored order, while dependency
+    // construction may create their parents first. Keep per-frame uniforms and
+    // cookie/shadow masks on the same light identities.
+    m_lightObjects.clear ();
+    for (const auto& object : scene->objects) {
+	if (const auto found = m_objects.find (object->id); found != m_objects.end ()) {
+	    if (auto* light = dynamic_cast<Objects::CLight*> (found->second)) m_lightObjects.push_back (light);
+	}
+    }
+    for (auto* light : m_lightObjects) light->initializeCookie ();
     // copy over objects by render order
     for (const auto& object : scene->objects) {
 	this->addObjectToRenderOrder (*object);
@@ -413,7 +435,21 @@ CScene::CScene (
     constructionGuard.cancel ();
 }
 
-CScene::~CScene () { this->destroyObjects (); }
+CScene::~CScene () {
+    this->destroyObjects ();
+    if (m_lightCookieSampler != GL_NONE) glDeleteSamplers (1, &m_lightCookieSampler);
+}
+
+GLuint CScene::getLightCookieSampler () {
+    if (m_lightCookieSampler == GL_NONE) {
+	glGenSamplers (1, &m_lightCookieSampler);
+	glSamplerParameteri (m_lightCookieSampler, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+	glSamplerParameteri (m_lightCookieSampler, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+	glSamplerParameteri (m_lightCookieSampler, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_BORDER);
+	glSamplerParameteri (m_lightCookieSampler, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_BORDER);
+    }
+    return m_lightCookieSampler;
+}
 
 void CScene::loadingCheckpoint (bool canCancel) const {
     if (!this->m_loadingCheckpoint) return;
@@ -1572,6 +1608,8 @@ void CScene::updateLightState () {
     int spot = 0;
     int tube = 0;
 
+    m_lightCookie.reset ();
+
     for (const auto* light : this->m_lightObjects) {
 	const auto& data = light->getLight ();
 
@@ -1634,10 +1672,17 @@ void CScene::updateLightState () {
 	    this->m_lights.spotColors[spot]
 		= glm::vec4 (light->getPremultipliedColor (), data.radius->value->getFloat ());
 	    this->m_lights.spotExponents[spot] = glm::vec4 (data.exponent->value->getFloat (), 0.0f, 0.0f, 0.0f);
+	    if (data.useCookie) {
+		this->m_lights.spotCookieMatrices[spot] = light->getCookieProjection ();
+		if (light->isVisibleThroughParents () && data.groupVisible->value->getBool ()) {
+		    m_lightCookie = light->getCookie ();
+		}
+	    }
 
 	    const int feature = this->m_lights.spotShadowFeatures[spot];
 	    if (data.castShadow && feature >= 0) {
-		this->m_lights.shadowMatrices[feature] = Objects::CLight::calculateSpotShadowViewProjection (
+		this->m_lights.shadowMatrices[feature] = data.useCookie ? light->getCookieProjection ()
+		    : Objects::CLight::calculateSpotShadowViewProjection (
 		    light->getWorldPosition (), light->getWorldDirection (), data.outerCone->value->getFloat (),
 		    data.radius->value->getFloat ()
 		);
