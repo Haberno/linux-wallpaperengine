@@ -8,6 +8,8 @@
 #include "WallpaperEngine/Render/WallpaperState.h"
 
 #include "CScene.h"
+#include "WallpaperEngine/Render/CTexture.h"
+#include "WallpaperEngine/Data/Parsers/TextureParser.h"
 #include "HdrBloom.h"
 #include "VolumetricLights.h"
 #include "WallpaperEngine/Logging/Log.h"
@@ -19,6 +21,7 @@
 #include <algorithm>
 #include <cmath>
 #include <functional>
+#include <fstream>
 #include <numeric>
 #include <ranges>
 
@@ -1946,4 +1949,29 @@ void CScene::moveLayerToScriptableIndex (CObject* layer, int index) {
 
 std::shared_ptr<const TextureProvider> CScene::resolveTexture (const std::string& name) const {
     return this->getContext ().resolveTexture (name, this->getAssetLocator (), this->getScene ().project.properties);
+}
+
+std::shared_ptr<const TextureProvider> CScene::resolveUserTexture (const std::string& filename, uint32_t flags, float aspect) const {
+    const std::filesystem::path path (filename);
+    if (!path.is_absolute ()) return resolveTexture (filename);
+    // Native shares normalized user paths at the same reference aspect. The
+    // first load fixes sampling for every use of that image, independent of the
+    // property name. Keep these separate from ordinary compiled-texture entries.
+    const std::string key = path.lexically_normal ().string ()
+	+ "\x1fuser:" + std::to_string (std::lround (aspect * 10.0f));
+    if (const auto found = m_userTextures.find (key); found != m_userTextures.end ()) {
+	return found->second;
+    }
+    std::ifstream input (path, std::ios::binary);
+    if (!input) throw std::runtime_error ("Cannot open user image " + filename);
+    const std::string contents (std::istreambuf_iterator<char> (input), {});
+    auto parsed = TextureParser::parseImage (contents, Data::JSON::JSON {
+	{"nomip", true},
+	{"nointerpolation", (flags & TextureFlags_NoInterpolation) != 0},
+	{"clampuvs", (flags & TextureFlags_ClampUVs) != 0}
+    });
+    parsed->anisotropy = 1.0f;
+    auto texture = std::make_shared<CTexture> (getContext (), std::move (parsed));
+    m_userTextures.emplace (key, texture);
+    return texture;
 }

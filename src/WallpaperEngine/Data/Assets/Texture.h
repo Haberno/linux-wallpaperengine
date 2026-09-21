@@ -167,6 +167,7 @@ struct TextureVariant {
 };
 
 struct Texture {
+    float anisotropy = 8.0f;
     /** The version of the texture container */
     ContainerVersion containerVersion = ContainerVersion_UNKNOWN;
     /** The version of the animated data */

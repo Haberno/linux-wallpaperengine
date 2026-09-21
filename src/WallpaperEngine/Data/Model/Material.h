@@ -4,6 +4,7 @@
 #include <optional>
 #include <string>
 #include <vector>
+#include <glm/vec2.hpp>
 
 #include "Types.h"
 
@@ -46,6 +47,8 @@ struct MaterialPass {
     TextureMap textures;
     /** List of user textures defined for this pass */
     TextureMap usertextures;
+    /** Explicit user-image reference dimensions suppress authored texture flags. */
+    glm::vec2 userTextureReference = glm::vec2 (0.0f);
     /** The combos and their values to pass onto the shader */
     ComboMap combos;
     /** Constant shader values (e.g., overbright, bloom settings) */

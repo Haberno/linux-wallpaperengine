@@ -43,6 +43,7 @@ ModelUniquePtr ModelParser::parse (const JSON& file, const Project& project, con
 	.filename = filename,
 	.material = MaterialParser::load (project, material),
 	.solidlayer = file.optional ("solidlayer", false),
+	.instanced = file.optional ("instanced", false),
 	.fullscreen = file.optional ("fullscreen", false),
 	.passthrough = file.optional ("passthrough", false),
 	.autosize = file.optional ("autosize", false),

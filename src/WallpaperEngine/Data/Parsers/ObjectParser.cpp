@@ -315,7 +315,14 @@ ObjectParser::parseImage (const JSON& it, const Project& project, ObjectData bas
 
     const auto instance = it.optional ("instance");
 
-    if (instance.has_value () && instance->is_object () && !result->model->material->passes.empty ()) {
+    if (result->model->instanced && !result->model->material->passes.empty ()) {
+	auto& firstPass = **result->model->material->passes.begin ();
+	firstPass.userTextureReference = result->sizeSpecified ? result->size
+	    : glm::vec2 (result->model->width.value_or (0), result->model->height.value_or (0));
+    }
+
+    if (result->model->instanced && instance.has_value () && instance->is_object ()
+	&& !result->model->material->passes.empty ()) {
 	auto& firstPass = **result->model->material->passes.begin ();
 	const auto instanceTextures = instance->optional ("textures");
 
@@ -404,6 +411,7 @@ ImageEffectPassOverrideUniquePtr ObjectParser::parseEffectPass (const JSON& it, 
     const auto& textures = it.optional ("textures");
     const auto& constants = it.optional ("constantshadervalues");
     const auto& usertextures = it.optional ("usertextures");
+    const auto reference = it.optional ("usertexturereference");
 
     // TODO: PARSE CONSTANT SHADER VALUES AND FIND REFS?
     return std::make_unique<ImageEffectPassOverride> (ImageEffectPassOverride {
@@ -414,6 +422,8 @@ ImageEffectPassOverrideUniquePtr ObjectParser::parseEffectPass (const JSON& it, 
 	.textures = textures.has_value () ? TextureParser::parseTextureMap (textures.value ()) : TextureMap {},
 	.usertextures
 	= usertextures.has_value () ? TextureParser::parseTextureMap (usertextures.value ()) : TextureMap {},
+	.userTextureReferenceWidth = reference.has_value () ? reference->optional<float> ("width") : std::nullopt,
+	.userTextureReferenceHeight = reference.has_value () ? reference->optional<float> ("height") : std::nullopt,
     });
 }
 

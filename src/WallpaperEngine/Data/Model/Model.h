@@ -15,6 +15,7 @@ struct ModelStruct {
     MaterialUniquePtr material;
     /** Whether this model is a solid layer */
     bool solidlayer;
+    bool instanced = false;
     /** Whether this model is a fullscreen layer */
     bool fullscreen;
     /** Whether this model is a passthrough layer */

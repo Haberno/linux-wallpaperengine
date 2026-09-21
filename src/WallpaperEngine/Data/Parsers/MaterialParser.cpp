@@ -52,6 +52,7 @@ MaterialPassUniquePtr
 MaterialParser::parsePass (const JSON& it, const Project& project, const bool modelDepthDefaults) {
     const auto textures = it.optional ("textures");
     const auto usertextures = it.optional ("usertextures");
+    const auto reference = it.optional ("usertexturereference");
     const auto combos = it.optional ("combos");
     JSON constants = it.optional ("constantshadervalues").value_or (JSON::object ());
     const auto userValues = it.optional ("usershadervalues");
@@ -81,6 +82,8 @@ MaterialParser::parsePass (const JSON& it, const Project& project, const bool mo
 	.shader = it.require<std::string> ("shader", "Material pass must have a shader"),
 	.textures = textures.has_value () ? TextureParser::parseTextureMap (*textures) : TextureMap {},
 	.usertextures = usertextures.has_value () ? TextureParser::parseTextureMap (*usertextures) : TextureMap {},
+	.userTextureReference = reference.has_value ()
+	    ? glm::vec2 (reference->optional ("width", 0.0f), reference->optional ("height", 0.0f)) : glm::vec2 (0.0f),
 	.combos = combos.has_value () ? parseCombos (*combos) : ComboMap {},
 	.constants = ShaderConstantParser::parse (constants, project),
     });

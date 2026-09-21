@@ -758,6 +758,78 @@ TextureUniquePtr TextureParser::selectVariants (const Texture& texture, const Va
     return result;
 }
 
+TextureUniquePtr TextureParser::parseImage (const std::string& contents, const JSON& metadata) {
+    auto result = std::make_unique<Texture> ();
+    auto mipmap = std::make_shared<Mipmap> ();
+    int width = 0, height = 0, channels = 0;
+    DecodedPixelsPtr pixels (stbi_load_from_memory (
+	reinterpret_cast<const unsigned char*> (contents.data ()), static_cast<int> (contents.size ()), &width,
+	&height, &channels, 4
+    ));
+    if (!pixels || width <= 0 || height <= 0) {
+	throw std::runtime_error ("Cannot decode source image");
+    }
+    result->format = TextureFormat_ARGB8888;
+    const auto format = metadata.value ("format", std::string ("rgba8888"));
+    size_t components = 4;
+    if (format == "rg88" || format == "rg88n") {
+	result->format = TextureFormat_RG88;
+	components = 2;
+    } else if (format == "r8") {
+	result->format = TextureFormat_R8;
+	components = 1;
+    } else if (format != "rgba8888") {
+	throw std::runtime_error ("Unsupported source texture format " + format);
+    }
+    result->width = result->textureWidth = mipmap->width = width;
+    result->height = result->textureHeight = mipmap->height = height;
+    result->imageCount = 1;
+    if (metadata.value ("nointerpolation", false)) {
+	result->flags |= TextureFlags_NoInterpolation;
+    }
+    if (metadata.value ("clampuvs", false)) {
+	result->flags |= TextureFlags_ClampUVs;
+    }
+    mipmap->uncompressedSize = static_cast<int> (static_cast<size_t> (width) * height * components);
+    mipmap->uncompressedData = std::make_unique<char[]> (mipmap->uncompressedSize);
+    for (size_t pixel = 0; pixel < static_cast<size_t> (width) * height; ++pixel) {
+	std::memcpy (mipmap->uncompressedData.get () + pixel * components, pixels.get () + pixel * 4, components);
+    }
+    result->images[0].push_back (mipmap);
+    // The shipped sources request nomip. For other sources, create the chain
+    // on the CPU so the ordinary uploader sees the same complete mip layout.
+    if (!metadata.value ("nomip", false)) {
+	while (mipmap->width > 1 || mipmap->height > 1) {
+	    auto next = std::make_shared<Mipmap> ();
+	    next->width = std::max (1u, mipmap->width / 2);
+	    next->height = std::max (1u, mipmap->height / 2);
+	    next->uncompressedSize = static_cast<int> (next->width * next->height * components);
+	    next->uncompressedData = std::make_unique<char[]> (next->uncompressedSize);
+	    for (uint32_t y = 0; y < next->height; ++y) {
+		for (uint32_t x = 0; x < next->width; ++x) {
+		    for (size_t channel = 0; channel < components; ++channel) {
+			unsigned sum = 0;
+			for (uint32_t dy = 0; dy < 2; ++dy) {
+			    for (uint32_t dx = 0; dx < 2; ++dx) {
+				const size_t at = (std::min (y * 2 + dy, mipmap->height - 1) * mipmap->width
+						   + std::min (x * 2 + dx, mipmap->width - 1))
+					* components
+				    + channel;
+				sum += static_cast<unsigned char> (mipmap->uncompressedData[at]);
+			    }
+			}
+			next->uncompressedData[(y * next->width + x) * components + channel]
+			    = static_cast<char> (sum / 4);
+		    }
+		}
+	    }
+	    result->images[0].push_back (next);
+	    mipmap = std::move (next);
+	}
+    }
+    return result;
+}
+
 TextureUniquePtr
 TextureParser::load (const WallpaperEngine::Assets::AssetLocator& locator, const std::string& filename) {
     const auto metadataLoader = [&locator] (const std::string& name) {
@@ -773,74 +845,7 @@ TextureParser::load (const WallpaperEngine::Assets::AssetLocator& locator, const
 	    metadataLoader (filename + ".tex-json"), filename + ".tex-json"
 	);
 	const auto contents = locator.readString (std::filesystem::path ("materials") / (filename + ".png"));
-	auto result = std::make_unique<Texture> ();
-	auto mipmap = std::make_shared<Mipmap> ();
-	int width = 0, height = 0, channels = 0;
-	DecodedPixelsPtr pixels (stbi_load_from_memory (
-	    reinterpret_cast<const unsigned char*> (contents.data ()), static_cast<int> (contents.size ()), &width,
-	    &height, &channels, 4
-	));
-	if (!pixels || width <= 0 || height <= 0) {
-	    throw std::runtime_error ("Cannot decode source texture " + filename);
-	}
-	result->format = TextureFormat_ARGB8888;
-	const auto format = metadata.value ("format", std::string ("rgba8888"));
-	size_t components = 4;
-	if (format == "rg88" || format == "rg88n") {
-	    result->format = TextureFormat_RG88;
-	    components = 2;
-	} else if (format == "r8") {
-	    result->format = TextureFormat_R8;
-	    components = 1;
-	} else if (format != "rgba8888") {
-	    throw std::runtime_error ("Unsupported source texture format " + format);
-	}
-	result->width = result->textureWidth = mipmap->width = width;
-	result->height = result->textureHeight = mipmap->height = height;
-	result->imageCount = 1;
-	if (metadata.value ("nointerpolation", false)) {
-	    result->flags |= TextureFlags_NoInterpolation;
-	}
-	if (metadata.value ("clampuvs", false)) {
-	    result->flags |= TextureFlags_ClampUVs;
-	}
-	mipmap->uncompressedSize = static_cast<int> (static_cast<size_t> (width) * height * components);
-	mipmap->uncompressedData = std::make_unique<char[]> (mipmap->uncompressedSize);
-	for (size_t pixel = 0; pixel < static_cast<size_t> (width) * height; ++pixel) {
-	    std::memcpy (mipmap->uncompressedData.get () + pixel * components, pixels.get () + pixel * 4, components);
-	}
-	result->images[0].push_back (mipmap);
-	// The shipped sources request nomip. For other sources, create the chain
-	// on the CPU so the ordinary uploader sees the same complete mip layout.
-	if (!metadata.value ("nomip", false)) {
-	    while (mipmap->width > 1 || mipmap->height > 1) {
-		auto next = std::make_shared<Mipmap> ();
-		next->width = std::max (1u, mipmap->width / 2);
-		next->height = std::max (1u, mipmap->height / 2);
-		next->uncompressedSize = static_cast<int> (next->width * next->height * components);
-		next->uncompressedData = std::make_unique<char[]> (next->uncompressedSize);
-		for (uint32_t y = 0; y < next->height; ++y) {
-		    for (uint32_t x = 0; x < next->width; ++x) {
-			for (size_t channel = 0; channel < components; ++channel) {
-			    unsigned sum = 0;
-			    for (uint32_t dy = 0; dy < 2; ++dy) {
-				for (uint32_t dx = 0; dx < 2; ++dx) {
-				    const size_t at = (std::min (y * 2 + dy, mipmap->height - 1) * mipmap->width
-						       + std::min (x * 2 + dx, mipmap->width - 1))
-					    * components
-					+ channel;
-				    sum += static_cast<unsigned char> (mipmap->uncompressedData[at]);
-				}
-			    }
-			    next->uncompressedData[(y * next->width + x) * components + channel]
-				= static_cast<char> (sum / 4);
-			}
-		    }
-		}
-		result->images[0].push_back (next);
-		mipmap = std::move (next);
-	    }
-	}
+	auto result = parseImage (contents, metadata);
 	parseSpritesheetMetadata (*result, filename, [&metadata] (const std::string&) { return metadata.dump (); });
 	return result;
     }

@@ -72,6 +72,8 @@ struct ImageEffectPassOverride {
     ShaderConstantMap constants;
     TextureMap textures;
     TextureMap usertextures;
+    std::optional<float> userTextureReferenceWidth;
+    std::optional<float> userTextureReferenceHeight;
     std::optional<std::string> shaderOverride; // Overrides MaterialPass::shader when set
 };
 

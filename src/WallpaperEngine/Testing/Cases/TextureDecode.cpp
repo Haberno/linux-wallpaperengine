@@ -450,6 +450,22 @@ TEST_CASE ("source texture imports preserve channels, sampling flags and compile
     CHECK_THROWS (TextureParser::load (AssetLocator (std::move (corrupt)), "source"));
 }
 
+TEST_CASE ("raw user images preserve pixels and use explicit single-level sampling", "[texture][user-image]") {
+    using namespace WallpaperEngine::Data::Assets;
+    using Json = WallpaperEngine::Data::JSON::JSON;
+    const auto texture = TextureParser::parseImage (encodePng (8, 1), Json {
+	{"nomip", true}, {"nointerpolation", true}, {"clampuvs", true}
+    });
+    REQUIRE (texture->images.at (0).size () == 1);
+    CHECK (texture->width == 8);
+    CHECK (texture->height == 8);
+    CHECK (texture->flags == (TextureFlags_NoInterpolation | TextureFlags_ClampUVs));
+    CHECK (texture->images.at (0).front ()->uncompressedSize == 8 * 8 * 4);
+    CHECK (texture->images.at (0).front ()->uncompressedData[0] == 31);
+    CHECK (texture->images.at (0).front ()->uncompressedData[4] == 59);
+    CHECK_THROWS (TextureParser::parseImage ("not an image", Json {{"nomip", true}}));
+}
+
 TEST_CASE ("installed TEXB4 corpus decodes every authored conditional mip chain", "[.][texture-corpus]") {
     const char* root = std::getenv ("LWE_TEXTURE_CORPUS");
     REQUIRE (root != nullptr);

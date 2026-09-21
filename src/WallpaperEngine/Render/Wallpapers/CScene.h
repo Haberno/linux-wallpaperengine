@@ -72,6 +72,8 @@ public:
     [[nodiscard]] GLuint getWallpaperTexture () const override;
     /** Authored textures resolve against this scene's assets and user properties. */
     [[nodiscard]] std::shared_ptr<const TextureProvider> resolveTexture (const std::string& name) const;
+    [[nodiscard]] std::shared_ptr<const TextureProvider>
+    resolveUserTexture (const std::string& name, uint32_t flags, float aspect) const;
 
     [[nodiscard]] int getWidth () const override;
     [[nodiscard]] int getHeight () const override;
@@ -271,6 +273,7 @@ protected:
     friend class CWallpaper;
 
 private:
+    mutable std::map<std::string, std::shared_ptr<const TextureProvider>> m_userTextures;
     std::set<std::string> m_sampledRenderTargets;
     /** Release raw-owned render objects, including during constructor unwinding. */
     void destroyObjects () noexcept;

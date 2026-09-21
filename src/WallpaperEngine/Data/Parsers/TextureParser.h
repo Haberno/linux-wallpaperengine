@@ -22,6 +22,7 @@ public:
     static TextureUniquePtr parse (const BinaryReader& file);
     static TextureUniquePtr parse (const BinaryReader& file, const VariantSelector& selector);
     static TextureUniquePtr load (const WallpaperEngine::Assets::AssetLocator& locator, const std::string& filename);
+    static TextureUniquePtr parseImage (const std::string& contents, const JSON& metadata);
     static TextureUniquePtr selectVariants (const Texture& texture, const VariantSelector& selector);
     static std::vector<uint32_t> selectedVariants (const Texture& texture, const VariantSelector& selector);
     static bool matchesCondition (const JSON& condition, const Properties& properties);

@@ -87,6 +87,8 @@ public:
     void addUniform (const std::string& name, const glm::mat4x3* value, int count = 1);
 
 private:
+    [[nodiscard]] std::shared_ptr<const TextureProvider> resolveUserTexture (int index, const std::string& entry) const;
+    void setupUserTexture (int index, const std::string& entry);
     struct TextureChainEntry {
 	std::shared_ptr<const TextureProvider> texture;
 	std::shared_ptr<TextureChainEntry> next;

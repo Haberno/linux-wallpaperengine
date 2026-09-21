@@ -58,7 +58,7 @@ TEST_CASE ("text parses authored width and row limits") {
 TEST_CASE ("image instances replace material texture defaults without changing sibling instances") {
     auto filesystem = std::make_unique<Container> ();
     filesystem->getVFS ().add (
-	"models/instance.json", R"({"material":"materials/instance.json","width":256,"height":256})"
+	"models/instance.json", R"({"material":"materials/instance.json","instanced":true,"width":256,"height":256})"
     );
     filesystem->getVFS ().add (
 	"materials/instance.json", R"({"passes":[{"shader":"genericimage4",
@@ -71,6 +71,7 @@ TEST_CASE ("image instances replace material texture defaults without changing s
 	"instance":{"textures":["seaweed",null,"extra"],"usertextures":["custom_albedo",null,"custom_extra"]}
     })"), project);
     const auto& pass = *overridden->as<Image> ()->model->material->passes.front ();
+    CHECK (pass.userTextureReference == glm::vec2 (256.0f));
     CHECK (pass.textures.at (0) == "seaweed");
     CHECK (pass.textures.at (1) == "normal");
     CHECK (pass.textures.at (2) == "extra");

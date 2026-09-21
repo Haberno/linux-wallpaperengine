@@ -37,6 +37,12 @@ const ImageEffectPassOverride DEFAULT_OVERRIDE = {};
 const glm::mat4 CPass::s_defaultMatrix = glm::mat4 (1.0f);
 
 namespace {
+TextureMap mergedTextures (const TextureMap& material, const TextureMap& overrides) {
+    TextureMap result = material;
+    for (const auto& [index, texture] : overrides) result.insert_or_assign (index, texture);
+    return result;
+}
+
 std::string textureSizeLabel (const std::shared_ptr<const TextureProvider>& texture) {
     if (texture == nullptr) {
 	return "<null>";
@@ -890,11 +896,18 @@ void CPass::setupShaders () {
 	      }
 	  };
 
+    const auto registerUserTextures = [&] (const TextureMap& textures) {
+	for (const auto& [index, entry] : textures) {
+	    try {
+		registerTextureMetadata (index, resolveUserTexture (index, entry));
+	    } catch (const std::runtime_error&) {
+		// Report unavailable selections during setup; retain authored metadata.
+	    }
+	}
+    };
     registerTextureMetadata (0, texture0);
-    registerAuthoredTextures (this->m_pass.textures);
-    registerAuthoredTextures (this->m_pass.usertextures);
-    registerAuthoredTextures (this->m_override.textures);
-    registerAuthoredTextures (this->m_override.usertextures);
+    registerAuthoredTextures (mergedTextures (m_pass.textures, m_override.textures));
+    registerUserTextures (mergedTextures (m_pass.usertextures, m_override.usertextures));
 
     // TODO: REVIEW THE SHADER TEXTURES HERE, THE ONES PASSED ON TO THE SHADER SHOULD NOT BE IN THE LIST
     // TODO: USED TO BUILD THE TEXTURES LATER
@@ -1029,6 +1042,45 @@ void CPass::leaveProgramSharing () {
     this->m_programSharingGroup.reset ();
 }
 
+std::shared_ptr<const TextureProvider> CPass::resolveUserTexture (int index, const std::string& entry) const {
+    const auto& scene = m_renderable.getScene ();
+    const auto& properties = scene.getScene ().project.properties;
+    std::string name = entry;
+    if (const auto property = properties.find (entry); property != properties.end ()) {
+	name = property->second->getString ();
+    }
+    if (name.empty ()) return nullptr;
+    const auto& originals = m_override.textures.contains (index) ? m_override.textures : m_pass.textures;
+    const auto authored = originals.find (index);
+    if (authored == originals.end ()) return nullptr;
+    glm::vec2 size (m_override.userTextureReferenceWidth.value_or (m_pass.userTextureReference.x),
+	m_override.userTextureReferenceHeight.value_or (m_pass.userTextureReference.y));
+    const bool reference = size.x > 0.0f && size.y > 0.0f;
+    uint32_t flags = 0;
+    if (!reference) {
+	const auto original = authored->second.starts_with ("_rt_") || authored->second.starts_with ("_alias_")
+	    ? resolveFBO (authored->second) : scene.resolveTexture (authored->second);
+	size = glm::vec2 (original->getRealWidth (), original->getRealHeight ());
+	flags = original->getFlags ();
+    }
+    return name.starts_with ("_rt_") || name.starts_with ("_alias_") ? resolveFBO (name)
+	: scene.resolveUserTexture (name, flags, size.y > 0.0f ? size.x / size.y : 0.0f);
+}
+
+void CPass::setupUserTexture (int index, const std::string& entry) {
+    try {
+	const auto texture = resolveUserTexture (index, entry);
+	if (!texture) return;
+	const auto it = m_textures.find (index);
+	m_textures[index] = std::make_shared<TextureChainEntry> (TextureChainEntry {
+	    .texture = texture,
+	    .next = it != m_textures.end () ? it->second : nullptr,
+	});
+    } catch (const std::runtime_error& ex) {
+	sLog.error ("Cannot resolve user texture ", entry, " for pass ", ex.what ());
+    }
+}
+
 void CPass::setupTextureUniforms () {
     // first set default textures extracted from the shader
     // vertex shader doesn't seem to have texture info
@@ -1078,7 +1130,7 @@ void CPass::setupTextureUniforms () {
 	}
     }
 
-    for (const auto& [index, textureName] : this->m_pass.textures) {
+    for (const auto& [index, textureName] : mergedTextures (m_pass.textures, m_override.textures)) {
 	try {
 	    auto texture = textureName.find ("_rt_") == 0 || textureName.find ("_alias_") == 0
 		? this->resolveFBO (textureName)
@@ -1096,74 +1148,8 @@ void CPass::setupTextureUniforms () {
 	}
     }
 
-    for (const auto& [index, entry] : this->m_pass.usertextures) {
-	// A usertextures entry names a user property, not a file: the texture is whatever that
-	// property currently holds. System entries ($mediaThumbnail and friends) are their own
-	// name. An unset property - a "scenetexture" the user never picked, which is the shipped
-	// default - overrides nothing, leaving the material's own texture in place. Treating the
-	// property name as a path instead leaves the slot empty and the layer renders black.
-	std::string textureName = entry;
-	const auto& properties = this->m_renderable.getScene ().getScene ().project.properties;
-	if (const auto property = properties.find (entry); property != properties.end ()) {
-	    textureName = property->second->getString ();
-
-	    if (textureName.empty ()) {
-		continue;
-	    }
-	}
-
-	try {
-	    auto texture = textureName.find ("_rt_") == 0 || textureName.find ("_alias_") == 0
-		? this->resolveFBO (textureName)
-		: this->m_renderable.getScene ().resolveTexture (textureName);
-
-	    const auto it = this->m_textures.find (index);
-	    const auto chain = std::make_shared<TextureChainEntry> (TextureChainEntry {
-		.texture = texture,
-		.next = it != this->m_textures.end () ? it->second : nullptr,
-	    });
-
-	    this->m_textures[index] = chain;
-	} catch (std::runtime_error& ex) {
-	    sLog.error ("Cannot resolve user texture ", textureName, " for pass ", ex.what ());
-	}
-    }
-
-    // override any texture
-    for (const auto& [index, textureName] : this->m_override.textures) {
-	try {
-	    auto texture = textureName.find ("_rt_") == 0 || textureName.find ("_alias_") == 0
-		? this->resolveFBO (textureName)
-		: this->m_renderable.getScene ().resolveTexture (textureName);
-
-	    const auto it = this->m_textures.find (index);
-	    const auto chain = std::make_shared<TextureChainEntry> (TextureChainEntry {
-		.texture = texture,
-		.next = it != this->m_textures.end () ? it->second : nullptr,
-	    });
-
-	    this->m_textures[index] = chain;
-	} catch (std::runtime_error& ex) {
-	    sLog.error ("Cannot resolve texture ", textureName, " for override ", ex.what ());
-	}
-    }
-
-    for (const auto& [index, textureName] : this->m_override.usertextures) {
-	try {
-	    auto texture = textureName.find ("_rt_") == 0 || textureName.find ("_alias_") == 0
-		? this->resolveFBO (textureName)
-		: this->m_renderable.getScene ().resolveTexture (textureName);
-
-	    const auto it = this->m_textures.find (index);
-	    const auto chain = std::make_shared<TextureChainEntry> (TextureChainEntry {
-		.texture = texture,
-		.next = it != this->m_textures.end () ? it->second : nullptr,
-	    });
-
-	    this->m_textures[index] = chain;
-	} catch (std::runtime_error& ex) {
-	    sLog.error ("Cannot resolve user texture ", textureName, " for override ", ex.what ());
-	}
+    for (const auto& [index, entry] : mergedTextures (m_pass.usertextures, m_override.usertextures)) {
+	setupUserTexture (index, entry);
     }
 
     // binds are set last as they're the most important to be set
