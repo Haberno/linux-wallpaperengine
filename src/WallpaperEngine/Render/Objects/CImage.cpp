@@ -2691,8 +2691,15 @@ std::optional<glm::vec3> CImage::cursorLocalPosition (const glm::vec3& worldPosi
     }
 
     const auto& camera = getScene ().getCamera ();
+    glm::vec3 hitPosition = worldPosition;
+    if (camera.isOrthogonal () && !this->getImage ().model->fullscreen) {
+	const glm::vec2 offset = this->resolveParallaxOffset ();
+	// Undo the rendered scene-space translation in authored coordinates before
+	// applying the parent/local inverse; rotation and scale must not affect it.
+	hitPosition -= glm::vec3 (offset.x, -offset.y, 0.0f);
+    }
     const auto position = camera.isOrthogonal ()
-	? std::optional<glm::vec3> (glm::vec3 (glm::inverse (world) * glm::vec4 (worldPosition, 1.0f)))
+	? std::optional<glm::vec3> (glm::vec3 (glm::inverse (world) * glm::vec4 (hitPosition, 1.0f)))
 	: intersectCursorPlane (world, camera.getProjection () * camera.getLookAt (),
 	    *getScene ().getMousePositionNormalized (), camera.isYFlipped ());
     if (!position) return std::nullopt;
