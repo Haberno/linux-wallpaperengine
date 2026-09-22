@@ -40,6 +40,14 @@ SceneUniquePtr WallpaperParser::parseScene (const JSON& file, Project& project) 
 	= projectionIt == general.end () || projectionIt->is_null () || !projectionIt->is_object ();
     const auto projection = isPerspective ? JSON::object () : *projectionIt;
     const auto objects = scene.require ("objects", "Scenes must have an objects section");
+    bool hasModelLayer = false;
+    for (const auto& object : objects) {
+	const auto model = object.find ("model");
+	if (model != object.end () && !model->is_null ()) {
+	    hasModelLayer = true;
+	    break;
+	}
+    }
     const auto& properties = project.properties;
     // 3D scenes author the projection values in "general", 2D scenes in "camera"
     const auto& projectionSource = isPerspective ? general : camera;
@@ -151,6 +159,7 @@ SceneUniquePtr WallpaperParser::parseScene (const JSON& file, Project& project) 
         }, SceneData {
             .version = scene.optional ("version", 0),
             .hdr = general.optional ("hdr", false),
+            .hasModelLayer = hasModelLayer,
             .transparentSorting = general.optional ("transparentsorting", false),
             .customSortOrder = general.optional ("customsortorder", false),
             .clearEnabled = general.user ("clearenabled", properties, true),

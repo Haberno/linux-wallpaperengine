@@ -662,6 +662,7 @@ if(BUILD_TESTING)
         src/WallpaperEngine/Testing/Cases/ScriptRuntime.cpp
         src/WallpaperEngine/Testing/Cases/Utf8Text.cpp
         src/WallpaperEngine/Testing/Cases/JsonTolerance.cpp
+        src/WallpaperEngine/Testing/Cases/SceneMsaaPolicy.cpp
         src/WallpaperEngine/Testing/Cases/EffectConditions.cpp
         src/WallpaperEngine/Testing/Cases/EffectFunctions.cpp
         src/WallpaperEngine/Testing/Cases/FluidTargetFormats.cpp

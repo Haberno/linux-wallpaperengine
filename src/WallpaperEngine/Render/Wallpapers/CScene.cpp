@@ -342,13 +342,14 @@ CScene::CScene (
 	    break;
 	}
     }
-    const auto samples = context.getApp ().getContext ().settings.render.msaaSamples;
+    const auto requestedSamples = context.getApp ().getContext ().settings.render.msaaSamples;
+    const auto samples = scene->hasModelLayer ? requestedSamples : 1;
     this->setupFramebuffers (isPerspective || hasModels || samples > 1, this->m_outputSize, samples, this->getColorFormat ());
     if (this->m_hdrEnabled) {
         const auto size = glm::max (glm::uvec2 (this->getFramebufferSize ()), glm::uvec2 (2));
         this->find ("_rt_FullFrameBuffer")->resize (size.x, size.y);
     }
-    sLog.out ("Scene MSAA: requested=", samples, " actual=", this->m_sceneFBO->getSamples ());
+    sLog.out ("Scene MSAA: requested=", requestedSamples, " actual=", this->m_sceneFBO->getSamples ());
 
     const uint32_t sceneWidth = this->m_camera->getWidth ();
     const uint32_t sceneHeight = this->m_camera->getHeight ();
