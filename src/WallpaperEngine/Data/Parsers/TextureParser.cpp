@@ -2,6 +2,7 @@
 #include "WallpaperEngine/Data/Model/Property.h"
 #include "WallpaperEngine/Data/Utils/ScopeGuard.h"
 #include <atomic>
+#include <cerrno>
 #include <cmath>
 #include <cstring>
 #include <limits>
@@ -11,6 +12,12 @@
 
 #include <lz4.h>
 #include <stb_image.h>
+
+extern "C" {
+#include <libavcodec/avcodec.h>
+#include <libavutil/opt.h>
+#include <libswscale/swscale.h>
+}
 
 #include "TextureParser.h"
 #include "WallpaperEngine/Data/Assets/Texture.h"
@@ -24,6 +31,127 @@ void WallpaperEngine::Data::Assets::freeDecodedPixels (void* pixels) {
 }
 
 namespace {
+struct GifImage {
+    std::unique_ptr<unsigned char[]> pixels;
+    float frametime;
+};
+
+std::vector<GifImage> decodeGifImages (const std::string& contents, int& width, int& height) {
+    // Match the packed texture payload/frame limits before allocating decoded canvases.
+    constexpr size_t maxDecodedBytes = 1u << 30;
+    constexpr size_t maxFrames = 16384;
+    if (contents.size () < 13) {
+	throw std::runtime_error ("Cannot decode GIF header");
+    }
+    const auto* header = reinterpret_cast<const unsigned char*> (contents.data ());
+    width = header[6] | (header[7] << 8);
+    height = header[8] | (header[9] << 8);
+    const size_t frameBytes = static_cast<size_t> (width) * height * 4;
+    if (frameBytes == 0 || frameBytes > maxDecodedBytes) {
+	throw std::runtime_error ("Invalid or oversized GIF canvas");
+    }
+
+    const AVCodec* decoder = avcodec_find_decoder (AV_CODEC_ID_GIF);
+    if (!decoder) {
+	throw std::runtime_error ("GIF decoder is unavailable");
+    }
+    AVCodecContext* context = avcodec_alloc_context3 (decoder);
+    AVCodecParserContext* parser = av_parser_init (AV_CODEC_ID_GIF);
+    AVPacket* packet = av_packet_alloc ();
+    AVFrame* frame = av_frame_alloc ();
+    SwsContext* converter = nullptr;
+    const WallpaperEngine::Data::Utils::ScopeGuard cleanup ([&] {
+	sws_freeContext (converter);
+	av_frame_free (&frame);
+	av_packet_free (&packet);
+	if (parser) {
+	    av_parser_close (parser);
+	}
+	avcodec_free_context (&context);
+    });
+    if (!context || !parser || !packet || !frame) {
+	throw std::runtime_error ("Cannot allocate GIF decoder");
+    }
+    context->max_pixels = maxDecodedBytes / 4;
+    context->time_base = context->pkt_timebase = AVRational { 1, 100 };
+    context->err_recognition = AV_EF_EXPLODE;
+    if (av_opt_set_int (context->priv_data, "trans_color", 0, 0) < 0 || avcodec_open2 (context, decoder, nullptr) < 0) {
+	throw std::runtime_error ("Cannot initialize GIF decoder");
+    }
+
+    std::vector<unsigned char> input (contents.begin (), contents.end ());
+    input.resize (contents.size () + AV_INPUT_BUFFER_PADDING_SIZE, 0);
+    const int inputSize = static_cast<int> (contents.size ());
+    int position = 0;
+    std::vector<GifImage> images;
+    size_t packets = 0;
+    for (;;) {
+	unsigned char* packetData = nullptr;
+	int packetSize = 0;
+	const int consumed = av_parser_parse2 (
+	    parser, context, &packetData, &packetSize, position < inputSize ? input.data () + position : nullptr,
+	    inputSize - position, AV_NOPTS_VALUE, AV_NOPTS_VALUE, position
+	);
+	if (consumed < 0 || consumed > inputSize - position) {
+	    throw std::runtime_error ("Cannot parse GIF frame");
+	}
+	position += consumed;
+	if (packetSize == 0) {
+	    if (consumed != 0) {
+		continue;
+	    }
+	    if (position != inputSize) {
+		throw std::runtime_error ("GIF parser made no progress");
+	    }
+	    break;
+	}
+	if (++packets > maxFrames) {
+	    throw std::runtime_error ("GIF animation has too many frames");
+	}
+	// The parser can point into the next frame's bytes; each decoder packet needs zero padding.
+	av_packet_unref (packet);
+	if (av_new_packet (packet, packetSize) < 0) {
+	    throw std::runtime_error ("Cannot allocate GIF frame packet");
+	}
+	std::memcpy (packet->data, packetData, packetSize);
+	packet->duration = parser->duration;
+	if (avcodec_send_packet (context, packet) < 0) {
+	    throw std::runtime_error ("Cannot decode GIF frame");
+	}
+	for (;;) {
+	    const int status = avcodec_receive_frame (context, frame);
+	    if (status == AVERROR (EAGAIN)) {
+		break;
+	    }
+	    if (status < 0 || frame->width != width || frame->height != height) {
+		throw std::runtime_error ("Cannot decode GIF canvas");
+	    }
+	    if (images.size () >= maxFrames || images.size () >= maxDecodedBytes / frameBytes) {
+		throw std::runtime_error ("GIF animation is too large");
+	    }
+	    converter = sws_getCachedContext (
+		converter, width, height, static_cast<AVPixelFormat> (frame->format), width, height, AV_PIX_FMT_RGBA,
+		SWS_POINT, nullptr, nullptr, nullptr
+	    );
+	    if (!converter) {
+		throw std::runtime_error ("Cannot convert GIF frame");
+	    }
+	    GifImage image { std::make_unique<unsigned char[]> (frameBytes),
+			     static_cast<float> (packet->duration > 0 ? packet->duration : 10) / 100.0f };
+	    unsigned char* planes[4] = { image.pixels.get (), nullptr, nullptr, nullptr };
+	    const int strides[4] = { width * 4, 0, 0, 0 };
+	    if (sws_scale (converter, frame->data, frame->linesize, 0, height, planes, strides) != height) {
+		throw std::runtime_error ("Cannot convert GIF canvas");
+	    }
+	    images.push_back (std::move (image));
+	}
+    }
+    if (images.empty ()) {
+	throw std::runtime_error ("GIF contains no decoded images");
+    }
+    return images;
+}
+
 size_t remainingBytes (const BinaryReader& file) {
     auto& input = file.base ();
     const auto position = input.tellg ();
@@ -759,15 +887,26 @@ TextureUniquePtr TextureParser::selectVariants (const Texture& texture, const Va
 }
 
 TextureUniquePtr TextureParser::parseImage (const std::string& contents, const JSON& metadata) {
+    if (contents.size () > static_cast<size_t> (std::numeric_limits<int>::max () - AV_INPUT_BUFFER_PADDING_SIZE)) {
+	throw std::runtime_error ("Source image is too large");
+    }
     auto result = std::make_unique<Texture> ();
-    auto mipmap = std::make_shared<Mipmap> ();
     int width = 0, height = 0, channels = 0;
-    DecodedPixelsPtr pixels (stbi_load_from_memory (
-	reinterpret_cast<const unsigned char*> (contents.data ()), static_cast<int> (contents.size ()), &width,
-	&height, &channels, 4
-    ));
-    if (!pixels || width <= 0 || height <= 0) {
-	throw std::runtime_error ("Cannot decode source image");
+    std::vector<GifImage> gifImages;
+    if (contents.starts_with ("GIF87a") || contents.starts_with ("GIF89a")) {
+	gifImages = decodeGifImages (contents, width, height);
+    }
+    DecodedPixelsPtr staticPixels;
+    if (gifImages.size () <= 1) {
+	// Preserve native/static stb background handling for single-frame GIFs.
+	gifImages.clear ();
+	staticPixels.reset (stbi_load_from_memory (
+	    reinterpret_cast<const unsigned char*> (contents.data ()), static_cast<int> (contents.size ()), &width,
+	    &height, &channels, 4
+	));
+	if (!staticPixels || width <= 0 || height <= 0) {
+	    throw std::runtime_error ("Cannot decode source image");
+	}
     }
     result->format = TextureFormat_ARGB8888;
     const auto format = metadata.value ("format", std::string ("rgba8888"));
@@ -781,50 +920,70 @@ TextureUniquePtr TextureParser::parseImage (const std::string& contents, const J
     } else if (format != "rgba8888") {
 	throw std::runtime_error ("Unsupported source texture format " + format);
     }
-    result->width = result->textureWidth = mipmap->width = width;
-    result->height = result->textureHeight = mipmap->height = height;
-    result->imageCount = 1;
+    result->width = result->textureWidth = width;
+    result->height = result->textureHeight = height;
+    result->imageCount = gifImages.empty () ? 1 : gifImages.size ();
+    if (!gifImages.empty ()) {
+	result->flags |= TextureFlags_IsGif;
+	result->gifWidth = width;
+	result->gifHeight = height;
+    }
     if (metadata.value ("nointerpolation", false)) {
 	result->flags |= TextureFlags_NoInterpolation;
     }
     if (metadata.value ("clampuvs", false)) {
 	result->flags |= TextureFlags_ClampUVs;
     }
-    mipmap->uncompressedSize = static_cast<int> (static_cast<size_t> (width) * height * components);
-    mipmap->uncompressedData = std::make_unique<char[]> (mipmap->uncompressedSize);
-    for (size_t pixel = 0; pixel < static_cast<size_t> (width) * height; ++pixel) {
-	std::memcpy (mipmap->uncompressedData.get () + pixel * components, pixels.get () + pixel * 4, components);
-    }
-    result->images[0].push_back (mipmap);
-    // The shipped sources request nomip. For other sources, create the chain
-    // on the CPU so the ordinary uploader sees the same complete mip layout.
-    if (!metadata.value ("nomip", false)) {
-	while (mipmap->width > 1 || mipmap->height > 1) {
-	    auto next = std::make_shared<Mipmap> ();
-	    next->width = std::max (1u, mipmap->width / 2);
-	    next->height = std::max (1u, mipmap->height / 2);
-	    next->uncompressedSize = static_cast<int> (next->width * next->height * components);
-	    next->uncompressedData = std::make_unique<char[]> (next->uncompressedSize);
-	    for (uint32_t y = 0; y < next->height; ++y) {
-		for (uint32_t x = 0; x < next->width; ++x) {
-		    for (size_t channel = 0; channel < components; ++channel) {
-			unsigned sum = 0;
-			for (uint32_t dy = 0; dy < 2; ++dy) {
-			    for (uint32_t dx = 0; dx < 2; ++dx) {
-				const size_t at = (std::min (y * 2 + dy, mipmap->height - 1) * mipmap->width
-						   + std::min (x * 2 + dx, mipmap->width - 1))
-					* components
-				    + channel;
-				sum += static_cast<unsigned char> (mipmap->uncompressedData[at]);
+    for (uint32_t image = 0; image < result->imageCount; ++image) {
+	const auto* pixels = gifImages.empty () ? staticPixels.get () : gifImages[image].pixels.get ();
+	auto mipmap = std::make_shared<Mipmap> ();
+	mipmap->width = width;
+	mipmap->height = height;
+	mipmap->uncompressedSize = static_cast<int> (static_cast<size_t> (width) * height * components);
+	mipmap->uncompressedData = std::make_unique<char[]> (mipmap->uncompressedSize);
+	for (size_t pixel = 0; pixel < static_cast<size_t> (width) * height; ++pixel) {
+	    std::memcpy (mipmap->uncompressedData.get () + pixel * components, pixels + pixel * 4, components);
+	}
+	if (!gifImages.empty ()) {
+	    gifImages[image].pixels.reset ();
+	    auto frame = std::make_shared<Frame> ();
+	    frame->frameNumber = image;
+	    frame->frametime = gifImages[image].frametime;
+	    frame->width1 = width;
+	    frame->height1 = height;
+	    result->frames.push_back (std::move (frame));
+	}
+	result->images[image].push_back (mipmap);
+	// The shipped sources request nomip. For other sources, create the chain
+	// on the CPU so the ordinary uploader sees the same complete mip layout.
+	if (!metadata.value ("nomip", false)) {
+	    while (mipmap->width > 1 || mipmap->height > 1) {
+		auto next = std::make_shared<Mipmap> ();
+		next->width = std::max (1u, mipmap->width / 2);
+		next->height = std::max (1u, mipmap->height / 2);
+		next->uncompressedSize = static_cast<int> (next->width * next->height * components);
+		next->uncompressedData = std::make_unique<char[]> (next->uncompressedSize);
+		for (uint32_t y = 0; y < next->height; ++y) {
+		    for (uint32_t x = 0; x < next->width; ++x) {
+			for (size_t channel = 0; channel < components; ++channel) {
+			    unsigned sum = 0;
+			    for (uint32_t dy = 0; dy < 2; ++dy) {
+				for (uint32_t dx = 0; dx < 2; ++dx) {
+				    const size_t at = (std::min (y * 2 + dy, mipmap->height - 1) * mipmap->width
+						       + std::min (x * 2 + dx, mipmap->width - 1))
+					    * components
+					+ channel;
+				    sum += static_cast<unsigned char> (mipmap->uncompressedData[at]);
+				}
 			    }
+			    next->uncompressedData[(y * next->width + x) * components + channel]
+				= static_cast<char> (sum / 4);
 			}
-			next->uncompressedData[(y * next->width + x) * components + channel]
-			    = static_cast<char> (sum / 4);
 		    }
 		}
+		result->images[image].push_back (next);
+		mipmap = std::move (next);
 	    }
-	    result->images[0].push_back (next);
-	    mipmap = std::move (next);
 	}
     }
     return result;

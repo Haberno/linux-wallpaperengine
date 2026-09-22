@@ -502,3 +502,159 @@ TEST_CASE ("installed TEXB4 corpus decodes every authored conditional mip chain"
     std::cout << "TEXB4 corpus: " << textures << " textures, " << variants << " variants, " << mipmaps << " mipmaps\n";
     REQUIRE (variants > 0);
 }
+
+TEST_CASE ("selected GIFs retain animated logical canvases and frame delays", "[texture][user-image][gif]") {
+    using namespace WallpaperEngine::Data::Assets;
+    using Json = WallpaperEngine::Data::JSON::JSON;
+    // Hand-authored 12x8 GIF: offset red; green restoring previous; blue
+    // clearing to background; yellow. Every frame lasts 800 ms.
+    const char bytes[]
+	= "\x47\x49\x46\x38\x39\x61\x0c\x00\x08\x00\xf2\x00\x00\x00\x00\x00\xff\x00\x00\x00\xff\x00\x00\x00"
+	  "\xff\xff\xff\x00\x11\x33\xef\x00\x00\x00\x00\x00\x00\x21\xff\x0b\x4e\x45\x54\x53\x43\x41\x50\x45"
+	  "\x32\x2e\x30\x03\x01\x00\x00\x00\x21\xf9\x04\x05\x50\x00\x00\x00\x2c\x02\x00\x01\x00\x02\x00\x02"
+	  "\x00\x00\x03\x05\x18\x18\x18\x18\x09\x00\x21\xf9\x04\x0d\x50\x00\x00\x00\x2c\x02\x00\x01\x00\x02"
+	  "\x00\x02\x00\x00\x03\x05\x28\x28\x28\x28\x09\x00\x21\xf9\x04\x09\x50\x00\x00\x00\x2c\x08\x00\x04"
+	  "\x00\x02\x00\x02\x00\x00\x03\x05\x38\x38\x38\x38\x09\x00\x21\xf9\x04\x05\x50\x00\x00\x00\x2c\x05"
+	  "\x00\x03\x00\x01\x00\x01\x00\x00\x03\x02\x48\x09\x00\x3b";
+    const auto texture = TextureParser::parseImage (
+	std::string (bytes, sizeof (bytes) - 1),
+	Json { { "nomip", true }, { "nointerpolation", true }, { "clampuvs", true } }
+    );
+    REQUIRE (texture->isAnimated ());
+    REQUIRE (texture->imageCount == 4);
+    REQUIRE (texture->frames.size () == 4);
+    CHECK (texture->width == 12);
+    CHECK (texture->height == 8);
+    CHECK (texture->textureWidth == 12);
+    CHECK (texture->textureHeight == 8);
+    CHECK (texture->gifWidth == 12);
+    CHECK (texture->gifHeight == 8);
+    CHECK (texture->flags == (TextureFlags_IsGif | TextureFlags_NoInterpolation | TextureFlags_ClampUVs));
+    for (uint32_t index = 0; index < 4; ++index) {
+	CAPTURE (index);
+	const auto& frame = texture->frames[index];
+	CHECK (frame->frameNumber == index);
+	CHECK (frame->frametime == 0.8f);
+	CHECK (frame->x == 0);
+	CHECK (frame->y == 0);
+	CHECK (frame->width1 == 12);
+	CHECK (frame->height1 == 8);
+	CHECK (frame->width2 == 0);
+	CHECK (frame->height2 == 0);
+	REQUIRE (texture->images.at (index).size () == 1);
+	const auto& mip = texture->images.at (index).front ();
+	REQUIRE (mip->uncompressedSize == 12 * 8 * 4);
+	for (int y = 0; y < 8; ++y) {
+	    for (int x = 0; x < 12; ++x) {
+		CAPTURE (x, y);
+		unsigned char expected[4] = { 0, 0, 0, 0 };
+		if (x >= 2 && x < 4 && y >= 1 && y < 3) {
+		    expected[index == 1 ? 1 : 0] = 255;
+		    expected[3] = 255;
+		} else if (index == 2 && x >= 8 && x < 10 && y >= 4 && y < 6) {
+		    expected[2] = expected[3] = 255;
+		} else if (index == 3 && x == 5 && y == 3) {
+		    expected[0] = expected[1] = expected[3] = 255;
+		}
+		for (int channel = 0; channel < 4; ++channel) {
+		    CHECK (
+			static_cast<unsigned char> (mip->uncompressedData[(y * 12 + x) * 4 + channel])
+			== expected[channel]
+		    );
+		}
+	    }
+	}
+    }
+    // Variable authored delays and source metadata must survive the animation path.
+    std::string varied (bytes, sizeof (bytes) - 1);
+    for (size_t frame = 0; frame < 4; ++frame) {
+	varied[60 + frame * 26] = static_cast<char> (12 + frame * 22);
+    }
+    const auto converted = TextureParser::parseImage (varied, Json { { "format", "r8" }, { "nomip", false } });
+    REQUIRE (converted->frames.size () == 4);
+    const float durations[] = { 0.12f, 0.34f, 0.56f, 0.78f };
+    for (uint32_t frame = 0; frame < 4; ++frame) {
+	CAPTURE (frame);
+	CHECK (converted->frames[frame]->frametime == durations[frame]);
+	REQUIRE (converted->images.at (frame).size () == 4);
+	CHECK (converted->images.at (frame).front ()->uncompressedSize == 12 * 8);
+	CHECK (converted->images.at (frame).back ()->uncompressedSize == 1);
+	CHECK (
+	    static_cast<unsigned char> (converted->images.at (frame).front ()->uncompressedData[14])
+	    == (frame == 1 ? 0 : 255)
+	);
+    }
+    CHECK (converted->format == TextureFormat_R8);
+    CHECK_THROWS (TextureParser::parseImage ("GIF89a", Json::object ()));
+    std::string oversized (bytes, sizeof (bytes) - 1);
+    oversized.replace (6, 4, 4, static_cast<char> (255));
+    CHECK_THROWS (TextureParser::parseImage (oversized, Json::object ()));
+}
+
+TEST_CASE ("selected GIFs distinguish clearing an overwritten patch from restoring it", "[texture][user-image][gif]") {
+    using Json = WallpaperEngine::Data::JSON::JSON;
+    // Both GIFs overwrite the existing red patch with green, then draw yellow
+    // elsewhere. The old patch must be cleared by disposal2, restored by disposal3.
+    const char clearBytes[]
+	= "\x47\x49\x46\x38\x39\x61\x0c\x00\x08\x00\xf2\x00\x00\x00\x00\x00\xff\x00\x00\x00\xff\x00\x00\x00"
+	  "\xff\xff\xff\x00\x11\x33\xef\x00\x00\x00\x00\x00\x00\x21\xff\x0b\x4e\x45\x54\x53\x43\x41\x50\x45"
+	  "\x32\x2e\x30\x03\x01\x00\x00\x00\x21\xf9\x04\x05\x50\x00\x00\x00\x2c\x02\x00\x01\x00\x02\x00\x02"
+	  "\x00\x00\x03\x05\x18\x18\x18\x18\x09\x00\x21\xf9\x04\x09\x50\x00\x00\x00\x2c\x02\x00\x01\x00\x02"
+	  "\x00\x02\x00\x00\x03\x05\x28\x28\x28\x28\x09\x00\x21\xf9\x04\x05\x50\x00\x00\x00\x2c\x05\x00\x03"
+	  "\x00\x01\x00\x01\x00\x00\x03\x02\x48\x09\x00\x3b";
+    const char restoreBytes[]
+	= "\x47\x49\x46\x38\x39\x61\x0c\x00\x08\x00\xf2\x00\x00\x00\x00\x00\xff\x00\x00\x00\xff\x00\x00\x00"
+	  "\xff\xff\xff\x00\x11\x33\xef\x00\x00\x00\x00\x00\x00\x21\xff\x0b\x4e\x45\x54\x53\x43\x41\x50\x45"
+	  "\x32\x2e\x30\x03\x01\x00\x00\x00\x21\xf9\x04\x05\x50\x00\x00\x00\x2c\x02\x00\x01\x00\x02\x00\x02"
+	  "\x00\x00\x03\x05\x18\x18\x18\x18\x09\x00\x21\xf9\x04\x0d\x50\x00\x00\x00\x2c\x02\x00\x01\x00\x02"
+	  "\x00\x02\x00\x00\x03\x05\x28\x28\x28\x28\x09\x00\x21\xf9\x04\x05\x50\x00\x00\x00\x2c\x05\x00\x03"
+	  "\x00\x01\x00\x01\x00\x00\x03\x02\x48\x09\x00\x3b";
+    for (bool restore : { false, true }) {
+	CAPTURE (restore);
+	const auto texture = TextureParser::parseImage (
+	    restore ? std::string (restoreBytes, sizeof (restoreBytes) - 1)
+		    : std::string (clearBytes, sizeof (clearBytes) - 1),
+	    Json { { "nomip", true } }
+	);
+	REQUIRE (texture->images.size () == 3);
+	const auto* pixels
+	    = reinterpret_cast<const unsigned char*> (texture->images.at (2).front ()->uncompressedData.get ());
+	const int oldPatch = (1 * 12 + 2) * 4;
+	CHECK (pixels[oldPatch] == (restore ? 255 : 0));
+	CHECK (pixels[oldPatch + 1] == 0);
+	CHECK (pixels[oldPatch + 2] == 0);
+	CHECK (pixels[oldPatch + 3] == (restore ? 255 : 0));
+	const int yellow = (3 * 12 + 5) * 4;
+	CHECK (pixels[yellow] == 255);
+	CHECK (pixels[yellow + 1] == 255);
+	CHECK (pixels[yellow + 2] == 0);
+	CHECK (pixels[yellow + 3] == 255);
+    }
+}
+
+TEST_CASE ("single-frame selected GIFs retain native static background colors", "[texture][user-image][gif]") {
+    using Json = WallpaperEngine::Data::JSON::JSON;
+    // Native preserves this legacy BGR background fill, while palette pixels are RGB.
+    const char bytes[]
+	= "\x47\x49\x46\x38\x39\x61\x0c\x00\x08\x00\xf2\x05\x00\x00\x00\x00\xff\x00\x00\x00\xff\x00\x00\x00"
+	  "\xff\xff\xff\x00\x11\x33\xef\x00\x00\x00\x00\x00\x00\x21\xff\x0b\x4e\x45\x54\x53\x43\x41\x50\x45"
+	  "\x32\x2e\x30\x03\x01\x00\x00\x00\x21\xf9\x04\x04\x50\x00\x00\x00\x2c\x02\x00\x01\x00\x02\x00\x02"
+	  "\x00\x00\x03\x05\x18\x18\x18\x18\x09\x00\x3b";
+    const auto texture
+	= TextureParser::parseImage (std::string (bytes, sizeof (bytes) - 1), Json { { "nomip", true } });
+    CHECK_FALSE (texture->isAnimated ());
+    CHECK (texture->frames.empty ());
+    REQUIRE (texture->images.size () == 1);
+    CHECK (texture->width == 12);
+    CHECK (texture->height == 8);
+    const auto* pixels
+	= reinterpret_cast<const unsigned char*> (texture->images.at (0).front ()->uncompressedData.get ());
+    CHECK (pixels[0] == 239);
+    CHECK (pixels[1] == 51);
+    CHECK (pixels[2] == 17);
+    CHECK (pixels[3] == 255);
+    CHECK (pixels[14 * 4] == 255);
+    CHECK (pixels[14 * 4 + 1] == 0);
+    CHECK (pixels[14 * 4 + 2] == 0);
+    CHECK (pixels[14 * 4 + 3] == 255);
+}
