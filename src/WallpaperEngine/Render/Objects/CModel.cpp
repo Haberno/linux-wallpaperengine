@@ -523,7 +523,10 @@ glm::mat4 CModel::resolveModelMatrix () const {
 	const glm::mat4 sceneToRender = glm::translate (
 	    glm::mat4 (1.0f), glm::vec3 (-camera.getWidth () * 0.5f, camera.getHeight () * 0.5f, 0.0f)
 	) * flipY;
-	model = sceneToRender * model;
+	// The root offset is already in render coordinates. Prepend it so a
+	// parent's rotation or scale does not change the scene-space drift.
+	model = glm::translate (glm::mat4 (1.0f), glm::vec3 (this->resolveParallaxOffset (), 0.0f))
+	    * sceneToRender * model;
     }
 
     return model;
