@@ -30,7 +30,7 @@ public:
 
 protected:
     void load ();
-    void unload ();
+    void unload (bool recordSingleCompletion = false);
     [[nodiscard]] float getGain () const;
 
 private:

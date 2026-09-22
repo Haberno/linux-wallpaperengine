@@ -87,13 +87,25 @@ void CSound::load () {
     this->m_audioStreams.emplace (id, stream.release ());
 }
 
-void CSound::unload () {
+void CSound::unload (const bool recordSingleCompletion) {
     // free all the sound buffers and streams
     for (const auto& stream : this->m_audioStreams) {
 	// Wake a decoder which may be waiting for packets before removeStream waits
 	// for the SDL callback mutex.
 	stream.second->stop ();
 	this->getScene ().getAudioContext ().removeStream (stream.first);
+	if (recordSingleCompletion) {
+	    // A companion can hand ownership away before this layer sees its EOF.
+	    // removeStream has waited for the callback, so completion is now stable.
+	    const auto completed = stream.second->getPlaybackCompletionCount ();
+	    if (completed != this->m_lastCompletion) {
+		this->m_lastCompletion = completed;
+		this->m_playing = false;
+		if (std::getenv ("WPE_SOUND_TRACE") != nullptr) {
+		    sLog.out ("Sound layer ", this->m_sound.id, " completed pass=", completed);
+		}
+	    }
+	}
 	delete stream.second;
     }
 
@@ -111,6 +123,7 @@ void CSound::render () {
 
     auto& audioContext = this->getScene ().getAudioContext ();
     const bool active = audioContext.isActiveSoundPlayer (this->m_wallpaperKey, this->m_soundKey, this);
+    const auto mode = this->m_sound.playbackmode.value_or ("loop");
     const float gain = this->getGain ();
     for (const auto& [id, stream] : this->m_audioStreams) {
 	stream->setGain (gain);
@@ -118,15 +131,29 @@ void CSound::render () {
     }
 
     if (!active) {
-	this->unload ();
+	this->unload (mode == "single");
 	return;
     }
     if (!this->m_playing) {
+	if (mode == "single" && this->m_started && !this->m_paused
+	    && audioContext.distinctSoundWallpaperCount () > 1) {
+	    // A completed single must relinquish a later soundtrack turn, but
+	    // another playing layer in this wallpaper still owns that turn.
+	    const bool companionPlaying = std::ranges::any_of (
+		this->getScene ().getObjectsByRenderOrder (), [&audioContext] (const CObject* object) {
+		    const auto* sound = dynamic_cast<const CSound*> (object);
+		    return sound != nullptr && sound->m_playing
+			&& audioContext.isActiveSoundPlayer (sound->m_wallpaperKey, sound->m_soundKey, sound);
+		}
+	    );
+	    if (!companionPlaying) {
+		audioContext.advanceActiveSound ();
+	    }
+	}
 	return;
     }
     const bool outputEnabled = audioContext.getApplicationContext ().state.audio.volume > 0
 	&& !audioContext.getDriver ().getAudioDetector ().anythingPlaying ();
-    const auto mode = this->m_sound.playbackmode.value_or ("loop");
     if (mode == "random" && gain > 0.0f && outputEnabled) {
 	// Native random timing starts with duration + delay and freezes when the
 	// combined gain is zero, even if an already playing handle finishes silently.
@@ -140,6 +167,10 @@ void CSound::render () {
 	    if (std::getenv ("WPE_SOUND_TRACE") != nullptr) {
 		sLog.out ("Sound layer ", this->m_sound.id, " completed pass=", completed);
 	    }
+	    if (mode == "single") {
+		// Retain completion before ownership can move to another wallpaper.
+		this->m_playing = false;
+	    }
 	    if (audioContext.distinctSoundWallpaperCount () > 1) {
 		this->unload ();
 		this->m_nextStartRemaining = 0.0;
@@ -147,7 +178,6 @@ void CSound::render () {
 		return;
 	    }
 	    if (mode == "single") {
-		this->m_playing = false;
 		this->unload ();
 		return;
 	    }
