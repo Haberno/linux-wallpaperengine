@@ -180,6 +180,8 @@ public:
     [[nodiscard]] std::shared_ptr<const CFBO>
     resolveRenderTarget (const std::shared_ptr<const CFBO>& requested) const;
     [[nodiscard]] bool isRenderingToComposition () const;
+    /** Non-copying composition subtrees union blended child alpha, including nested groups. */
+    [[nodiscard]] bool usesCompositionAlphaMax () const;
 
     /**
      * Per-frame light state for 3D scenes, laid out to match the LightingV1
@@ -369,6 +371,7 @@ private:
     std::shared_ptr<const TextureProvider> m_lightCookie;
     GLuint m_lightCookieSampler = GL_NONE;
     std::shared_ptr<const CFBO> m_compositionRenderTarget = nullptr;
+    bool m_compositionAlphaMax = false;
 
     static constexpr int SHADOW_ATLAS_SIZE = 2048;
     static constexpr int SHADOW_ATLAS_GUARD = 2;

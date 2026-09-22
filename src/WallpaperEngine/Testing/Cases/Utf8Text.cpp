@@ -174,4 +174,21 @@ TEST_CASE ("text effects use the native padded line box and split placement") {
     REQUIRE (layout.rasterOffset == glm::vec2 (0.0f, -1.5f));
     REQUIRE (layout.compositeOffset == glm::vec2 (0.0f, 15.5f));
     REQUIRE (layout.rasterOffset + layout.compositeOffset == glm::vec2 (0.0f, 14.0f));
+
+    const auto cropped = computeTextEffectLayout (
+	"center", "center", glyphBounds, 114.0f, -27.0f, 145.0f, 1, { -12, -8 }
+    );
+    REQUIRE (cropped.surfaceSize == glm::vec2 (263.0f, 129.0f));
+    REQUIRE (cropped.compositeOffset == layout.compositeOffset);
+    const auto capped = computeTextEffectLayout (
+	"center", "center", glyphBounds, 114.0f, -27.0f, 145.0f, 1, { 1024, 1024 }
+    );
+    REQUIRE (capped.surfaceSize == glm::vec2 (1311.0f, 1169.0f));
+}
+
+TEST_CASE ("text horizontal alignment includes the pen origin before positive bearings") {
+    const glm::vec4 bounds { 6.0f, -10.0f, 52.0f, 49.0f };
+    CHECK (computeTextAlignmentOffset ("center", "center", bounds, 63, -16, 78, 1).x == 3.0f);
+    CHECK (computeTextAlignmentOffset ("left", "center", bounds, 63, -16, 78, 1).x == 29.0f);
+    CHECK (computeTextAlignmentOffset ("right", "center", bounds, 63, -16, 78, 1).x == -23.0f);
 }

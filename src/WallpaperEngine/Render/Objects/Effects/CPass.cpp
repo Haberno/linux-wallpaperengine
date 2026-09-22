@@ -175,7 +175,10 @@ void CPass::setupRenderFramebuffer (const std::shared_ptr<const CFBO>& drawTo) c
     glDisable (GL_SAMPLE_ALPHA_TO_COVERAGE);
     // Blend equations are sticky state. Most passes use ordinary addition, while
     // puppet mask generation selects MAX for RGB to union overlapping source parts.
-    glBlendEquationSeparate (this->m_colorBlendEquation, this->m_alphaBlendEquation);
+    const auto blending = this->getBlendingMode ();
+    const bool compositionAlpha = this->m_renderable.getScene ().usesCompositionAlphaMax ()
+	&& (blending == BlendingMode_Translucent || blending == BlendingMode_Additive);
+    glBlendEquationSeparate (this->m_colorBlendEquation, compositionAlpha ? GL_MAX : this->m_alphaBlendEquation);
 
     // set texture blending
     switch (this->getBlendingMode ()) {

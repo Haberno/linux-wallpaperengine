@@ -74,6 +74,25 @@ TEST_CASE ("text depth defaults enabled and normalizes authored and live enum va
     }
 }
 
+TEST_CASE ("text backgrounds retain native defaults and live padding values") {
+    const Project project {};
+    auto data = JSON::parse (R"({"id":1,"name":"Background text","text":"M"})");
+    const auto defaults = ObjectParser::parse (data, project);
+    const auto* text = defaults->as<Text> ();
+    CHECK_FALSE (text->opaqueBackground->value->getBool ());
+    CHECK (text->backgroundColor->value->getVec3 () == glm::vec3 (0.0f));
+    CHECK (text->backgroundBrightness->value->getFloat () == 1.0f);
+    CHECK (glm::vec2 (text->padding->value->getVec3 ()) == glm::vec2 (32.0f));
+    for (const JSON padding : { JSON (8), JSON ("-12 -8") }) {
+	data["padding"] = padding;
+	const auto object = ObjectParser::parse (data, project);
+	auto& value = *object->as<Text> ()->padding->value;
+	CHECK (glm::vec2 (value.getVec3 ()) == (padding.is_number () ? glm::vec2 (8) : glm::vec2 (-12, -8)));
+	value.update (glm::vec2 (24, 16), DynamicValue::Script);
+	CHECK (glm::vec2 (value.getVec3 ()) == glm::vec2 (24, 16));
+    }
+}
+
 TEST_CASE ("conditional text depth bindings normalize once and release their subscription") {
     Project project {};
     const auto choice = std::make_shared<PropertyCombo> (

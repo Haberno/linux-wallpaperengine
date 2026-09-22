@@ -583,8 +583,9 @@ void CModel::renderPasses (const std::optional<RenderSortClass> renderClass) {
     glPushDebugGroup (GL_DEBUG_SOURCE_APPLICATION, 0, -1, debugName.c_str ());
 #endif /* DEBUG */
 
-    // keep the scene framebuffer's alpha untouched, same as image layers do
-    glColorMask (true, true, true, false);
+    // Scene alpha belongs to the compositor; isolated composition targets need
+    // the model's authored alpha, just like image and particle children.
+    glColorMask (true, true, true, this->getScene ().isRenderingToComposition () ? GL_TRUE : GL_FALSE);
 
     for (const auto& pass : this->m_passes) {
 	if (!renderClass.has_value () || passRenderClass (pass->getBlendingMode ()) == *renderClass) {

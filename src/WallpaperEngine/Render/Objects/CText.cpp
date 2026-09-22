@@ -45,8 +45,10 @@ layout(location = 0) in vec2 aPos;
 layout(location = 1) in vec2 aUV;
 uniform mat4 uMVP;
 out vec2 vUV;
+out vec2 vPosition;
 void main() {
     vUV = aUV;
+    vPosition = aPos;
     gl_Position = uMVP * vec4(aPos, 0.0, 1.0);
 }
 )glsl";
@@ -56,23 +58,32 @@ const char* kFragmentShader = R"glsl(
 in vec2 vUV;
 uniform sampler2D uTexture;
 uniform vec4 uColor;
+uniform bool uSolid;
 out vec4 FragColor;
 void main() {
-    float coverage = texture(uTexture, vUV).r;
+    float coverage = uSolid ? 1.0 : texture(uTexture, vUV).r;
     FragColor = vec4(uColor.rgb, uColor.a * coverage);
 }
 )glsl";
 
-// composite shader for the effect path: the chain result is already colored RGBA;
-// uColor modulates it (brightness on rgb, object alpha on a)
+// Composite the already colored effect result, or initialize its transparent
+// background from the corresponding position in the scene.
 const char* kFragmentShaderRGBA = R"glsl(
 #version 330 core
 in vec2 vUV;
+in vec2 vPosition;
 uniform sampler2D uTexture;
 uniform vec4 uColor;
+uniform bool uCopyBackground;
+uniform mat4 uSceneMVP;
 out vec4 FragColor;
 void main() {
-    FragColor = texture(uTexture, vUV) * uColor;
+    if (uCopyBackground) {
+        vec4 projected = uSceneMVP * vec4(vPosition, 0.0, 1.0);
+        FragColor = vec4(texture(uTexture, projected.xy / projected.w * 0.5 + 0.5).rgb, 0.0);
+    } else {
+        FragColor = texture(uTexture, vUV) * uColor;
+    }
 }
 )glsl";
 
@@ -234,15 +245,18 @@ glm::vec2 WallpaperEngine::Render::Objects::computeTextAlignmentOffset (
     const std::string& horizontalAlign, const std::string& verticalAlign, const glm::vec4& glyphBounds,
     const float ascender, const float descender, const float lineSpacing, const size_t lineCount
 ) {
-    const float width = glyphBounds.z - glyphBounds.x;
+    const float lineLeft = std::min (0.0f, glyphBounds.x);
+    const float lineRight = std::max (0.0f, glyphBounds.z);
+    const float width = lineRight - lineLeft;
     const float boundsCenterY = (glyphBounds.y + glyphBounds.w) * 0.5f;
     const float followingRows = static_cast<float> (lineCount > 0 ? lineCount - 1 : 0);
 
-    float x = 0.0f;
+    // Native mesh bounds start at the pen origin, including positive bearings.
+    float x = (glyphBounds.x + glyphBounds.z - lineLeft - lineRight) * 0.5f;
     if (horizontalAlign == "left") {
-	x = width * 0.5f;
+	x += width * 0.5f;
     } else if (horizontalAlign == "right") {
-	x = width * -0.5f;
+	x -= width * 0.5f;
     }
 
     float verticalReference;
@@ -284,8 +298,8 @@ TextEffectLayout WallpaperEngine::Render::Objects::computeTextEffectLayout (
 
     return {
 	.surfaceSize = {
-	    lineBounds.z - lineBounds.x + std::max (padding.x, 0.0f) * 2.0f,
-	    lineBounds.w - lineBounds.y + std::max (padding.y, 0.0f) * 2.0f,
+	    lineBounds.z - lineBounds.x + std::min (padding.x, 512.0f) * 2.0f,
+	    lineBounds.w - lineBounds.y + std::min (padding.y, 512.0f) * 2.0f,
 	},
 	.rasterOffset = glyphDown - surfaceDown,
 	.compositeOffset = surfaceDown,
@@ -296,7 +310,7 @@ namespace WallpaperEngine::Render::Objects {
 /**
  * CPass needs a CRenderable owner for its uniform sources (brightness/alpha/color) and the
  * texture-0 fallback. Text effect passes run value-neutral — brightness and object alpha are
- * applied once at composite time (the blur-style shaders don't read them) — so every getter
+ * applied when rasterizing the text input — so every getter
  * returns a constant and the texture is the rasterized-text FBO.
  */
 class CTextEffectHost final : public CRenderable {
@@ -338,6 +352,10 @@ CText::CText (Wallpapers::CScene& scene, const Text& text) :
     this->registerProperty ("pointSize", *text.pointSize);
     this->registerProperty ("text", *text.text);
     this->registerProperty ("spacing", *text.spacing);
+    this->registerProperty ("padding", *text.padding);
+    this->registerProperty ("opaquebackground", *text.opaqueBackground);
+    this->registerProperty ("backgroundcolor", *text.backgroundColor);
+    this->registerProperty ("backgroundbrightness", *text.backgroundBrightness);
     this->registerProperty ("limitwidth", *text.limitWidth);
     this->registerProperty ("maxwidth", *text.maxWidth);
     this->registerProperty ("limitrows", *text.limitRows);
@@ -396,25 +414,19 @@ void CText::setup () {
 	return;
     }
 
-    m_lastPixelSize = computeEffectivePixelSize ();
-    FT_Set_Pixel_Sizes (m_ftFace, 0, static_cast<FT_UInt> (m_lastPixelSize));
+    m_lastFontSize = currentFontSize ();
+    FT_Set_Char_Size (m_ftFace, 0, m_lastFontSize, 300, 300);
 
     buildShader ();
     // Initially empty text can be written later by any layer's script.
     rebuildTextureFrom (text.empty () ? std::string (" ") : text);
 
-    const bool sampledByLayer = std::ranges::any_of (getScene ().getScene ().objects, [this] (const auto& object) {
-        return std::ranges::find (object->dependencies, getId ()) != object->dependencies.end ();
-    });
-    if (!m_text.effects.empty () || sampledByLayer || m_text.colorBlendMode->value->getInt () != 0) {
-	try {
-	    setupEffectChain ();
-	} catch (const std::exception& e) {
-	    // a failed effect (missing asset, shader translation) degrades to plain text
-	    // instead of killing the object like CImage's all-or-nothing setup does
-	    sLog.error ("CText: effect chain failed for '", m_text.name, "', rendering without effects: ", e.what ());
-	    destroyEffectChain ();
-	}
+    try {
+	setupEffectChain ();
+    } catch (const std::exception& e) {
+	// A failed optional effect degrades to plain text instead of killing the layer.
+	sLog.error ("CText: effect chain failed for '", m_text.name, "', rendering without effects: ", e.what ());
+	destroyEffectChain ();
     }
 
     // m_vao is created lazily on the render thread (see ensureVao); the VBO is the
@@ -423,6 +435,12 @@ void CText::setup () {
 }
 
 void CText::setupEffectChain () {
+    m_colorBlendMode = m_text.colorBlendMode->value->getInt ();
+    const bool sampledByLayer = std::ranges::any_of (getScene ().getScene ().objects, [this] (const auto& object) {
+	return std::ranges::find (object->dependencies, getId ()) != object->dependencies.end ();
+    });
+    if (m_text.effects.empty () && !sampledByLayer && (m_colorBlendMode == 0 || m_colorBlendMode == 31)) return;
+
     // wallpaper64.exe sizes this surface from the generated font line box plus the
     // authored padding. The serialized editor size is not part of text rendering.
     const glm::vec2 surface = m_effectSurface;
@@ -588,7 +606,6 @@ void CText::setupEffectChain () {
     glBindBuffer (GL_ARRAY_BUFFER, m_compositeVbo);
     glBufferData (GL_ARRAY_BUFFER, sizeof (quad), quad, GL_STATIC_DRAW);
 
-    m_colorBlendMode = m_text.colorBlendMode->value->getInt ();
     if (m_colorBlendMode > 0 && m_colorBlendMode != 31) {
 	m_colorBlendProvider = std::make_shared<FBOProvider> (&getScene ());
 	// All text draws are sequential. Share one scene snapshot instead of keeping
@@ -748,21 +765,49 @@ void CText::renderEffectChain (const glm::mat4& mvp, const float brightness, con
     glGetFloatv (GL_COLOR_CLEAR_VALUE, previousClearColor);
     const GLboolean depthWasEnabled = glIsEnabled (GL_DEPTH_TEST);
 
-    // 1. Rasterize onto transparent black with the font material's alpha blending.
-    // Invisible glyph texels must not leave solid text-color RGB in the effect
-    // input: color-dependent blends such as Shine otherwise brighten the entire
-    // blurred outline, filling counters and obscuring the original sharp glyphs.
+    // Native clears opaque backgrounds into the effect input, then draws the
+    // glyph with the layer's opacity. Its translucent material also blends alpha.
     glBindFramebuffer (GL_FRAMEBUFFER, m_fboA->getFramebuffer ());
     glViewport (0, 0, m_fboA->getRealWidth (), m_fboA->getRealHeight ());
-    glClearColor (0.0f, 0.0f, 0.0f, 0.0f);
-    glClear (GL_COLOR_BUFFER_BIT);
+    glColorMask (GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
+    glDisable (GL_DEPTH_TEST);
+    glDisable (GL_CULL_FACE);
+    if (m_text.opaqueBackground->value->getBool ()) {
+	const float backgroundBrightness = getScene ().isHdr ()
+	    ? m_text.backgroundBrightness->evaluateFloat (getScene ().getTime ()) : 1.0f;
+	const glm::vec3 background = m_text.backgroundColor->value->getVec3 () * backgroundBrightness;
+	glClearColor (background.r, background.g, background.b, alpha);
+	glClear (GL_COLOR_BUFFER_BIT);
+    } else {
+	// Native composelayer_clearalpha preserves projected scene RGB, including
+	// beneath transparent glyphs, while resetting only the input alpha.
+	glDisable (GL_BLEND);
+	glUseProgram (m_compositeProgram);
+	const glm::mat4 rasterMVP = glm::ortho (
+	    -m_effectSurface.x * 0.5f, m_effectSurface.x * 0.5f,
+	    -m_effectSurface.y * 0.5f, m_effectSurface.y * 0.5f
+	) * glm::translate (glm::mat4 (1.0f), glm::vec3 (-m_effectCompositeOffset, 0.0f));
+	glUniformMatrix4fv (m_cuMVP, 1, GL_FALSE, glm::value_ptr (rasterMVP));
+	glUniformMatrix4fv (glGetUniformLocation (m_compositeProgram, "uSceneMVP"), 1, GL_FALSE, glm::value_ptr (mvp));
+	glUniform1i (glGetUniformLocation (m_compositeProgram, "uCopyBackground"), 1);
+	glActiveTexture (GL_TEXTURE0);
+	glBindTexture (GL_TEXTURE_2D, getScene ().getFBO ()->getTextureID (0));
+	glUniform1i (m_cuTexture, 0);
+	ensureCompositeVao ();
+	glBindVertexArray (m_compositeVao);
+	glDrawArrays (GL_TRIANGLES, 0, 6);
+	glBindVertexArray (0);
+	glUniform1i (glGetUniformLocation (m_compositeProgram, "uCopyBackground"), 0);
+    }
     glEnable (GL_BLEND);
-    glBlendFuncSeparate (GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA, GL_ONE, GL_ONE_MINUS_SRC_ALPHA);
+    glBlendFunc (GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+    glBlendEquationSeparate (GL_FUNC_ADD, getScene ().usesCompositionAlphaMax () ? GL_MAX : GL_FUNC_ADD);
     glDisable (GL_DEPTH_TEST);
 
     glUseProgram (m_program);
     glUniformMatrix4fv (m_uMVP, 1, GL_FALSE, glm::value_ptr (m_baseMVP));
-    glUniform4f (m_uColor, color.r, color.g, color.b, color.a);
+    glUniform4f (m_uColor, color.r * brightness, color.g * brightness, color.b * brightness, color.a * alpha);
+    glUniform1i (m_uSolid, 0);
     glActiveTexture (GL_TEXTURE0);
     glBindTexture (GL_TEXTURE_2D, m_texture);
     glUniform1i (m_uTexture, 0);
@@ -774,6 +819,7 @@ void CText::renderEffectChain (const glm::mat4& mvp, const float brightness, con
     // Named simulation targets persist between frames; only the working
     // compositing surface is reset here. Authored clear functions reset state.
     glBindFramebuffer (GL_FRAMEBUFFER, m_fboB->getFramebuffer ());
+    glClearColor (0.0f, 0.0f, 0.0f, 0.0f);
     glClear (GL_COLOR_BUFFER_BIT);
 
     auto command = m_swapCommands.begin ();
@@ -787,8 +833,9 @@ void CText::renderEffectChain (const glm::mat4& mvp, const float brightness, con
 	}
     }
 
-    // Publish the finished, modulated layer through a stable target. A later
+    // Publish the finished layer through a stable target. A later
     // clock change can resize it without leaving consumers with an old texture.
+    glDisable (GL_SAMPLE_ALPHA_TO_COVERAGE);
     glBindFramebuffer (GL_FRAMEBUFFER, m_publishedFBO->getFramebuffer ());
     glViewport (0, 0, m_publishedFBO->getRealWidth (), m_publishedFBO->getRealHeight ());
     glDisable (GL_BLEND);
@@ -801,7 +848,7 @@ void CText::renderEffectChain (const glm::mat4& mvp, const float brightness, con
     ) * glm::translate (glm::mat4 (1.0f), glm::vec3 (-m_effectCompositeOffset, 0.0f));
     glUniformMatrix4fv (m_cuMVP, 1, GL_FALSE, glm::value_ptr (publishMVP));
     const GLint uColor = glGetUniformLocation (m_compositeProgram, "uColor");
-    glUniform4f (uColor, brightness, brightness, brightness, alpha);
+    glUniform4f (uColor, 1.0f, 1.0f, 1.0f, 1.0f);
     glActiveTexture (GL_TEXTURE0);
     glBindTexture (GL_TEXTURE_2D, m_effectResult->getTextureID (0));
     glUniform1i (m_cuTexture, 0);
@@ -813,6 +860,8 @@ void CText::renderEffectChain (const glm::mat4& mvp, const float brightness, con
     const auto sceneTarget = this->getScene ().getActiveRenderTarget ();
     glBindFramebuffer (GL_FRAMEBUFFER, sceneTarget->getDrawFramebuffer ());
     glViewport (0, 0, sceneTarget->getRealWidth (), sceneTarget->getRealHeight ());
+    glColorMask (GL_TRUE, GL_TRUE, GL_TRUE, getScene ().isRenderingToComposition () ? GL_TRUE : GL_FALSE);
+    glBlendEquationSeparate (GL_FUNC_ADD, getScene ().usesCompositionAlphaMax () ? GL_MAX : GL_FUNC_ADD);
     if (drawToScene && m_colorBlendPass) {
 	const auto width = sceneTarget->getRealWidth ();
 	const auto height = sceneTarget->getRealHeight ();
@@ -843,6 +892,7 @@ void CText::renderEffectChain (const glm::mat4& mvp, const float brightness, con
     glBindVertexArray (0);
 
     // restore the state this chain touched that nothing downstream re-sets per draw
+    glColorMask (GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
     glClearColor (previousClearColor[0], previousClearColor[1], previousClearColor[2], previousClearColor[3]);
     if (depthWasEnabled == GL_TRUE) {
 	glEnable (GL_DEPTH_TEST);
@@ -938,17 +988,10 @@ bool CText::loadSystemFont () {
     return true;
 }
 
-unsigned int CText::computeEffectivePixelSize () const {
-    // Wallpaper Engine defines pointsize as "Size of the font in points for 300 DPI"
-    // (ui/dist/monaco/autocomplete/lib.sceneScript.d.ts, ITextLayer.pointsize), so the
-    // glyph EM square is pointsize * 300/72 pixels in scene units. The object's scale
-    // (own and inherited, via the world matrix) then scales the rasterized quad like
-    // WE does — which is also why WE's editor warns that scaling text reduces quality.
-    constexpr float kTextDPI = 300.0f;
-    constexpr float kPointsPerInch = 72.0f;
-    return std::max<unsigned int> (
-	1u, static_cast<unsigned int> (m_text.pointSize->value->getFloat () * kTextDPI / kPointsPerInch)
-    );
+unsigned int CText::currentFontSize () const {
+    // Native keeps fractional points in FreeType's 26.6 units at 300 DPI.
+    // Converting to whole pixels first changes both ink and padded line bounds.
+    return static_cast<unsigned int> (std::clamp (m_text.pointSize->value->getFloat (), 1.0f, 256.0f) * 64.0f);
 }
 
 TextLayoutLimits CText::currentLayoutLimits () const {
@@ -966,6 +1009,32 @@ glm::vec2 CText::currentSpacing () const {
     return glm::vec2 (m_text.spacing->evaluateVec3 (getScene ().getTime ()));
 }
 
+glm::vec2 CText::currentPadding () const {
+    return glm::vec2 (m_text.padding->evaluateVec3 (getScene ().getTime ()));
+}
+
+void CText::drawBackground (const glm::mat4& mvp, const float alpha) {
+    if (!m_text.opaqueBackground->value->getBool ()) return;
+    const float brightness = getScene ().isHdr ()
+	? m_text.backgroundBrightness->evaluateFloat (getScene ().getTime ()) : 1.0f;
+    const glm::vec3 color = m_text.backgroundColor->value->getVec3 () * brightness;
+    const glm::mat4 backgroundMVP = mvp
+	* glm::translate (glm::mat4 (1.0f), glm::vec3 (m_effectCompositeOffset, 0.0f))
+	* glm::scale (glm::mat4 (1.0f), glm::vec3 (m_effectSurface / m_quadSize, 1.0f))
+	* glm::translate (glm::mat4 (1.0f), glm::vec3 (-m_quadOffset, 0.0f));
+    glEnable (GL_BLEND);
+    glBlendFunc (GL_SRC_ALPHA, m_text.colorBlendMode->value->getInt () == 31 ? GL_ONE : GL_ONE_MINUS_SRC_ALPHA);
+    glUseProgram (m_program);
+    glUniformMatrix4fv (m_uMVP, 1, GL_FALSE, glm::value_ptr (backgroundMVP));
+    glUniform4f (m_uColor, color.r, color.g, color.b, alpha);
+    glUniform1i (m_uSolid, 1);
+    ensureVao ();
+    glBindVertexArray (m_vao);
+    glDrawArrays (GL_TRIANGLES, 0, 6);
+    glBindVertexArray (0);
+    glUniform1i (m_uSolid, 0);
+}
+
 void CText::rebuildTextureFrom (const std::string& text) {
     // Wallpaper Engine lays out a glyph mesh, then aligns that mesh around the layer
     // origin from its actual bounds and the font's ascender/descender. The serialized
@@ -980,6 +1049,7 @@ void CText::rebuildTextureFrom (const std::string& text) {
     FT_GlyphSlot slot = m_ftFace->glyph;
     FT_Set_Transform (m_ftFace, nullptr, nullptr);
     m_lastSpacing = currentSpacing ();
+    m_lastPadding = currentPadding ();
 
     // Metrics-based row spacing is stable across glyph mixes and meaningful for empty rows.
     // Native spacing adds pixels after converting FreeType's 26.6 metrics; it
@@ -1155,7 +1225,7 @@ void CText::rebuildTextureFrom (const std::string& text) {
     m_quadOffset = { nativeOffset.x, -nativeOffset.y };
     const TextEffectLayout effectLayout = computeTextEffectLayout (
 	m_text.alignment, m_text.verticalalign, glyphBounds, static_cast<float> (ascender),
-	static_cast<float> (descender), static_cast<float> (lineHeight), lines.size (), m_text.padding
+	static_cast<float> (descender), static_cast<float> (lineHeight), lines.size (), m_lastPadding
     );
     m_effectSurface = glm::max (effectLayout.surfaceSize, glm::vec2 (1.0f));
     m_effectRasterOffset = effectLayout.rasterOffset;
@@ -1199,6 +1269,7 @@ void CText::buildShader () {
     m_uMVP = glGetUniformLocation (m_program, "uMVP");
     m_uColor = glGetUniformLocation (m_program, "uColor");
     m_uTexture = glGetUniformLocation (m_program, "uTexture");
+    m_uSolid = glGetUniformLocation (m_program, "uSolid");
 }
 
 void CText::uploadQuadVertices () {
@@ -1287,14 +1358,14 @@ void CText::render () {
     const glm::vec2 previousCompositeOffset = m_effectCompositeOffset;
     const glm::vec2 previousQuadOffset = m_quadOffset;
     bool rebuiltGlyphs = false;
-    const unsigned int pixelSize = computeEffectivePixelSize ();
-    if (pixelSize != m_lastPixelSize) {
-	m_lastPixelSize = pixelSize;
-	FT_Set_Pixel_Sizes (m_ftFace, 0, static_cast<FT_UInt> (m_lastPixelSize));
+    const unsigned int fontSize = currentFontSize ();
+    if (fontSize != m_lastFontSize) {
+	m_lastFontSize = fontSize;
+	FT_Set_Char_Size (m_ftFace, 0, m_lastFontSize, 300, 300);
 	rebuildTextureFrom (renderedText);
 	rebuiltGlyphs = true;
     } else if (renderedText != m_lastRenderedText || currentLayoutLimits () != m_lastLayoutLimits
-	       || currentSpacing () != m_lastSpacing) {
+	       || currentSpacing () != m_lastSpacing || currentPadding () != m_lastPadding) {
 	rebuildTextureFrom (renderedText);
 	rebuiltGlyphs = true;
     }
@@ -1331,6 +1402,9 @@ void CText::render () {
     // Glyph plates are double-sided, including the mirrored 2D path and the
     // initial raster pass of an effect chain. Never inherit image-material culling.
     glDisable (GL_CULL_FACE);
+    glDisable (GL_SAMPLE_ALPHA_TO_COVERAGE);
+    glColorMask (GL_TRUE, GL_TRUE, GL_TRUE, getScene ().isRenderingToComposition () ? GL_TRUE : GL_FALSE);
+    glBlendEquationSeparate (GL_FUNC_ADD, getScene ().usesCompositionAlphaMax () ? GL_MAX : GL_FUNC_ADD);
     if (depthTestEnabled ()) glEnable (GL_DEPTH_TEST);
     else glDisable (GL_DEPTH_TEST);
     glDepthFunc (GL_LESS);
@@ -1354,8 +1428,9 @@ void CText::render () {
 	    return;
 	}
 
+	drawBackground (mvp, alpha);
 	glEnable (GL_BLEND);
-	glBlendFunc (GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+	glBlendFunc (GL_SRC_ALPHA, m_text.colorBlendMode->value->getInt () == 31 ? GL_ONE : GL_ONE_MINUS_SRC_ALPHA);
 	glUseProgram (m_program);
 	glUniformMatrix4fv (m_uMVP, 1, GL_FALSE, glm::value_ptr (mvp));
 	glUniform4f (m_uColor, color.r * brightness, color.g * brightness, color.b * brightness, color.a * alpha);
@@ -1368,6 +1443,7 @@ void CText::render () {
 	glBindVertexArray (m_vao);
 	glDrawArrays (GL_TRIANGLES, 0, 6);
 	glBindVertexArray (0);
+        glColorMask (GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
 #if !NDEBUG
 	glPopDebugGroup ();
 #endif /* DEBUG */
@@ -1401,8 +1477,9 @@ void CText::render () {
 	return;
     }
 
+    drawBackground (mvp, alpha);
     glEnable (GL_BLEND);
-    glBlendFunc (GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+    glBlendFunc (GL_SRC_ALPHA, m_text.colorBlendMode->value->getInt () == 31 ? GL_ONE : GL_ONE_MINUS_SRC_ALPHA);
 
     glUseProgram (m_program);
     glUniformMatrix4fv (m_uMVP, 1, GL_FALSE, glm::value_ptr (mvp));
@@ -1416,6 +1493,7 @@ void CText::render () {
     glBindVertexArray (m_vao);
     glDrawArrays (GL_TRIANGLES, 0, 6);
     glBindVertexArray (0);
+    glColorMask (GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
 #if !NDEBUG
     glPopDebugGroup ();
 #endif /* DEBUG */

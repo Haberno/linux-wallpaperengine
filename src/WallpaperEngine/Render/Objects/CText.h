@@ -116,10 +116,12 @@ private:
     bool initFreeType ();
     bool loadEmbeddedFont ();
     bool loadSystemFont ();
-    unsigned int computeEffectivePixelSize () const;
+    unsigned int currentFontSize () const;
     TextLayoutLimits currentLayoutLimits () const;
     glm::vec2 currentSpacing () const;
+    glm::vec2 currentPadding () const;
     bool depthTestEnabled () const;
+    void drawBackground (const glm::mat4& mvp, float alpha);
 
     // text-effect chain (rebuilt when dynamic glyph metrics change, like the native renderer)
     void setupEffectChain ();
@@ -129,9 +131,10 @@ private:
 
     const Text& m_text;
     std::string m_lastRenderedText;
-    unsigned int m_lastPixelSize = 0;
+    unsigned int m_lastFontSize = 0;
     TextLayoutLimits m_lastLayoutLimits;
     glm::vec2 m_lastSpacing = glm::vec2 (0.0f);
+    glm::vec2 m_lastPadding = glm::vec2 (32.0f);
 
     FT_Library m_ftLibrary = nullptr;
     FT_Face m_ftFace = nullptr;
@@ -153,6 +156,7 @@ private:
     GLint m_uMVP = -1;
     GLint m_uColor = -1;
     GLint m_uTexture = -1;
+    GLint m_uSolid = -1;
 
     glm::ivec2 m_textureSize = { 0, 0 };
     glm::vec2 m_quadSize = { 0.0f, 0.0f };

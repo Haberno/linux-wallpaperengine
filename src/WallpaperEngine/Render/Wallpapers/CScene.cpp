@@ -1056,7 +1056,9 @@ void CScene::renderFrame (const glm::ivec4& viewport) {
 	}
 
 	const auto previousTarget = this->m_compositionRenderTarget;
-	const auto source = this->getActiveRenderTarget ();
+	const bool previousAlphaMode = this->m_compositionAlphaMax;
+	// Native copybackground samples the scene, including for nested groups.
+	const auto source = this->getFBO ();
 	GLfloat previousClearColor[4];
 	glGetFloatv (GL_COLOR_CLEAR_VALUE, previousClearColor);
 	glBindFramebuffer (GL_FRAMEBUFFER, target->getFramebuffer ());
@@ -1079,6 +1081,7 @@ void CScene::renderFrame (const glm::ivec4& viewport) {
 	}
 
 	this->m_compositionRenderTarget = target;
+	this->m_compositionAlphaMax = previousAlphaMode || !composition->copiesCompositionBackground ();
 	for (const FrameRenderEntry& entry : renderOrder) {
 	    CObject* child = entry.object;
 	    if (compositionAncestor (child) != composition) {
@@ -1092,6 +1095,7 @@ void CScene::renderFrame (const glm::ivec4& viewport) {
 	    }
 	}
 	this->m_compositionRenderTarget = previousTarget;
+	this->m_compositionAlphaMax = previousAlphaMode;
 
 	// The stock composelayer material samples the locally shadowed
 	// _rt_FullFrameBuffer and composites the effected group into the prior target.
@@ -1861,6 +1865,8 @@ CScene::resolveRenderTarget (const std::shared_ptr<const CFBO>& requested) const
 }
 
 bool CScene::isRenderingToComposition () const { return this->m_compositionRenderTarget != nullptr; }
+
+bool CScene::usesCompositionAlphaMax () const { return this->m_compositionAlphaMax; }
 
 Render::CObject* CScene::createLayer (const std::string& modelPath, const std::string& workshopId) {
     // Resolve the asset path: scripts reference bar models by their bare workshop-relative path

@@ -208,18 +208,10 @@ TextUniquePtr ObjectParser::parseText (const JSON& it, const Project& project, O
 	    .depthTest = std::move (depthTest),
 	    .alignment = it.optional ("horizontalalign", it.optional ("alignment", std::string ("center"))),
 	    .verticalalign = it.optional ("verticalalign", std::string ("center")),
-	    // padding is authored as a single number by older scenes and as an "x y" vector
-	    // string by newer editors (e.g. workshop 3758354038)
-	    .padding = [&] () -> glm::vec2 {
-		const auto raw = it.optional ("padding");
-		if (!raw.has_value ()) {
-		    return glm::vec2 (0.0f);
-		}
-		if (raw->is_number ()) {
-		    return glm::vec2 (raw->get<float> ());
-		}
-		return it.optional ("padding", glm::vec2 (0.0f));
-	    }(),
+	    .padding = it.user ("padding", project.properties, glm::vec2 (32.0f)),
+	    .opaqueBackground = it.user ("opaquebackground", project.properties, false),
+	    .backgroundColor = it.color ("backgroundcolor", project.properties, Builders::ColorBuilder::Black),
+	    .backgroundBrightness = it.user ("backgroundbrightness", project.properties, 1.0f),
 	    .spacing = it.user ("spacing", project.properties, glm::vec2 (0.0f)),
 	    .brightness = it.user ("brightness", project.properties, 1.0f),
 	    .effects = effects.has_value () ? parseEffects (*effects, project) : std::vector<ImageEffectUniquePtr> {},

@@ -760,7 +760,10 @@ struct TextData {
     std::string verticalalign;
     /** Padding around the generated text surface, in pixels. Older scenes author a single
      *  number (uniform padding); newer editors write an "x y" vector. */
-    glm::vec2 padding;
+    UserSettingUniquePtr padding;
+    UserSettingUniquePtr opaqueBackground;
+    UserSettingUniquePtr backgroundColor;
+    UserSettingUniquePtr backgroundBrightness;
     /** Additional glyph advance (X) and row height (Y), in font raster pixels. */
     UserSettingUniquePtr spacing;
     /** Layer brightness multiplier, applied to the text color at draw time */
