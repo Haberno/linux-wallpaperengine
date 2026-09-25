@@ -1025,11 +1025,6 @@ EmitterFunc CParticle::createBoxEmitter (const ParticleEmitter& emitter) {
 	 randomPeriodicEmission, emissionTimer = 0.0f, delayTimer = emitter.delay, durationTimer = 0.0f,
 	 periodicTimer = 0.0f, periodicDuration = 0.0f, periodicDelay = 0.0f, emitting = false,
 	 instantaneousEmitted = false] (std::vector<ParticleInstance>& particles, uint32_t& count, float dt, uint32_t burst) mutable {
-	    if (count >= particles.size ()) {
-		return;
-	    }
-
-	    uint32_t toEmit = burst;
 	    if (burst == 0) {
 		// Handle delay
 		if (delayTimer > 0.0f) {
@@ -1037,14 +1032,20 @@ EmitterFunc CParticle::createBoxEmitter (const ParticleEmitter& emitter) {
 		    return;
 		}
 
-		// Handle duration
+		// Native advances duration even with a full pool, after admitting this tick.
 		if (emitter.duration > 0.0f) {
-		    durationTimer += dt;
 		    if (durationTimer >= emitter.duration) {
 			return;
 		    }
+		    durationTimer += dt;
 		}
+	    }
+	    if (count >= particles.size ()) {
+		return;
+	    }
 
+	    uint32_t toEmit = burst;
+	    if (burst == 0) {
 		// Handle random periodic emission
 		if (randomPeriodicEmission) {
 		    periodicTimer += dt;
@@ -1180,19 +1181,27 @@ EmitterFunc CParticle::createSphereEmitter (const ParticleEmitter& emitter) {
     bool limitOnePerFrame = (emitter.flags & 2) != 0;
 
     return [this, emitter, transformedEmitterOrigin, controlPointIndex, countOverride, lifetime, limitOnePerFrame,
-	    emissionTimer = 0.0f, delayTimer = emitter.delay,
+	    emissionTimer = 0.0f, delayTimer = emitter.delay, durationTimer = 0.0f,
 	    remaining
 	    = emitter.instantaneous] (std::vector<ParticleInstance>& particles, uint32_t& count, float dt, uint32_t burst) mutable {
+	if (burst == 0) {
+	    if (delayTimer > 0.0f) {
+		delayTimer -= dt;
+		return;
+	    }
+	    if (emitter.duration > 0.0f) {
+		if (durationTimer >= emitter.duration) {
+		    return;
+		}
+		durationTimer += dt;
+	    }
+	}
 	if (count >= particles.size ()) {
 	    return;
 	}
 
 	uint32_t toEmit = burst;
 	if (burst == 0) {
-	    if (delayTimer > 0.0f) {
-		delayTimer -= dt;
-		return;
-	    }
 	    // Rate-based emission with optional cap at 1 per frame
 	    const auto& recorder = getScene ().getAudioContext ().getRecorder ();
 	    const float response = calculateParticleAudioResponse (
