@@ -3216,11 +3216,11 @@ void CParticle::renderRopeTrail () {
 	    addVertex (0.0f, 1.0f);
 
 	    m_indices[indexOffset++] = baseVertex + 0;
+	    m_indices[indexOffset++] = baseVertex + 2;
 	    m_indices[indexOffset++] = baseVertex + 1;
 	    m_indices[indexOffset++] = baseVertex + 2;
-	    m_indices[indexOffset++] = baseVertex + 2;
-	    m_indices[indexOffset++] = baseVertex + 3;
 	    m_indices[indexOffset++] = baseVertex + 0;
+	    m_indices[indexOffset++] = baseVertex + 3;
 	}
     }
 
@@ -3441,11 +3441,11 @@ void CParticle::renderRope () {
 
 	// 2 triangles
 	m_indices[indexOffset++] = baseVertex + 0;
+	m_indices[indexOffset++] = baseVertex + 2;
 	m_indices[indexOffset++] = baseVertex + 1;
 	m_indices[indexOffset++] = baseVertex + 2;
-	m_indices[indexOffset++] = baseVertex + 2;
-	m_indices[indexOffset++] = baseVertex + 3;
 	m_indices[indexOffset++] = baseVertex + 0;
+	m_indices[indexOffset++] = baseVertex + 3;
     }
 
     m_activeIndexCount = static_cast<GLsizei> (indexOffset);
