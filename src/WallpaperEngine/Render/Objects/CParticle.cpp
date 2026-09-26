@@ -367,16 +367,22 @@ void CParticle::setup () {
 	}
     }
 
-    // Texture is resolved by CRenderable base class; read spritesheet data.
-    // TextureParser computes spritesheet grid from TEXS frame data (animated textures)
-    // or .tex-json metadata (static textures). For GIF-style animated textures (separate
-    // GL texture per frame), the parser returns 0 cols/rows since a 1x1 grid can't hold
-    // all frames — so no SPRITESHEET mode is needed (frame switching happens via texture ID).
+    // Static sheets use .tex-json grids. Binary TEXS frames supply their own
+    // count and axes, including sheets whose frames span several texture pages.
     if (const auto texture = getTexture ()) {
 	m_spritesheetCols = static_cast<int> (texture->getSpritesheetCols ());
 	m_spritesheetRows = static_cast<int> (texture->getSpritesheetRows ());
 	m_spritesheetFrames = static_cast<int> (texture->getSpritesheetFrames ());
 	m_spritesheetDuration = texture->getSpritesheetDuration ();
+	const auto& frames = texture->getFrames ();
+	if (texture->isAnimated () && !frames.empty () && frames.front ()->width1 > 0.0f
+	    && frames.front ()->height1 > 0.0f) {
+	    m_spritesheetFrames = static_cast<int> (frames.size ());
+	    m_spritesheetDuration = 0.0f;
+	    for (const auto& frame : frames) {
+		m_spritesheetDuration += frame->frametime;
+	    }
+	}
     }
 
     setupEmitters ();
@@ -2552,6 +2558,13 @@ void CParticle::setupPass () {
     }
     if (m_spritesheetFrames > 0) {
 	m_passOverride->combos["SPRITESHEET"] = 1;
+	if (const auto texture = getTexture (); texture && texture->isAnimated ()) {
+	    // Native particle overrides win over authored material combinations.
+	    m_passOverride->combos["SPRITESHEETBLEND"]
+		= (m_particle.flags & 2) == 0 && m_particle.animationMode != "randomframe";
+	    const glm::vec4& resolution = *texture->getResolution ();
+	    m_passOverride->combos["SPRITESHEETBLENDNPOT"] = resolution.z < resolution.x;
+	}
     }
     if (m_useTrailRenderer) {
 	m_passOverride->combos["TRAILRENDERER"] = 1;
@@ -2890,6 +2903,20 @@ void CParticle::updateParticleRenderVars () {
     // Sprite trails use the authored length limits directly in genericparticle.
     m_renderVar0 = m_useRopeTrailRenderer ? glm::vec4 (0.0f, 0.0f, 1.0f, 0.0f)
 					  : glm::vec4 (m_trailLength, m_trailMaxLength, m_trailMinLength, 0.0f);
+
+    if (const auto texture = getTexture (); texture && texture->isAnimated () && !texture->getFrames ().empty ()) {
+	const auto& frame = *texture->getFrames ().front ();
+	const glm::vec4& resolution = *texture->getResolution ();
+	if (frame.width1 > 0.0f && frame.height1 > 0.0f && resolution.x > 0.0f && resolution.y > 0.0f) {
+	    // TEXS axes are pixels in the stored atlas, independent of the GIF canvas
+	    // and the logical atlas padding used by ComputeSpriteFrame's row wrap.
+	    m_renderVar1 = glm::vec4 (
+		frame.width1 / resolution.x, frame.height1 / resolution.y,
+		static_cast<float> (m_spritesheetFrames), frame.height1 / frame.width1
+	    );
+	    return;
+	}
+    }
 
     if (m_spritesheetFrames > 0 && m_spritesheetCols > 0 && m_spritesheetRows > 0) {
 	float frameWidth = 1.0f / static_cast<float> (m_spritesheetCols);
