@@ -191,6 +191,12 @@ std::string maskShaderComments (const std::string& source) {
     };
     // Mask comments/strings without changing offsets or source text.
     for (size_t i = 0; i < code.size ();) {
+        // Only these characters can open a comment or string; skipping straight to them
+        // matters because every shader pass masks its whole include-expanded source
+        if (code[i] != '/' && code[i] != '"' && code[i] != '\'') {
+            ++i;
+            continue;
+        }
         size_t end = i;
         if (code.compare (i, 2, "//") == 0) {
             end = code.find ('\n', i + 2);
@@ -537,6 +543,16 @@ void ShaderUnit::preprocessVaryingDeclarations () {
         R"(\bvarying\s+[biu]?vec[234]\s+[A-Za-z_][A-Za-z0-9_]*(\s*\.\s*(?:[xyzw]{1,4}|[rgba]{1,4}))\s*;)"
     );
     const std::string code = maskShaderComments (m_preprocessed);
+    // std::regex over every shader cost ~0.7 s on 3D scenes; only run it when some
+    // varying declaration actually contains a '.' before its ';'
+    bool candidate = false;
+    for (size_t at = code.find ("varying"); at != std::string::npos && !candidate; at = code.find ("varying", at + 1)) {
+	const size_t end = code.find (';', at);
+	candidate = code.find ('.', at) < end;
+    }
+    if (!candidate) {
+	return;
+    }
     size_t removed = 0;
     for (std::sregex_iterator it (code.begin (), code.end (), declaration), last; it != last; ++it) {
         const size_t length = (*it).length (1);
