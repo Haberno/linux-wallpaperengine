@@ -1203,7 +1203,7 @@ EmitterFunc CParticle::createBoxEmitter (const ParticleEmitter& emitter) {
 
 		p.color = m_instanceColor;
 		p.alpha = 1.0f * getInstanceOverride ().alpha->value->getFloat ();
-		p.size = 20.0f * getInstanceOverride ().size->value->getFloat ();
+		p.size = 0.5f;
 		p.lifetime = 1.0f * getInstanceOverride ().lifetime->value->getFloat ();
 		p.age = 0.0f;
 		p.alive = true;
@@ -1382,7 +1382,7 @@ EmitterFunc CParticle::createSphereEmitter (const ParticleEmitter& emitter) {
 
 	    p.color = m_instanceColor;
 	    p.alpha = 1.0f * getInstanceOverride ().alpha->value->getFloat ();
-	    p.size = 20.0f * getInstanceOverride ().size->value->getFloat ();
+	    p.size = 0.5f;
 	    p.lifetime = lifetime;
 	    p.age = 0.0f;
 	    p.alive = true;
@@ -1485,7 +1485,9 @@ InitializerFunc CParticle::createSizeRandomInitializer (const SizeRandomInitiali
 
 	// Apply exponent for non-linear distribution
 	float adjustedT = std::pow (t, exponent);
-	p.size = (min + adjustedT * (max - min)) * sizeOverride->getFloat () / 2.0f;
+	const float sizeMultiplier = (m_particle.flags & 128) != 0 ? 1.0f : sizeOverride->getFloat ();
+	// Each initializer multiplies the retained half-size, starting at .5.
+	p.size *= (min + adjustedT * (max - min)) * sizeMultiplier;
 	p.initial.size = p.size;
     };
 }
@@ -2057,15 +2059,17 @@ OperatorFunc CParticle::createSizeChangeOperator (const SizeChangeOperator& op) 
     DynamicValue* endTimeValue = op.endTime->value.get ();
     DynamicValue* startValueValue = op.startValue->value.get ();
     DynamicValue* endValueValue = op.endValue->value.get ();
+    DynamicValue* sizeOverride = getInstanceOverride ().size->value.get ();
 
     return
-	[startTimeValue, endTimeValue, startValueValue, endValueValue] (
+	[this, startTimeValue, endTimeValue, startValueValue, endValueValue, sizeOverride] (
 	    std::vector<ParticleInstance>& particles, uint32_t count, const std::vector<ControlPointData>&, float, float
 	) {
 	    float startTime = startTimeValue->getFloat ();
 	    float endTime = endTimeValue->getFloat ();
-	    float startValue = startValueValue->getFloat ();
-	    float endValue = endValueValue->getFloat ();
+	    const float sizeMultiplier = (m_particle.flags & 128) != 0 ? 1.0f : sizeOverride->getFloat ();
+	    float startValue = startValueValue->getFloat () * sizeMultiplier;
+	    float endValue = endValueValue->getFloat () * sizeMultiplier;
 
 	    for (uint32_t i = 0; i < count; i++) {
 		auto& p = particles[i];
