@@ -1213,9 +1213,11 @@ EmitterFunc CParticle::createSphereEmitter (const ParticleEmitter& emitter) {
     const int controlPointIndex = emitter.controlPoint;
 
     bool limitOnePerFrame = (emitter.flags & 2) != 0;
+    bool randomPeriodicEmission = (emitter.flags & 4) != 0;
 
     return [this, emitter, transformedEmitterOrigin, controlPointIndex, countOverride, limitOnePerFrame,
-	    emissionTimer = 0.0f, delayTimer = emitter.delay, durationTimer = 0.0f,
+	    randomPeriodicEmission, emissionTimer = 0.0f, delayTimer = emitter.delay, durationTimer = 0.0f,
+	    periodicTimer = 0.0f, emittedThisPeriod = 0u,
 	    remaining
 	    = emitter.instantaneous] (std::vector<ParticleInstance>& particles, uint32_t& count, float dt, uint32_t burst) mutable {
 	if (burst == 0) {
@@ -1244,13 +1246,49 @@ EmitterFunc CParticle::createSphereEmitter (const ParticleEmitter& emitter) {
 		emitter.audioProcessingFrequencyStart, emitter.audioProcessingFrequencyEnd
 	    );
 	    const float countMultiplier = (m_particle.flags & 32) != 0 ? 1.0f : countOverride->getFloat ();
-	    const float rate = calculateParticleEmissionRate (emitter.rate, countMultiplier) * response;
+	    float rate = calculateParticleEmissionRate (emitter.rate, countMultiplier) * response;
+	    if (randomPeriodicEmission) {
+		// Native uses a positive active clock and a negative waiting clock.
+		if (periodicTimer > 0.0f) {
+		    periodicTimer -= dt;
+		    if (periodicTimer < 0.0f) {
+			periodicTimer = -WallpaperEngine::Maths::randomFloat (
+			    m_rng, emitter.minPeriodicDelay, emitter.maxPeriodicDelay
+			);
+		    }
+		    // The tick crossing into the wait still admits scheduled births.
+		} else {
+		    periodicTimer += dt;
+		    if (periodicTimer < 0.0f) {
+			rate = 0.0f;
+		    } else {
+			periodicTimer = WallpaperEngine::Maths::randomFloat (
+			    m_rng, emitter.minPeriodicDuration, emitter.maxPeriodicDuration
+			);
+			emittedThisPeriod = 0;
+		    }
+		}
+	    }
 	    emissionTimer += dt * rate;
 	    toEmit = static_cast<uint32_t> (emissionTimer);
 	    emissionTimer -= static_cast<float> (toEmit);
 	    // limitOnePerFrame (flags bit 1): cap at 1 to prevent rope artifacts
 	    if (limitOnePerFrame && toEmit > 1) {
 		toEmit = 1;
+	    }
+	    if (randomPeriodicEmission && emitter.maxToEmitPerPeriod != 0) {
+		uint32_t cap = emitter.maxToEmitPerPeriod;
+		if ((m_particle.flags & 32) == 0) {
+		    const float scaled = static_cast<float> (cap) * countMultiplier;
+		    // Match the box path's native signed64 truncation and low32 bits.
+		    cap = scaled >= -0x1p63f && scaled < 0x1p63f
+			? static_cast<uint32_t> (static_cast<int64_t> (scaled)) : 0;
+		}
+		if (cap != 0) {
+		    const uint32_t available = cap > emittedThisPeriod ? cap - emittedThisPeriod : 0;
+		    toEmit = std::min (toEmit, available);
+		    emittedThisPeriod += toEmit;
+		}
 	    }
 
 	    if (remaining > 0) {
