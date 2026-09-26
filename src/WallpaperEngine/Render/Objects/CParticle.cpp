@@ -1042,7 +1042,7 @@ EmitterFunc CParticle::createBoxEmitter (const ParticleEmitter& emitter) {
     return
 	[this, emitter, transformedEmitterOrigin, controlPointIndex, countOverride, flippedDirections, limitOnePerFrame,
 	 randomPeriodicEmission, emissionTimer = 0.0f, delayTimer = emitter.delay, durationTimer = 0.0f,
-	 periodicTimer = 0.0f, periodicDuration = 0.0f, periodicDelay = 0.0f, emitting = false,
+	 periodicTimer = 0.0f, periodicDuration = 0.0f, periodicDelay = 0.0f, emittedThisPeriod = 0u, emitting = false,
 	 instantaneousEmitted = false] (std::vector<ParticleInstance>& particles, uint32_t& count, float dt, uint32_t burst) mutable {
 	    if (burst == 0) {
 		// Handle delay
@@ -1073,6 +1073,7 @@ EmitterFunc CParticle::createBoxEmitter (const ParticleEmitter& emitter) {
 			if (periodicTimer >= periodicDelay) {
 			    emitting = true;
 			    periodicTimer = 0.0f;
+			    emittedThisPeriod = 0;
 			    periodicDuration = WallpaperEngine::Maths::randomFloat (
 				m_rng, emitter.minPeriodicDuration, emitter.maxPeriodicDuration
 			    );
@@ -1114,6 +1115,21 @@ EmitterFunc CParticle::createBoxEmitter (const ParticleEmitter& emitter) {
 		    // limitOnePerFrame (flags bit 1): cap at 1 to prevent rope artifacts
 		    if (limitOnePerFrame && rateEmit > 1) {
 			rateEmit = 1;
+		    }
+		    if (randomPeriodicEmission && emitter.maxToEmitPerPeriod != 0) {
+			uint32_t cap = emitter.maxToEmitPerPeriod;
+			if ((m_particle.flags & 32) == 0) {
+			    const float scaled = static_cast<float> (cap) * countMultiplier;
+			    // Native truncates to signed64, then retains the low32 bits.
+			    // Its invalid-conversion sentinel also has zero low bits.
+			    cap = scaled >= -0x1p63f && scaled < 0x1p63f
+				? static_cast<uint32_t> (static_cast<int64_t> (scaled)) : 0;
+			}
+			if (cap != 0) {
+			    const uint32_t remaining = cap > emittedThisPeriod ? cap - emittedThisPeriod : 0;
+			    rateEmit = std::min (rateEmit, remaining);
+			    emittedThisPeriod += rateEmit;
+			}
 		    }
 		    toEmit += rateEmit;
 		}

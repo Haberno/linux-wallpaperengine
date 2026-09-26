@@ -967,6 +967,7 @@ ParticleEmitter ObjectParser::parseParticleEmitter (const JSON& it) {
 	    .maxPeriodicDelay = it.optional ("maxperiodicdelay", 2.0f),
 	    .minPeriodicDuration = it.optional ("minperiodicduration", 2.0f),
 	    .maxPeriodicDuration = it.optional ("maxperiodicduration", 3.0f),
+	    .maxToEmitPerPeriod = it.optional ("maxtoemitperperiod", 0u),
 	};
     } catch (nlohmann::json::exception& e) {
 	sLog.error ("Error parsing emitter: ", e.what ());

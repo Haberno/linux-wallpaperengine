@@ -219,6 +219,7 @@ struct ParticleEmitter {
     float maxPeriodicDelay;
     float minPeriodicDuration;
     float maxPeriodicDuration;
+    uint32_t maxToEmitPerPeriod;
 };
 
 /**

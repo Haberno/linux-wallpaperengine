@@ -681,6 +681,30 @@ TEST_CASE ("particle emission follows the strongest selected audio band", "[part
 	   == Catch::Approx (0.5f).margin (0.00001f));
 }
 
+TEST_CASE ("particle emitters retain periodic caps and default to unlimited", "[particle]") {
+    auto filesystem = std::make_unique<WallpaperEngine::FileSystem::Container> ();
+    filesystem->getVFS ().add ("particles/periodic.json", R"({
+        "emitter":[{"name":"boxrandom"},
+                   {"name":"boxrandom","maxtoemitperperiod":0},
+                   {"name":"boxrandom","flags":4,"maxtoemitperperiod":3,
+                    "minperiodicduration":10,"maxperiodicduration":11}]
+    })");
+    WallpaperEngine::Data::Model::Project project {};
+    project.assetLocator = std::make_unique<WallpaperEngine::Assets::AssetLocator> (std::move (filesystem));
+    const auto object = WallpaperEngine::Data::Parsers::ObjectParser::parse (
+        WallpaperEngine::Data::JSON::JSON::parse (R"({"id":19,"particle":"particles/periodic.json"})"), project
+    );
+    const auto* particle = object->as<WallpaperEngine::Data::Model::Particle> ();
+    REQUIRE (particle != nullptr);
+    REQUIRE (particle->emitters.size () == 3);
+    CHECK (particle->emitters[0].maxToEmitPerPeriod == 0);
+    CHECK (particle->emitters[1].maxToEmitPerPeriod == 0);
+    CHECK (particle->emitters[2].maxToEmitPerPeriod == 3);
+    CHECK (particle->emitters[2].flags == 4);
+    CHECK (particle->emitters[2].minPeriodicDuration == 10.0f);
+    CHECK (particle->emitters[2].maxPeriodicDuration == 11.0f);
+}
+
 TEST_CASE ("discharge particles retain their between-control-point initializer", "[particle]") {
     auto filesystem = std::make_unique<WallpaperEngine::FileSystem::Container> ();
     filesystem->getVFS ().add ("particles/discharge.json", R"({
