@@ -1042,7 +1042,7 @@ EmitterFunc CParticle::createBoxEmitter (const ParticleEmitter& emitter) {
     return
 	[this, emitter, transformedEmitterOrigin, controlPointIndex, countOverride, flippedDirections, limitOnePerFrame,
 	 randomPeriodicEmission, emissionTimer = 0.0f, delayTimer = emitter.delay, durationTimer = 0.0f,
-	 periodicTimer = 0.0f, periodicDuration = 0.0f, periodicDelay = 0.0f, emittedThisPeriod = 0u, emitting = false,
+	 periodicTimer = 0.0f, emittedThisPeriod = 0u,
 	 instantaneousEmitted = false] (std::vector<ParticleInstance>& particles, uint32_t& count, float dt, uint32_t burst) mutable {
 	    if (burst == 0) {
 		// Handle delay
@@ -1065,30 +1065,25 @@ EmitterFunc CParticle::createBoxEmitter (const ParticleEmitter& emitter) {
 
 	    uint32_t toEmit = burst;
 	    if (burst == 0) {
-		// Handle random periodic emission
+		// Native uses a positive active clock and a negative waiting clock.
 		if (randomPeriodicEmission) {
-		    periodicTimer += dt;
-
-		    if (!emitting) {
-			if (periodicTimer >= periodicDelay) {
-			    emitting = true;
-			    periodicTimer = 0.0f;
-			    emittedThisPeriod = 0;
-			    periodicDuration = WallpaperEngine::Maths::randomFloat (
-				m_rng, emitter.minPeriodicDuration, emitter.maxPeriodicDuration
-			    );
-			} else {
-			    return;
-			}
-		    } else {
-			if (periodicTimer >= periodicDuration) {
-			    emitting = false;
-			    periodicTimer = 0.0f;
-			    periodicDelay = WallpaperEngine::Maths::randomFloat (
+		    if (periodicTimer > 0.0f) {
+			periodicTimer -= dt;
+			if (periodicTimer < 0.0f) {
+			    periodicTimer = -WallpaperEngine::Maths::randomFloat (
 				m_rng, emitter.minPeriodicDelay, emitter.maxPeriodicDelay
 			    );
+			}
+			// The tick crossing into the wait still admits scheduled births.
+		    } else {
+			periodicTimer += dt;
+			if (periodicTimer < 0.0f) {
 			    return;
 			}
+			periodicTimer = WallpaperEngine::Maths::randomFloat (
+			    m_rng, emitter.minPeriodicDuration, emitter.maxPeriodicDuration
+			);
+			emittedThisPeriod = 0;
 		    }
 		}
 
