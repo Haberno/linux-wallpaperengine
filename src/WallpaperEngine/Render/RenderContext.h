@@ -1,5 +1,6 @@
 #pragma once
 
+#include <array>
 #include <glm/vec2.hpp>
 #include <glm/vec4.hpp>
 #include <memory>
@@ -92,6 +93,10 @@ namespace Render {
 	[[nodiscard]] TextureCacheStats getTextureCacheStats () const;
 	[[nodiscard]] Media::MediaSource& getMediaSource () const;
 	[[nodiscard]] Shaders::ShaderProgramCache& getShaderProgramCache () { return m_shaderProgramCache; }
+	/** Seconds for the load-time HUD: total, then project, textures, upload, build, pacing, wait */
+	using LoadTimes = std::array<float, 7>;
+	/** Shows a finished switch's timings on that screen until its next switch */
+	void setLoadTimes (const std::string& display, const LoadTimes& times) { m_loadTimes[display] = times; }
 
     private:
 	/** Crossfade between the previous and the current wallpaper of a screen */
@@ -115,6 +120,7 @@ namespace Render {
 	/** Screens with a crossfade in progress, keeping the outgoing wallpaper alive */
 	std::map<std::string, Transition> m_transitions = {};
 	std::map<std::string, FrameRateCounter> m_frameRates;
+	std::map<std::string, LoadTimes> m_loadTimes;
 	/** App that holds the render context */
 	WallpaperApplication& m_app;
 	/** Source for the media playback information */

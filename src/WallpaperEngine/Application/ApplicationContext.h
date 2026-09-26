@@ -120,6 +120,8 @@ public:
 	    int maximumFPS;
 	    /** Show measured rendering FPS on each output */
 	    bool showFps;
+	    /** Break the load-time HUD down into the phases that contributed */
+	    bool showLoadDetails;
 	    /** Scene render-target scale (1.0 = native, >1.0 = supersampling) */
 	    float renderScale;
 	    /** Scene geometry multisample count (1 = off) */
@@ -222,6 +224,7 @@ public:
             .mode = NORMAL_WINDOW,
             .maximumFPS = 30,
             .showFps = false,
+	    .showLoadDetails = false,
 	    .renderScale = 1.0f,
 	    .msaaSamples = 2,
 	    .postProcessing = PostProcessing::Enabled,

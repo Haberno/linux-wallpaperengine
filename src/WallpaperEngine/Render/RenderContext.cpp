@@ -45,6 +45,7 @@ void RenderContext::render (Drivers::Output::OutputViewport* viewport) {
 		this->m_transitions.erase (transition);
 	    } else {
 		transition->second.from->setFpsOverlay (-1.0f);
+		transition->second.from->setLoadOverlay ({ -1.0f }, false);
 		transition->second.from->render (
 		    viewport->viewport, this->getOutput ().renderVFlip (), viewport->globalPosition,
 		    viewport->logicalSize
@@ -63,6 +64,13 @@ void RenderContext::render (Drivers::Output::OutputViewport* viewport) {
             fps = counter.fps ();
         }
         ref->second->setFpsOverlay (fps);
+	const auto& settings = this->m_app.getContext ().settings.render;
+	const auto load = this->m_loadTimes.find (viewport->name);
+	ref->second->setLoadOverlay (
+	    (settings.showFps || settings.showLoadDetails) && load != this->m_loadTimes.end () ? load->second
+												: LoadTimes { -1.0f },
+	    settings.showLoadDetails
+	);
 	ref->second->render (
 	    viewport->viewport, this->getOutput ().renderVFlip (), viewport->globalPosition, viewport->logicalSize
 	);

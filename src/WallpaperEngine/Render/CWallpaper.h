@@ -1,6 +1,7 @@
 #pragma once
 
 #include <GL/glew.h>
+#include <array>
 #include <GLFW/glfw3.h>
 #include <optional>
 
@@ -113,6 +114,11 @@ public:
     void setDestinationFramebuffer (GLuint framebuffer);
     /** Negative FPS hides the overlay; nonnegative values are measured per output. */
     void setFpsOverlay (float fps) { m_fps = fps; }
+    /** A negative total hides the load-time HUD; details add the phases that contributed. */
+    void setLoadOverlay (const std::array<float, 7>& seconds, bool details) {
+	m_loadTimes = seconds;
+	m_loadDetails = details;
+    }
 
     /**
      * Transition state for the final on-screen composite; while progress < 1.0 the
@@ -203,6 +209,11 @@ private:
     GLint g_Fps = GL_NONE;
     GLint g_FpsOutput = GL_NONE;
     float m_fps = -1.0f;
+    GLint g_LoadTimes = GL_NONE;
+    GLint g_LoadDetails = GL_NONE;
+    // RenderContext::LoadTimes; spelled out because RenderContext.h includes this header.
+    std::array<float, 7> m_loadTimes { -1.0f };
+    bool m_loadDetails = false;
     GLint a_Position = GL_NONE;
     GLint a_TexCoord = GL_NONE;
     /** The framebuffer to draw the background to */

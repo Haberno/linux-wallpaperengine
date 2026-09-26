@@ -127,6 +127,8 @@ void CWallpaper::setupShaders () {
 		    "uniform float g_Saturation;\n"
 		    "uniform float g_Fps;\n"
 		    "uniform vec3 g_FpsOutput;\n"
+		    "uniform float g_LoadTimes[7];\n"
+		    "uniform int g_LoadDetails;\n"
 		    "in vec2 v_TexCoord;\n"
 		    "in vec2 v_ScreenPos;\n"
 		    "out vec4 out_FragColor;\n"
@@ -231,6 +233,10 @@ void CWallpaper::setupShaders () {
 		    "return 1.0;\n"
 		    "}\n"
 		    "// The HUD is part of the existing final composite: no extra window, texture or draw pass.\n"
+		    // 3x5 bitmaps: digits, F, P, S (as 5), space, '.', then L A D R J T E X U B I C W and an S unlike 5
+		    "const int GLYPHS[29] = int[29] (31599, 29850, 29671, 31207, 18925, 31183, 31695, 18727, 31727, 31215,\n"
+		    "    4815, 4843, 31183, 0, 8192, 29257, 23530, 15211, 23275, 11044, 9367, 29391, 23213, 31597, 15083,\n"
+		    "    29847, 25166, 24429, 14478);\n"
 		    "void fpsOverlay () {\n"
 		    "    if (g_Fps < 0.0) return;\n"
 		    "    vec2 pixel = vec2 (v_ScreenPos.x, 1.0 - v_ScreenPos.y) * g_FpsOutput.xy / g_FpsOutput.z;\n"
@@ -245,8 +251,28 @@ void CWallpaper::setupShaders () {
 		    "        value >= 1000 ? value / 1000 % 10 : 13,\n"
 		    "        value >= 100 ? value / 100 % 10 : 13,\n"
 		    "        value / 10 % 10, 14, value % 10);\n"
-		    "    int glyphs[15] = int[15] (31599, 29850, 29671, 31207, 18925, 31183, 31695, 18727, 31727, 31215, 4815, 4843, 31183, 0, 8192);\n"
-		    "    if ((glyphs[chars[p.x / 4]] & (1 << (p.y * 3 + p.x % 4))) != 0)\n"
+		    "    if ((GLYPHS[chars[p.x / 4]] & (1 << (p.y * 3 + p.x % 4))) != 0)\n"
+		    "        out_FragColor = vec4 (0.65, 1.0, 0.65, 1.0);\n"
+		    "}\n"
+		    // Beside the FPS panel: "LOAD  1.23 S", plus one row per phase with details on.
+		    "void loadOverlay () {\n"
+		    "    if (g_LoadTimes[0] < 0.0) return;\n"
+		    "    int rows = g_LoadDetails != 0 ? 7 : 1;\n"
+		    "    vec2 pixel = vec2 (v_ScreenPos.x, 1.0 - v_ScreenPos.y) * g_FpsOutput.xy / g_FpsOutput.z;\n"
+		    "    vec2 panel = pixel - vec2 (156.0, 52.0);\n"
+		    "    if (any (lessThan (panel, vec2 (0.0))) || any (greaterThanEqual (panel, vec2 (169.0, 13.0 + 18.0 * float (rows))))) return;\n"
+		    "    out_FragColor = vec4 (out_FragColor.rgb * 0.2, 1.0);\n"
+		    "    ivec2 p = ivec2 (floor ((panel - vec2 (8.0)) / 3.0));\n"
+		    "    if (any (lessThan (p, ivec2 (0))) || p.x >= 52 || p.x % 4 == 3 || p.y % 6 == 5 || p.y / 6 >= rows) return;\n"
+		    // LOAD, PROJ, TEX, UPLD, BUILD, PACE, WAIT; the letter O reuses the zero glyph
+		    "    const int labels[35] = int[35] (15, 0, 16, 17, 13, 11, 18, 0, 19, 13, 20, 21, 22, 13, 13,\n"
+		    "        23, 11, 15, 17, 13, 24, 23, 25, 15, 17, 11, 16, 26, 21, 13, 27, 16, 25, 20, 13);\n"
+		    "    int row = p.y / 6, column = p.x / 4;\n"
+		    "    int value = int (clamp (g_LoadTimes[row], 0.0, 99.99) * 100.0 + 0.5);\n"
+		    "    int c = column < 5 ? labels[row * 5 + column] : column == 5 ? 13\n"
+		    "        : column == 6 ? (value >= 1000 ? value / 1000 : 13) : column == 7 ? value / 100 % 10\n"
+		    "        : column == 8 ? 14 : column == 9 ? value / 10 % 10 : column == 10 ? value % 10 : column == 11 ? 13 : 28;\n"
+		    "    if ((GLYPHS[c] & (1 << (p.y % 6 * 3 + p.x % 4))) != 0)\n"
 		    "        out_FragColor = vec4 (0.65, 1.0, 0.65, 1.0);\n"
 		    "}\n"
 		    "void main () {\n"
@@ -264,6 +290,7 @@ void CWallpaper::setupShaders () {
 		    "sceneColor = (sceneColor - vec3 (0.5)) * g_Contrast + vec3 (0.5);\n"
 		    "out_FragColor = vec4 (sceneColor, transitionAlpha ());\n"
 		    "fpsOverlay ();\n"
+		    "loadOverlay ();\n"
 		    "}";
 
     glShaderSource (fragmentShaderID, 1, &sourcePointer, nullptr);
@@ -334,6 +361,8 @@ void CWallpaper::setupShaders () {
     this->g_Saturation = glGetUniformLocation (this->m_shader, "g_Saturation");
     this->g_Fps = glGetUniformLocation (this->m_shader, "g_Fps");
     this->g_FpsOutput = glGetUniformLocation (this->m_shader, "g_FpsOutput");
+    this->g_LoadTimes = glGetUniformLocation (this->m_shader, "g_LoadTimes");
+    this->g_LoadDetails = glGetUniformLocation (this->m_shader, "g_LoadDetails");
     this->a_Position = glGetAttribLocation (this->m_shader, "a_Position");
     this->a_TexCoord = glGetAttribLocation (this->m_shader, "a_TexCoord");
 }
@@ -498,6 +527,8 @@ void CWallpaper::render (
     glUniform1f (this->g_Fps, this->m_fps);
     const float outputScale = logicalSize.x > 0 ? static_cast<float> (viewport.z) / logicalSize.x : 1.0f;
     glUniform3f (this->g_FpsOutput, viewport.z, viewport.w, outputScale);
+    glUniform1fv (this->g_LoadTimes, static_cast<GLsizei> (this->m_loadTimes.size ()), this->m_loadTimes.data ());
+    glUniform1i (this->g_LoadDetails, this->m_loadDetails);
     // write the framebuffer as is to the screen
     glBindBuffer (GL_ARRAY_BUFFER, this->m_texCoordBuffer);
     glDrawArrays (GL_TRIANGLES, 0, 6);

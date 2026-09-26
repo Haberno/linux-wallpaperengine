@@ -1059,9 +1059,11 @@ void WallpaperApplication::switchWorkerMain () {
 	    job.error = e.what ();
 	}
 
+	const std::chrono::duration<double, std::milli> totalMs = std::chrono::steady_clock::now () - prepareStart;
+	job.projectMs = projectMs.count ();
+	job.textureMs = textureMs.count ();
+	job.uploadMs = (totalMs - projectMs - textureMs).count ();
 	if (Debug::RenderHealth::enabled ()) {
-	    const std::chrono::duration<double, std::milli> totalMs
-		= std::chrono::steady_clock::now () - prepareStart;
 	    std::ostringstream detail;
 	    detail << totalMs.count () << " ms (project " << projectMs.count () << ", read+decode "
 		   << textureMs.count () << ", upload " << (totalMs - projectMs - textureMs).count () << "), "
@@ -1183,6 +1185,8 @@ bool WallpaperApplication::applyPreparedSwitch (PreparedSwitch& job) {
 	auto lastCheckpoint = lastYield;
 	double longestUnitMs = 0.0;
 	size_t yields = 0;
+	// Outgoing frames drawn between loading slices: what pacing adds to the load time.
+	Milliseconds pacingMs = Milliseconds::zero ();
 	const auto cancelled = [&] {
 	    std::lock_guard lock (this->m_switchMutex);
 	    return !this->m_context.state.general.keepRunning || this->m_latestSwitchIds[job.screen] != job.id;
@@ -1210,6 +1214,7 @@ bool WallpaperApplication::applyPreparedSwitch (PreparedSwitch& job) {
 		// this context; resolve a current surface again without retaining a raw pointer.
 		this->makeAnyViewportCurrent ();
 		lastYield = lastCheckpoint = std::chrono::steady_clock::now ();
+		pacingMs += lastYield - renderStart;
 		++yields;
 		if (pacing == SwitchPacing::Adaptive) {
 		    // The outgoing frame was on time if the driver still had to wait for its deadline.
@@ -1308,6 +1313,16 @@ bool WallpaperApplication::applyPreparedSwitch (PreparedSwitch& job) {
 		job.screen, std::move (renderWallpaper), std::move (previousProject), job.transition
 	    );
 
+	    const auto ready = std::chrono::steady_clock::now ();
+	    const double totalMs = Milliseconds (ready - requested).count ();
+	    const double applyMs = Milliseconds (ready - applyStart).count ();
+	    const auto seconds = [] (double ms) { return static_cast<float> (ms / 1000.0); };
+	    // Waiting (queued, or prepared but not yet picked up) is whatever the phases leave.
+	    this->m_renderContext->setLoadTimes (
+		job.screen, { seconds (totalMs), seconds (job.projectMs), seconds (job.textureMs), seconds (job.uploadMs),
+			      seconds (applyMs - pacingMs.count ()), seconds (pacingMs.count ()),
+			      seconds (totalMs - job.projectMs - job.textureMs - job.uploadMs - applyMs) }
+	    );
 	}
 
 	this->m_context.settings.general.screenBackgrounds[job.screen] = job.path;

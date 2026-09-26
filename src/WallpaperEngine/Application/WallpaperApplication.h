@@ -198,6 +198,8 @@ private:
 	std::string error {};
 	/** When the switch was requested, for the health report's switch.total */
 	std::chrono::steady_clock::time_point requested {};
+	/** Loader-thread phases in ms, for the load-time HUD */
+	double projectMs = 0.0, textureMs = 0.0, uploadMs = 0.0;
 	std::string comparisonToken {};
     };
 

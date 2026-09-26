@@ -549,6 +549,12 @@ void ApplicationContext::loadSettingsFromArgv () {
         .flag ()
         .store_into (this->settings.render.showFps);
 
+    performanceGroup.add_argument ("--show-load-details")
+	.help ("Show the last wallpaper switch's load time with the phases that contributed to it, "
+	       "beside the FPS counter. --show-fps alone shows only the total")
+	.flag ()
+	.store_into (this->settings.render.showLoadDetails);
+
     performanceGroup.add_argument ("--render-scale")
 	.help (
 	    "Scene supersampling factor (1.0 = native). Values above 1.0 improve edge quality at increased GPU "
