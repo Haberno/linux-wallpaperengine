@@ -252,7 +252,10 @@ protected:
     void applyParallaxToModelMatrix ();
     void updateParticleViewProjection ();
     void updateParticleRenderVars ();
-    void refreshInstanceParameters ();
+    void updateInstanceParameters (bool allowColorOverride);
+    void activateInstanceParameters ();
+    void refreshInstanceParameters (bool suppressColorOverride = false);
+    [[nodiscard]] glm::vec3 adjustInstanceColor (const glm::vec3& color) const;
 
 private:
     const Particle& m_particle;
@@ -264,6 +267,10 @@ private:
     std::vector<Data::Utils::ScopeGuard<std::function<void ()>>> m_controlPointSubscriptions;
     std::vector<Data::Utils::ScopeGuard<std::function<void ()>>> m_instanceParameterSubscriptions;
     float m_turbulenceRate = 1.0f;
+    glm::vec3 m_instanceColor { 1.0f };
+    glm::vec3 m_colorOverrideDelta { 0.0f };
+    bool m_colorOverrideActive = false;
+    bool m_propagateColorOverride = false;
     bool m_instanceParametersDirty = false;
     bool m_instanceParameterTimelines = false;
     glm::mat4 m_controlPointTransform { 1.0f };

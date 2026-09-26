@@ -231,10 +231,11 @@ public:
 
 class ColorRandomInitializer : public ParticleInitializerBase {
 public:
-    ColorRandomInitializer (UserSettingUniquePtr min, UserSettingUniquePtr max) :
-	min (std::move (min)), max (std::move (max)) { }
+    ColorRandomInitializer (UserSettingUniquePtr min, UserSettingUniquePtr max, float exponent = 1.0f) :
+	min (std::move (min)), max (std::move (max)), exponent (exponent) { }
     UserSettingUniquePtr min;
     UserSettingUniquePtr max;
+    float exponent;
 };
 
 class SizeRandomInitializer : public ParticleInitializerBase {
@@ -680,8 +681,8 @@ struct ParticleInstanceOverride {
     UserSettingUniquePtr rate;
     UserSettingUniquePtr speed;
     UserSettingUniquePtr count;
-    UserSettingUniquePtr color; // Replaces particle color
-    UserSettingUniquePtr colorn; // Multiplies particle color
+    UserSettingUniquePtr color; // Neutral material tint; legacy color migrates into colorn
+    UserSettingUniquePtr colorn; // Normalized instance override; negative X disables it
     /** Overrides retain each control point's local/world-space flags. */
     std::map<int, UserSettingUniquePtr> controlPointOffsets;
     std::map<int, UserSettingUniquePtr> controlPointAngles;
@@ -705,6 +706,10 @@ struct ParticleData {
     uint32_t maxCount;
     uint32_t startTime;
     uint32_t flags;
+
+    /** Rounded definition color used as the reference for instance recoloring. */
+    glm::vec3 colorReference {1.0f};
+    bool hasColor = false;
 
     /** Material for rendering */
     ModelUniquePtr material;

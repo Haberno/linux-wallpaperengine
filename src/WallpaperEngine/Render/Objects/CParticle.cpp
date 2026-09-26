@@ -198,7 +198,7 @@ CParticle::CParticle (Wallpapers::CScene& scene, const Particle& particle, CPart
 	rootSettings.rate->value->update (std::max (0.01f, rootSettings.rate->value->getFloat ()),
 	    DynamicValue::UpdateSource::Initialization);
     }
-    m_turbulenceRate = rootSettings.rate->value->getFloat ();
+    activateInstanceParameters ();
     const auto subscribeParameters = [this] (const UserSetting& setting, const int channels) {
 	m_instanceParameterSubscriptions.emplace_back (Data::Utils::ScopeGuard (setting.value->listen (
 	    [this] (const DynamicValue&, DynamicValue::UpdateSource source) {
@@ -480,15 +480,54 @@ void CParticle::setupChildren () {
     }
 }
 
-void CParticle::refreshInstanceParameters () {
-    m_turbulenceRate = getInstanceOverride ().rate->value->getFloat ();
+void CParticle::updateInstanceParameters (const bool allowColorOverride) {
+    const auto& settings = getInstanceOverride ();
+    m_turbulenceRate = settings.rate->value->getFloat ();
+    const glm::vec3 color = settings.colorn->value->getVec3 ();
+    m_colorOverrideActive = allowColorOverride && (m_particle.flags & 8) == 0 && color.x >= 0.0f
+	&& glm::any (glm::greaterThanEqual (glm::abs (color - m_particle.colorReference), glm::vec3 (0.9f / 255.0f)));
+    if (m_colorOverrideActive) {
+	m_colorOverrideDelta = WallpaperEngine::Maths::particleRgbToHsv (color)
+	    - WallpaperEngine::Maths::particleRgbToHsv (m_particle.colorReference);
+    }
+    // Native caches brightness with birth color. Existing particles retain it;
+    // common refresh prepares subsequent births and color-operator endpoints.
+    m_instanceColor = glm::vec3 (getScene ().isHdr () && (m_particle.flags & 8) == 0
+	? settings.brightness->value->getFloat () : 1.0f);
+    if (m_colorOverrideActive && (getScene ().getScene ().version < 5 || !m_particle.hasColor)) {
+	m_instanceColor *= color;
+    }
     m_instanceParametersDirty = false;
+}
+
+void CParticle::activateInstanceParameters () {
+    const bool inherited = m_particleParent == nullptr || m_particleParent->m_propagateColorOverride;
+    updateInstanceParameters (inherited);
+    // First activation copies the parent's propagation bit, even when this
+    // child locally opts out. Permanent descendants follow the same rule.
+    m_propagateColorOverride = m_particleParent ? inherited : m_colorOverrideActive;
+    for (auto& child : m_children) child.renderer->activateInstanceParameters ();
+}
+
+void CParticle::refreshInstanceParameters (bool suppressColorOverride) {
+    updateInstanceParameters (!suppressColorOverride);
+    if (m_particleParent == nullptr && !m_colorOverrideActive) suppressColorOverride = true;
+    m_propagateColorOverride = m_colorOverrideActive;
     // Native common refresh also visits permanent and pooled children while
     // hidden. Deferring their cache read until drawing would sample later writes.
-    for (auto& child : m_children) child.renderer->refreshInstanceParameters ();
+    for (auto& child : m_children) child.renderer->refreshInstanceParameters (suppressColorOverride);
     for (auto& child : m_followChildren) {
-	for (auto& instance : child.instances) instance.renderer->refreshInstanceParameters ();
+	for (auto& instance : child.instances) instance.renderer->refreshInstanceParameters (suppressColorOverride);
     }
+}
+
+glm::vec3 CParticle::adjustInstanceColor (const glm::vec3& color) const {
+    if (!m_colorOverrideActive) return color;
+    glm::vec3 hsv = WallpaperEngine::Maths::particleRgbToHsv (color) + m_colorOverrideDelta;
+    hsv.x -= std::floor (hsv.x);
+    hsv.y = std::clamp (hsv.y, 0.0f, 1.0f);
+    hsv.z = std::clamp (hsv.z, 0.0f, 1.0f);
+    return WallpaperEngine::Maths::particleHsvToRgb (hsv);
 }
 
 void CParticle::rebaseRenderTime (float offset) {
@@ -556,10 +595,15 @@ void CParticle::render () {
 	glColorMask (true, true, true, true);
     }
     for (auto& child : m_children) {
+	child.renderer->m_propagateColorOverride = m_propagateColorOverride;
 	child.renderer->render ();
     }
     for (auto& child : m_followChildren) {
-	for (auto& instance : child.instances) instance.renderer->render ();
+	for (auto& instance : child.instances) {
+	    if (instance.parentSerial != 0 || instance.renderer->hasLivingParticles ())
+		instance.renderer->m_propagateColorOverride = m_propagateColorOverride;
+	    instance.renderer->render ();
+	}
     }
 }
 
@@ -641,10 +685,11 @@ void CParticle::updateFollowChildren (const uint32_t firstNewParticle) {
 	    slot->parentSerial = particle.serial;
 	    slot->renderer->stop ();
 	    slot->renderer->m_simulationTime = 0.0f;
+	    slot->renderer->m_propagateColorOverride = m_propagateColorOverride;
 	    // Native samples raw overrides on first activation. Recycling retains
 	    // the cache, including any explicit root refresh since the previous use.
 	    if (!slot->hasStarted) {
-		slot->renderer->m_instanceParametersDirty = true;
+		slot->renderer->activateInstanceParameters ();
 		slot->hasStarted = true;
 	    }
 	    slot->renderer->m_time = g_Time;
@@ -855,15 +900,16 @@ void CParticle::update (float dt) {
 	    particle.size = 0.5f;
 	    // Native separates working alpha/color only when an operator needs it.
 	    if (m_hasAlphaOperators) particle.alpha = getInstanceOverride ().alpha->value->getFloat ();
-	    if (m_hasColorOperators) particle.color = getInstanceOverride ().colorn->value->getVec3 ();
+	    if (m_hasColorOperators) particle.color = m_instanceColor;
 	}
 	updateFollowChildren (firstNewParticle);
 	return;
     }
 
-    // Native 14023fc75/14023fc99 restore birth alpha/size before the ordered
+    // Native restores birth color/alpha/size before the ordered
     // operator chain. Reset once, so oscillators do not accumulate per frame.
     for (uint32_t i = 0; i < m_particleCount; ++i) {
+        if (m_hasColorOperators) m_particles[i].color = m_particles[i].initial.color;
         if (m_hasAlphaOperators) m_particles[i].alpha = m_particles[i].initial.alpha;
         m_particles[i].size = m_particles[i].initial.size;
     }
@@ -980,17 +1026,11 @@ const float& CParticle::getAlpha () const { return getInstanceOverride ().alpha-
 
 const glm::vec3& CParticle::getColor () const {
     static const glm::vec3 defaultColor (1.0f);
-    if (getInstanceOverride ().color && getInstanceOverride ().color->value) {
-	return getInstanceOverride ().color->value->getVec3 ();
-    }
     return defaultColor;
 }
 
 const glm::vec4& CParticle::getColor4 () const {
     static const glm::vec4 defaultColor (1.0f);
-    if (getInstanceOverride ().color && getInstanceOverride ().color->value) {
-	return getInstanceOverride ().color->value->getVec4 ();
-    }
     return defaultColor;
 }
 
@@ -1160,7 +1200,7 @@ EmitterFunc CParticle::createBoxEmitter (const ParticleEmitter& emitter) {
 		p.angularVelocity = glm::vec3 (0.0f);
 		p.angularAcceleration = glm::vec3 (0.0f);
 
-		p.color = glm::vec3 (1.0f) * getInstanceOverride ().colorn->value->getVec3 ();
+		p.color = m_instanceColor;
 		p.alpha = 1.0f * getInstanceOverride ().alpha->value->getFloat ();
 		p.size = 20.0f * getInstanceOverride ().size->value->getFloat ();
 		p.lifetime = 1.0f * getInstanceOverride ().lifetime->value->getFloat ();
@@ -1338,7 +1378,7 @@ EmitterFunc CParticle::createSphereEmitter (const ParticleEmitter& emitter) {
 	    p.angularVelocity = glm::vec3 (0.0f);
 	    p.angularAcceleration = glm::vec3 (0.0f);
 
-	    p.color = glm::vec3 (1.0f) * getInstanceOverride ().colorn->value->getVec3 ();
+	    p.color = m_instanceColor;
 	    p.alpha = 1.0f * getInstanceOverride ().alpha->value->getFloat ();
 	    p.size = 20.0f * getInstanceOverride ().size->value->getFloat ();
 	    p.lifetime = lifetime;
@@ -1418,11 +1458,13 @@ void CParticle::setupInitializers () {
 InitializerFunc CParticle::createColorRandomInitializer (const ColorRandomInitializer& init) {
     DynamicValue* minValue = init.min->value.get ();
     DynamicValue* maxValue = init.max->value.get ();
-    DynamicValue* colorOverride = getInstanceOverride ().colorn->value.get ();
-
-    return [this, minValue, maxValue, colorOverride] (ParticleInstance& p) {
-	p.color = WallpaperEngine::Maths::randomVec3 (m_rng, minValue->getVec3 (), maxValue->getVec3 ())
-	    * colorOverride->getVec3 ();
+    const float exponent = init.exponent;
+    return [this, minValue, maxValue, exponent] (ParticleInstance& p) {
+	// Native adjusts the endpoints before interpolating one shared RGB fraction.
+	float fraction = WallpaperEngine::Maths::randomFloat (m_rng, 0.0f, 1.0f);
+	if (exponent != 1.0f) fraction = std::pow (fraction, exponent);
+	p.color *= glm::mix (adjustInstanceColor (minValue->getVec3 ()),
+	    adjustInstanceColor (maxValue->getVec3 ()), fraction);
 	p.initial.color = p.color;
     };
 }
@@ -2073,13 +2115,13 @@ OperatorFunc CParticle::createColorChangeOperator (const ColorChangeOperator& op
     DynamicValue* endValueValue = op.endValue->value.get ();
 
     return
-	[startTimeValue, endTimeValue, startValueValue, endValueValue] (
+	[this, startTimeValue, endTimeValue, startValueValue, endValueValue] (
 	    std::vector<ParticleInstance>& particles, uint32_t count, const std::vector<ControlPointData>&, float, float
 	) {
 	    float startTime = startTimeValue->getFloat ();
 	    float endTime = endTimeValue->getFloat ();
-	    glm::vec3 startValue = startValueValue->getVec3 ();
-	    glm::vec3 endValue = endValueValue->getVec3 ();
+	    glm::vec3 startValue = adjustInstanceColor (startValueValue->getVec3 ());
+	    glm::vec3 endValue = adjustInstanceColor (endValueValue->getVec3 ());
 
 	    for (uint32_t i = 0; i < count; i++) {
 		auto& p = particles[i];
@@ -2094,7 +2136,7 @@ OperatorFunc CParticle::createColorChangeOperator (const ColorChangeOperator& op
 		color.g = WallpaperEngine::Maths::fadeValue (life, startTime, endTime, startValue.g, endValue.g);
 		color.b = WallpaperEngine::Maths::fadeValue (life, startTime, endTime, startValue.b, endValue.b);
 
-		p.color = p.initial.color * color;
+		p.color *= color;
 	    }
 	};
 }
@@ -2973,7 +3015,6 @@ void CParticle::renderSprites () {
     const bool is3D = getScene ().getScene ().camera.projection.isPerspective;
     const bool perspectiveBillboard = is3D
 	&& (m_particle.renderers.empty () || m_particle.renderers[0].orientation != "fixed");
-    const float brightness = getScene ().isHdr () ? getInstanceOverride ().brightness->value->getFloat () : 1.0f;
 
     for (uint32_t i = 0; i < m_particleCount; i++) {
 	const auto& p = m_particles[i];
@@ -3013,7 +3054,7 @@ void CParticle::renderSprites () {
 	const float vertex[SPRITE_FLOATS_PER_VERTEX] = {
 	    p.position.x, p.position.y, p.position.z,
 	    0.0f, 0.0f, renderRotation.z, p.size,
-	    p.color.r * brightness, p.color.g * brightness, p.color.b * brightness, p.alpha,
+	    p.color.r, p.color.g, p.color.b, p.alpha,
 	    p.velocity.x, p.velocity.y, p.velocity.z, lifetime,
 	    renderRotation.x, renderRotation.y,
 	};
@@ -3097,7 +3138,6 @@ void CParticle::renderRopeTrail () {
 	return;
     }
 
-    const float brightness = getScene ().isHdr () ? getInstanceOverride ().brightness->value->getFloat () : 1.0f;
     const int subdivision = std::max (1, m_ropeSubdivision);
     uint32_t vertexIndex = 0;
     uint32_t indexOffset = 0;
@@ -3180,14 +3220,14 @@ void CParticle::renderRopeTrail () {
 		// remains attached to the live particle so alpha/size operators fade the
 		// complete trail instead of leaving bright historical samples behind.
 		splineSizes[index] = particle.size;
-		splineColors[index] = glm::vec4 (particle.color * brightness, particle.alpha);
+		splineColors[index] = glm::vec4 (particle.color, particle.alpha);
 	    }
 	}
 
 	const auto& lastPoint = points.back ();
 	splinePositions.back () = lastPoint.position;
 	splineSizes.back () = particle.size;
-	splineColors.back () = glm::vec4 (particle.color * brightness, particle.alpha);
+	splineColors.back () = glm::vec4 (particle.color, particle.alpha);
 
 	if (m_ropeFadeAlpha || m_ropeFadeSize) {
 	    const float denominator = static_cast<float> (totalPoints - 1);
@@ -3316,7 +3356,6 @@ void CParticle::renderRope () {
     // Array is already in spawn order (oldest at index 0) thanks to order-preserving
     // compaction in update(). All particles in [0, m_particleCount) are alive.
     const uint32_t aliveCount = m_particleCount;
-    const float brightness = getScene ().isHdr () ? getInstanceOverride ().brightness->value->getFloat () : 1.0f;
 
     // Build vertex data with Catmull-Rom spline subdivision.
     // Each segment between consecutive particles is subdivided into m_ropeSubdivision
@@ -3362,8 +3401,8 @@ void CParticle::renderRope () {
 
 	    splinePositions[idx] = catmullRom (p0.position, p1.position, p2.position, p3.position, t);
 	    splineSizes[idx] = glm::mix (p1.size, p2.size, t);
-	    splineColors[idx] = glm::mix (glm::vec4 (p1.color * brightness, p1.alpha),
-					glm::vec4 (p2.color * brightness, p2.alpha), t);
+	    splineColors[idx] = glm::mix (glm::vec4 (p1.color, p1.alpha),
+					glm::vec4 (p2.color, p2.alpha), t);
 	}
     }
     // Last point is the final particle
@@ -3371,7 +3410,7 @@ void CParticle::renderRope () {
 	const auto& pLast = m_particles[aliveCount - 1];
 	splinePositions[totalPoints - 1] = pLast.position;
 	splineSizes[totalPoints - 1] = pLast.size;
-	splineColors[totalPoints - 1] = glm::vec4 (pLast.color * brightness, pLast.alpha);
+	splineColors[totalPoints - 1] = glm::vec4 (pLast.color, pLast.alpha);
     }
 
     // Second pass: build quads from consecutive spline points.

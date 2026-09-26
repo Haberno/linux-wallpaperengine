@@ -13,7 +13,11 @@
 #include "WallpaperEngine/Data/Model/Project.h"
 #include "WallpaperEngine/Data/Utils/JsonTelemetry.h"
 #include "WallpaperEngine/Logging/Log.h"
+#include "WallpaperEngine/Maths.h"
 
+#include <cstdlib>
+#include <cstring>
+#include <format>
 #include <glm/gtc/constants.hpp>
 #include <limits>
 #include <sstream>
@@ -529,6 +533,86 @@ ImageAnimationLayerUniquePtr ObjectParser::parseAnimationLayer (const JSON& it, 
     });
 }
 
+namespace {
+glm::vec3 particleColorFromString (const std::string& text) {
+    glm::vec3 color (0.0f);
+    const char* component = text.c_str ();
+    for (int i = 0; i < 3; ++i) {
+	color[i] = static_cast<float> (std::atof (component));
+	component = std::strchr (component, ' ');
+	if (component == nullptr) break;
+	while (*component == ' ') ++component;
+    }
+    return color;
+}
+
+glm::vec3 roundParticleColor (const glm::vec3& color) {
+    // Native serializes both generated references and migrated legacy overrides.
+    return particleColorFromString (std::format ("{:.5f} {:.5f} {:.5f}", color.x, color.y, color.z));
+}
+
+std::pair<glm::vec3, bool> particleColorReference (const JSON& definition) {
+    glm::vec3 reference (1.0f);
+    bool hasColor = false;
+    auto colorField = [] (const JSON& data, const char* key, const glm::vec3& defaultValue) {
+	const auto value = data.optional (key);
+	return value && value->is_string () ? particleColorFromString (value->get<std::string> ()) : defaultValue;
+    };
+    if (const auto initializers = definition.optional ("initializer"); initializers && initializers->is_array ()) {
+	for (const auto& initializer : *initializers) {
+	    const auto name = initializer.optional<std::string> ("name", "");
+	    if (name == "colorrandom") {
+		const auto min = colorField (initializer, "min", glm::vec3 (0.0f));
+		const auto max = colorField (initializer, "max", glm::vec3 (255.0f));
+		reference = (min + (max - min) * 0.5f) * (1.0f / 255.0f);
+		hasColor = true;
+	    } else if (name == "hsvcolorrandom") {
+		auto scalar = [&] (const char* key, float defaultValue) {
+		    const auto value = initializer.find (key);
+		    if (value == initializer.end ()) return defaultValue;
+		    if (value->is_boolean ()) return value->get<bool> () ? 1.0f : 0.0f;
+		    return initializer.optional (key, 0.0f);
+		};
+		const glm::vec3 min (scalar ("huemin", 0.0f), scalar ("saturationmin", 0.5f), scalar ("valuemin", 0.5f));
+		const glm::vec3 max (scalar ("huemax", 1.0f), scalar ("saturationmax", 1.0f), scalar ("valuemax", 1.0f));
+		reference = WallpaperEngine::Maths::particleHsvToRgb (glm::clamp ((min + max) * 0.5f, 0.0f, 1.0f));
+		hasColor = true;
+	    } else if (name == "colorlist") {
+		const auto colors = initializer.optional ("colors");
+		if (!initializer.contains ("colors")) {
+		    reference = glm::vec3 (1.0f);
+		    hasColor = true;
+		} else if (colors && colors->is_array ()) {
+		    for (const auto& color : *colors) {
+			if (!color.is_string ()) continue;
+			const auto text = color.get<std::string> ();
+			// Empty strings yield black; other entries need three space-delimited fields.
+			const auto second = text.find_first_not_of (' ', text.find (' '));
+			if (!text.empty () && (second == std::string::npos || text.find (' ', second) == std::string::npos)) {
+			    continue;
+			}
+			reference = particleColorFromString (text);
+			hasColor = true;
+			break;
+		    }
+		}
+	    }
+	}
+    }
+    if (!hasColor) {
+	if (const auto operators = definition.optional ("operator"); operators && operators->is_array ()) {
+	    for (const auto& op : *operators) {
+		if (op.optional<std::string> ("name", "") != "colorchange") continue;
+		reference = colorField (op, "startvalue", glm::vec3 (1.0f));
+		hasColor = true;
+		break;
+	    }
+	}
+    }
+    return {roundParticleColor (reference), hasColor};
+}
+}
+
 ParticleUniquePtr ObjectParser::parseParticle (const JSON& it, const Project& project, ObjectData base) {
     try {
 	const auto& properties = project.properties;
@@ -565,8 +649,8 @@ ParticleUniquePtr ObjectParser::parseParticle (const JSON& it, const Project& pr
 			.rate = Builders::UserSettingBuilder::fromValue(1.0f),
 			.speed = Builders::UserSettingBuilder::fromValue(1.0f),
 			.count = Builders::UserSettingBuilder::fromValue(1.0f),
-			.color = Builders::UserSettingBuilder::fromValue(1.0f),
-			.colorn = Builders::UserSettingBuilder::fromValue(1.0f),
+			.color = Builders::UserSettingBuilder::fromValue(glm::vec3 (1.0f)),
+			.colorn = Builders::UserSettingBuilder::fromValue(glm::vec3 (-1.0f)),
 		    },
 		}
 	    );
@@ -681,8 +765,8 @@ ParticleUniquePtr ObjectParser::parseParticle (const JSON& it, const Project& pr
 	    .rate = Builders::UserSettingBuilder::fromValue (1.0f),
 	    .speed = Builders::UserSettingBuilder::fromValue (1.0f),
 	    .count = Builders::UserSettingBuilder::fromValue (1.0f),
-	    .color = Builders::UserSettingBuilder::fromValue (1.0f),
-	    .colorn = Builders::UserSettingBuilder::fromValue (1.0f),
+	    .color = Builders::UserSettingBuilder::fromValue (glm::vec3 (1.0f)),
+	    .colorn = Builders::UserSettingBuilder::fromValue (glm::vec3 (-1.0f)),
 	};
 	const auto instanceOverrideIt = it.optional ("instanceoverride");
 	if (instanceOverrideIt.has_value ()) {
@@ -760,6 +844,7 @@ ParticleUniquePtr ObjectParser::parseParticle (const JSON& it, const Project& pr
 	if (flagsIt != particleJson.end () && flagsIt->is_number ()) {
 	    flags = flagsIt->get<uint32_t> ();
 	}
+	const auto [colorReference, hasColor] = particleColorReference (particleJson);
 
 	// only particles loaded from their own file are a full document worth scanning;
 	// inline definitions are part of the scene document and covered by its scan
@@ -780,6 +865,8 @@ ParticleUniquePtr ObjectParser::parseParticle (const JSON& it, const Project& pr
 		.maxCount = maxCount,
 		.startTime = startTime,
 		.flags = flags,
+		.colorReference = colorReference,
+		.hasColor = hasColor,
 		.material = std::move (material),
 		.emitters = std::move (emitters),
 		.initializers = std::move (initializers),
@@ -892,9 +979,17 @@ ParticleInitializerUniquePtr ObjectParser::parseParticleInitializer (const JSON&
     std::string name = it.optional<std::string> ("name", "");
 
     if (name == "colorrandom") {
+	auto color = [&] (const char* key, const Color& defaultValue) {
+	    const auto value = it.optional (key);
+	    if (value && value->is_string ()) {
+		return Builders::UserSettingBuilder::fromValue (
+		    particleColorFromString (value->get<std::string> ()) * (1.0f / 255.0f));
+	    }
+	    return it.color (key, properties, defaultValue);
+	};
 	return std::make_unique<ColorRandomInitializer> (
-	    it.color ("min", properties, Builders::ColorBuilder::Black),
-	    it.color ("max", properties, Builders::ColorBuilder::White)
+	    color ("min", Builders::ColorBuilder::Black), color ("max", Builders::ColorBuilder::White),
+	    it.contains ("exponent") ? it.optional ("exponent", 0.0f) : 1.0f
 	);
     } else if (name == "sizerandom") {
 	return std::make_unique<SizeRandomInitializer> (
@@ -1214,9 +1309,15 @@ ParticleInstanceOverride ObjectParser::parseParticleInstanceOverride (const JSON
 	.rate = it.user ("rate", properties, 1.0f),
 	.speed = it.user ("speed", properties, 1.0f),
 	.count = it.user ("count", properties, 1.0f),
-	.color = it.user ("color", properties, glm::vec3 (1.0f)),
-	.colorn = it.user ("colorn", properties, glm::vec3 (1.0f)),
+	.color = Builders::UserSettingBuilder::fromValue (glm::vec3 (1.0f)),
+	.colorn = it.user ("colorn", properties, glm::vec3 (-1.0f)),
     };
+
+    if (const auto legacyColor = it.optional ("color"); legacyColor && legacyColor->is_string ()) {
+	// Migration takes precedence over colorn; color is not a second material tint.
+	override.colorn = Builders::UserSettingBuilder::fromValue (roundParticleColor (
+	    particleColorFromString (legacyColor->get<std::string> ()) * (1.0f / 255.0f)));
+    }
 
     for (const auto& [prefix, values] : {
 	    std::pair { "controlpoint", &override.controlPointOffsets },
