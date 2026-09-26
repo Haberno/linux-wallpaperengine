@@ -5,6 +5,7 @@
 #include "include/cef_app.h"
 #include "include/cef_render_handler.h"
 #include <chrono>
+#include <csignal>
 #include <filesystem>
 #include <random>
 #include <ranges>
@@ -96,7 +97,14 @@ WebBrowserContext::WebBrowserContext (WallpaperEngine::Application::WallpaperApp
 
     // spawns two new processess
 
+    // CEF may start lazily, after main () installed the engine's shutdown handlers, and it
+    // replaces them; without restoring, SIGINT/SIGTERM no longer stop the engine
+    struct sigaction previousInt {}, previousTerm {};
+    sigaction (SIGINT, nullptr, &previousInt);
+    sigaction (SIGTERM, nullptr, &previousTerm);
     this->m_initialized = CefInitialize (main_args, settings, this->m_browserApplication, nullptr);
+    sigaction (SIGINT, &previousInt, nullptr);
+    sigaction (SIGTERM, &previousTerm, nullptr);
     if (!this->m_initialized) {
 	removeCacheDirectory ();
 	sLog.exception ("CefInitialize: failed");

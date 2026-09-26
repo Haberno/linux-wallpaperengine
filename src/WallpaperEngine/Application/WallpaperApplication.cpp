@@ -1327,13 +1327,15 @@ void WallpaperApplication::setupProperties () {
 }
 
 void WallpaperApplication::setupBrowser () {
-    // Runtime switching can introduce a web wallpaper after startup, and CEF
-    // must initialize before the GL/EGL context exists.
+    // CEF only renders web wallpapers; starting it for a scene costs startup time for nothing.
+    // A later switch to a web wallpaper creates it on demand (ensureBrowserForProject).
     if (this->m_browserContext) {
 	return;
     }
 
-    this->m_browserContext = std::make_unique<WebBrowser::WebBrowserContext> (*this);
+    for (const auto& [background, info] : this->m_backgrounds) {
+	this->ensureBrowserForProject (*info);
+    }
 }
 
 void WallpaperApplication::takeScreenshot (const std::filesystem::path& filename) const {
