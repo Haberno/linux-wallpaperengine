@@ -147,24 +147,24 @@ JSValue get_layer (JSContext* ctx, JSValueConst this_val, int argc, JSValueConst
     JSValue layer = argv[0];
 
     if (JS_IsNumber (layer)) {
-	int id = 0;
+	int index = 0;
 
-	JS_ToInt32 (ctx, &id, layer);
+	JS_ToInt32 (ctx, &index, layer);
 
-	auto* object = container->getScene ().getObject (id);
-
-	if (object == nullptr) {
-	    return JS_UNDEFINED;
+	if (index < 0) {
+	    return JS_NULL;
 	}
 
-	if (!object->is<ScriptableObject> ()) {
-	    return JS_UNDEFINED;
+	for (auto* object : container->getScene ().getObjectsByCursorOrder ()) {
+	    if (object == nullptr || !object->is<ScriptableObject> ()) {
+		continue;
+	    }
+	    if (index-- == 0) {
+		return container->getEngine ().getAdapters ().object->instantiate (*object->as<ScriptableObject> ());
+	    }
 	}
 
-	// TODO: REMOVE THIS CONST_CAST?
-	return container->getEngine ().getAdapters ().object->instantiate (
-	    const_cast<ScriptableObject&> (*object->as<ScriptableObject> ())
-	);
+	return JS_NULL;
     } else if (!JS_IsNull (layer) && !JS_IsUndefined (layer)) {
 	// Wallpaper Engine accepts string-coercible values here too (notably boxed
 	// strings produced by some workshop script/transpiler combinations).
@@ -360,6 +360,19 @@ JSValue scene_set_camera_transforms (JSContext* ctx, JSValueConst this_val, int 
 
     scene.setScriptCameraTransform (transform);
     return JS_UNDEFINED;
+}
+
+JSValue scene_get_layer_count (JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    auto* container = get_opaque (this_val);
+    int count = 0;
+
+    for (const auto* object : container->getScene ().getObjectsByCursorOrder ()) {
+	if (object != nullptr && object->is<ScriptableObject> ()) {
+	    ++count;
+	}
+    }
+
+    return JS_NewInt32 (ctx, count);
 }
 
 // thisScene.enumerateLayers() -> array of every scriptable layer in authored stacking order.
@@ -690,6 +703,10 @@ SceneObject::SceneObject (ScriptEngine& engine, Render::Wallpapers::CScene& scen
     JS_DefinePropertyValueStr (
 	this->m_engine.getContext (), this->m_instance, "getLayer",
 	JS_NewCFunction (this->m_engine.getContext (), get_layer, "getLayer", 1), JS_PROP_ENUMERABLE
+    );
+    JS_DefinePropertyValueStr (
+	this->m_engine.getContext (), this->m_instance, "getLayerCount",
+	JS_NewCFunction (this->m_engine.getContext (), scene_get_layer_count, "getLayerCount", 0), JS_PROP_ENUMERABLE
     );
     JS_DefinePropertyValueStr (
 	this->m_engine.getContext (), this->m_instance, "enumerateLayers",
