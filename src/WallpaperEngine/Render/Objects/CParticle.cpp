@@ -1476,8 +1476,9 @@ InitializerFunc CParticle::createVelocityRandomInitializer (const VelocityRandom
     DynamicValue* speedOverride = getInstanceOverride ().speed->value.get ();
 
     return [this, minValue, maxValue, speedOverride] (ParticleInstance& p) {
+	const float speedMultiplier = (m_particle.flags & 16) != 0 ? 1.0f : speedOverride->getFloat ();
 	glm::vec3 vel = WallpaperEngine::Maths::randomVec3 (m_rng, minValue->getVec3 (), maxValue->getVec3 ())
-	    * speedOverride->getFloat ();
+	    * speedMultiplier;
 	vel.y = -vel.y;
 	p.velocity += vel;
     };
