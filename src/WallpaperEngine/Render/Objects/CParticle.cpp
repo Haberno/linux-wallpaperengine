@@ -1551,11 +1551,9 @@ InitializerFunc CParticle::createInheritControlPointVelocityInitializer (
 InitializerFunc CParticle::createRotationRandomInitializer (const RotationRandomInitializer& init) {
     DynamicValue* minValue = init.min->value.get ();
     DynamicValue* maxValue = init.max->value.get ();
-    DynamicValue* speedOverride = getInstanceOverride ().speed->value.get ();
 
-    return [this, minValue, maxValue, speedOverride] (ParticleInstance& p) {
-	p.rotation = WallpaperEngine::Maths::randomVec3 (m_rng, minValue->getVec3 (), maxValue->getVec3 ())
-	    * speedOverride->getFloat ();
+    return [this, minValue, maxValue] (ParticleInstance& p) {
+	p.rotation += WallpaperEngine::Maths::randomVec3 (m_rng, minValue->getVec3 (), maxValue->getVec3 ());
     };
 }
 
