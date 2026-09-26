@@ -39,6 +39,8 @@ public:
     struct SharingGroup {
 	// Weak references let the last material release the GL object immediately.
 	std::unordered_map<std::string, std::weak_ptr<const SharedProgram>> programs;
+	// Location queries only: nobody draws with it, so its uniforms are never written.
+	std::weak_ptr<const SharedProgram> interface;
     };
     explicit ShaderProgramCache (size_t budgetBytes = 64ULL * 1024 * 1024) : m_budgetBytes (budgetBytes) { }
     [[nodiscard]] GLuint createProgram (
@@ -52,6 +54,20 @@ public:
      */
     [[nodiscard]] static std::shared_ptr<const SharedProgram>
     shareProgram (GLuint privateProgram, const std::shared_ptr<SharingGroup>& group, const std::string& layout);
+    /**
+     * For callers that opt into sharing: one program per source pair for uniform and
+     * attribute location queries, so later users skip loading their own copy. Never
+     * draw with it or write its uniforms while `group` is set; draw through
+     * shareProgram or a cloneProgram copy. A null group means the caller owns it alone.
+     */
+    [[nodiscard]] std::shared_ptr<const SharedProgram>
+    interfaceProgram (const std::string& vertex, const std::string& fragment, std::shared_ptr<SharingGroup>& group);
+    /** A caller-owned copy with an identical interface, or GL_NONE when the driver cannot copy it. */
+    [[nodiscard]] static GLuint cloneProgram (GLuint program);
+    /** Compile a private source fallback with the same interface, or throw if cached locations cannot be retained. */
+    [[nodiscard]] static GLuint compileCompatibleProgram (
+	GLuint program, const std::string& vertex, const std::string& fragment
+    );
 
 private:
     struct Entry {

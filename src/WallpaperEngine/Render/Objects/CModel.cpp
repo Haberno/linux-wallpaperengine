@@ -102,10 +102,6 @@ CModel::~CModel () {
 	glDeleteBuffers (1, &submesh.indexBuffer);
 	if (submesh.shadowVao != GL_NONE) glDeleteVertexArrays (1, &submesh.shadowVao);
     }
-
-    if (this->m_shadowProgram != GL_NONE) {
-	glDeleteProgram (this->m_shadowProgram);
-    }
 }
 
 void CModel::setup () {
@@ -274,17 +270,17 @@ void CModel::setupShadowProgram () {
 
     static const std::string fragment = "#version 330 core\nvoid main() {}\n";
     std::shared_ptr<Shaders::ShaderProgramCache::SharingGroup> group;
-    this->m_shadowProgram = this->getScene ().getContext ().getShaderProgramCache ().createProgram (
-	vertex.str (), fragment, &group
+    this->m_shadowProgram = this->getScene ().getContext ().getShaderProgramCache ().interfaceProgram (
+	vertex.str (), fragment, group
     );
     // Identical depth shaders upload their complete matrix/bone layout on every draw.
     this->m_sharedShadowProgram = Shaders::ShaderProgramCache::shareProgram (
-	this->m_shadowProgram, group, "model-shadow"
+	this->m_shadowProgram->id, group, "model-shadow"
     );
 
-    this->m_shadowLightViewProjection = glGetUniformLocation (this->m_shadowProgram, "u_LightViewProjection");
-    this->m_shadowModel = glGetUniformLocation (this->m_shadowProgram, "u_Model");
-    this->m_shadowBones = glGetUniformLocation (this->m_shadowProgram, "u_Bones");
+    this->m_shadowLightViewProjection = glGetUniformLocation (this->m_shadowProgram->id, "u_LightViewProjection");
+    this->m_shadowModel = glGetUniformLocation (this->m_shadowProgram->id, "u_Model");
+    this->m_shadowBones = glGetUniformLocation (this->m_shadowProgram->id, "u_Bones");
 }
 
 void CModel::setupGeometryCallback (Effects::CPass* pass, size_t submeshIndex) {
@@ -604,13 +600,14 @@ void CModel::renderPasses (const std::optional<RenderSortClass> renderClass) {
 }
 
 void CModel::renderShadow (const glm::mat4& lightViewProjection) {
-    if (!this->m_frameVisible || this->m_shadowProgram == GL_NONE
+    if (!this->m_frameVisible || !this->m_shadowProgram
 	|| !this->m_model.castShadow->value->getBool ()
 	|| !this->m_posedShadowBounds.intersects (lightViewProjection * this->m_modelMatrix)) {
 	return;
     }
 
-    glUseProgram (this->m_sharedShadowProgram ? this->m_sharedShadowProgram->id : this->m_shadowProgram);
+    // Every depth draw uploads its full layout, so the query program is safe as a fallback.
+    glUseProgram (this->m_sharedShadowProgram ? this->m_sharedShadowProgram->id : this->m_shadowProgram->id);
     glUniformMatrix4fv (
 	this->m_shadowLightViewProjection, 1, GL_FALSE, glm::value_ptr (lightViewProjection)
     );

@@ -101,27 +101,12 @@ void CPass::releaseShaders () {
     this->m_programSharingGroup.reset ();
     this->m_programSharingChecked = false;
 
-    // destroy shader programs
-    if (!glIsProgram (this->m_programID)) {
-	return; // program already invalid or deleted
+    if (this->m_privateProgram != GL_NONE) {
+	glDeleteProgram (this->m_privateProgram);
+	this->m_privateProgram = GL_NONE;
     }
-
-    GLint shaderCount = 0;
-    glGetProgramiv (this->m_programID, GL_ATTACHED_SHADERS, &shaderCount);
-
-    if (shaderCount > 0) {
-	std::vector<GLuint> attachedShaders (shaderCount);
-	glGetAttachedShaders (this->m_programID, shaderCount, nullptr, attachedShaders.data ());
-
-	for (GLuint s : attachedShaders) {
-	    if (glIsShader (s)) {
-		glDeleteShader (s);
-	    }
-	}
-    }
-
-    glDeleteProgram (this->m_programID);
-    this->m_programID = 0;
+    this->m_interfaceProgram.reset ();
+    this->m_programID = GL_NONE;
 }
 
 std::shared_ptr<const TextureProvider> CPass::resolveTexture (
@@ -264,7 +249,7 @@ void CPass::setupRenderTexture () {
     }
     this->refreshUniformBindings ();
     // use the shader we have registered
-    glUseProgram (this->m_sharedProgram ? this->m_sharedProgram->id : this->m_programID);
+    glUseProgram (this->m_sharedProgram ? this->m_sharedProgram->id : this->privateProgram ());
 
     auto texture0 = this->resolveTexture0 ();
     const auto animation = this->resolveTextureAnimationState (texture0);
@@ -994,9 +979,10 @@ void CPass::setupShaders () {
     const auto [vertex, fragment]
 	= Shaders::GLSLContext::get ().toGlsl (this->m_shader->vertex (), this->m_shader->fragment ());
 
-    this->m_programID = this->m_renderable.getScene ().getContext ().getShaderProgramCache ().createProgram (
-	vertex, fragment, &this->m_programSharingGroup
+    this->m_interfaceProgram = this->m_renderable.getScene ().getContext ().getShaderProgramCache ().interfaceProgram (
+	vertex, fragment, this->m_programSharingGroup
     );
+    this->m_programID = this->m_interfaceProgram->id;
 #if !NDEBUG
     glObjectLabel (GL_PROGRAM, this->m_programID, -1, shaderName.c_str ());
 #endif
@@ -1111,6 +1097,21 @@ void CPass::setupProgramSharing () {
 	= Shaders::ShaderProgramCache::shareProgram (this->m_programID, this->m_programSharingGroup, layout.str ());
 }
 
+GLuint CPass::privateProgram () {
+    // Without a sharing group the interface program belongs to this pass alone.
+    if (this->m_privateProgram == GL_NONE && this->m_programSharingGroup) {
+	this->m_privateProgram = Shaders::ShaderProgramCache::cloneProgram (this->m_programID);
+	if (this->m_privateProgram == GL_NONE) {
+	    const auto [vertex, fragment]
+		= Shaders::GLSLContext::get ().toGlsl (this->m_shader->vertex (), this->m_shader->fragment ());
+	    this->m_privateProgram = Shaders::ShaderProgramCache::compileCompatibleProgram (
+		this->m_programID, vertex, fragment
+	    );
+	}
+    }
+    return this->m_privateProgram != GL_NONE ? this->m_privateProgram : this->m_programID;
+}
+
 void CPass::leaveProgramSharing () {
     if (!this->m_sharedProgram) {
 	return;
@@ -1121,7 +1122,7 @@ void CPass::leaveProgramSharing () {
     // without copying whichever other material last used the shared program.
     GLint previous = 0;
     glGetIntegerv (GL_CURRENT_PROGRAM, &previous);
-    glUseProgram (this->m_programID);
+    glUseProgram (this->privateProgram ());
     const auto shared = std::move (this->m_sharedProgram);
     this->setupRenderUniforms ();
     this->setupRenderReferenceUniforms ();

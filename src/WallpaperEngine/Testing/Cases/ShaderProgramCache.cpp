@@ -1,5 +1,6 @@
 #include "WallpaperEngine/Render/Shaders/ShaderProgramCache.h"
 #include "WallpaperEngine/Render/Shaders/ShaderUnit.h"
+#include "WallpaperEngine/Data/Utils/ScopeGuard.h"
 
 #include <GLFW/glfw3.h>
 #include <catch2/catch_test_macros.hpp>
@@ -158,6 +159,108 @@ TEST_CASE ("Shader cache falls back to source when binaries do not fit and recov
     const GLuint recovered = cache.createProgram (vertex, fragment);
     checkLinked (recovered);
     glDeleteProgram (recovered);
+    CHECK (glGetError () == GL_NO_ERROR);
+}
+
+TEST_CASE ("Identical sources share one interface program and draw through private clones", "[.][gl]") {
+    GLContext context;
+    ShaderProgramCache cache;
+    std::shared_ptr<ShaderProgramCache::SharingGroup> firstGroup, secondGroup, otherGroup;
+    auto first = cache.interfaceProgram (vertex, fragment, firstGroup);
+    auto second = cache.interfaceProgram (vertex, fragment, secondGroup);
+    checkLinked (first->id);
+    if (!firstGroup) {
+	SKIP ("Driver does not provide retrievable program binaries");
+    }
+    // Later users of the same sources must not load another copy of the executable.
+    CHECK (second->id == first->id);
+    CHECK (secondGroup == firstGroup);
+    auto other = cache.interfaceProgram (
+	vertex, "#version 330 core\nuniform vec4 tint;\nout vec4 color;\nvoid main() { color = tint; }\n", otherGroup
+    );
+    CHECK (other->id != first->id);
+    CHECK (otherGroup != firstGroup);
+
+    const GLint location = glGetUniformLocation (first->id, "value");
+    REQUIRE (location >= 0);
+    const GLuint clone = ShaderProgramCache::cloneProgram (first->id);
+    REQUIRE (clone != GL_NONE);
+    checkLinked (clone);
+    CHECK (glGetUniformLocation (clone, "value") == location);
+    glUseProgram (clone);
+    glUniform1f (location, 0.5f);
+    float value = -1.0f;
+    glGetUniformfv (first->id, location, &value);
+    CHECK (value == 0.0f);
+    glUseProgram (0);
+    glDeleteProgram (clone);
+
+    // Users own the interface program; the group must not pin it.
+    const GLuint released = first->id;
+    first.reset ();
+    second.reset ();
+    CHECK (glIsProgram (released) == GL_FALSE);
+    auto replacement = cache.interfaceProgram (vertex, fragment, firstGroup);
+    checkLinked (replacement->id);
+
+    // Without cached binaries nothing can share, so each caller owns its program.
+    ShaderProgramCache disabled (1);
+    std::shared_ptr<ShaderProgramCache::SharingGroup> noGroup;
+    auto a = disabled.interfaceProgram (vertex, fragment, noGroup);
+    auto b = disabled.interfaceProgram (vertex, fragment, noGroup);
+    CHECK_FALSE (noGroup);
+    CHECK (a->id != b->id);
+    CHECK (glGetError () == GL_NO_ERROR);
+}
+
+TEST_CASE ("Rejected shader copies fall back to independent source programs", "[.][gl]") {
+    GLContext context;
+    ShaderProgramCache cache;
+    const std::string arrayFragment = "#version 330 core\nuniform vec4 colors[2];\n"
+	"out vec4 color;\nvoid main() { color = colors[0] + colors[1]; }\n";
+    std::shared_ptr<ShaderProgramCache::SharingGroup> group;
+    auto query = cache.interfaceProgram (vertex, arrayFragment, group);
+    if (!group) SKIP ("Driver does not provide retrievable program binaries");
+    const auto binary = __glewProgramBinary;
+    WallpaperEngine::Data::Utils::ScopeGuard restoreBinary ([binary] { __glewProgramBinary = binary; });
+    __glewProgramBinary = [] (GLuint, GLenum, const void*, GLsizei) {};
+    CHECK_FALSE (ShaderProgramCache::shareProgram (query->id, group, "full-array"));
+    REQUIRE (ShaderProgramCache::cloneProgram (query->id) == GL_NONE);
+
+    GLuint full = GL_NONE, partial = GL_NONE;
+    WallpaperEngine::Data::Utils::ScopeGuard release ([&] {
+	glUseProgram (0);
+	if (full != GL_NONE && full != query->id) glDeleteProgram (full);
+	if (partial != GL_NONE && partial != query->id && partial != full) glDeleteProgram (partial);
+    });
+    full = ShaderProgramCache::compileCompatibleProgram (query->id, vertex, arrayFragment);
+    partial = ShaderProgramCache::compileCompatibleProgram (query->id, vertex, arrayFragment);
+    REQUIRE (full != query->id);
+    REQUIRE (partial != query->id);
+    REQUIRE (full != partial);
+    checkLinked (full);
+    checkLinked (partial);
+    const GLint colors = glGetUniformLocation (query->id, "colors");
+    const GLint tail = glGetUniformLocation (query->id, "colors[1]");
+    REQUIRE (colors >= 0);
+    REQUIRE (tail >= 0);
+    CHECK (glGetUniformLocation (full, "colors") == colors);
+    CHECK (glGetUniformLocation (partial, "colors[1]") == tail);
+
+    const float red[] = { 0.5f, 0, 0, 0.5f, 0.5f, 0, 0, 0.5f };
+    const float blue[] = { 0, 0, 1, 1 };
+    glUseProgram (full);
+    glUniform4fv (colors, 2, red);
+    glUseProgram (partial);
+    glUniform4fv (colors, 1, blue);
+    float values[4];
+    glGetUniformfv (partial, tail, values);
+    for (const float value : values) CHECK (value == 0.0f);
+    glGetUniformfv (full, colors, values);
+    for (size_t index = 0; index < 4; ++index) CHECK (values[index] == red[index]);
+    glGetUniformfv (query->id, colors, values);
+    for (const float value : values) CHECK (value == 0.0f);
+    REQUIRE_THROWS (ShaderProgramCache::compileCompatibleProgram (query->id, vertex, fragment));
     CHECK (glGetError () == GL_NO_ERROR);
 }
 

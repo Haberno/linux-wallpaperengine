@@ -44,6 +44,12 @@ std::string programInterface (GLuint program) {
     return result;
 }
 
+// All authored defines, generated lighting, bone counts and source edits must
+// participate in the key. Length-prefixing keeps the two stages unambiguous.
+std::string programKey (const std::string& vertex, const std::string& fragment) {
+    return std::to_string (vertex.size ()) + ':' + vertex + fragment;
+}
+
 GLuint compileStage (const std::string& source, GLenum type) {
     const GLuint shader = glCreateShader (type);
     const char* text = source.c_str ();
@@ -77,9 +83,7 @@ GLuint ShaderProgramCache::createProgram (
     if (group) {
 	group->reset ();
     }
-    // All authored defines, generated lighting, bone counts and source edits must
-    // participate in the key. Length-prefixing keeps the two stages unambiguous.
-    const std::string key = std::to_string (vertex.size ()) + ':' + vertex + fragment;
+    const std::string key = programKey (vertex, fragment);
     const bool supportsBinaries = GLEW_VERSION_4_1 || GLEW_ARB_get_program_binary;
     GLuint program = glCreateProgram ();
     if (supportsBinaries) {
@@ -196,29 +200,69 @@ std::shared_ptr<const ShaderProgramCache::SharedProgram> ShaderProgramCache::sha
 	}
     }
 
-    // Clone into a separate object: callers retain their private executable for
-    // uniform registration and can leave sharing if their write layout changes.
-    GLint length = 0;
-    glGetProgramiv (privateProgram, GL_PROGRAM_BINARY_LENGTH, &length);
-    if (length <= 0) {
+    // Clone into a separate object: callers keep their query program for location
+    // lookups and can leave sharing if their write layout changes.
+    const GLuint clone = cloneProgram (privateProgram);
+    if (clone == GL_NONE) {
+	Debug::RenderHealth::count ("shader.live_program_rejected");
 	return nullptr;
+    }
+    auto program = std::make_shared<SharedProgram> (clone);
+    group->programs.emplace (key, program);
+    Debug::RenderHealth::count ("shader.live_program_created");
+    return program;
+}
+
+std::shared_ptr<const ShaderProgramCache::SharedProgram> ShaderProgramCache::interfaceProgram (
+    const std::string& vertex, const std::string& fragment, std::shared_ptr<SharingGroup>& group
+) {
+    if (const auto found = m_entries.find (programKey (vertex, fragment)); found != m_entries.end ()) {
+	if (auto program = found->second.group->interface.lock ()) {
+	    found->second.lastUsed = ++m_useCounter;
+	    group = found->second.group;
+	    Debug::RenderHealth::count ("shader.interface_program_hit");
+	    return program;
+	}
+    }
+    auto program = std::make_shared<SharedProgram> (this->createProgram (vertex, fragment, &group));
+    if (group) {
+	group->interface = program;
+    }
+    return program;
+}
+
+GLuint ShaderProgramCache::cloneProgram (GLuint program) {
+    GLint length = 0;
+    glGetProgramiv (program, GL_PROGRAM_BINARY_LENGTH, &length);
+    if (length <= 0) {
+	return GL_NONE;
     }
     std::vector<char> binary (length);
     GLenum format = 0;
     GLsizei written = 0;
-    glGetProgramBinary (privateProgram, length, &written, &format, binary.data ());
+    glGetProgramBinary (program, length, &written, &format, binary.data ());
     if (written <= 0) {
-	return nullptr;
+	return GL_NONE;
     }
-    auto program = std::make_shared<SharedProgram> (glCreateProgram ());
-    glProgramBinary (program->id, format, binary.data (), written);
+    const GLuint clone = glCreateProgram ();
+    glProgramBinary (clone, format, binary.data (), written);
     GLint linked = GL_FALSE;
-    glGetProgramiv (program->id, GL_LINK_STATUS, &linked);
-    if (linked != GL_TRUE || programInterface (program->id) != interface) {
-	Debug::RenderHealth::count ("shader.live_program_rejected");
-	return nullptr;
+    glGetProgramiv (clone, GL_LINK_STATUS, &linked);
+    if (linked != GL_TRUE || programInterface (clone) != programInterface (program)) {
+	glDeleteProgram (clone);
+	return GL_NONE;
     }
-    group->programs.emplace (key, program);
-    Debug::RenderHealth::count ("shader.live_program_created");
-    return program;
+    return clone;
+}
+
+GLuint ShaderProgramCache::compileCompatibleProgram (
+    GLuint program, const std::string& vertex, const std::string& fragment
+) {
+    ShaderProgramCache sourceOnly (0);
+    const GLuint fallback = sourceOnly.createProgram (vertex, fragment);
+    if (programInterface (fallback) != programInterface (program)) {
+	glDeleteProgram (fallback);
+	sLog.exception ("Private shader fallback changed cached uniform or attribute locations");
+    }
+    return fallback;
 }

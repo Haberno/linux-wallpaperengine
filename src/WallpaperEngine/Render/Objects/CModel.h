@@ -120,7 +120,8 @@ private:
 
     std::vector<Effects::CPass*> m_passes = {};
     std::vector<RenderSortClass> m_renderSortClasses = {};
-    GLuint m_shadowProgram = GL_NONE;
+    // Location queries only; identical depth shaders share it and draw through m_sharedShadowProgram.
+    std::shared_ptr<const Shaders::ShaderProgramCache::SharedProgram> m_shadowProgram;
     std::shared_ptr<const Shaders::ShaderProgramCache::SharedProgram> m_sharedShadowProgram;
     ModelBounds m_shadowBounds;
     ModelBounds::Box m_posedShadowBounds;

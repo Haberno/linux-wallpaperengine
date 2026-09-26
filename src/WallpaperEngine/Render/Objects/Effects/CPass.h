@@ -172,6 +172,7 @@ private:
     [[nodiscard]] glm::ivec2 fogCombos () const;
     void setupProgramSharing ();
     void leaveProgramSharing ();
+    [[nodiscard]] GLuint privateProgram ();
     void setupShaderVariables ();
     void setupUniforms ();
     void setupTextureUniforms ();
@@ -326,7 +327,11 @@ private:
      */
     glm::vec4 m_effectiveColor4 = {};
 
+    // Location queries only; identical passes share this GL object. Draws use
+    // m_sharedProgram, or m_privateProgram once this pass cannot share.
     GLuint m_programID = GL_NONE;
+    std::shared_ptr<const Shaders::ShaderProgramCache::SharedProgram> m_interfaceProgram;
+    GLuint m_privateProgram = GL_NONE;
     std::shared_ptr<Shaders::ShaderProgramCache::SharingGroup> m_programSharingGroup;
     std::shared_ptr<const Shaders::ShaderProgramCache::SharedProgram> m_sharedProgram;
     bool m_programSharingChecked = false;
