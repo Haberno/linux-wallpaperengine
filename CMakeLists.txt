@@ -669,6 +669,7 @@ if(BUILD_TESTING)
         src/WallpaperEngine/Testing/Cases/EffectFBOBindings.cpp
         src/WallpaperEngine/Testing/Cases/TextureUpload.cpp
         src/WallpaperEngine/Testing/Cases/TextureDecode.cpp
+        src/WallpaperEngine/Testing/Cases/TextureAnimationParsing.cpp
         src/WallpaperEngine/Testing/Cases/MdlParser.cpp
         src/WallpaperEngine/Testing/Cases/PuppetClippingPlan.cpp
         src/WallpaperEngine/Testing/Cases/MdlAnimation.cpp

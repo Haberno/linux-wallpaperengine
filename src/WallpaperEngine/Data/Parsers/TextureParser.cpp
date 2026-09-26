@@ -372,12 +372,12 @@ FrameSharedPtr TextureParser::parseFrameV1 (const BinaryReader& file) {
 
     result->frameNumber = file.nextUInt32 ();
     result->frametime = file.nextFloat ();
-    result->x = static_cast<float> (file.nextUInt32 ());
-    result->y = static_cast<float> (file.nextUInt32 ());
-    result->width1 = static_cast<float> (file.nextUInt32 ());
-    std::ignore = file.nextUInt32 (); // unknown
-    std::ignore = file.nextUInt32 (); // unknown
-    result->height1 = static_cast<float> (file.nextUInt32 ());
+    result->x = static_cast<float> (file.nextInt ());
+    result->y = static_cast<float> (file.nextInt ());
+    result->width1 = static_cast<float> (file.nextInt ());
+    result->width2 = static_cast<float> (file.nextInt ());
+    result->height2 = static_cast<float> (file.nextInt ());
+    result->height1 = static_cast<float> (file.nextInt ());
 
     return result;
 }
@@ -569,10 +569,10 @@ void TextureParser::parseAnimations (Texture& header, const BinaryReader& file) 
 	}
     }
 
-    // ensure gif width and height is right for TEXS0001, TEXS0002
+    // TEXS0001 and TEXS0002 use the authored TEXI dimensions, independent of the frame's atlas basis.
     if (header.animatedVersion == AnimatedVersion_TEXS0001 || header.animatedVersion == AnimatedVersion_TEXS0002) {
-	header.gifWidth = (*header.frames.begin ())->width1;
-	header.gifHeight = (*header.frames.begin ())->height1;
+	header.gifWidth = header.width;
+	header.gifHeight = header.height;
     }
 
     // Calculate spritesheet grid dimensions from animation frames

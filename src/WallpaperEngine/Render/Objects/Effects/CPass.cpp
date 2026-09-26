@@ -337,8 +337,8 @@ CPass::resolveTextureAnimationState (const std::shared_ptr<const TextureProvider
 	state.translation.y = frameCur->y / texture->getTextureHeight (state.currentTexture);
 
 	state.rotation.x = frameCur->width1 / static_cast<float> (texture->getTextureWidth (state.currentTexture));
-	state.rotation.y = frameCur->width2 / static_cast<float> (texture->getTextureWidth (state.currentTexture));
-	state.rotation.z = frameCur->height2 / static_cast<float> (texture->getTextureHeight (state.currentTexture));
+	state.rotation.y = frameCur->width2 / static_cast<float> (texture->getTextureHeight (state.currentTexture));
+	state.rotation.z = frameCur->height2 / static_cast<float> (texture->getTextureWidth (state.currentTexture));
 	state.rotation.w = frameCur->height1 / static_cast<float> (texture->getTextureHeight (state.currentTexture));
 	break;
     }

@@ -198,8 +198,9 @@ bool CTexture::isBlockCompressedPayload (
 
 void CTexture::setupResolution () {
     if (this->isAnimated ()) {
-	this->m_resolution = { this->m_header->textureWidth, this->m_header->textureHeight, this->m_header->gifWidth,
-			       this->m_header->gifHeight };
+	// Shader resolution describes the atlas; getRealWidth/Height describe its animation canvas.
+	this->m_resolution = { this->m_header->textureWidth, this->m_header->textureHeight, this->m_header->width,
+			       this->m_header->height };
     } else {
 	if (this->m_header->freeImageFormat != FIF_UNKNOWN) {
 	    // wpengine-texture format always has one mipmap

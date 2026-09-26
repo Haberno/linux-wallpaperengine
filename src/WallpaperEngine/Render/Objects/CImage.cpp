@@ -26,6 +26,7 @@
 #include "WallpaperEngine/Data/Utils/BinaryReader.h"
 #include "WallpaperEngine/Data/Utils/MemoryStream.h"
 #include "WallpaperEngine/Logging/Log.h"
+#include "WallpaperEngine/Render/CTexture.h"
 #include "WallpaperEngine/Scripting/ScriptEngine.h"
 
 using namespace WallpaperEngine;
@@ -37,6 +38,13 @@ using namespace WallpaperEngine::Data::Builders;
 using namespace WallpaperEngine::Data::Utils;
 
 namespace {
+bool usesLegacyAnimationUvs (const Render::TextureProvider& texture) {
+    const auto* compiled = dynamic_cast<const Render::CTexture*> (&texture);
+    if (compiled == nullptr || !compiled->isAnimated ()) return false;
+    const auto version = compiled->getHeader ().animatedVersion;
+    return version == Data::Assets::AnimatedVersion_TEXS0001 || version == Data::Assets::AnimatedVersion_TEXS0002;
+}
+
 glm::vec2 rotateVec2 (const glm::vec2& value, float angle) {
     const float cosAngle = std::cos (angle);
     const float sinAngle = std::sin (angle);
@@ -358,8 +366,8 @@ CImage::CImage (Wallpapers::CScene& scene, const Image& image) :
     float x = 0.0f;
     float y = 0.0f;
 
-    if (this->getTexture ()->isAnimated ()) {
-	// animations should be copied completely
+    if (this->getTexture ()->isAnimated () && !usesLegacyAnimationUvs (*this->getTexture ())) {
+	// TEXS3 uses the complete frame basis; older sheets retain the authored input UV crop.
 	x = 0.0f;
 	y = 0.0f;
 	width = 1.0f;
@@ -2353,7 +2361,8 @@ void CImage::uploadGeometryBuffers (const glm::vec2& size) {
 
     float width = 1.0f;
     float height = 1.0f;
-    if (this->getTexture () != nullptr && !this->getTexture ()->isAnimated ()
+    if (this->getTexture () != nullptr
+	&& (!this->getTexture ()->isAnimated () || usesLegacyAnimationUvs (*this->getTexture ()))
 	&& (this->getTexture ()->getTextureWidth (0) != this->getTexture ()->getRealWidth ()
 	    || this->getTexture ()->getTextureHeight (0) != this->getTexture ()->getRealHeight ())) {
 	width = static_cast<float> (this->getTexture ()->getRealWidth ())
