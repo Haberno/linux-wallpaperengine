@@ -96,29 +96,48 @@ bool ShaderDiskCache::store (std::string_view stage, const std::string& key, con
     WallpaperEngine::Data::Utils::ScopeGuard unlock ([&] { close (lock); });
     if (flock (lock, LOCK_EX | LOCK_NB) != 0) return false;
     const auto target = m_directory / filename (id);
-    struct Entry { fs::file_time_type time; fs::path path; uintmax_t size; };
-    std::vector<Entry> entries;
-    uintmax_t total = 0;
-    for (fs::directory_iterator it (m_directory, error), end; !error && it != end; it.increment (error)) {
-        const auto path = it->path ();
-        if (path.filename ().string ().starts_with (".tmp-")) {
-            fs::remove (path, error); // unfinished write from an earlier process
-        } else if (path.extension () == ".bin" && path != target) {
-            const auto size = it->file_size (error);
-            if (error) return false;
-            const auto time = it->last_write_time (error);
-            if (error) return false;
-            entries.push_back ({ time, path, size });
-            total += size;
-        }
-    }
+    const std::lock_guard guard (m_totalMutex);
+    uint64_t generation = 0;
+    const auto generationBytes = pread (lock, &generation, sizeof (generation), 0);
+    if (generationBytes < 0) return false;
+    const auto directoryTime = fs::last_write_time (m_directory, error);
     if (error) return false;
-    std::ranges::sort (entries, {}, &Entry::time);
-    for (const auto& entry : entries) {
-        if (total + bytes <= m_budget) break;
-        fs::remove (entry.path, error);
+    if (generationBytes != sizeof (generation) || generation != m_generation || directoryTime != m_directoryTime)
+        m_total.reset ();
+    // Publish before changing entries so a failed or interrupted write also invalidates
+    // every other writer's estimate. File timestamps can miss rapid consecutive writes.
+    ++generation;
+    if (pwrite (lock, &generation, sizeof (generation), 0) != sizeof (generation)) return false;
+    // Scanning thousands of entries on every write made a cold 3D scene spend ~20% of its
+    // load in stat (); rescan only after another writer or when this store exceeds the budget
+    if (!m_total || *m_total + bytes > m_budget) {
+        struct Entry { fs::file_time_type time; fs::path path; uintmax_t size; };
+        std::vector<Entry> entries;
+        uintmax_t total = 0;
+        for (fs::directory_iterator it (m_directory, error), end; !error && it != end; it.increment (error)) {
+            const auto path = it->path ();
+            if (path.filename ().string ().starts_with (".tmp-")) {
+                fs::remove (path, error); // unfinished write from an earlier process
+            } else if (path.extension () == ".bin" && path != target) {
+                const auto size = it->file_size (error);
+                if (error) return false;
+                const auto time = it->last_write_time (error);
+                if (error) return false;
+                entries.push_back ({ time, path, size });
+                total += size;
+            }
+        }
         if (error) return false;
-        total -= entry.size;
+        std::ranges::sort (entries, {}, &Entry::time);
+        // evict to 90% so a full cache does not rescan on every following write
+        const uintmax_t lowWater = m_budget - m_budget / 10;
+        for (const auto& entry : entries) {
+            if (total + bytes <= lowWater) break;
+            fs::remove (entry.path, error);
+            if (error) return false;
+            total -= entry.size;
+        }
+        m_total = total;
     }
 
     std::string temporary = (m_directory / ".tmp-XXXXXX").string ();
@@ -135,5 +154,11 @@ bool ShaderDiskCache::store (std::string_view stage, const std::string& key, con
     const bool closed = fclose (output) == 0;
     if (!written || !closed) return false;
     fs::rename (temporary, target, error); // readers see a complete old or new file
-    return !error;
+    if (error) return false;
+    m_directoryTime = fs::last_write_time (m_directory, error);
+    if (error) return false;
+    // replacing an existing entry counts it twice; overestimating only rescans sooner
+    *m_total += bytes;
+    m_generation = generation;
+    return true;
 }

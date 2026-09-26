@@ -1,5 +1,6 @@
 #include "WallpaperEngine/Render/Shaders/ShaderDiskCache.h"
 #include <catch2/catch_test_macros.hpp>
+#include <chrono>
 #include <cstdlib>
 #include <fstream>
 #include <fcntl.h>
@@ -105,6 +106,66 @@ TEST_CASE ("shader disk budget evicts old results including previous versions", 
     uintmax_t bytes = 0;
     for (const auto& file : std::filesystem::directory_iterator (directory.path)) bytes += file.file_size ();
     CHECK (bytes <= 256);
+}
+
+TEST_CASE ("one writer keeps the shader disk budget across many stores", "[shader-disk-cache]") {
+    CacheDirectory directory;
+    ShaderDiskCache cache (directory.path, "v1", 1024);
+    for (int i = 0; i < 40; i++) {
+        const auto key = "source-" + std::to_string (i);
+        REQUIRE (cache.store ("glsl", key, { std::string (100, 'a'), "" }));
+        REQUIRE (cache.load ("glsl", key));
+        uintmax_t bytes = 0;
+        for (const auto& file : std::filesystem::directory_iterator (directory.path)) {
+            if (file.path ().extension () == ".bin") bytes += file.file_size ();
+        }
+        CHECK (bytes <= 1024);
+    }
+    CHECK_FALSE (cache.load ("glsl", "source-0"));
+}
+
+TEST_CASE ("independent shader cache writers share the disk budget", "[shader-disk-cache]") {
+    CacheDirectory directory;
+    ShaderDiskCache first (directory.path, "v1", 1024);
+    ShaderDiskCache second (directory.path, "v2", 1024);
+    for (int i = 0; i < 40; i++) {
+        auto& writer = i % 2 == 0 ? first : second;
+        const auto key = "source-" + std::to_string (i);
+        REQUIRE (writer.store ("glsl", key, { std::string (100, 'a'), "" }));
+        REQUIRE (writer.load ("glsl", key));
+        uintmax_t bytes = 0;
+        for (const auto& file : std::filesystem::directory_iterator (directory.path)) {
+            if (file.path ().extension () == ".bin") bytes += file.file_size ();
+        }
+        CHECK (bytes <= 1024);
+    }
+}
+
+TEST_CASE ("legacy shader cache writes refresh the shared disk budget", "[shader-disk-cache]") {
+    CacheDirectory directory;
+    ShaderDiskCache current (directory.path, "current", 1024);
+    REQUIRE (current.store ("glsl", "first", { std::string (100, 'a'), "" }));
+    const auto modified = std::filesystem::last_write_time (directory.path);
+    CacheDirectory staged;
+    ShaderDiskCache legacy (staged.path, "old", 1024);
+    for (int i = 0; i < 4; i++) {
+        REQUIRE (legacy.store ("glsl", "source-" + std::to_string (i), { std::string (100, 'b'), "" }));
+    }
+    // Older writers publish entries without updating the lock-file generation.
+    for (const auto& file : std::filesystem::directory_iterator (staged.path)) {
+        if (file.path ().extension () == ".bin") {
+            std::filesystem::copy_file (file.path (), directory.path / file.path ().filename ());
+        }
+    }
+    // Keep the directory change visible on filesystems with coarse timestamps too.
+    std::filesystem::last_write_time (directory.path, modified + std::chrono::seconds (1));
+    REQUIRE (current.store ("glsl", "after-legacy", { std::string (400, 'c'), "" }));
+    REQUIRE (current.load ("glsl", "after-legacy"));
+    uintmax_t bytes = 0;
+    for (const auto& file : std::filesystem::directory_iterator (directory.path)) {
+        if (file.path ().extension () == ".bin") bytes += file.file_size ();
+    }
+    CHECK (bytes <= 1024);
 }
 
 TEST_CASE ("unavailable shader cache storage remains optional", "[shader-disk-cache]") {

@@ -1,6 +1,8 @@
 #pragma once
 
+#include <cstdint>
 #include <filesystem>
+#include <mutex>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -23,5 +25,11 @@ private:
     std::string m_version;
     size_t m_budget;
     bool m_enabled = true;
+    // Refresh after another writer, including older versions without lock-file generations,
+    // or when the next store would exceed the budget.
+    mutable std::mutex m_totalMutex;
+    mutable std::optional<uintmax_t> m_total;
+    mutable uint64_t m_generation = 0;
+    mutable std::filesystem::file_time_type m_directoryTime {};
 };
 }
