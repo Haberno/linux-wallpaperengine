@@ -1495,11 +1495,9 @@ InitializerFunc CParticle::createSizeRandomInitializer (const SizeRandomInitiali
 InitializerFunc CParticle::createAlphaRandomInitializer (const AlphaRandomInitializer& init) {
     DynamicValue* minValue = init.min->value.get ();
     DynamicValue* maxValue = init.max->value.get ();
-    DynamicValue* alphaOverride = getInstanceOverride ().alpha->value.get ();
 
-    return [this, minValue, maxValue, alphaOverride] (ParticleInstance& p) {
-	p.alpha = WallpaperEngine::Maths::randomFloat (m_rng, minValue->getFloat (), maxValue->getFloat ())
-	    * alphaOverride->getFloat ();
+    return [this, minValue, maxValue] (ParticleInstance& p) {
+	p.alpha *= WallpaperEngine::Maths::randomFloat (m_rng, minValue->getFloat (), maxValue->getFloat ());
 	p.initial.alpha = p.alpha;
     };
 }
