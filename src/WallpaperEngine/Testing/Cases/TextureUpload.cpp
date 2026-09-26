@@ -1,6 +1,7 @@
 #include "WallpaperEngine/Data/Assets/Texture.h"
 #include "WallpaperEngine/Render/CFBO.h"
 #include "WallpaperEngine/Render/CTexture.h"
+#include "WallpaperEngine/Render/FBOProvider.h"
 #include "WallpaperEngine/Render/Shaders/ShaderProgramCache.h"
 #include "WallpaperEngine/Render/TextureCache.h"
 
@@ -85,6 +86,40 @@ TEST_CASE ("only the dedicated reflection framebuffer generates mipmaps", "[text
     CHECK_FALSE (CFBO::targetUsesMipmaps ("_rt_FullFrameBuffer"));
     CHECK_FALSE (CFBO::targetUsesMipmaps ("_rt_imageLayerComposite_206_a"));
     CHECK_FALSE (CFBO::targetUsesMipmaps ("_rt_imageLayerComposite_206_b"));
+}
+
+TEST_CASE ("declared effect target samplers survive HDR allocation and resize", "[.][gl][texture][fbo][sampling]") {
+    TextureGLContext context;
+    WallpaperEngine::Render::FBOProvider provider (nullptr);
+    provider.setBackbufferFormat (TextureFormat_RGBA16161616f);
+    for (const bool repeat : { false, true }) {
+	CAPTURE (repeat);
+	const WallpaperEngine::Data::Model::FBO definition {
+	    .name = "effect-target", .format = "rgba_backbuffer", .scale = 1.0f,
+	    .unique = false, .repeat = repeat,
+	};
+	const auto target = provider.create (definition, glm::vec2 (9, 9));
+	const auto texture = target->getTextureID (0);
+	for (const uint32_t size : { 9, 13 }) {
+	    if (size != 9) target->resize (size, size);
+	    glBindTexture (GL_TEXTURE_2D, target->getTextureID (0));
+	    CHECK (target->getTextureID (0) == texture);
+	    for (const auto parameter : { GL_TEXTURE_MIN_FILTER, GL_TEXTURE_MAG_FILTER }) {
+		GLint value = 0;
+		glGetTexParameteriv (GL_TEXTURE_2D, parameter, &value);
+		CHECK (value == GL_LINEAR);
+	    }
+	    for (const auto parameter : { GL_TEXTURE_WRAP_S, GL_TEXTURE_WRAP_T }) {
+		GLint value = 0;
+		glGetTexParameteriv (GL_TEXTURE_2D, parameter, &value);
+		CHECK (value == (repeat ? GL_REPEAT : GL_CLAMP_TO_EDGE));
+	    }
+	    GLint format = 0;
+	    glGetTexLevelParameteriv (GL_TEXTURE_2D, 0, GL_TEXTURE_INTERNAL_FORMAT, &format);
+	    CHECK (format == GL_RGBA16F);
+	    CHECK (glGetError () == GL_NO_ERROR);
+	}
+    }
 }
 
 TEST_CASE ("RGBA16F framebuffers preserve HDR storage across resize and mipmap cleanup", "[.][gl][texture][fbo][hdr]") {

@@ -199,12 +199,14 @@ std::vector<FBOUniquePtr> EffectParser::parseFBOs (const JSON& it, const JSON& c
 
     for (const auto& cur : it) {
 	if (!conditionsPass (cur, combos)) continue;
+	const auto uvs = cur.optional ("uvs");
 	result.push_back (
 	    std::make_unique<FBO> (FBO {
 		.name = cur.require<std::string> ("name", "FBO must have a name"),
 		.format = cur.optional<std::string> ("format", "rgba8888"),
 		.scale = cur.optional ("scale", 1.0f),
 		.unique = cur.optional ("unique", false),
+		.repeat = uvs.has_value () && uvs->is_string () && uvs->get<std::string> () == "repeat",
 		.fit = cur.optional ("fit", 0),
 	    })
 	);

@@ -493,7 +493,7 @@ void CText::setupEffectChain () {
 	m_effectProviders.push_back (fboProvider);
 
 	for (const auto& fbo : effect->effect->fbos) {
-	    fboProvider->create (*fbo, TextureFlags_ClampUVs, surface);
+	    fboProvider->create (*fbo, surface);
 	}
 	registerEffectFunctions (*effect, fboProvider);
 	std::vector<std::string> bufferNames;

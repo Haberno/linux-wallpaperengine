@@ -53,10 +53,13 @@ TextureFormat FBOProvider::resolveTargetFormat (const std::string_view format, c
 	? TextureFormat_RGBA16161616f : TextureFormat_ARGB8888;
 }
 
-std::shared_ptr<CFBO> FBOProvider::create (const FBO& base, uint32_t flags, const glm::vec2 size) {
+std::shared_ptr<CFBO> FBOProvider::create (const FBO& base, const glm::vec2 size) {
     const auto targetSize = calculateTargetSize (
 	size / base.scale, this->m_renderScale, !isFixedSizeTarget (base.name), base.fit
     );
+    // Native declared targets have their own linear sampler, independent of the
+    // image reference's interpolation and wrapping flags.
+    const auto flags = base.repeat ? TextureFlags_NoFlags : TextureFlags_ClampUVs;
     auto target = this->m_fbos[base.name] = std::make_shared<CFBO> (
 	       base.name,
 	       resolveTargetFormat (base.format, this->getBackbufferFormat ()), flags, base.scale,

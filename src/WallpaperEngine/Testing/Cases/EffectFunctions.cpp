@@ -54,6 +54,23 @@ TEST_CASE ("effect clear functions ignore non-object function tables", "[effect]
     CHECK (effect->functions.empty ());
 }
 
+TEST_CASE ("effect targets repeat only for the native uvs string", "[effect][sampling]") {
+    const auto effect = loadFunctions (JSON::parse (R"({"passes":[],"fbos":[
+	{"name":"default"},
+	{"name":"repeat","uvs":"repeat"},
+	{"name":"clamp","uvs":"clamp"},
+	{"name":"case","uvs":"Repeat"},
+	{"name":"bool","uvs":true},
+	{"name":"null","uvs":null},
+	{"name":"otherKey","wrap":"repeat"}
+    ]})"));
+    REQUIRE (effect->fbos.size () == 7);
+    for (size_t index = 0; index < effect->fbos.size (); ++index) {
+	CAPTURE (index);
+	CHECK (effect->fbos[index]->repeat == (index == 1));
+    }
+}
+
 TEST_CASE ("effect FBO clear colors retain four floats and default missing channels to zero", "[effect][functions]") {
     const auto effect = loadFunctions (JSON::parse (R"({"passes":[],"fbos":[
 	{"name":"rgba","clear":"0.25 0.5 -1 2"},

@@ -14,6 +14,8 @@ struct FBO {
     std::string format;
     float scale;
     bool unique;
+    /** Named effect targets clamp by default; uvs=repeat enables wrapping. */
+    bool repeat = false;
     /** Optional maximum edge length for aspect-preserving simulation targets. */
     int fit = 0;
     /** Color used by this target's clear action. */

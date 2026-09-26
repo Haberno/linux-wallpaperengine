@@ -14,7 +14,7 @@ class FBOProvider {
 public:
     explicit FBOProvider (const FBOProvider* parent);
 
-    std::shared_ptr<CFBO> create (const FBO& base, uint32_t flags, glm::vec2 size);
+    std::shared_ptr<CFBO> create (const FBO& base, glm::vec2 size);
     std::shared_ptr<CFBO> create (
 	const std::string& name, TextureFormat format, uint32_t flags, float scale, glm::vec2 realSize,
 	glm::vec2 textureSize, bool withDepthBuffer = false, bool depthTexture = false, uint32_t samples = 1

@@ -239,7 +239,7 @@ CImage::CImage (Wallpapers::CScene& scene, const Image& image) :
 	// TODO: create a dummy texture of correct size, fbo constructors should be enough, but this should be properly
 	// handled
 	this->m_texture = std::make_shared<CFBO> (
-	    "", TextureFormat_ARGB8888, TextureFlags_NoFlags, 1, size.x, size.y, size.x, size.y
+	    "", TextureFormat_ARGB8888, TextureFlags_ClampUVs, 1, size.x, size.y, size.x, size.y
 	);
     }
 
@@ -1520,7 +1520,7 @@ void CImage::setup () {
 
 	    // create all the fbos for this effect
 	    for (const auto& fbo : cur->effect->fbos) {
-		auto target = fboProvider->create (*fbo, this->m_texture->getFlags (), m_effectSize);
+		auto target = fboProvider->create (*fbo, m_effectSize);
 		if (this->m_image.model->fullscreen || this->m_compositionFBO != nullptr) {
 		    this->m_sceneEffectTargets.push_back ({ std::move (target), fbo.get () });
 		}
