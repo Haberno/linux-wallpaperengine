@@ -84,13 +84,12 @@ struct ParticleInstance {
     glm::vec3 color { 1.0f };
     float alpha { 1.0f };
     float size { 20.0f };
-    float frame { 0.0f }; // Current animation frame
 
     // Lifetime
     float lifetime { 1.0f }; // Total lifetime in seconds
     float age { 0.0f }; // Current age in seconds
 
-    // Native alpha, size, position oscillation and turbulence share one stable fraction.
+    // Native random-frame animation, oscillation and turbulence share one stable fraction.
     float oscillationRandom { -1.0f };
 
     // Initial values for resets/multipliers
@@ -373,7 +372,6 @@ private:
     int m_spritesheetCols { 0 };
     int m_spritesheetRows { 0 };
     int m_spritesheetFrames { 0 };
-    float m_spritesheetDuration { 1.0f };
 
     // Material shader constants
     float m_overbright { 1.0f };

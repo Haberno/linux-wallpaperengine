@@ -373,15 +373,10 @@ void CParticle::setup () {
 	m_spritesheetCols = static_cast<int> (texture->getSpritesheetCols ());
 	m_spritesheetRows = static_cast<int> (texture->getSpritesheetRows ());
 	m_spritesheetFrames = static_cast<int> (texture->getSpritesheetFrames ());
-	m_spritesheetDuration = texture->getSpritesheetDuration ();
 	const auto& frames = texture->getFrames ();
 	if (texture->isAnimated () && !frames.empty () && frames.front ()->width1 > 0.0f
 	    && frames.front ()->height1 > 0.0f) {
 	    m_spritesheetFrames = static_cast<int> (frames.size ());
-	    m_spritesheetDuration = 0.0f;
-	    for (const auto& frame : frames) {
-		m_spritesheetDuration += frame->frametime;
-	    }
 	}
     }
 
@@ -865,6 +860,9 @@ void CParticle::update (float dt) {
     }
     for (uint32_t i = firstNewParticle; i < m_particleCount; ++i) {
 	m_particles[i].serial = ++m_nextParticleSerial;
+	if (m_particle.animationMode == "randomframe") {
+	    m_particles[i].oscillationRandom = WallpaperEngine::Maths::randomFloat (m_rng, 0.0f, 1.0f);
+	}
     }
 
     std::vector<ControlPointData> worldControlPoints;
@@ -917,46 +915,6 @@ void CParticle::update (float dt) {
     // Apply operators to living particles (including alphafade)
     for (auto& op : m_operators) {
 	op (m_particles, m_particleCount, *operatorControlPoints, m_simulationTime, dt);
-    }
-
-    // Update animation frames
-    for (uint32_t i = 0; i < m_particleCount; i++) {
-	auto& p = m_particles[i];
-
-	if (m_spritesheetFrames > 0) {
-	    float lifetimePos = p.getLifetimePos ();
-	    float animSpeed = m_particle.sequenceMultiplier > 0.0f ? m_particle.sequenceMultiplier : 1.0f;
-
-	    if (m_particle.animationMode == "randomframe") {
-		if (p.frame < 0.0f) {
-		    std::mt19937 particleRng (
-			static_cast<std::mt19937::result_type> (reinterpret_cast<uintptr_t> (&p))
-		    );
-		    std::uniform_int_distribution<int> dist (0, m_spritesheetFrames - 1);
-		    p.frame = static_cast<float> (dist (particleRng));
-		}
-	    } else if (m_particle.animationMode == "once") {
-		p.frame = std::min (
-		    lifetimePos * m_spritesheetFrames * animSpeed, static_cast<float> (m_spritesheetFrames - 1)
-		);
-	    } else {
-		if (m_particle.sequenceMultiplier > 0.0f) {
-		    // sequencemultiplier is relative to the particle's lifetime: the sequence
-		    // plays that many times over the particle's life, regardless of the
-		    // texture's own frame timings
-		    p.frame = std::fmod (
-			lifetimePos * m_spritesheetFrames * animSpeed, static_cast<float> (m_spritesheetFrames)
-		    );
-		} else if (m_spritesheetDuration > 0.0f) {
-		    // no multiplier authored: play at the texture's own animation speed
-		    float timeInCycle = std::fmod (p.age, m_spritesheetDuration);
-		    float cyclePos = timeInCycle / m_spritesheetDuration;
-		    p.frame = std::fmod (cyclePos * m_spritesheetFrames, static_cast<float> (m_spritesheetFrames));
-		} else {
-		    p.frame = std::fmod (lifetimePos * m_spritesheetFrames, static_cast<float> (m_spritesheetFrames));
-		}
-	    }
-	}
     }
 
     updateRopeTrailHistory (dt);
@@ -1207,7 +1165,6 @@ EmitterFunc CParticle::createBoxEmitter (const ParticleEmitter& emitter) {
 		p.lifetime = 1.0f;
 		p.age = 0.0f;
 		p.alive = true;
-		p.frame = -1.0f;
 
 		p.initial.color = p.color;
 		p.initial.alpha = p.alpha;
@@ -1385,7 +1342,6 @@ EmitterFunc CParticle::createSphereEmitter (const ParticleEmitter& emitter) {
 	    p.lifetime = 1.0f;
 	    p.age = 0.0f;
 	    p.alive = true;
-	    p.frame = -1.0f;
 
 	    p.initial.color = p.color;
 	    p.initial.alpha = p.alpha;
@@ -2601,15 +2557,13 @@ void CParticle::setupPass () {
     if (m_useRopeRenderer) {
 	m_passOverride->shaderOverride = "genericropeparticle";
     }
-    if (m_spritesheetFrames > 0) {
+    if (const auto texture = getTexture (); texture && texture->isAnimated ()) {
 	m_passOverride->combos["SPRITESHEET"] = 1;
-	if (const auto texture = getTexture (); texture && texture->isAnimated ()) {
-	    // Native particle overrides win over authored material combinations.
-	    m_passOverride->combos["SPRITESHEETBLEND"]
-		= (m_particle.flags & 2) == 0 && m_particle.animationMode != "randomframe";
-	    const glm::vec4& resolution = *texture->getResolution ();
-	    m_passOverride->combos["SPRITESHEETBLENDNPOT"] = resolution.z < resolution.x;
-	}
+	// Native particle overrides win over authored material combinations.
+	m_passOverride->combos["SPRITESHEETBLEND"]
+	    = (m_particle.flags & 2) == 0 && m_particle.animationMode != "randomframe";
+	const glm::vec4& resolution = *texture->getResolution ();
+	m_passOverride->combos["SPRITESHEETBLENDNPOT"] = resolution.z < resolution.x;
     }
     if (m_useTrailRenderer) {
 	m_passOverride->combos["TRAILRENDERER"] = 1;
@@ -3018,6 +2972,8 @@ void CParticle::renderSprites () {
     const bool is3D = getScene ().getScene ().camera.projection.isPerspective;
     const bool perspectiveBillboard = is3D
 	&& (m_particle.renderers.empty () || m_particle.renderers[0].orientation != "fixed");
+    const auto texture = getTexture ();
+    const bool animated = texture && texture->isAnimated ();
 
     for (uint32_t i = 0; i < m_particleCount; i++) {
 	const auto& p = m_particles[i];
@@ -3033,24 +2989,10 @@ void CParticle::renderSprites () {
 	    continue;
 	}
 
-	// Compute the lifetime value for the WP shader's ComputeSpriteFrame.
-	// The shader computes: floor(frac(lifetime) * numFrames) to get current frame,
-	// and frac(lifetime * numFrames) for the blend factor between frames.
-	// We encode the CPU-computed p.frame (which accounts for sequenceMultiplier
-	// and animation mode) into the lifetime value the shader expects.
-	float lifetime = p.getLifetimePos ();
-
-	if (m_spritesheetFrames > 0 && p.frame >= 0.0f) {
-	    if (m_particle.animationMode == "randomframe") {
-		// Center within the frame to avoid floating-point edge cases
-		lifetime = (p.frame + 0.5f) / static_cast<float> (m_spritesheetFrames);
-	    } else {
-		// Encode frame index + fractional blend: shader reconstructs via
-		// floor(lifetime * numFrames) = current frame,
-		// frac(lifetime * numFrames) = blend toward next frame
-		lifetime = p.frame / static_cast<float> (m_spritesheetFrames);
-	    }
-	}
+	// Native uploads an unwrapped sequence phase or the retained birth random.
+	// Stock shaders apply frac when selecting the frame; static sequences stay zero.
+	const float animationPhase = m_particle.animationMode == "randomframe" ? p.oscillationRandom
+	    : animated ? p.getLifetimePos () * m_particle.sequenceMultiplier : 0.0f;
 
 	// All four corners share the same particle attributes. Pack them once,
 	// then change only the UV coordinates in each copy.
@@ -3058,7 +3000,7 @@ void CParticle::renderSprites () {
 	    p.position.x, p.position.y, p.position.z,
 	    0.0f, 0.0f, renderRotation.z, p.size,
 	    p.color.r, p.color.g, p.color.b, p.alpha,
-	    p.velocity.x, p.velocity.y, p.velocity.z, lifetime,
+	    p.velocity.x, p.velocity.y, p.velocity.z, animationPhase,
 	    renderRotation.x, renderRotation.y,
 	};
 	constexpr float corners[4][2] = { { 0.0f, 1.0f }, { 1.0f, 1.0f }, { 1.0f, 0.0f }, { 0.0f, 0.0f } };
