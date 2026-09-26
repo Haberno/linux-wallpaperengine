@@ -47,9 +47,13 @@ ReadStreamSharedPtr Container::read (const std::filesystem::path& path) const {
 
 std::string Container::readString (const std::filesystem::path& path) const {
     const auto stream = this->read (path);
-    std::stringstream buffer;
-    buffer << stream->rdbuf ();
-    return buffer.str ();
+    // One sized read: streaming through a stringstream regrew and copied multi-MB models
+    // several times, most of a 3D scene's project load. Every adapter's stream is seekable.
+    stream->seekg (0, std::ios::end);
+    std::string result (static_cast<size_t> (stream->tellg ()), '\0');
+    stream->seekg (0, std::ios::beg);
+    stream->read (result.data (), static_cast<std::streamsize> (result.size ()));
+    return result;
 }
 
 std::filesystem::path Container::physicalPath (const std::filesystem::path& path) const {
