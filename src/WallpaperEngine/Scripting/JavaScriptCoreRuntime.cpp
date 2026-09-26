@@ -55,7 +55,8 @@ struct JSContext {
     std::vector<std::string> atoms { std::string () };
     std::unordered_map<std::string, JSAtom> atomMap;
     std::vector<std::unique_ptr<JSModuleDef>> modules;
-    JSObjectRef defineProperty = nullptr, stringify = nullptr, functionProto = nullptr;
+    JSObjectRef defineProperty = nullptr, hasOwnProperty = nullptr, stringify = nullptr, functionProto = nullptr;
+    JSObjectRef objectProto = nullptr;
 };
 struct Native {
     JSContext* ctx;
@@ -66,6 +67,7 @@ struct Native {
     JSCFunctionData* dataFunction = nullptr;
     JSCFunctionEnum kind = JS_CFUNC_generic;
     int magic = 0;
+    bool queryingOwnProperty = false;
     std::vector<JSValue> data;
 };
 struct Str {
@@ -218,14 +220,39 @@ static void drain (JSRuntime* rt) {
 	delete n;
     }
 }
+static bool hasOrdinaryOwnProperty (Native* n, JSObjectRef obj, JSStringRef name, JSValueRef* ex) {
+    // QuickJS checks ordinary own descriptors before its exotic hooks. Hide
+    // those hooks during this query so JSC sees only the object's own storage.
+    n->queryingOwnProperty = true;
+    const JSValueRef prototype = JSObjectGetPrototype (n->ctx->jsc, obj);
+    // The original Object.prototype has an immutable null prototype. A missing
+    // key on these ordinary chains cannot run a user-supplied Proxy.has trap.
+    if ((prototype == n->ctx->objectProto || JSValueIsNull (n->ctx->jsc, prototype))
+	&& !JSObjectHasProperty (n->ctx->jsc, obj, name)) {
+	n->queryingOwnProperty = false;
+	return false;
+    }
+    const JSValueRef arg = JSValueMakeString (n->ctx->jsc, name);
+    JSValueRef error = nullptr;
+    const JSValueRef result = JSObjectCallAsFunction (n->ctx->jsc, n->ctx->hasOwnProperty, obj, 1, &arg, &error);
+    n->queryingOwnProperty = false;
+    if (error) {
+	if (ex) *ex = error;
+	return true;
+    }
+    return JSValueToBoolean (n->ctx->jsc, result);
+}
 static JSValueRef getNative (JSContextRef jc, JSObjectRef obj, JSStringRef name, JSValueRef* ex) {
     auto* n = static_cast<Native*> (JSObjectGetPrivate (obj));
-    if (!n || !n->id) {
+    if (!n || !n->id || n->queryingOwnProperty) {
 	return nullptr;
     }
     auto* c = n->ctx;
     auto& cls = *n->rt.load ()->classes.at (n->id);
     if (!cls.exotic.get_property) {
+	return nullptr;
+    }
+    if (hasOrdinaryOwnProperty (n, obj, name, ex)) {
 	return nullptr;
     }
     auto atom = JS_NewAtom (c, utf8 (name).c_str ());
@@ -243,12 +270,15 @@ static JSValueRef getNative (JSContextRef jc, JSObjectRef obj, JSStringRef name,
 }
 static bool setNative (JSContextRef jc, JSObjectRef obj, JSStringRef name, JSValueRef value, JSValueRef* ex) {
     auto* n = static_cast<Native*> (JSObjectGetPrivate (obj));
-    if (!n || !n->id) {
+    if (!n || !n->id || n->queryingOwnProperty) {
 	return false;
     }
     auto* c = n->ctx;
     auto& cls = *n->rt.load ()->classes.at (n->id);
     if (!cls.exotic.set_property) {
+	return false;
+    }
+    if (hasOrdinaryOwnProperty (n, obj, name, ex)) {
 	return false;
     }
     auto atom = JS_NewAtom (c, utf8 (name).c_str ());
@@ -382,9 +412,13 @@ JSContext* JS_NewContext (JSRuntime* rt) {
 	return JSValueToObject (c->jsc, JSEvaluateScript (c->jsc, source, nullptr, nullptr, 1, nullptr), nullptr);
     };
     c->defineProperty = get ("Object.defineProperty");
+    c->hasOwnProperty = get ("Object.prototype.hasOwnProperty");
+    c->objectProto = get ("Object.prototype");
     c->stringify = get ("JSON.stringify");
     c->functionProto = get ("Function.prototype");
     JSValueProtect (c->jsc, c->defineProperty);
+    JSValueProtect (c->jsc, c->hasOwnProperty);
+    JSValueProtect (c->jsc, c->objectProto);
     JSValueProtect (c->jsc, c->stringify);
     JSValueProtect (c->jsc, c->functionProto);
     return c;
@@ -432,6 +466,8 @@ void JS_FreeRuntime (JSRuntime* rt) {
     }
     for (auto* c : rt->contexts) {
 	JSValueUnprotect (c->jsc, c->defineProperty);
+	JSValueUnprotect (c->jsc, c->hasOwnProperty);
+	JSValueUnprotect (c->jsc, c->objectProto);
 	JSValueUnprotect (c->jsc, c->stringify);
 	JSValueUnprotect (c->jsc, c->functionProto);
 	JSGlobalContextRelease (c->jsc);
