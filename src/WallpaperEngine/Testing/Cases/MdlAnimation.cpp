@@ -1,4 +1,5 @@
 #include <algorithm>
+#include <cmath>
 #include <cstdint>
 #include <cstring>
 #include <limits>
@@ -783,4 +784,99 @@ TEST_CASE ("Full weight model clips preserve rotations and masked reference bone
 	    }
 	}
     }
+}
+
+TEST_CASE ("MDLS spring bone constraints parse the native physics keys", "[mdl][animation][physics]") {
+    const std::string spring = R"({"se":true,"re":false,"r":true,"t":false,"rs":35,"rf":15,"ri":45,)"
+	R"("tp":"100 20","tm":200.0,"la":true,"lamin":"0 0 -0.5","lamax":"0 0 0.25","rax":false,"ray":false,"raz":true})";
+    std::vector<char> data;
+    appendMarker (data, "MDLS0002");
+    const auto endOffset = data.size ();
+    appendValue<uint32_t> (data, 0);
+    appendValue<uint32_t> (data, 2);
+    for (const auto& metadata : { spring, std::string (R"({"se":false,"re":true,"r":true})") }) {
+	appendString (data, "bone");
+	appendValue<uint32_t> (data, 1);
+	appendValue<int32_t> (data, -1);
+	appendValue<uint32_t> (data, 64);
+	appendMatrix (data, glm::mat4 (1));
+	appendString (data, metadata);
+    }
+    patchU32 (data, endOffset, data.size ());
+
+    const auto parsed = MdlAnimationParser::parse (data, "spring.mdl");
+    REQUIRE (parsed.bones[0].spring.has_value ());
+    const auto& bone = *parsed.bones[0].spring;
+    CHECK ((bone.rotation && !bone.translation && bone.limitAngles));
+    CHECK (bone.rotationStiffness == Catch::Approx (35));
+    CHECK (bone.rotationFriction == Catch::Approx (15));
+    CHECK (bone.rotationInertia == Catch::Approx (0.55f));
+    CHECK (bone.tip == glm::vec3 (100, 20, 0));
+    CHECK (bone.maxAngles.z == Catch::Approx (0.25f));
+    CHECK (bone.rotationAxes == glm::bvec3 (false, false, true));
+    CHECK (bone.translationAxes == glm::bvec3 (true));
+    CHECK_FALSE (parsed.bones[1].spring.has_value ()); // rigid physics is not simulated
+}
+
+TEST_CASE ("Spring bones lag behind layer motion and settle back", "[mdl][animation][physics]") {
+    MdlAnimationData data;
+    data.bones = { { .name = "arm", .spring = MdlBoneSpring {
+	.rotation = true, .rotationStiffness = 35, .rotationFriction = 15, .rotationInertia = 0.55f,
+	.tip = { 100, 0, 0 }, .rotationAxes = { false, false, true } } } };
+    MdlPhysicsState state;
+    const auto step = [&] (const glm::vec3& position) {
+	MdlPhysicsStep physics { .state = state, .model = glm::translate (glm::mat4 (1), position), .deltaTime = 1 / 60.0f };
+	return MdlAnimationEvaluator::evaluate (data, {}, &physics);
+    };
+
+    CHECK (step ({ 0, 0, 0 }).worldBones[0] == glm::mat4 (1)); // nothing to measure against yet
+    for (int frame = 0; frame < 5; ++frame) step ({ 0, 10.0f * (frame + 1), 0 });
+    // Moving up leaves the tip below, so the bone swings clockwise, around Z only.
+    CHECK (state.bones[0].angles.z < -0.01f);
+    CHECK (state.bones[0].angles.x == 0.0f);
+    CHECK (step ({ 0, 60, 0 }).worldBones[0][0].y < 0.0f);
+
+    for (int frame = 0; frame < 600; ++frame) step ({ 0, 60, 0 });
+    CHECK (state.bones[0].angles.z == Catch::Approx (0).margin (1e-3f));
+
+    data.bones[0].spring->limitAngles = true;
+    data.bones[0].spring->minAngles = { 0, 0, -0.02f };
+    data.bones[0].spring->maxAngles = { 0, 0, 0.02f };
+    for (int frame = 0; frame < 5; ++frame) step ({ 0, 60 - 40.0f * (frame + 1), 0 });
+    CHECK (state.bones[0].angles.z == Catch::Approx (0.02f));
+}
+
+TEST_CASE ("Spring bones recover after a zero scale frame", "[mdl][animation][physics]") {
+    MdlAnimationData data;
+    data.bones = { { .name = "arm", .spring = MdlBoneSpring {
+	.rotation = true, .translation = true, .rotationStiffness = 35, .rotationFriction = 15,
+	.rotationInertia = 0.55f, .translationStiffness = 200, .translationFriction = 20,
+	.translationInertia = 0.7f, .tip = { 100, 0, 0 }, .rotationAxes = { false, false, true } } } };
+    MdlPhysicsState state;
+    const auto step = [&] (const float position, const glm::vec3 scale = glm::vec3 (1.0f)) {
+	MdlPhysicsStep physics {
+	    .state = state,
+	    .model = glm::scale (glm::translate (glm::mat4 (1), { 0, position, 0 }), scale),
+	    .deltaTime = 1 / 60.0f,
+	};
+	return MdlAnimationEvaluator::evaluate (data, {}, &physics);
+    };
+    const auto checkFinitePose = [] (const MdlPose& pose) {
+	for (int column = 0; column < 4; ++column) {
+	    for (int row = 0; row < 4; ++row) {
+		CHECK (std::isfinite (pose.worldBones[0][column][row]));
+		CHECK (std::isfinite (pose.skinBones[0][column][row]));
+	    }
+	}
+    };
+
+    step (0);
+    for (int frame = 0; frame < 5; ++frame) step (10.0f * (frame + 1));
+    CHECK (state.bones[0].angles.z < -0.01f);
+    checkFinitePose (step (50, { 0, 1, 1 }));
+    checkFinitePose (step (50));
+    for (int frame = 0; frame < 5; ++frame) step (60.0f + 10.0f * frame);
+    checkFinitePose (step (110));
+    CHECK (state.bones[0].angles.z < -0.01f);
+    CHECK (state.bones[0].offset.y < 0.0f);
 }

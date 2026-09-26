@@ -831,9 +831,25 @@ void CImage::updatePuppetPositionBuffer (const glm::vec2& size) {
     const float sceneTime = this->getScene ().getTime ();
     this->selectPuppetAnimations (sceneTime);
 
+    // Spring bones react to the layer's scene motion (scripted origin, parallax). Native steps
+    // them in y-up scene space, so flip the fork's y-down quad back to keep rotation handedness.
+    // ponytail: layer rotation is left out of this matrix; add it when a rotated spring puppet shows up.
+    const glm::vec2 parallax = this->getImage ().model->fullscreen ? glm::vec2 (0.0f) : this->resolveParallaxOffset ();
+    const glm::vec2 center = glm::vec2 (this->m_pos.x + this->m_pos.z, this->m_pos.y + this->m_pos.w) * 0.5f + parallax;
+    MdlPhysicsStep physics {
+	.state = this->m_puppetPhysics,
+	.model = glm::scale (
+	    glm::translate (glm::mat4 (1.0f), glm::vec3 (center.x, -center.y, 0.0f)),
+	    glm::vec3 ((this->m_pos.z - this->m_pos.x) / size.x, (this->m_pos.y - this->m_pos.w) / size.y, 1.0f)
+	),
+	// Re-skinning at an unchanged scene time must not advance the springs again.
+	.deltaTime = std::max (sceneTime - this->m_puppetPhysicsTime, 0.0f),
+    };
+    this->m_puppetPhysicsTime = sceneTime;
+
     // Vertex positions are stored in the assembled rest pose, so each bone applies
     // animatedWorld * inverseBindWorld. The same evaluator now drives 3D models too.
-    auto pose = MdlAnimationEvaluator::evaluate (this->m_puppetAnimation, this->m_puppetActiveLayers);
+    auto pose = MdlAnimationEvaluator::evaluate (this->m_puppetAnimation, this->m_puppetActiveLayers, &physics);
     this->m_puppetWorldBones = std::move (pose.worldBones);
     this->m_puppetSkinBones = std::move (pose.skinBones);
 

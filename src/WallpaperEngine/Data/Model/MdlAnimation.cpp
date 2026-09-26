@@ -5,6 +5,7 @@
 
 #include <glm/gtc/matrix_transform.hpp>
 #define GLM_ENABLE_EXPERIMENTAL
+#include <glm/gtx/euler_angles.hpp>
 #include <glm/gtx/quaternion.hpp>
 
 using namespace WallpaperEngine::Data::Model;
@@ -230,6 +231,87 @@ void applyBoneControls (
 	pose.skinBones[bone] = pose.worldBones[bone] * data.bones[bone].inverseBindWorld;
 }
 
+float wrapAngle (const float angle) {
+    constexpr float pi = glm::pi<float> ();
+    return angle >= 0.0f ? std::fmod (angle + pi, 2.0f * pi) - pi : std::fmod (angle - pi, 2.0f * pi) + pi;
+}
+
+/**
+ * One spring bone step from native 1401fdf90, returning the local physics transform that
+ * follows the animated bone. `animatedWorld` already carries the parent's physics.
+ * ponytail: the "lt" torque limit is not applied; no installed spring rig enables it.
+ */
+glm::mat4 stepSpring (
+    const MdlBoneSpring& spring, MdlPhysicsStep& physics, MdlPhysicsState::Bone& state, const glm::mat4& previous,
+    const glm::mat4& animatedWorld
+) {
+    const glm::quat identity (1.0f, 0.0f, 0.0f, 0.0f);
+    const float dt = physics.deltaTime;
+    const float scale = (glm::length (glm::vec3 (physics.model[0])) + glm::length (glm::vec3 (physics.model[1]))
+			 + glm::length (glm::vec3 (physics.model[2]))) / 3.0f;
+    const glm::mat4 current = physics.model * animatedWorld;
+    const glm::vec3 position (current[3]);
+    const float determinant = glm::determinant (glm::mat3 (current));
+    if (determinant == 0.0f || !std::isfinite (determinant)) {
+	state = {};
+	return glm::mat4 (1.0f);
+    }
+    const glm::mat3 toLocal = glm::inverse (glm::mat3 (current));
+
+    // Where the tip was last frame, and where the carried physics puts it now, in bone space.
+    const glm::vec3 lagging = toLocal * (glm::vec3 (previous * glm::vec4 (spring.tip, 1.0f)) - position);
+    glm::vec3 tip = glm::mat3_cast (glm::quat (state.angles)) * spring.tip + toLocal * state.offset;
+    if (spring.gravity) {
+	const glm::vec3 axis = directionOr (tip, glm::vec3 (1.0f, 0.0f, 0.0f));
+	const glm::vec3 pull = toLocal * spring.gravityDirection * (spring.mass * scale);
+	tip -= pull - glm::dot (axis, pull) * axis;
+	if (spring.translation) state.velocity += spring.gravityDirection * (spring.mass * dt * 1000.0f);
+    }
+    // Native caps the tip's travel at 900 units per second.
+    const float drag = std::min (glm::length (tip - lagging), 900.0f * dt);
+    const glm::quat follow = glm::rotation (
+	directionOr (tip, glm::vec3 (1.0f, 0.0f, 0.0f)), directionOr (lagging, glm::vec3 (1.0f, 0.0f, 0.0f))
+    );
+
+    if (spring.rotation) {
+	const float degree = glm::radians (1.0f);
+	auto& velocity = state.angularVelocity;
+	velocity *= glm::slerp (identity, follow, std::min (drag * spring.rotationInertia * degree, 1.0f));
+	velocity *= glm::slerp (identity, glm::quat (-state.angles), std::min (spring.rotationStiffness * degree * dt, 1.0f));
+	// The velocity is one 60 Hz step; integrate it on top of the carried orientation.
+	const glm::quat step = glm::slerp (identity, velocity, std::min (dt * 60.0f, 1.0f));
+	glm::vec3 angles;
+	glm::extractEulerAngleZYX (
+	    glm::mat4 (glm::mat3_cast (step) * glm::mat3_cast (glm::quat (state.angles))), angles.z, angles.y, angles.x
+	);
+	for (int axis = 0; axis < 3; axis++) angles[axis] = spring.rotationAxes[axis] ? wrapAngle (angles[axis]) : 0.0f;
+	if (spring.limitAngles) {
+	    const glm::vec3 limited = glm::clamp (angles, spring.minAngles, spring.maxAngles);
+	    // A clamped rotation also stops the velocity pushing against the limit.
+	    velocity = glm::conjugate (glm::quat (angles - limited)) * velocity;
+	    angles = limited;
+	}
+	state.angles = angles;
+	velocity = glm::slerp (velocity, identity, std::min (dt * spring.rotationFriction, 1.0f));
+    }
+
+    if (spring.translation) {
+	auto& offset = state.offset;
+	offset -= (position + offset - glm::vec3 (previous[3])) * spring.translationInertia;
+	state.velocity -= dt * spring.translationStiffness * offset;
+	offset += dt * state.velocity;
+	for (int axis = 0; axis < 3; axis++) {
+	    const glm::vec3 direction (current[axis]);
+	    if (!spring.translationAxes[axis]) offset -= glm::dot (offset, direction) / glm::dot (direction, direction) * direction;
+	}
+	const float limit = scale * spring.maxDistance;
+	if (limit > 0.0f && glm::length (offset) > limit) offset *= limit / glm::length (offset);
+	state.velocity -= std::min (dt * spring.translationFriction, 1.0f) * state.velocity;
+    }
+
+    return glm::translate (glm::mat4 (1.0f), toLocal * state.offset) * glm::mat4_cast (glm::quat (state.angles));
+}
+
 /** Same playhead and interpolation as the bones, on a scalar track instead of a pose. */
 float sampleBlendTrack (const MdlActiveAnimation& layer, const size_t row) {
     const auto& track = layer.animation->blendTracks[row];
@@ -243,13 +325,19 @@ float sampleBlendTrack (const MdlActiveAnimation& layer, const size_t row) {
 } // namespace
 
 MdlPose MdlAnimationEvaluator::evaluate (
-    const MdlAnimationData& animationData, const std::vector<MdlActiveAnimation>& activeAnimations
+    const MdlAnimationData& animationData, const std::vector<MdlActiveAnimation>& activeAnimations,
+    MdlPhysicsStep* physics
 ) {
     MdlPose pose;
     pose.worldBones.resize (animationData.bones.size ());
     pose.skinBones.resize (animationData.bones.size ());
     std::vector<glm::mat4> locals;
     if (!animationData.ikGroups.empty ()) locals.resize (animationData.bones.size ());
+    if (physics != nullptr && physics->state.bones.size () != animationData.bones.size ()) {
+	physics->state = { .bones = std::vector<MdlPhysicsState::Bone> (animationData.bones.size ()) };
+    }
+    // Native skips the step until it has a previous frame to measure motion against.
+    const bool simulate = physics != nullptr && !physics->state.previousWorld.empty ();
 
     for (size_t bone = 0; bone < animationData.bones.size (); bone++) {
 	// Native 1401fdf90 initializes the shared blend reference from MDLS's
@@ -293,10 +381,24 @@ MdlPose MdlAnimationEvaluator::evaluate (
 	}
 
 	const auto parent = animationData.bones[bone].parent;
-	const glm::mat4 localMatrix = poseMatrix (local ? *local : referencePose ());
+	const glm::mat4 parentWorld = parent >= 0 ? pose.worldBones[parent] : glm::mat4 (1.0f);
+	glm::mat4 localMatrix = poseMatrix (local ? *local : referencePose ());
+	if (simulate && skeletonBone.spring) {
+	    localMatrix *= stepSpring (
+		*skeletonBone.spring, *physics, physics->state.bones[bone], physics->state.previousWorld[bone],
+		parentWorld * localMatrix
+	    );
+	}
 	if (!locals.empty ()) locals[bone] = localMatrix;
-	pose.worldBones[bone] = parent >= 0 ? pose.worldBones[parent] * localMatrix : localMatrix;
+	pose.worldBones[bone] = parentWorld * localMatrix;
 	pose.skinBones[bone] = pose.worldBones[bone] * animationData.bones[bone].inverseBindWorld;
+    }
+
+    // The next step measures motion against these, taken before IK like native's 0x340 matrices.
+    if (physics != nullptr) {
+	physics->state.previousWorld.resize (pose.worldBones.size ());
+	for (size_t bone = 0; bone < pose.worldBones.size (); bone++)
+	    physics->state.previousWorld[bone] = physics->model * pose.worldBones[bone];
     }
 
     if (!animationData.ikGroups.empty ()) applyBoneControls (animationData, activeAnimations, locals, pose);

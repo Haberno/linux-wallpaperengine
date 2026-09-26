@@ -192,6 +192,8 @@ private:
     std::vector<uint32_t> m_puppetBlendIndices = {};
     std::vector<GLfloat> m_puppetBlendWeights = {};
     WallpaperEngine::Data::Model::MdlAnimationData m_puppetAnimation = {};
+    WallpaperEngine::Data::Model::MdlPhysicsState m_puppetPhysics = {};
+    float m_puppetPhysicsTime = 0.0f;
     std::vector<glm::mat4> m_puppetWorldBones = {};
     std::vector<glm::mat4> m_puppetSkinBones = {};
     std::vector<GLfloat> m_puppetPositions = {};

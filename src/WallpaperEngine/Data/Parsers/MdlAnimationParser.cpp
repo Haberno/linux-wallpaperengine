@@ -4,6 +4,7 @@
 #include <cmath>
 #include <cstring>
 #include <optional>
+#include <sstream>
 #include <stdexcept>
 
 #include <glm/gtc/matrix_inverse.hpp>
@@ -42,6 +43,57 @@ std::string readString (const std::vector<char>& data, size_t& offset, const siz
     std::string value (begin, terminator);
     offset = std::distance (data.begin (), terminator) + 1;
     return value;
+}
+
+/** Spring bone settings, following native 140265c30's key handling. */
+std::optional<WallpaperEngine::Data::Model::MdlBoneSpring> parseSpring (const nlohmann::json& constraints) {
+    const auto flag = [&] (const char* key) {
+	const auto value = constraints.find (key);
+	return value != constraints.end () && value->is_boolean () && value->get<bool> ();
+    };
+    const auto number = [&] (const char* key, const float fallback) {
+	const auto value = constraints.find (key);
+	return value != constraints.end () && value->is_number () ? value->get<float> () : fallback;
+    };
+    const auto vector = [&] (const char* key) {
+	glm::vec3 result (0.0f);
+	const auto value = constraints.find (key);
+	// Missing trailing components stay zero, as with the native strtod walk.
+	if (value != constraints.end () && value->is_string ())
+	    std::istringstream (value->get<std::string> ()) >> result.x >> result.y >> result.z;
+	return result;
+    };
+    // Axis switches only take effect when all three are authored booleans.
+    const auto axes = [&] (const char* x, const char* y, const char* z) {
+	for (const auto* key : { x, y, z }) {
+	    const auto value = constraints.find (key);
+	    if (value == constraints.end () || !value->is_boolean ()) return glm::bvec3 (true);
+	}
+	return glm::bvec3 (flag (x), flag (y), flag (z));
+    };
+
+    // ponytail: spring mode only; rigid ("re") physics has its own native branch and is not simulated.
+    if (!flag ("se") || flag ("re") || !(flag ("r") || flag ("t"))) return std::nullopt;
+    return WallpaperEngine::Data::Model::MdlBoneSpring {
+	.rotation = flag ("r"),
+	.translation = flag ("t"),
+	.rotationStiffness = number ("rs", 0.0f),
+	.rotationFriction = number ("rf", 0.0f),
+	.rotationInertia = 1.0f - number ("ri", 0.0f) / 100.0f,
+	.translationStiffness = number ("ts", 0.0f),
+	.translationFriction = number ("tf", 0.0f),
+	.translationInertia = 1.0f - number ("ti", 0.0f) / 100.0f,
+	.gravity = flag ("ge"),
+	.gravityDirection = vector ("gd"),
+	.mass = number ("m", 0.0f),
+	.tip = vector ("tp"),
+	.maxDistance = number ("tm", 0.0f),
+	.limitAngles = flag ("la"),
+	.minAngles = vector ("lamin"),
+	.maxAngles = vector ("lamax"),
+	.rotationAxes = axes ("rax", "ray", "raz"),
+	.translationAxes = axes ("tax", "tay", "taz"),
+    };
 }
 
 size_t findSection (const std::vector<char>& data, const char* marker, const size_t from) {
@@ -334,6 +386,7 @@ void parseSkeleton (
 		if (distance != constraints.end () && distance->is_number ())
 		    parsed.ikAimDistance = std::max (distance->get<float> (), 1e-5f);
 		parsed.ikAngleLimits = enabled ("ikce");
+		parsed.spring = parseSpring (constraints);
 	    }
 	}
     }

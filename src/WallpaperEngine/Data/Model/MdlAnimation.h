@@ -12,6 +12,31 @@
 #include "PropertyAnimation.h"
 
 namespace WallpaperEngine::Data::Model {
+/** MDLS "spring physics" bone constraint (se), as read by native 140265c30. */
+struct MdlBoneSpring {
+    bool rotation = false; // r
+    bool translation = false; // t
+    float rotationStiffness = 0.0f; // rs
+    float rotationFriction = 0.0f; // rf
+    /** Native stores 1 - ri / 100. */
+    float rotationInertia = 1.0f;
+    float translationStiffness = 0.0f; // ts
+    float translationFriction = 0.0f; // tf
+    float translationInertia = 1.0f; // 1 - ti / 100
+    bool gravity = false; // ge
+    glm::vec3 gravityDirection = glm::vec3 (0.0f); // gd
+    float mass = 0.0f; // m
+    /** Bone-local point whose lag drives the rotation (tp). */
+    glm::vec3 tip = glm::vec3 (0.0f);
+    /** Translation offset limit in scene units before object scale (tm). */
+    float maxDistance = 0.0f;
+    bool limitAngles = false; // la
+    glm::vec3 minAngles = glm::vec3 (0.0f);
+    glm::vec3 maxAngles = glm::vec3 (0.0f);
+    glm::bvec3 rotationAxes = glm::bvec3 (true); // rax/ray/raz
+    glm::bvec3 translationAxes = glm::bvec3 (true); // tax/tay/taz
+};
+
 struct MdlBone {
     std::string name = {};
     uint32_t type = 0;
@@ -24,6 +49,7 @@ struct MdlBone {
     bool ikAimToTarget = false;
     float ikAimDistance = 1.0f;
     bool ikAngleLimits = false;
+    std::optional<MdlBoneSpring> spring;
 };
 
 struct MdlAttachment {
@@ -114,10 +140,35 @@ struct MdlPose {
     std::vector<float> blendWeights = {};
 };
 
+/** Spring state one model instance carries between frames. */
+struct MdlPhysicsState {
+    struct Bone {
+	/** Per-step rotation; inertia and stiffness add to it, friction decays it. */
+	glm::quat angularVelocity = glm::quat (1.0f, 0.0f, 0.0f, 0.0f);
+	/** ZYX Euler rotation applied on top of the animated bone. */
+	glm::vec3 angles = glm::vec3 (0.0f);
+	/** Scene-space translation offset and its velocity. */
+	glm::vec3 offset = glm::vec3 (0.0f);
+	glm::vec3 velocity = glm::vec3 (0.0f);
+    };
+    std::vector<Bone> bones;
+    /** Last frame's scene-space bone matrices after physics; empty before the first step. */
+    std::vector<glm::mat4> previousWorld;
+};
+
+struct MdlPhysicsStep {
+    MdlPhysicsState& state;
+    /** Model space to y-up scene space, including layer motion such as parallax. */
+    glm::mat4 model = glm::mat4 (1.0f);
+    float deltaTime = 0.0f;
+};
+
 class MdlAnimationEvaluator {
 public:
-    [[nodiscard]] static MdlPose
-    evaluate (const MdlAnimationData& animationData, const std::vector<MdlActiveAnimation>& activeAnimations);
+    [[nodiscard]] static MdlPose evaluate (
+	const MdlAnimationData& animationData, const std::vector<MdlActiveAnimation>& activeAnimations,
+	MdlPhysicsStep* physics = nullptr
+    );
     [[nodiscard]] static std::optional<glm::mat4> attachmentTransform (
 	const MdlAnimationData& animationData, const std::vector<glm::mat4>& worldBones, const std::string& name
     );
