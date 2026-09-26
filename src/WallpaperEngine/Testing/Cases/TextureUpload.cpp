@@ -8,6 +8,7 @@
 #include <GLFW/glfw3.h>
 #include <algorithm>
 #include <array>
+#include <cstdlib>
 #include <vector>
 
 #ifdef CHECK
@@ -21,6 +22,7 @@ using WallpaperEngine::Data::Assets::TextureFormat_ARGB8888;
 using WallpaperEngine::Data::Assets::TextureFormat_DXT1;
 using WallpaperEngine::Data::Assets::TextureFormat_DXT5;
 using WallpaperEngine::Data::Assets::TextureFormat_RG88;
+using WallpaperEngine::Data::Assets::TextureFormat_R8;
 using WallpaperEngine::Data::Assets::TextureFormat_RGBA16161616f;
 using WallpaperEngine::Render::CFBO;
 using WallpaperEngine::Render::CTexture;
@@ -695,5 +697,87 @@ TEST_CASE ("multisample framebuffers resolve coverage and preserve render mode s
     glUseProgram (0);
     glBindFramebuffer (GL_FRAMEBUFFER, 0);
     glBindVertexArray (0);
+    glDeleteVertexArrays (1, &vao);
+}
+
+TEST_CASE ("R8 effect targets retain one-channel storage through resize", "[.][gl][texture][fbo][r8]") {
+    TextureGLContext context;
+    ShaderProgramCache cache;
+    const ShaderProgramCache::SharedProgram program (cache.createProgram (
+	"#version 330 core\nvoid main() {\n"
+	"vec2 p = vec2((gl_VertexID << 1) & 2, gl_VertexID & 2);\n"
+	"gl_Position = vec4(p * 2.0 - 1.0, 0.0, 1.0);\n}\n",
+	"#version 330 core\nout vec4 color;\n"
+	"void main() { color = vec4(0.5, 0.0, 0.0, 1.0); }\n"
+    ));
+    GLuint vao = GL_NONE;
+    glGenVertexArrays (1, &vao);
+    glBindVertexArray (vao);
+    glUseProgram (program.id);
+    glDisable (GL_DEPTH_TEST);
+    glDisable (GL_CULL_FACE);
+    glDisable (GL_SCISSOR_TEST);
+    glDisable (GL_DITHER);
+    glColorMask (GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
+
+    for (const bool r8 : { true, false }) {
+	CAPTURE (r8);
+	const size_t liveBytes = CFBO::getLiveGpuBytes ();
+	const size_t liveCount = CFBO::getLiveCount ();
+	{
+	    WallpaperEngine::Render::FBOProvider provider (nullptr);
+	    const WallpaperEngine::Data::Model::FBO definition {
+		.name = "_rt_R8Storage", .format = r8 ? "r8" : "rgba8888", .scale = 1.0f, .unique = true,
+	    };
+	    const auto target = provider.create (definition, glm::vec2 (9, 5));
+	    const GLuint texture = target->getTextureID (0);
+	    CHECK (target->getFormat () == (r8 ? TextureFormat_R8 : TextureFormat_ARGB8888));
+	    for (const auto size : { glm::uvec2 (9, 5), glm::uvec2 (13, 7) }) {
+		CAPTURE (size.x, size.y);
+		if (size.x != 9) target->resize (size.x, size.y);
+		CHECK (target->getTextureID (0) == texture);
+		CHECK (target->getTextureWidth (0) == size.x);
+		CHECK (target->getTextureHeight (0) == size.y);
+		CHECK (target->getMipMapCount (0) == 1);
+		CHECK (target->getSamples () == 1);
+		const size_t expectedBytes = static_cast<size_t> (size.x) * size.y * (r8 ? 1 : 4);
+		CHECK (target->getApproximateGpuBytes () == expectedBytes);
+		CHECK (CFBO::getLiveGpuBytes () == liveBytes + expectedBytes);
+		CHECK (CFBO::getLiveCount () == liveCount + 1);
+		glBindTexture (GL_TEXTURE_2D, texture);
+		GLint internalFormat = 0;
+		glGetTexLevelParameteriv (GL_TEXTURE_2D, 0, GL_TEXTURE_INTERNAL_FORMAT, &internalFormat);
+		CHECK (internalFormat == (r8 ? GL_R8 : GL_RGBA8));
+
+		// Clear before first use too: lazy framebuffer creation must preserve storage.
+		target->clear (glm::vec4 (0.25f, 0.5f, 0.75f, 0.125f));
+		glBindFramebuffer (GL_FRAMEBUFFER, target->getFramebuffer ());
+		REQUIRE (glCheckFramebufferStatus (GL_FRAMEBUFFER) == GL_FRAMEBUFFER_COMPLETE);
+		std::array<unsigned char, 4> pixel {};
+		glReadPixels (0, 0, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, pixel.data ());
+		const std::array<int, 4> stored = r8
+		    ? std::array<int, 4> { 64, 0, 0, 255 }
+		    : std::array<int, 4> { 64, 128, 191, 32 };
+		for (size_t channel = 0; channel < pixel.size (); ++channel) {
+		    CAPTURE (channel);
+		    CHECK (std::abs (static_cast<int> (pixel[channel]) - stored[channel]) <= 1);
+		}
+
+		// Missing destination alpha is one. This checks the blend unit directly,
+		// beyond reading the texture's implicit alpha in a later shader.
+		glViewport (0, 0, size.x, size.y);
+		glEnable (GL_BLEND);
+		glBlendEquation (GL_FUNC_ADD);
+		glBlendFunc (GL_DST_ALPHA, GL_ZERO);
+		glDrawArrays (GL_TRIANGLES, 0, 3);
+		glReadPixels (0, 0, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, pixel.data ());
+		CHECK (std::abs (static_cast<int> (pixel[0]) - (r8 ? 128 : 16)) <= 1);
+		CHECK (std::abs (static_cast<int> (pixel[3]) - stored[3]) <= 1);
+		CHECK (glGetError () == GL_NO_ERROR);
+	    }
+	}
+	CHECK (CFBO::getLiveGpuBytes () == liveBytes);
+	CHECK (CFBO::getLiveCount () == liveCount);
+    }
     glDeleteVertexArrays (1, &vao);
 }

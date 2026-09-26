@@ -28,6 +28,7 @@ std::map<const CFBO*, LiveFBOInfo> s_liveFBOs;
 
 GLenum colorInternalFormat (const TextureFormat format) {
     switch (format) {
+	case TextureFormat_R8: return GL_R8;
 	case TextureFormat_R16f: return GL_R16F;
 	case TextureFormat_RG1616f: return GL_RG16F;
 	case TextureFormat_RGBA16161616f: return GL_RGBA16F;
@@ -46,6 +47,7 @@ GLenum colorUploadType (const TextureFormat format) {
 
 size_t colorPixelBytes (const TextureFormat format) {
     switch (format) {
+	case TextureFormat_R8: return 1;
 	case TextureFormat_R16f: return 2;
 	case TextureFormat_RGBA16161616f: return 8;
 	default: return 4;

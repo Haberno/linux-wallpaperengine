@@ -37,6 +37,7 @@ TEST_CASE ("Explicit effect target formats keep their storage independent of HDR
 	    CHECK (FBOProvider::resolveTargetFormat (format, backbuffer) == TextureFormat_RGBA16161616f);
 	}
 	CHECK (FBOProvider::resolveTargetFormat ("rgba8888", backbuffer) == TextureFormat_ARGB8888);
+	CHECK (FBOProvider::resolveTargetFormat ("r8", backbuffer) == TextureFormat_R8);
 	CHECK (FBOProvider::resolveTargetFormat ("unknown", backbuffer) == TextureFormat_ARGB8888);
     }
 }

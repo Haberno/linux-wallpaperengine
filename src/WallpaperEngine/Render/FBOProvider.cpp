@@ -46,6 +46,7 @@ TextureFormat FBOProvider::getBackbufferFormat () const {
 }
 
 TextureFormat FBOProvider::resolveTargetFormat (const std::string_view format, const TextureFormat backbufferFormat) {
+    if (format == "r8") return TextureFormat_R8;
     if (format == "rg1616f") return TextureFormat_RG1616f;
     if (format == "r16f") return TextureFormat_R16f;
     if (format == "rgba_backbuffer") return backbufferFormat;
