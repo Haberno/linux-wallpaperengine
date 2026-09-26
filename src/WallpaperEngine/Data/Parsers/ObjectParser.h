@@ -1,5 +1,6 @@
 #pragma once
 
+#include <memory>
 #include <vector>
 
 #include "WallpaperEngine/Data/JSON.h"
@@ -16,6 +17,24 @@ using namespace WallpaperEngine::Data::Model;
 class ObjectParser {
 public:
     static ObjectUniquePtr parse (const JSON& it, const Project& project);
+
+    /**
+     * While alive, 3D objects parsed on this thread that share an MDL read and parse it once;
+     * each object still receives its own copy. Scoped to one object list so nothing outlives it.
+     */
+    class ModelCacheScope {
+    public:
+	ModelCacheScope ();
+	~ModelCacheScope ();
+	ModelCacheScope (const ModelCacheScope&) = delete;
+	ModelCacheScope& operator= (const ModelCacheScope&) = delete;
+
+	struct Cache;
+
+    private:
+	std::unique_ptr<Cache> m_cache;
+	Cache* m_previous;
+    };
 
 private:
     static std::vector<int> parseDependencies (const JSON& it);

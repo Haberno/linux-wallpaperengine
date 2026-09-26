@@ -17,6 +17,7 @@
 #include <glm/gtc/constants.hpp>
 #include <limits>
 #include <sstream>
+#include <unordered_map>
 
 using namespace WallpaperEngine::Data::Parsers;
 using namespace WallpaperEngine::Data::Model;
@@ -225,22 +226,55 @@ TextUniquePtr ObjectParser::parseText (const JSON& it, const Project& project, O
     );
 }
 
+struct ObjectParser::ModelCacheScope::Cache {
+    struct Model {
+	MdlMesh mesh;
+	MdlAnimationData animationData;
+    };
+    std::unordered_map<std::string, Model> models;
+};
+
+namespace {
+thread_local ObjectParser::ModelCacheScope::Cache* tModelCache = nullptr;
+
+ObjectParser::ModelCacheScope::Cache::Model parseModelFile (const Project& project, const std::string& model) {
+    // Geometry and animation live in the same MDL. Read it once in bulk;
+    // the two load() helpers each reopened it and copied it byte by byte.
+    const auto contents = project.assetLocator->readString (model);
+    const std::vector<char> data (contents.begin (), contents.end ());
+    ObjectParser::ModelCacheScope::Cache::Model result { .mesh = MdlParser::parse (data, model) };
+    try {
+	result.animationData = MdlAnimationParser::parse (data, model);
+    } catch (const std::exception& e) {
+	sLog.error ("Cannot load model animation data ", model, ": ", e.what ());
+    }
+    return result;
+}
+
+/** Scenes place the same MDL many times (238 objects over 44 files in one); parse each once. */
+ObjectParser::ModelCacheScope::Cache::Model loadModel (const Project& project, const std::string& model) {
+    if (tModelCache == nullptr) {
+	return parseModelFile (project, model);
+    }
+    const auto key = project.assetLocator->identity () + '\0' + model;
+    auto it = tModelCache->models.find (key);
+    if (it == tModelCache->models.end ()) {
+	it = tModelCache->models.emplace (key, parseModelFile (project, model)).first;
+    }
+    return it->second;
+}
+} // namespace
+
+ObjectParser::ModelCacheScope::ModelCacheScope () : m_cache (std::make_unique<Cache> ()), m_previous (tModelCache) {
+    tModelCache = m_cache.get ();
+}
+
+ObjectParser::ModelCacheScope::~ModelCacheScope () { tModelCache = m_previous; }
+
 ObjectUniquePtr
 ObjectParser::parseModel3D (const JSON& it, const Project& project, ObjectData base, const std::string& model) {
     try {
-	// Geometry and animation live in the same MDL. Read it once in bulk;
-	// the two load() helpers each reopened it and copied it byte by byte.
-	const auto data = [&] {
-	    const auto contents = project.assetLocator->readString (model);
-	    return std::vector<char> (contents.begin (), contents.end ());
-	} ();
-	auto mesh = MdlParser::parse (data, model);
-	MdlAnimationData animationData;
-	try {
-	    animationData = MdlAnimationParser::parse (data, model);
-	} catch (const std::exception& e) {
-	    sLog.error ("Cannot load model animation data ", model, ": ", e.what ());
-	}
+	auto [mesh, animationData] = loadModel (project, model);
 	std::vector<MaterialUniquePtr> materials;
 
 	for (const auto& submesh : mesh.submeshes) {

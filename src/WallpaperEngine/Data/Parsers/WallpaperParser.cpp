@@ -254,6 +254,7 @@ WebUniquePtr WallpaperParser::parseWeb (const JSON& file, Project& project) {
 }
 
 ObjectList WallpaperParser::parseObjects (const JSON& objects, const Project& project) {
+    const ObjectParser::ModelCacheScope modelCache;
     ObjectList result = {};
 
     for (const auto& cur : objects) {

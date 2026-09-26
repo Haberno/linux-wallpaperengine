@@ -403,3 +403,35 @@ TEST_CASE ("Model objects preserve authored shadow participation") {
     scripted->as<Model3D> ()->castShadow->value->update (true, DynamicValue::UpdateSource::Script);
     CHECK (scripted->as<Model3D> ()->castShadow->value->getBool ());
 }
+
+TEST_CASE ("Model objects in one object list share one MDL parse") {
+    using namespace WallpaperEngine::Data::Model;
+    using WallpaperEngine::Data::JSON::JSON;
+    using WallpaperEngine::Data::Parsers::ObjectParser;
+    auto filesystem = std::make_unique<WallpaperEngine::FileSystem::Container> ();
+    auto& vfs = filesystem->getVFS ();
+    const auto add = [&vfs] (const std::vector<char>& bytes) {
+	vfs.add ("models/rock.mdl", std::string (bytes.begin (), bytes.end ()));
+    };
+    add (makeModel (0, 15, 48, { -1.0f, -1.0f, -1.0f, 1.0f, 1.0f, 1.0f }));
+    vfs.add ("materials/test0.json", R"({"passes":[]})");
+    Project project {};
+    project.assetLocator = std::make_unique<WallpaperEngine::Assets::AssetLocator> (std::move (filesystem));
+    const auto parse = [&] (int id) {
+	auto object = ObjectParser::parse (
+	    JSON::parse (R"({"id":)" + std::to_string (id) + R"(,"model":"models/rock.mdl"})"), project
+	);
+	REQUIRE (object->is<Model3D> ());
+	return object->as<Model3D> ()->mesh.boundingBoxMax.x;
+    };
+
+    {
+	const ObjectParser::ModelCacheScope scope;
+	CHECK (parse (1) == 1.0f);
+	// the file changing under an open scope proves the second object reused the first parse
+	add (makeModel (0, 15, 48, { -2.0f, -2.0f, -2.0f, 2.0f, 2.0f, 2.0f }));
+	CHECK (parse (2) == 1.0f);
+    }
+    // nothing outlives the scope
+    CHECK (parse (3) == 2.0f);
+}

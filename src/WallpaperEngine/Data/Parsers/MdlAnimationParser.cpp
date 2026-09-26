@@ -47,7 +47,16 @@ std::string readString (const std::vector<char>& data, size_t& offset, const siz
 size_t findSection (const std::vector<char>& data, const char* marker, const size_t from) {
     const size_t markerLength = std::strlen (marker);
     for (size_t offset = from; offset + SECTION_HEADER_SIZE <= data.size (); offset++) {
-	if (std::memcmp (data.data () + offset, marker, markerLength) == 0
+	// memmem skips straight to the next marker; a byte-wise memcmp over multi-MB meshes
+	// was a visible share of 3D scene load time
+	const auto* hit = static_cast<const char*> (
+	    memmem (data.data () + offset, data.size () - offset, marker, markerLength)
+	);
+	if (hit == nullptr) {
+	    break;
+	}
+	offset = static_cast<size_t> (hit - data.data ());
+	if (offset + SECTION_HEADER_SIZE <= data.size ()
 	    && std::all_of (
 		data.begin () + static_cast<ptrdiff_t> (offset + markerLength),
 		data.begin () + static_cast<ptrdiff_t> (offset + SECTION_HEADER_SIZE - 1),
