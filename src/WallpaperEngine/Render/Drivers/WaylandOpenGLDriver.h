@@ -71,6 +71,7 @@ public:
     void hideWindow () override;
     glm::ivec2 getFramebufferSize () const override;
     uint32_t getFrameCounter () const override;
+    std::chrono::steady_clock::duration getLastFrameWait () const override;
     void dispatchEventQueue () override;
     [[nodiscard]] void* getProcAddress (const char* name) const override;
     bool makeBuildContextCurrent () override;
@@ -110,6 +111,7 @@ private:
 
     uint32_t m_frameCounter = 0;
     std::chrono::steady_clock::time_point m_nextFrameToken {};
+    std::chrono::steady_clock::duration m_lastFrameWait {};
     ApplicationContext& m_context;
     WaylandMouseInput m_mouseInput;
 

@@ -30,6 +30,7 @@ public:
     void hideWindow () override;
     [[nodiscard]] glm::ivec2 getFramebufferSize () const override;
     [[nodiscard]] uint32_t getFrameCounter () const override;
+    [[nodiscard]] std::chrono::steady_clock::duration getLastFrameWait () const override;
     void dispatchEventQueue () override;
     [[nodiscard]] void* getProcAddress (const char* name) const override;
 
@@ -41,5 +42,6 @@ private:
     Output::Output* m_output = nullptr;
     GLFWwindow* m_window = nullptr;
     uint32_t m_frameCounter = 0;
+    std::chrono::steady_clock::duration m_lastFrameWait {};
 };
 } // namespace WallpaperEngine::Render::Drivers

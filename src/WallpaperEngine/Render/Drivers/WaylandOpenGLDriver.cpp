@@ -590,8 +590,10 @@ void WaylandOpenGLDriver::dispatchEventQueue () {
     }
     const auto nanoseconds = std::chrono::duration_cast<std::chrono::nanoseconds> (wait).count ();
     const timespec timeout { nanoseconds / 1000000000, nanoseconds % 1000000000 };
+    const auto waitStart = Clock::now ();
     const int ready = ppoll (&events, 1, &timeout, nullptr);
     const int pollError = errno;
+    m_lastFrameWait = wait > Clock::duration::zero () ? Clock::now () - waitStart : Clock::duration::zero ();
     if (ready > 0 && (events.revents & POLLIN)) {
 	if (wl_display_read_events (display) < 0) {
 	    m_requestedExit = true;
@@ -686,6 +688,8 @@ void WaylandOpenGLDriver::hideWindow () { }
 glm::ivec2 WaylandOpenGLDriver::getFramebufferSize () const { return glm::ivec2 { 0, 0 }; }
 
 uint32_t WaylandOpenGLDriver::getFrameCounter () const { return m_frameCounter; }
+
+std::chrono::steady_clock::duration WaylandOpenGLDriver::getLastFrameWait () const { return m_lastFrameWait; }
 
 WaylandOpenGLDriver::SEGLContext* WaylandOpenGLDriver::getEGLContext () { return &this->m_eglContext; }
 

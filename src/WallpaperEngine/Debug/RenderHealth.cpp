@@ -280,8 +280,14 @@ void Debug::RenderHealth::frame () {
     const std::lock_guard lock (s.mutex);
 
     if (s.frames > 0) {
-	s.worstFrameSeconds
-	    = std::max (s.worstFrameSeconds, std::chrono::duration<double> (now - s.lastFrame).count ());
+	const double gap = std::chrono::duration<double> (now - s.lastFrame).count ();
+	s.worstFrameSeconds = std::max (s.worstFrameSeconds, gap);
+	// worst_frame_ms is a single outlier; these show how often playback visibly hitched
+	if (gap > 0.050) {
+	    s.counters ["frame.gap_over_50ms"]++;
+	} else if (gap > 0.025) {
+	    s.counters ["frame.gap_over_25ms"]++;
+	}
     } else {
 	s.firstFrame = now;
     }

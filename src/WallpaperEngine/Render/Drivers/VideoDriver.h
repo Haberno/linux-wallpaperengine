@@ -4,6 +4,7 @@
 #include "WallpaperEngine/Input/MouseInput.h"
 #include "WallpaperEngine/Render/Drivers/Output/Output.h"
 #include <glm/vec2.hpp>
+#include <chrono>
 #include <glm/vec4.hpp>
 #include <string>
 
@@ -66,6 +67,11 @@ public:
      * @return The number of rendered frames since the start of the driver
      */
     [[nodiscard]] virtual uint32_t getFrameCounter () const = 0;
+    /**
+     * @return How long the last dispatchEventQueue idled until its frame was due. Zero means the
+     * frame was late, or the driver does not report it; switch loading then keeps its minimum slice
+     */
+    [[nodiscard]] virtual std::chrono::steady_clock::duration getLastFrameWait () const { return {}; }
     /**
      * @param name
      * @return GetProcAddress for this video driver

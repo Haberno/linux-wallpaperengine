@@ -1167,12 +1167,20 @@ bool WallpaperApplication::applyPreparedSwitch (PreparedSwitch& job) {
 	    g_TimeLast = liveTimeLast;
 	    this->m_buildingSwitch = false;
 	});
-	// Give loading at most a quarter of a requested frame, capped at 2 ms.
-	// High-refresh outputs must not inherit an 8 ms / 60 Hz loading slice.
-	const auto loadingBudget = std::chrono::duration<double, std::milli> (
-	    std::min (2.0, 250.0 / std::max (1, this->m_context.settings.render.maximumFPS))
-	);
+	using Milliseconds = std::chrono::duration<double, std::milli>;
+	using SwitchPacing = ApplicationContext::SwitchPacing;
+	const auto pacing = this->m_context.settings.render.switchPacing;
+	const int fps = std::max (1, this->m_context.settings.render.maximumFPS);
+	const Milliseconds framePeriod (1000.0 / fps);
+	// Fixed pacing gives loading at most a quarter of a requested frame, capped at 2 ms.
+	// High-refresh outputs must not inherit an 8 ms / 60 Hz loading slice. Adaptive pacing
+	// starts there and grows into the part of each frame the outgoing wallpaper leaves idle:
+	// at a fixed 2 ms, Pokemon's ~0.9 s build took ~440 frames (7 s at 60 FPS).
+	const Milliseconds minimumBudget (std::min (2.0, 250.0 / fps));
+	Milliseconds loadingBudget = minimumBudget;
+	Milliseconds largestBudget = minimumBudget;
 	auto lastYield = std::chrono::steady_clock::now ();
+	auto lastCheckpoint = lastYield;
 	double longestUnitMs = 0.0;
 	size_t yields = 0;
 	const auto cancelled = [&] {
@@ -1181,13 +1189,19 @@ bool WallpaperApplication::applyPreparedSwitch (PreparedSwitch& job) {
 	};
 	const auto checkpoint = [&] (bool canCancel) {
 	    const auto now = std::chrono::steady_clock::now ();
-	    const std::chrono::duration<double, std::milli> elapsed = now - lastYield;
-	    if (elapsed >= loadingBudget) {
+	    const Milliseconds elapsed = now - lastYield;
+	    // Adaptive slices are long, so yield before a unit like the one just finished would
+	    // overrun the slice instead of after it. Off never yields: the outgoing wallpaper freezes.
+	    const Milliseconds unit = pacing == SwitchPacing::Adaptive ? now - lastCheckpoint : Milliseconds::zero ();
+	    lastCheckpoint = now;
+	    if (pacing != SwitchPacing::Off && elapsed + unit >= loadingBudget) {
 		longestUnitMs = std::max (longestUnitMs, elapsed.count ());
 		LoadingGLState state;
 		state.prepareOutgoingFrame (this->getDestinationFramebuffer (), loadingVao);
 		g_Time = liveTime;
 		g_TimeLast = liveTimeLast;
+		const auto framesBefore = this->m_videoDriver->getFrameCounter ();
+		const auto renderStart = std::chrono::steady_clock::now ();
 		this->render ();
 		liveTime = g_Time;
 		liveTimeLast = g_TimeLast;
@@ -1195,8 +1209,20 @@ bool WallpaperApplication::applyPreparedSwitch (PreparedSwitch& job) {
 		// Event dispatch may select another surface. All viewport rendering shares
 		// this context; resolve a current surface again without retaining a raw pointer.
 		this->makeAnyViewportCurrent ();
-		lastYield = std::chrono::steady_clock::now ();
+		lastYield = lastCheckpoint = std::chrono::steady_clock::now ();
 		++yields;
+		if (pacing == SwitchPacing::Adaptive) {
+		    // The outgoing frame was on time if the driver still had to wait for its deadline.
+		    // The next slice may then take the rest of a frame: the period minus this frame's
+		    // own work and a 2 ms margin. A late or skipped frame falls back to the minimum.
+		    const Milliseconds wait = this->m_videoDriver->getLastFrameWait ();
+		    const Milliseconds work = Milliseconds (lastYield - renderStart) - wait;
+		    const bool onTime = wait > Milliseconds::zero () && this->m_videoDriver->getFrameCounter () != framesBefore;
+		    loadingBudget = onTime
+			? std::clamp (framePeriod - work - Milliseconds (2.0), minimumBudget, framePeriod * 0.75)
+			: minimumBudget;
+		    largestBudget = std::max (largestBudget, loadingBudget);
+		}
 	    }
 	    if (canCancel && cancelled ()) throw CancelledSwitch {};
 	};
@@ -1281,6 +1307,7 @@ bool WallpaperApplication::applyPreparedSwitch (PreparedSwitch& job) {
 	    this->m_renderContext->setWallpaper (
 		job.screen, std::move (renderWallpaper), std::move (previousProject), job.transition
 	    );
+
 	}
 
 	this->m_context.settings.general.screenBackgrounds[job.screen] = job.path;
@@ -1292,7 +1319,8 @@ bool WallpaperApplication::applyPreparedSwitch (PreparedSwitch& job) {
 	    std::ostringstream detail;
 	    detail << "elapsed " << applyMs.count () << " ms (scene build/warmup " << buildMs.count ()
 		   << "), yields " << yields << ", longest loading unit " << longestUnitMs
-		   << " ms, request to ready " << totalMs.count () << " ms";
+		   << " ms, largest slice " << largestBudget.count () << " ms, request to ready " << totalMs.count ()
+		   << " ms";
 	    Debug::RenderHealth::record ("switch.apply", detail.str ());
 	}
 

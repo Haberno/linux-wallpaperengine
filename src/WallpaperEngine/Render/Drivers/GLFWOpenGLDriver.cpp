@@ -107,6 +107,8 @@ glm::ivec2 GLFWOpenGLDriver::getFramebufferSize () const {
 
 uint32_t GLFWOpenGLDriver::getFrameCounter () const { return this->m_frameCounter; }
 
+std::chrono::steady_clock::duration GLFWOpenGLDriver::getLastFrameWait () const { return this->m_lastFrameWait; }
+
 void GLFWOpenGLDriver::dispatchEventQueue () {
     static float previousFrameEnd = 0.0f;
     const float minimumTime = 1.0f / this->m_context.settings.render.maximumFPS;
@@ -157,8 +159,13 @@ void GLFWOpenGLDriver::dispatchEventQueue () {
     const float endTime = this->getRenderTime ();
 
     // ensure the frame time is correct to not overrun FPS
+    m_lastFrameWait = {};
     if ((endTime - startTime) < minimumTime) {
-	usleep ((minimumTime - (endTime - startTime)) * CLOCKS_PER_SEC);
+	const float wait = minimumTime - (endTime - startTime);
+	usleep (wait * CLOCKS_PER_SEC);
+	m_lastFrameWait = std::chrono::duration_cast<std::chrono::steady_clock::duration> (
+	    std::chrono::duration<float> (wait)
+	);
     }
     previousFrameEnd = this->getRenderTime ();
 }

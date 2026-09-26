@@ -33,6 +33,8 @@ public:
     void loadSettingsFromArgv ();
 
     enum class PostProcessing { Disabled, Enabled, Ultra };
+    /** How a live switch shares frames with the outgoing wallpaper while it loads */
+    enum class SwitchPacing { Adaptive, Fixed, Off };
 
     enum WINDOW_MODE {
 	/** Default window mode */
@@ -123,6 +125,7 @@ public:
 	    /** Scene geometry multisample count (1 = off) */
 	    uint32_t msaaSamples;
 	    PostProcessing postProcessing;
+	    SwitchPacing switchPacing;
 	    /** Final-output color grading (1.0 = neutral) */
 	    float contrast;
 	    float saturation;
@@ -222,6 +225,7 @@ public:
 	    .renderScale = 1.0f,
 	    .msaaSamples = 2,
 	    .postProcessing = PostProcessing::Enabled,
+	    .switchPacing = SwitchPacing::Adaptive,
 	    .contrast = 1.0f,
 	    .saturation = 1.0f,
             .pauseOnFullscreen = true,

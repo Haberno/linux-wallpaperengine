@@ -580,6 +580,17 @@ void ApplicationContext::loadSettingsFromArgv () {
 		: value == "ultra" ? PostProcessing::Ultra : PostProcessing::Enabled;
 	});
 
+    performanceGroup.add_argument ("--switch-pacing")
+	.help ("How live switches load while the outgoing wallpaper keeps playing: adaptive (use each frame's idle "
+	       "time), fixed (2 ms per frame), or off (load in one go; the outgoing wallpaper freezes). Default: adaptive.")
+	.choices ("adaptive", "fixed", "off")
+	.default_value (std::string ("adaptive"))
+	.nargs (1)
+	.action ([this] (const std::string& value) -> void {
+	    this->settings.render.switchPacing = value == "off" ? SwitchPacing::Off
+		: value == "fixed" ? SwitchPacing::Fixed : SwitchPacing::Adaptive;
+	});
+
     performanceGroup.add_argument ("--contrast")
 	.help ("Final-output contrast multiplier (1.0 = neutral). Clamped to 0.0-4.0.")
 	.scan<'g', float> ()
