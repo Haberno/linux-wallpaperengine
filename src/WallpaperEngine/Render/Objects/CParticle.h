@@ -51,6 +51,9 @@ constexpr uint32_t DEFAULT_MAX_PARTICLES = 1000;
 [[nodiscard]] glm::vec3 resolveParticleControlPoint (
     const glm::vec3& offset, const glm::mat4& worldToLocal, bool worldSpace
 );
+[[nodiscard]] glm::vec3 calculateFollowChildDisplacement (
+    const std::optional<glm::vec3>& previous, const glm::vec3& next, bool worldSpace
+);
 [[nodiscard]] glm::mat3 calculateFixedParticleOrientation (
     const glm::vec3& axis, const glm::mat3& model, bool worldSpace
 );
@@ -282,6 +285,8 @@ private:
     };
     std::vector<FollowChildSystem> m_followChildren;
     std::optional<glm::vec3> m_followPosition;
+    // Event-follow child of a world-space system: it lives in world units, not the parent layer's frame.
+    bool m_followsWorldParticle = false;
     uint64_t m_nextParticleSerial = 0;
     size_t m_childSystemCount = 0; // Root-owned allocation budget for the entire tree.
     size_t m_childAllocationLimit = 64; // Absolute end of this branch's share of that budget.

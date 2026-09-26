@@ -880,6 +880,16 @@ TEST_CASE ("rope trails use the live particle visual state", "[particle]") {
     CHECK (calculateRopeTrailVisualValue (0.25f, 1.0f, true) == Catch::Approx (0.25f));
 }
 
+TEST_CASE ("event-follow children carry local particles with the parent particle", "[particle][eventfollow]") {
+    using WallpaperEngine::Render::Objects::calculateFollowChildDisplacement;
+    // Meteors at Dawn: a one-shot head born at the first follow point must reach the tip.
+    CHECK (calculateFollowChildDisplacement (glm::vec3 (382.0f, -353.0f, 0.0f), { 591.0f, -331.0f, 0.0f }, false)
+	   == glm::vec3 (209.0f, 22.0f, 0.0f));
+    CHECK (calculateFollowChildDisplacement (glm::vec3 (382.0f, -353.0f, 0.0f), { 591.0f, -331.0f, 0.0f }, true)
+	   == glm::vec3 (0.0f));
+    CHECK (calculateFollowChildDisplacement (std::nullopt, { 591.0f, -331.0f, 0.0f }, false) == glm::vec3 (0.0f));
+}
+
 TEST_CASE ("control point attraction fades through the full authored radius", "[particle]") {
     // At three quarters of the radius, force must still act at one quarter strength.
     CHECK (calculateControlPointAttraction ({ 750.0f, 0.0f, 0.0f }, 200.0f, 1000.0f, 0.1f).x

@@ -136,6 +136,14 @@ glm::vec3 WallpaperEngine::Render::Objects::resolveParticleControlPoint (
     return { local.x, -local.y, local.z };
 }
 
+glm::vec3 WallpaperEngine::Render::Objects::calculateFollowChildDisplacement (
+    const std::optional<glm::vec3>& previous, const glm::vec3& next, const bool worldSpace
+) {
+    // Local-space event-follow particles ride with their parent particle, so a
+    // one-shot head stays on a meteor's tip. World-space births stay where emitted.
+    return previous.has_value () && !worldSpace ? next - *previous : glm::vec3 (0.0f);
+}
+
 glm::mat3 WallpaperEngine::Render::Objects::calculateFixedParticleOrientation (
     const glm::vec3& axis, const glm::mat3& model, const bool worldSpace
 ) {
@@ -453,6 +461,7 @@ void CParticle::setupChildren () {
 		    auto renderer = std::make_unique<CParticle> (getScene (), *particle, this);
 		    renderer->m_childAllocationLimit = branchEnd;
 		    renderer->m_controlPointStartIndex = child.controlPointStartIndex;
+		    renderer->m_followsWorldParticle = (m_particle.flags & 1) != 0;
 		    renderer->setup ();
 		    renderer->pause ();
 		    system.instances.push_back ({ .renderer = std::move (renderer) });
@@ -648,10 +657,15 @@ void CParticle::updateFollowChildren (const uint32_t firstNewParticle) {
 		instance.renderer->pause ();
 	    } else {
 		const glm::mat4 flipY = glm::scale (glm::mat4 (1.0f), glm::vec3 (1.0f, -1.0f, 1.0f));
-		const glm::mat4 parentToLocal = glm::inverse (flipY
-		    * ((m_particle.flags & 1) != 0 ? instance.renderer->particleWorldMatrix ()
-			: instance.renderer->resolveWorldMatrix ()) * flipY);
-		instance.renderer->m_followPosition = glm::vec3 (parentToLocal * glm::vec4 (parent->position, 1.0f));
+		const glm::mat4 parentToLocal = glm::inverse (flipY * instance.renderer->resolveWorldMatrix () * flipY);
+		auto& follower = *instance.renderer;
+		const glm::vec3 follow = glm::vec3 (parentToLocal * glm::vec4 (parent->position, 1.0f));
+		const glm::vec3 displacement = calculateFollowChildDisplacement (
+		    follower.m_followPosition, follow, (follower.m_particle.flags & 1) != 0
+		);
+		// ponytail: rope-trail history is not shifted; add it when a local-space trail child needs it.
+		for (uint32_t i = 0; i < follower.m_particleCount; ++i) follower.m_particles[i].position += displacement;
+		follower.m_followPosition = follow;
 	    }
 	}
     }
@@ -659,7 +673,8 @@ void CParticle::updateFollowChildren (const uint32_t firstNewParticle) {
 
 glm::mat4 CParticle::particleWorldMatrix () {
     const glm::mat4 local = resolveWorldMatrix ();
-    return m_particleParent ? m_particleParent->particleWorldMatrix () * local : local;
+    // Native sizes a world-space system's follow children without the layer scale (paired probe).
+    return m_particleParent && !m_followsWorldParticle ? m_particleParent->particleWorldMatrix () * local : local;
 }
 
 void ControlPointData::sampleVelocity (const glm::vec3& simulationPosition, const float frameTime) {
