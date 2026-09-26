@@ -1,5 +1,7 @@
 #pragma once
 
+#include <future>
+#include <memory>
 #include <random>
 
 #include "WallpaperEngine/Audio/AudioStream.h"
@@ -30,11 +32,17 @@ public:
 
 protected:
     void load ();
+    /** Adds a stream built by load () once its worker is done; true while it is still being built */
+    bool attachPendingStream ();
     void unload (bool recordSingleCompletion = false);
     [[nodiscard]] float getGain () const;
 
 private:
     std::map<int, Audio::AudioStream*> m_audioStreams = {};
+    /** Stream being opened off the render thread, and the random-mode delay chosen for it */
+    std::future<std::unique_ptr<Audio::AudioStream>> m_pendingStream;
+    double m_pendingDelay = 0.0;
+    std::string m_pendingFile;
 
     const Sound& m_sound;
     /** value keys identifying this wallpaper and sound across screens (see registerSoundCandidate) */

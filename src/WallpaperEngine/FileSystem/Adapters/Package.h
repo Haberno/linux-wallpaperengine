@@ -1,6 +1,7 @@
 #pragma once
 
 #include <filesystem>
+#include <mutex>
 #include <unordered_map>
 
 #include "Types.h"
@@ -37,5 +38,7 @@ private:
 
     /** The package's entries, keyed by lowercased filename */
     std::unordered_map<std::string, const FileEntry*> m_index;
+    /** Every entry is read through the package's single file stream (seek + read) */
+    mutable std::mutex m_readMutex;
 };
 }

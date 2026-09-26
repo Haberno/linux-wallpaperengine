@@ -48,9 +48,12 @@ ReadStreamSharedPtr PackageAdapter::open (const std::filesystem::path& path) con
     // read file into memory
     auto buffer = std::make_unique<char[]> (entry->length);
 
-    // go to the file's position and read into the buffer
-    this->package->file->base ().seekg (entry->offset + this->package->baseOffset, std::ios::beg);
-    this->package->file->next (buffer.get (), entry->length);
+    // go to the file's position and read into the buffer; sound layers open entries off the render thread
+    {
+	const std::lock_guard lock (this->m_readMutex);
+	this->package->file->base ().seekg (entry->offset + this->package->baseOffset, std::ios::beg);
+	this->package->file->next (buffer.get (), entry->length);
+    }
 
     // create a memory stream and return that
     return std::make_shared<MemoryStream> (std::move (buffer), entry->length);

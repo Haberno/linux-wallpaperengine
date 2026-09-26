@@ -59,10 +59,6 @@ void CSound::load () {
     const bool repeat = mode == "loop" && this->m_sound.sounds.size () == 1;
     const auto index = std::uniform_int_distribution<size_t> (0, this->m_sound.sounds.size () - 1) (this->m_random);
     const auto& file = this->m_sound.sounds[index];
-    auto stream = std::make_unique<Audio::AudioStream> (
-	this->getScene ().getAudioContext (), this->getAssetLocator ().read (file), repeat
-    );
-    stream->setGain (this->getGain ());
     double delay = 0.0;
     if (mode == "random") {
 	const float time = this->getScene ().getTime ();
@@ -74,20 +70,48 @@ void CSound::load () {
 	    delay = 0.0;
 	}
     }
-    this->m_nextStartRemaining = std::max (0.0, stream->getDuration () + delay);
+    this->m_pendingDelay = delay;
+    this->m_pendingFile = file;
+    // Reading the file and opening a stream (probing it, building the decoder and resampler) took
+    // 50-100 ms that hitched a frame whenever a layer started, e.g. as a switch transition finished.
+    // Build the stream on a worker; unload () waits for it, so the locator outlives the task.
+    this->m_pendingStream = std::async (
+	std::launch::async,
+	[&context = this->getScene ().getAudioContext (), &locator = this->getAssetLocator (), file, repeat] {
+	    return std::make_unique<Audio::AudioStream> (context, locator.read (file), repeat);
+	}
+    );
+}
+
+bool CSound::attachPendingStream () {
+    if (!this->m_pendingStream.valid ()) {
+	return false;
+    }
+    if (this->m_pendingStream.wait_for (std::chrono::seconds::zero ()) != std::future_status::ready) {
+	return true;
+    }
+    auto stream = this->m_pendingStream.get ();
+    stream->setGain (this->getGain ());
+    stream->setPaused (!this->m_playing);
+    this->m_nextStartRemaining = std::max (0.0, stream->getDuration () + this->m_pendingDelay);
     this->m_lastCompletion = 0;
     this->m_waiting = false;
     this->m_started = true;
     if (std::getenv ("WPE_SOUND_TRACE") != nullptr) {
 	sLog.out (
-	    "Sound layer ", this->m_sound.id, " start file=", file, " mode=", mode, " next=", this->m_nextStartRemaining
+	    "Sound layer ", this->m_sound.id, " start file=", this->m_pendingFile,
+	    " mode=", this->m_sound.playbackmode.value_or ("loop"), " next=", this->m_nextStartRemaining
 	);
     }
     const int id = this->getScene ().getAudioContext ().addStream (stream.get ());
     this->m_audioStreams.emplace (id, stream.release ());
+    return false;
 }
 
 void CSound::unload (const bool recordSingleCompletion) {
+    // A stream still being opened is discarded; this waits for its worker, which only
+    // happens when the layer stops within the brief window while it opens.
+    this->m_pendingStream = {};
     // free all the sound buffers and streams
     for (const auto& stream : this->m_audioStreams) {
 	// Wake a decoder which may be waiting for packets before removeStream waits
@@ -132,6 +156,9 @@ void CSound::render () {
 
     if (!active) {
 	this->unload (mode == "single");
+	return;
+    }
+    if (this->attachPendingStream ()) {
 	return;
     }
     if (!this->m_playing) {
