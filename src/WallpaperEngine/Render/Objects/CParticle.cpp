@@ -1148,7 +1148,8 @@ EmitterFunc CParticle::createBoxEmitter (const ParticleEmitter& emitter) {
 			emitter.audioProcessingBounds, emitter.audioProcessingExponent,
 			emitter.audioProcessingFrequencyStart, emitter.audioProcessingFrequencyEnd
 		    );
-		    const float rate = calculateParticleEmissionRate (emitter.rate, countOverride->getFloat ()) * response;
+		    const float countMultiplier = (m_particle.flags & 32) != 0 ? 1.0f : countOverride->getFloat ();
+		    const float rate = calculateParticleEmissionRate (emitter.rate, countMultiplier) * response;
 		    emissionTimer += dt * rate;
 		    uint32_t rateEmit = static_cast<uint32_t> (emissionTimer);
 		    emissionTimer -= static_cast<float> (rateEmit);
@@ -1270,7 +1271,8 @@ EmitterFunc CParticle::createSphereEmitter (const ParticleEmitter& emitter) {
 		emitter.audioProcessingBounds, emitter.audioProcessingExponent,
 		emitter.audioProcessingFrequencyStart, emitter.audioProcessingFrequencyEnd
 	    );
-	    const float rate = calculateParticleEmissionRate (emitter.rate, countOverride->getFloat ()) * response;
+	    const float countMultiplier = (m_particle.flags & 32) != 0 ? 1.0f : countOverride->getFloat ();
+	    const float rate = calculateParticleEmissionRate (emitter.rate, countMultiplier) * response;
 	    emissionTimer += dt * rate;
 	    toEmit = static_cast<uint32_t> (emissionTimer);
 	    emissionTimer -= static_cast<float> (toEmit);
