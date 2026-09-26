@@ -50,6 +50,7 @@
 #include <cstring>
 #include <numeric>
 #include <poll.h>
+#include <sstream>
 #include <sys/socket.h>
 #include <sys/stat.h>
 #include <sys/un.h>
@@ -128,6 +129,8 @@ WallpaperApplication::~WallpaperApplication () {
 	this->m_switchRequests.clear ();
 	this->m_switchResults.clear ();
     }
+
+    this->cancelComparison ();
 
     // CEF-backed wallpapers must be destroyed while their browser and GL contexts still exist.
     if (this->m_renderContext) {
@@ -602,7 +605,15 @@ void WallpaperApplication::processControlSocket () {
 	}
 
 	std::string reply
-	    = "err invalid command, expected: switch <screen> [transition] <path> | prop <screen> <key> <value> | language [locale]\n";
+	    = "err invalid command, expected: switch <screen> [transition] <path> | prop <screen> <key> <value> | language [locale] | comparison <prepare|status|commit|cancel> <token>\n";
+
+	if (command.starts_with ("comparison ")) {
+	    try {
+		reply = this->processComparisonCommand (command.substr (11));
+	    } catch (const std::exception& error) {
+		reply = "err " + std::string (error.what ()) + "\n";
+	    }
+	}
 
 	if (command == "language" || command.starts_with ("language ")) {
 	    if (command.starts_with ("language ")) {
@@ -860,9 +871,89 @@ private:
 };
 } // namespace
 
-void WallpaperApplication::requestBackgroundSwitch (
-    const std::string& screen, const std::string& path, const Render::TransitionMode transition
+void WallpaperApplication::cancelComparison () {
+    {
+	std::lock_guard lock (this->m_switchMutex);
+	for (const auto& [screen, candidate] : this->m_comparisonScreens) {
+	    if (this->m_latestSwitchIds[screen] == candidate.id)
+		this->m_latestSwitchIds[screen] = ++this->m_switchIdCounter;
+	}
+    }
+    if (!this->m_comparisonScreens.empty ()) this->makeAnyViewportCurrent ();
+    this->m_comparisonScreens.clear ();
+    this->m_comparisonToken.clear ();
+}
+
+std::string WallpaperApplication::processComparisonCommand (const std::string& command) {
+    std::istringstream input (command);
+    std::string action, token;
+    if (!(input >> action >> token)) return "err expected comparison action and token\n";
+
+    if (action == "prepare") {
+	std::string screen, path;
+	input >> screen;
+	std::getline (input >> std::ws, path);
+	if (screen.empty () || path.empty ()) return "err expected comparison prepare <token> <screen> <path>\n";
+	if (!this->m_renderContext || !this->m_renderContext->getWallpapers ().contains (screen))
+	    return "err unknown screen " + screen + "\n";
+	if (this->m_comparisonToken != token) {
+	    this->cancelComparison ();
+	    this->m_comparisonToken = token;
+	}
+	const auto id = this->requestBackgroundSwitch (screen, path, Render::TransitionMode_None, token);
+	this->makeAnyViewportCurrent ();
+	this->m_comparisonScreens.erase (screen);
+	this->m_comparisonScreens.emplace (screen, ComparisonScreen { .id = id, .path = path });
+	return "ok\n";
+    }
+
+    if (token != this->m_comparisonToken || this->m_comparisonScreens.empty ())
+	return "err unknown or superseded comparison\n";
+
+    if (action == "status") {
+	JSON screens = JSON::object ();
+	for (const auto& [screen, candidate] : this->m_comparisonScreens) {
+	    screens[screen] = { { "id", candidate.id }, { "path", candidate.path },
+		{ "state", candidate.state }, { "error", candidate.error } };
+	}
+	return "ok " + JSON ({ { "token", token }, { "screens", std::move (screens) } }).dump () + "\n";
+    }
+    if (action == "cancel") {
+	this->cancelComparison ();
+	return "ok\n";
+    }
+    if (action != "commit") return "err unknown comparison action\n";
+
+    for (const auto& [screen, candidate] : this->m_comparisonScreens) {
+	if (candidate.state != "ready" && candidate.state != "committed")
+	    return "err comparison " + screen + " is " + candidate.state + ": " + candidate.error + "\n";
+    }
+    if (!this->makeAnyViewportCurrent ()) return "err no active viewport\n";
+    for (auto& [screen, candidate] : this->m_comparisonScreens) {
+	if (candidate.state == "committed") continue;
+	auto* scene = static_cast<Render::Wallpapers::CScene*> (candidate.wallpaper.get ());
+	scene->finishLoading ();
+	if (this->m_isPaused) candidate.wallpaper->setPause (true);
+	std::shared_ptr<void> previousProject;
+	if (const auto it = this->m_backgrounds.find (screen); it != this->m_backgrounds.end ())
+	    previousProject = std::shared_ptr<Project> (std::move (it->second));
+	this->m_backgrounds[screen] = std::move (candidate.project);
+	this->m_renderContext->setWallpaper (
+	    screen, std::move (candidate.wallpaper), std::move (previousProject), Render::TransitionMode_None
+	);
+	this->m_context.settings.general.screenBackgrounds[screen] = candidate.path;
+	candidate.state = "committed";
+    }
+    this->m_pendingMallocTrim = std::chrono::steady_clock::now () + std::chrono::seconds (5);
+    return "ok\n";
+}
+
+uint64_t WallpaperApplication::requestBackgroundSwitch (
+    const std::string& screen, const std::string& path, const Render::TransitionMode transition,
+    const std::string& comparisonToken
 ) {
+    if (comparisonToken.empty () && this->m_comparisonScreens.contains (screen)) this->cancelComparison ();
+    uint64_t id;
     {
 	std::lock_guard lock (this->m_switchMutex);
 
@@ -872,16 +963,18 @@ void WallpaperApplication::requestBackgroundSwitch (
 	}
 
 	PreparedSwitch job {};
-	job.id = ++this->m_switchIdCounter;
+	job.id = id = ++this->m_switchIdCounter;
 	job.screen = screen;
 	job.path = path;
 	job.transition = transition;
 	job.requested = std::chrono::steady_clock::now ();
+	job.comparisonToken = comparisonToken;
 	this->m_latestSwitchIds[screen] = job.id;
 	this->m_switchRequests.emplace_back (std::move (job));
     }
 
     this->m_switchCv.notify_one ();
+    return id;
 }
 
 void WallpaperApplication::switchWorkerMain () {
@@ -913,6 +1006,11 @@ void WallpaperApplication::switchWorkerMain () {
 
 	try {
 	    job.project = this->loadProject (job.path);
+	    if (!job.comparisonToken.empty ()) {
+		if (!job.project->wallpaper->is<Scene> ())
+		    throw std::runtime_error ("Synchronized comparison currently requires a scene wallpaper");
+		for (auto& source : job.project->wallpaper->as<Scene> ()->camera.paths) source.queueMode = "sequence";
+	    }
 	    projectMs = std::chrono::steady_clock::now () - prepareStart;
 
 	    // Read, decompress and decode textures away from the render loop first.
@@ -1016,6 +1114,11 @@ void WallpaperApplication::processPreparedSwitches () {
 		this->makeAnyViewportCurrent ();
 	    }
 	    sLog.error ("Failed to load wallpaper ", job.path, " for ", job.screen, ": ", job.error);
+	    if (!job.comparisonToken.empty () && job.comparisonToken == this->m_comparisonToken) {
+		auto& candidate = this->m_comparisonScreens.at (job.screen);
+		candidate.state = "error";
+		candidate.error = job.error;
+	    }
 	    this->markPlaylistItemFailed (job.screen, job.path);
 	    continue;
 	}
@@ -1143,7 +1246,8 @@ bool WallpaperApplication::applyPreparedSwitch (PreparedSwitch& job) {
 		);
 		scene->prepareFirstFrame ();
 		checkpoint (true);
-		scene->finishLoading ();
+		if (job.comparisonToken.empty ()) scene->finishLoading ();
+		else scene->holdLoading ();
 		renderWallpaper = std::move (scene);
 	    } else {
 		renderWallpaper = Render::CWallpaper::fromWallpaper (
@@ -1153,6 +1257,13 @@ bool WallpaperApplication::applyPreparedSwitch (PreparedSwitch& job) {
 	    }
 	    if (cancelled ()) throw CancelledSwitch {};
 	    buildMs = std::chrono::steady_clock::now () - buildStart;
+	    if (!job.comparisonToken.empty ()) {
+		auto& candidate = this->m_comparisonScreens.at (job.screen);
+		candidate.project = std::move (job.project);
+		candidate.wallpaper = std::move (renderWallpaper);
+		candidate.state = "ready";
+		return true;
+	    }
 
 	    // A replacement built while fullscreen-paused must inherit the pause state.
 	    if (this->m_isPaused) {
@@ -1191,6 +1302,13 @@ bool WallpaperApplication::applyPreparedSwitch (PreparedSwitch& job) {
 	return true;
     } catch (const std::exception& e) {
 	sLog.error ("Failed to switch wallpaper on ", job.screen, ": ", e.what ());
+	if (!job.comparisonToken.empty () && job.comparisonToken == this->m_comparisonToken) {
+	    const auto candidate = this->m_comparisonScreens.find (job.screen);
+	    if (candidate != this->m_comparisonScreens.end () && candidate->second.id == job.id) {
+		candidate->second.state = "error";
+		candidate->second.error = e.what ();
+	    }
+	}
 	return false;
     }
 }
@@ -1862,6 +1980,7 @@ void WallpaperApplication::show () {
     // still alive. Leaving m_renderContext until ~WallpaperApplication made
     // cleanup() call SDL_Quit first, which can hang or invalidate SDL state
     // underneath AudioStream teardown.
+    this->cancelComparison ();
     this->m_renderContext.reset ();
 
     cleanup ();

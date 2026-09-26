@@ -487,6 +487,14 @@ void CScene::prepareFirstFrame () {
     this->loadingCheckpoint (true);
 }
 
+void CScene::holdLoading () {
+    // Keep loading clocks frozen without retaining the builder's stack references.
+    this->m_loadingCheckpoint = [] (bool) {};
+    for (const auto& [_, entry] : this->m_videoActivity) {
+	if (const auto texture = entry.texture.lock ()) texture->getVideoPlayer ()->setSceneActive (*this, false);
+    }
+}
+
 void CScene::finishLoading () {
     const float renderOffset = this->getContext ().getDriver ().getRenderTime () - this->m_loadingRenderTime;
     const auto timerOffset = std::chrono::steady_clock::now () - this->m_loadingTimerTime;
@@ -497,6 +505,7 @@ void CScene::finishLoading () {
     this->m_previousSceneTime = this->getContext ().getDriver ().getRenderTime ();
     this->m_sceneDeltaTime = 0.0f;
     this->m_loadingCheckpoint = {};
+    this->updateVideoActivity ();
     this->m_scriptEngine->finishLoading (timerOffset);
     for (const auto& [id, object] : this->m_objects) {
 	if (auto* sound = dynamic_cast<Objects::CSound*> (object)) sound->activate ();

@@ -56,6 +56,7 @@ public:
     [[nodiscard]] float getRenderTime () const;
     [[nodiscard]] std::chrono::steady_clock::time_point getTimerTime () const;
     void prepareFirstFrame ();
+    void holdLoading ();
     void finishLoading ();
 
 

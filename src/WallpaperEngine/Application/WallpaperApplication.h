@@ -27,6 +27,10 @@
 #include <set>
 #include <thread>
 
+namespace WallpaperEngine::Render {
+class CWallpaper;
+}
+
 namespace WallpaperEngine::Application {
 
 using namespace WallpaperEngine::Assets;
@@ -194,6 +198,16 @@ private:
 	std::string error {};
 	/** When the switch was requested, for the health report's switch.total */
 	std::chrono::steady_clock::time_point requested {};
+	std::string comparisonToken {};
+    };
+
+    struct ComparisonScreen {
+	uint64_t id = 0;
+	std::string path {};
+	std::string state = "loading";
+	std::string error {};
+	ProjectUniquePtr project = nullptr;
+	std::unique_ptr<Render::CWallpaper> wallpaper = nullptr;
     };
 
     /**
@@ -201,10 +215,13 @@ private:
      * thread and the swap is applied by processPreparedSwitches once ready, so rendering
      * never blocks. Shared by playlists and the IPC control socket.
      */
-    void requestBackgroundSwitch (
+    uint64_t requestBackgroundSwitch (
 	const std::string& screen, const std::string& path,
-	Render::TransitionMode transition = Render::TransitionMode_Fade
+	Render::TransitionMode transition = Render::TransitionMode_Fade,
+	const std::string& comparisonToken = {}
     );
+    std::string processComparisonCommand (const std::string& command);
+    void cancelComparison ();
     /** Loader thread main loop */
     void switchWorkerMain ();
     /** Applies a background switch the loader thread finished preparing, if any */
@@ -279,6 +296,8 @@ private:
     /** Set under m_switchMutex to make the loader thread exit */
     bool m_switchWorkerStop = false;
     bool m_buildingSwitch = false;
+    std::string m_comparisonToken {};
+    std::map<std::string, ComparisonScreen> m_comparisonScreens {};
     /** When set, malloc_trim runs at this point to return post-switch allocator slack to the OS */
     std::chrono::steady_clock::time_point m_pendingMallocTrim {};
 
