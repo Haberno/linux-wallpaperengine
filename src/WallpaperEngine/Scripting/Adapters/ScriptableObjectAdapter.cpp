@@ -1303,7 +1303,17 @@ int scriptableobject_property_set (
     ScopeGuard guard ([=] { JS_FreeCString (ctx, name); });
 
     if (std::strcmp (name, "pointsize") == 0 && container->object.getObject ().is<Text> ()) name = "pointSize";
-    if (!container->object.getProperties ().contains (name)) return 1;
+    if (!container->object.getProperties ().contains (name)) {
+	// Keep native image/text size separate until its engine behavior is implemented.
+	if (std::strcmp (name, "size") == 0
+	    && (container->object.getObject ().is<Image> () || container->object.getObject ().is<Text> ())) return 1;
+	const JSValue current = scriptableobject_property_get (ctx, obj_val, atom, receiver);
+	if (JS_IsException (current)) return -1;
+	const bool nativeProperty = !JS_IsUndefined (current);
+	JS_FreeValue (ctx, current);
+	if (nativeProperty) return 1;
+	return JS_DefinePropertyValueStr (ctx, obj_val, name, JS_DupValue (ctx, val), JS_PROP_C_W_E);
+    }
     try {
 	auto& property = container->object.getProperty (name);
 
@@ -1337,7 +1347,7 @@ int scriptableobject_property_set (
 	    property.update (vector, DynamicValue::UpdateSource::User);
 	}
     } catch (const std::exception&) {
-	// Unknown script-visible fields are ignored by Wallpaper Engine.
+	// Keep rejected native-property values on their existing path.
     }
 
     return 1;
