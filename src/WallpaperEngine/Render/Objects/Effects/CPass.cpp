@@ -882,14 +882,18 @@ void CPass::setupShaders () {
 	this->m_combos.insert_or_assign ("LIGHTS_TUBE", lights.tubeCount);
     }
 
-    // Wallpaper Engine exposes the concrete format of every bound sampler as
-    // TEX<n>FORMAT. This is required for packed normal maps: DecompressNormal
+    // Image samplers opt into TEX<n>FORMAT with formatcombo metadata. Keep
+    // concrete formats until preprocessing discovers those requests. DecompressNormal
     // reads RG88 from .rg, while DXT normals are stored in .ay. Treating an
     // RG88 normal as RGBA forces one axis to 1 and produces extreme lighting.
     // The high texture flag nibble is the matching packed-component occupancy
     // mask consumed by sampler metadata's `components` array.
-    const auto registerTextureMetadata
-	= [this] (const int index, const std::shared_ptr<const TextureProvider>& texture, const bool overwrite = true) {
+    const bool imageFormatRequests = m_renderable.is<CImage> ();
+    bool preserveImageBaseComponents = false;
+    std::map<int, int> textureFormats;
+    const auto registerTextureMetadata = [this, &textureFormats, imageFormatRequests, &preserveImageBaseComponents] (
+	const int index, const std::shared_ptr<const TextureProvider>& texture, const bool overwrite = true
+    ) {
 	      if (texture == nullptr) {
 		  return;
 	      }
@@ -898,14 +902,19 @@ void CPass::setupShaders () {
 
 	      // A slot the pass authors wins over the shader's own default: that is the texture
 	      // setupTextureUniforms ends up binding, so its format is the one the shader must see.
-	      if (!overwrite && this->m_combos.contains (prefix + "FORMAT")) {
+	      if (!overwrite && (textureFormats.contains (index) || this->m_combos.contains (prefix + "FORMAT"))) {
 		  return;
 	      }
 
-	      this->m_combos.insert_or_assign (prefix + "FORMAT", static_cast<int> (texture->getFormat ()));
-	      this->m_combos.insert_or_assign (
-		  prefix + "COMPONENTS", static_cast<int> ((texture->getFlags () & TextureFlags_ComponentMask) >> 20)
-	      );
+	      textureFormats.insert_or_assign (index, static_cast<int> (texture->getFormat ()));
+	      if (!imageFormatRequests) {
+		  this->m_combos.insert_or_assign (prefix + "FORMAT", static_cast<int> (texture->getFormat ()));
+	      }
+	      if (overwrite || index != 0 || !preserveImageBaseComponents) {
+		  this->m_combos.insert_or_assign (
+		      prefix + "COMPONENTS", static_cast<int> ((texture->getFlags () & TextureFlags_ComponentMask) >> 20)
+		  );
+	      }
 	  };
 
     const auto registerAuthoredTextures
@@ -936,16 +945,21 @@ void CPass::setupShaders () {
     registerTextureMetadata (0, texture0);
     registerAuthoredTextures (mergedTextures (m_pass.textures, m_override.textures));
     registerUserTextures (mergedTextures (m_pass.usertextures, m_override.usertextures));
-    // Native refreshes selected pixels without changing the initial TEXnFORMAT
-    // branch, even when clearing an RGBA selection exposes an authored R8 image.
-    for (const auto index : m_userTextureEntries | std::views::keys) {
-	const std::string combo = "TEX" + std::to_string (index) + "FORMAT";
-	if (const auto initial = m_userTextureFormats.find (index); initial != m_userTextureFormats.end ()) {
-	    m_combos.insert_or_assign (combo, initial->second);
-	} else if (const auto current = m_combos.find (combo); current != m_combos.end ()) {
-	    m_userTextureFormats.emplace (index, current->second);
+    // Selected pixels can change while native retains the initial format branch.
+    // Freeze values before publishing, so a cached value cannot bypass opt-in.
+    const auto retainUserTextureFormats = [&] {
+	for (const auto index : m_userTextureEntries | std::views::keys) {
+	    if (const auto initial = m_userTextureFormats.find (index); initial != m_userTextureFormats.end ()) {
+		textureFormats.insert_or_assign (index, initial->second);
+	    } else if (const auto current = textureFormats.find (index); current != textureFormats.end ()) {
+		m_userTextureFormats.emplace (index, current->second);
+	    }
+	    if (!imageFormatRequests && textureFormats.contains (index)) {
+		m_combos.insert_or_assign ("TEX" + std::to_string (index) + "FORMAT", textureFormats.at (index));
+	    }
 	}
-    }
+    };
+    if (!imageFormatRequests) retainUserTextureFormats ();
 
     // TODO: REVIEW THE SHADER TEXTURES HERE, THE ONES PASSED ON TO THE SHADER SHOULD NOT BE IN THE LIST
     // TODO: USED TO BUILD THE TEXTURES LATER
@@ -968,6 +982,16 @@ void CPass::setupShaders () {
 	overrideTextures, this->m_override.constants
     );
 
+    // A shader default takes precedence over the image's provisional slot-zero
+    // provider, but never over an authored or user-selected slot.
+    if (imageFormatRequests && !passTextures.contains (0) && !overrideTextures.contains (0)
+	&& (m_shader->getVertex ().getTextures ().contains (0)
+	    || m_shader->getFragment ().getTextures ().contains (0))) {
+	textureFormats.erase (0);
+	// Only format precedence changes; keep the preprocessed component metadata.
+	preserveImageBaseComponents = true;
+    }
+
     // Samplers the shader declares itself (the "formatcombo":true defaults, like generic4's
     // toon shading gradient) are only discovered while the units preprocess, which happens in
     // the constructor above. ShaderUnit keeps m_combos by reference and only emits the #define
@@ -975,6 +999,16 @@ void CPass::setupShaders () {
     // this an R8 gradient reads through the RGBA path and every lit pixel comes out red.
     registerAuthoredTextures (this->m_shader->getVertex ().getTextures (), false);
     registerAuthoredTextures (this->m_shader->getFragment ().getTextures (), false);
+
+    if (imageFormatRequests) {
+	retainUserTextureFormats ();
+	for (const auto& [index, format] : textureFormats) {
+	    if (m_shader->getVertex ().requestsTextureFormat (index)
+		|| m_shader->getFragment ().requestsTextureFormat (index)) {
+		m_combos.insert_or_assign ("TEX" + std::to_string (index) + "FORMAT", format);
+	    }
+	}
+    }
 
     const auto [vertex, fragment]
 	= Shaders::GLSLContext::get ().toGlsl (this->m_shader->vertex (), this->m_shader->fragment ());

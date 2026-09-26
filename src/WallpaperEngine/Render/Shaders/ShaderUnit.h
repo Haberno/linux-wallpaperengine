@@ -2,6 +2,7 @@
 
 #include <map>
 #include <memory>
+#include <set>
 #include <string>
 
 #include "GLSLContext.h"
@@ -52,6 +53,7 @@ public:
      * @return The textures this shader unit requires
      */
     [[nodiscard]] const TextureMap& getTextures () const;
+    [[nodiscard]] bool requestsTextureFormat (size_t index) const;
     /**
      * @return The combos set for this shader unit by the configuration
      */
@@ -231,6 +233,7 @@ private:
     const TextureMap& m_overrideTextures;
     /** The default textures to use when a texture is not applied in a given slot */
     TextureMap m_defaultTextures = {};
+    std::set<size_t> m_textureFormatRequests;
     /**
      * The shader unit this unit is linked to
      */

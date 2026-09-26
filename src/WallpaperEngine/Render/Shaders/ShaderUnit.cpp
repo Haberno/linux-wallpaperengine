@@ -1951,6 +1951,10 @@ void ShaderUnit::parseParameterConfiguration (
 	// TODO: BETTER CONVERSION HERE
 	size_t index = value - '0';
 	// TODO: SUPPORT USER TEXTURES!!
+	const auto formatCombo = data.find ("formatcombo");
+	if (formatCombo != data.end () && formatCombo->is_boolean () && formatCombo->get<bool> ()) {
+	    this->m_textureFormatRequests.insert (index);
+	}
 
 	// Packed material textures record their authored channels in texture flag
 	// bits 20..23. CPass exposes that nibble as TEX<n>COMPONENTS; match the
@@ -2352,3 +2356,7 @@ void ShaderUnit::dumpFinalSource () const {
 
 const std::vector<Variables::ShaderVariable*>& ShaderUnit::getParameters () const { return this->m_parameters; }
 const TextureMap& ShaderUnit::getTextures () const { return this->m_defaultTextures; }
+
+bool ShaderUnit::requestsTextureFormat (const size_t index) const {
+    return this->m_textureFormatRequests.contains (index);
+}
