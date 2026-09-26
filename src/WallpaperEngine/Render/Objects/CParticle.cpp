@@ -1577,7 +1577,8 @@ InitializerFunc CParticle::createAngularVelocityRandomInitializer (const Angular
 	    result[i] = minVec[i] + t * (maxVec[i] - minVec[i]);
 	}
 
-	p.angularVelocity = result * speedOverride->getFloat ();
+	const float speedMultiplier = (m_particle.flags & 16) != 0 ? 1.0f : speedOverride->getFloat ();
+	p.angularVelocity += result * speedMultiplier;
     };
 }
 
