@@ -1412,6 +1412,12 @@ void CText::render () {
 	}
     }
 
+    // Native composites text directly while every authored effect is hidden.
+    // Published layer textures still need refreshing for other layers to sample.
+    const bool compositeEffects = m_effectsEnabled
+	&& (!drawToScene || m_colorBlendPass != nullptr
+	    || std::ranges::any_of (m_text.effects, [] (const auto& effect) { return effect->visible->value->getBool (); }));
+
     const glm::vec4 color = m_text.color->value->getVec4 ();
     const float alpha = m_text.alpha->evaluateFloat (getScene ().getTime ());
     // Native text draws (140257d70 / 140258050) multiply RGB by brightness
@@ -1446,11 +1452,14 @@ void CText::render () {
 	const glm::mat4 mvp = getScene ().getCamera ().getProjection () * getScene ().getCamera ().getLookAt () * model;
 
 	if (m_effectsEnabled) {
-	    renderEffectChain (mvp, brightness, alpha, drawToScene);
+	    renderEffectChain (mvp, brightness, alpha, compositeEffects && drawToScene);
+	    if (compositeEffects) {
 #if !NDEBUG
-	    glPopDebugGroup ();
+		glPopDebugGroup ();
 #endif /* DEBUG */
-	    return;
+		return;
+	    }
+	    glColorMask (GL_TRUE, GL_TRUE, GL_TRUE, getScene ().isRenderingToComposition () ? GL_TRUE : GL_FALSE);
 	}
 
 	drawBackground (mvp, alpha);
@@ -1495,11 +1504,14 @@ void CText::render () {
     const glm::mat4 mvp = getScene ().getCamera ().getProjection () * getScene ().getCamera ().getLookAt () * model;
 
     if (m_effectsEnabled) {
-	renderEffectChain (mvp, brightness, alpha, drawToScene);
+	renderEffectChain (mvp, brightness, alpha, compositeEffects && drawToScene);
+	if (compositeEffects) {
 #if !NDEBUG
-	glPopDebugGroup ();
+	    glPopDebugGroup ();
 #endif /* DEBUG */
-	return;
+	    return;
+	}
+	glColorMask (GL_TRUE, GL_TRUE, GL_TRUE, getScene ().isRenderingToComposition () ? GL_TRUE : GL_FALSE);
     }
 
     drawBackground (mvp, alpha);
