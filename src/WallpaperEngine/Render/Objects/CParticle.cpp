@@ -1204,7 +1204,7 @@ EmitterFunc CParticle::createBoxEmitter (const ParticleEmitter& emitter) {
 		p.color = m_instanceColor;
 		p.alpha = 1.0f * getInstanceOverride ().alpha->value->getFloat ();
 		p.size = 0.5f;
-		p.lifetime = 1.0f * getInstanceOverride ().lifetime->value->getFloat ();
+		p.lifetime = 1.0f;
 		p.age = 0.0f;
 		p.alive = true;
 		p.frame = -1.0f;
@@ -1232,7 +1232,6 @@ EmitterFunc CParticle::createBoxEmitter (const ParticleEmitter& emitter) {
 EmitterFunc CParticle::createSphereEmitter (const ParticleEmitter& emitter) {
     includeControlPoint (emitter.controlPoint);
     DynamicValue* countOverride = getInstanceOverride ().count->value.get ();
-    float lifetime = 1.0f * getInstanceOverride ().lifetime->value->getFloat ();
 
     // Convert emitter origin from screen space (Y down) to centered space (Y up)
     glm::vec3 transformedEmitterOrigin = emitter.origin;
@@ -1242,7 +1241,7 @@ EmitterFunc CParticle::createSphereEmitter (const ParticleEmitter& emitter) {
 
     bool limitOnePerFrame = (emitter.flags & 2) != 0;
 
-    return [this, emitter, transformedEmitterOrigin, controlPointIndex, countOverride, lifetime, limitOnePerFrame,
+    return [this, emitter, transformedEmitterOrigin, controlPointIndex, countOverride, limitOnePerFrame,
 	    emissionTimer = 0.0f, delayTimer = emitter.delay, durationTimer = 0.0f,
 	    remaining
 	    = emitter.instantaneous] (std::vector<ParticleInstance>& particles, uint32_t& count, float dt, uint32_t burst) mutable {
@@ -1383,7 +1382,7 @@ EmitterFunc CParticle::createSphereEmitter (const ParticleEmitter& emitter) {
 	    p.color = m_instanceColor;
 	    p.alpha = 1.0f * getInstanceOverride ().alpha->value->getFloat ();
 	    p.size = 0.5f;
-	    p.lifetime = lifetime;
+	    p.lifetime = 1.0f;
 	    p.age = 0.0f;
 	    p.alive = true;
 	    p.frame = -1.0f;
@@ -1508,8 +1507,9 @@ InitializerFunc CParticle::createLifetimeRandomInitializer (const LifetimeRandom
     DynamicValue* lifetimeOverride = getInstanceOverride ().lifetime->value.get ();
 
     return [this, minValue, maxValue, lifetimeOverride] (ParticleInstance& p) {
+	const float lifetimeMultiplier = (m_particle.flags & 64) != 0 ? 1.0f : lifetimeOverride->getFloat ();
 	p.lifetime = WallpaperEngine::Maths::randomFloat (m_rng, minValue->getFloat (), maxValue->getFloat ())
-	    * lifetimeOverride->getFloat ();
+	    * lifetimeMultiplier;
 	p.initial.lifetime = p.lifetime;
     };
 }
