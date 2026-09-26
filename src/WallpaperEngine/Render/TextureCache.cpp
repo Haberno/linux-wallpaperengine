@@ -255,21 +255,38 @@ void TextureCache::trim () {
 std::shared_ptr<const TextureProvider> TextureCache::resolve (
     const std::string& filename, const AssetLocator& assetLocator, const Data::Model::Properties& properties
 ) {
-    const auto base = this->resolve (filename, assetLocator);
-    const auto texture = std::dynamic_pointer_cast<const CTexture> (base);
-    if (!texture || !texture->getHeader ().variantSource) {
-	return base;
+    const std::string baseKey = scopedKey (filename, assetLocator);
+    auto cachedBase = this->m_textureCache.end ();
+    if (filename.starts_with ('$')) {
+	cachedBase = this->m_textureCache.find (filename);
+    }
+    if (cachedBase == this->m_textureCache.end ()) {
+	cachedBase = this->m_textureCache.find (baseKey);
+    }
+    // Ordinary cached textures and runtime aliases need no property-specific key.
+    if (cachedBase != this->m_textureCache.end ()) {
+	const auto texture = std::dynamic_pointer_cast<const CTexture> (cachedBase->second.texture);
+	if (!texture || !texture->getHeader ().variantSource) {
+	    cachedBase->second.lastUsed = ++this->m_useCounter;
+	    return cachedBase->second.texture;
+	}
     }
     // Property objects are shared by one Project, not by its mount fingerprint.
     // Holding these shared_ptrs also prevents an address from being reused while
     // its bound texture is cached. Normal textures retain cross-project reuse.
-    std::string key = scopedKey (filename, assetLocator) + '\x1f' + "properties";
+    std::string key = baseKey + '\x1f' + "properties";
     for (const auto& [name, property] : properties) {
 	key += ':' + std::to_string (reinterpret_cast<uintptr_t> (property.get ()));
     }
     if (const auto found = this->m_textureCache.find (key); found != this->m_textureCache.end ()) {
 	found->second.lastUsed = ++this->m_useCounter;
 	return found->second.texture;
+    }
+    // A bound variant retains its own source after the unbound base is evicted.
+    const auto base = this->resolve (filename, assetLocator);
+    const auto texture = std::dynamic_pointer_cast<const CTexture> (base);
+    if (!texture || !texture->getHeader ().variantSource) {
+	return base;
     }
     const auto selector = [properties] (const Data::JSON::JSON& condition) {
 	return TextureParser::matchesCondition (condition, properties);
