@@ -3,6 +3,7 @@
 #include "Effects/EffectSwapCommand.h"
 
 #include <functional>
+#include <memory>
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
@@ -138,7 +139,8 @@ private:
 
     FT_Library m_ftLibrary = nullptr;
     FT_Face m_ftFace = nullptr;
-    std::vector<uint8_t> m_fontData;
+    /** shared by every text object using the same font file; must outlive m_ftFace */
+    std::shared_ptr<const std::vector<uint8_t>> m_fontData;
 
     /**
      * Create the quad/composite VAOs on first use. VAOs are container objects and are

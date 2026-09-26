@@ -4,6 +4,7 @@
 #include <cmath>
 #include <filesystem>
 #include <limits>
+#include <mutex>
 #include <vector>
 
 #include <ft2build.h>
@@ -914,6 +915,35 @@ bool CText::initFreeType () {
     return false;
 }
 
+namespace {
+/**
+ * Text objects commonly share one font; CJK fonts are 10-20 MB, and reading one per object
+ * made a scene with 34 texts on a 20 MB .ttc copy ~1.4 GB at startup and keep ~700 MB resident.
+ */
+std::shared_ptr<const std::vector<uint8_t>> sharedFontData (
+    const WallpaperEngine::Assets::AssetLocator& locator, const std::string& font) {
+    // ponytail: expired entries keep their key until the same font loads again; keys are tiny
+    static std::mutex mutex;
+    static std::unordered_map<std::string, std::weak_ptr<const std::vector<uint8_t>>> fonts;
+    const std::lock_guard lock (mutex);
+    auto& cached = fonts[locator.identity () + '\0' + font];
+    if (auto data = cached.lock ()) {
+	return data;
+    }
+
+    auto stream = locator.read (font);
+    stream->seekg (0, std::ios::end);
+    const auto size = stream->tellg ();
+    stream->seekg (0, std::ios::beg);
+    auto bytes = std::vector<uint8_t> (static_cast<size_t> (size));
+    stream->read (reinterpret_cast<char*> (bytes.data ()), size);
+
+    auto data = std::make_shared<const std::vector<uint8_t>> (std::move (bytes));
+    cached = data;
+    return data;
+}
+} // namespace
+
 bool CText::loadEmbeddedFont () {
     // Wallpapers packed in .pkg don't expose physical paths, so we read the font
     // into memory and use FT_New_Memory_Face. m_fontData must outlive the face.
@@ -923,15 +953,10 @@ bool CText::loadEmbeddedFont () {
     }
 
     try {
-	auto stream = getAssetLocator ().read (m_text.font);
-	stream->seekg (0, std::ios::end);
-	const auto size = stream->tellg ();
-	stream->seekg (0, std::ios::beg);
-	m_fontData.resize (static_cast<size_t> (size));
-	stream->read (reinterpret_cast<char*> (m_fontData.data ()), size);
+	m_fontData = sharedFontData (getAssetLocator (), m_text.font);
 
 	if (FT_New_Memory_Face (
-		m_ftLibrary, m_fontData.data (), static_cast<FT_Long> (m_fontData.size ()), 0, &m_ftFace
+		m_ftLibrary, m_fontData->data (), static_cast<FT_Long> (m_fontData->size ()), 0, &m_ftFace
 	    )
 	    == 0) {
 	    return true;
@@ -942,7 +967,7 @@ bool CText::loadEmbeddedFont () {
 	sLog.error ("CText: cannot read font '", m_text.font, "': ", e.what (), ", falling back to system font");
     }
 
-    m_fontData.clear ();
+    m_fontData.reset ();
     return false;
 }
 
