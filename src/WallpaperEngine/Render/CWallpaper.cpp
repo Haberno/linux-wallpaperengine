@@ -68,8 +68,21 @@ GLuint CWallpaper::getWallpaperFramebuffer () const { return this->m_sceneFBO->g
 GLuint CWallpaper::getWallpaperTexture () const { return this->m_sceneFBO->getTextureID (0); }
 
 void CWallpaper::setupShaders () {
+    // This runs during construction, so failures must release their GL objects here.
+    struct ShaderResources {
+	GLuint vertex = 0;
+	GLuint fragment = 0;
+	GLuint program = 0;
+	~ShaderResources () {
+	    if (program != 0) glDeleteProgram (program);
+	    if (fragment != 0) glDeleteShader (fragment);
+	    if (vertex != 0) glDeleteShader (vertex);
+	}
+    } resources;
+
     // reserve shaders in OpenGL
     const GLuint vertexShaderID = glCreateShader (GL_VERTEX_SHADER);
+    resources.vertex = vertexShaderID;
 
     // give shader's source code to OpenGL to be compiled
     const char* sourcePointer = "#version 330\n"
@@ -101,16 +114,17 @@ void CWallpaper::setupShaders () {
 	memset (logBuffer, 0, infoLogLength + 1);
 	// get information about the error
 	glGetShaderInfoLog (vertexShaderID, infoLogLength, nullptr, logBuffer);
-	// throw an exception about the issue
 	const std::string message = logBuffer;
 	// free the buffer
 	delete[] logBuffer;
-	// throw an exception
-	sLog.exception (message);
+	if (result != GL_TRUE) sLog.exception ("Wallpaper vertex shader compilation failed: ", message);
+	if (!message.empty ()) sLog.error (message);
     }
+    if (result != GL_TRUE) sLog.exception ("Wallpaper vertex shader compilation failed without a driver log");
 
     // reserve shaders in OpenGL
     const GLuint fragmentShaderID = glCreateShader (GL_FRAGMENT_SHADER);
+    resources.fragment = fragmentShaderID;
 
     // give shader's source code to OpenGL to be compiled
     // transitions compute a per-pixel reveal alpha; blending is only enabled while
@@ -299,7 +313,7 @@ void CWallpaper::setupShaders () {
     result = GL_FALSE;
     infoLogLength = 0;
 
-    // ensure the vertex shader was correctly compiled
+    // ensure the fragment shader was correctly compiled
     glGetShaderiv (fragmentShaderID, GL_COMPILE_STATUS, &result);
     glGetShaderiv (fragmentShaderID, GL_INFO_LOG_LENGTH, &infoLogLength);
 
@@ -309,16 +323,17 @@ void CWallpaper::setupShaders () {
 	memset (logBuffer, 0, infoLogLength + 1);
 	// get information about the error
 	glGetShaderInfoLog (fragmentShaderID, infoLogLength, nullptr, logBuffer);
-	// throw an exception about the issue
 	const std::string message = logBuffer;
 	// free the buffer
 	delete[] logBuffer;
-	// throw an exception
-	sLog.exception (message);
+	if (result != GL_TRUE) sLog.exception ("Wallpaper fragment shader compilation failed: ", message);
+	if (!message.empty ()) sLog.error (message);
     }
+    if (result != GL_TRUE) sLog.exception ("Wallpaper fragment shader compilation failed without a driver log");
 
     // create the final program
     this->m_shader = glCreateProgram ();
+    resources.program = this->m_shader;
     // link the shaders together
     glAttachShader (this->m_shader, vertexShaderID);
     glAttachShader (this->m_shader, fragmentShaderID);
@@ -336,20 +351,17 @@ void CWallpaper::setupShaders () {
 	memset (logBuffer, 0, infoLogLength + 1);
 	// get information about the error
 	glGetProgramInfoLog (this->m_shader, infoLogLength, nullptr, logBuffer);
-	// throw an exception about the issue
 	const std::string message = logBuffer;
 	// free the buffer
 	delete[] logBuffer;
-	// throw an exception
-	sLog.exception (message);
+	if (result != GL_TRUE) sLog.exception ("Wallpaper shader program linking failed: ", message);
+	if (!message.empty ()) sLog.error (message);
     }
+    if (result != GL_TRUE) sLog.exception ("Wallpaper shader program linking failed without a driver log");
 
-    // after being liked shaders can be dettached and deleted
+    // After linking, detach the shaders; the scoped resources delete them on return.
     glDetachShader (this->m_shader, vertexShaderID);
     glDetachShader (this->m_shader, fragmentShaderID);
-
-    glDeleteShader (vertexShaderID);
-    glDeleteShader (fragmentShaderID);
 
     // get textures
     this->g_Texture0 = glGetUniformLocation (this->m_shader, "g_Texture0");
@@ -365,6 +377,7 @@ void CWallpaper::setupShaders () {
     this->g_LoadDetails = glGetUniformLocation (this->m_shader, "g_LoadDetails");
     this->a_Position = glGetAttribLocation (this->m_shader, "a_Position");
     this->a_TexCoord = glGetAttribLocation (this->m_shader, "a_TexCoord");
+    resources.program = 0;
 }
 
 void CWallpaper::setDestinationFramebuffer (GLuint framebuffer) { this->m_destFramebuffer = framebuffer; }
