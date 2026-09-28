@@ -25,6 +25,9 @@ CVideo::CVideo (
 	this->getContext (), this->CWallpaper::getWallpaperTexture (), videopath, 64, 64,
 	this->CWallpaper::getWallpaperFramebuffer ()
     );
+    // The output driver paces presentation. Waiting for an MP4 frame here also
+    // stalls every cooperative scene-loading slice while this video is outgoing.
+    this->m_player->setNonBlocking ();
     // --silent disables audio (audio.enabled = false) and must mute video wallpapers too;
     // a volume of 0 mutes the mpv backend (matching what --volume 0 already does).
     const auto& audioSettings = this->getContext ().getApp ().getContext ().settings.audio;

@@ -200,6 +200,7 @@ void CWeb::renderFrame (const glm::ivec4& viewport) {
     if (viewport.z != this->getWidth () || viewport.w != this->getHeight ()) {
 	this->setSize (viewport.z, viewport.w);
     }
+    this->m_renderHandler->uploadTexture ();
 
     // ensure the virtual mouse position is up to date
     this->updateMouse (viewport);
@@ -208,14 +209,8 @@ void CWeb::renderFrame (const glm::ivec4& viewport) {
     // ensure we render over the whole framebuffer
     glViewport (0, 0, this->getWidth (), this->getHeight ());
 
-    // Cef processes all messages, including OnPaint, which renders frame
-    // If there is no OnPaint in message loop, we will not update(render) frame
-    //  This means some frames will not have OnPaint call in cef messageLoop
-    //  Because of that glClear will result in flickering on higher fps
-    //  Do not use glClear until some method to control rendering with cef is supported
-    // We might actually try to use cef to execute javascript, and not using off-screen rendering at all
-    // But for now let it be like this
-    //  glClear (GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+    // CEF queues paints between output frames. Keep the previous image when
+    // there is no new paint; clearing here would flicker above the browser FPS.
     this->pushBridgeData ();
 }
 

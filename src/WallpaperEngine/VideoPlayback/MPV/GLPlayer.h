@@ -47,7 +47,7 @@ public:
      */
     void decrementUsageCount ();
 
-    /** Scene textures retain real-time playback without blocking the scene renderer. */
+    /** Retain real-time playback without blocking the renderer. */
     void setNonBlocking ();
     void clearNonBlocking ();
     void setMuted ();

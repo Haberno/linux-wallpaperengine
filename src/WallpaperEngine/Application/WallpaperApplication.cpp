@@ -1219,12 +1219,17 @@ bool WallpaperApplication::applyPreparedSwitch (PreparedSwitch& job) {
 		if (pacing == SwitchPacing::Adaptive) {
 		    // The outgoing frame was on time if the driver still had to wait for its deadline.
 		    // The next slice may then take the rest of a frame: the period minus this frame's
-		    // own work and a 2 ms margin. A late or skipped frame falls back to the minimum.
+		    // own work and a 2 ms margin. If the outgoing wallpaper already exceeds the
+		    // requested period, reserve a quarter of its measured work for loading instead
+		    // of forcing every loading slice back to 1-2 ms. This bounds the added CPU
+		    // cost while allowing progress on heavy web/3D wallpapers below the FPS cap.
 		    const Milliseconds wait = this->m_videoDriver->getLastFrameWait ();
 		    const Milliseconds work = Milliseconds (lastYield - renderStart) - wait;
-		    const bool onTime = wait > Milliseconds::zero () && this->m_videoDriver->getFrameCounter () != framesBefore;
-		    loadingBudget = onTime
-			? std::clamp (framePeriod - work - Milliseconds (2.0), minimumBudget, framePeriod * 0.75)
+		    const bool rendered = this->m_videoDriver->getFrameCounter () != framesBefore;
+		    const Milliseconds available = wait > Milliseconds::zero ()
+			? framePeriod - work - Milliseconds (2.0) : work * 0.25;
+		    loadingBudget = rendered
+			? std::clamp (available, minimumBudget, framePeriod * 0.75)
 			: minimumBudget;
 		    largestBudget = std::max (largestBudget, loadingBudget);
 		}

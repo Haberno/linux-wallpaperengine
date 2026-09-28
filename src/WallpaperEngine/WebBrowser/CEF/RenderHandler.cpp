@@ -1,6 +1,8 @@
 #include "RenderHandler.h"
 #include "include/wrapper/cef_helpers.h"
 
+#include <cstring>
+
 using namespace WallpaperEngine::WebBrowser::CEF;
 
 RenderHandler::RenderHandler (WallpaperEngine::Render::Wallpapers::CWeb* webdata) : m_webdata (webdata) { }
@@ -22,12 +24,39 @@ void RenderHandler::OnPaint (
     if (webdata == nullptr || buffer == nullptr || width <= 0 || height <= 0) {
 	return;
     }
+    // setSize owns texture allocation. A paint queued before a resize can still
+    // arrive afterward; wait for the new-sized paint instead of resizing back.
+    if (width != webdata->getWidth () || height != webdata->getHeight ()) {
+	return;
+    }
+
+    // Slow GL uploads inside CEF's pump can let more paint events accumulate
+    // while it drains the queue. Only the last image can reach presentation.
+    m_pixels.resize (static_cast<size_t> (width) * height * 4);
+    std::memcpy (m_pixels.data (), buffer, m_pixels.size ());
+    m_paintWidth = width;
+    m_paintHeight = height;
+    m_pendingPaint = true;
+}
+
+void RenderHandler::uploadTexture () {
+    CEF_REQUIRE_UI_THREAD ();
+    const auto* webdata = this->m_webdata;
+    if (!m_pendingPaint || webdata == nullptr) {
+	return;
+    }
+    m_pendingPaint = false;
+    if (m_paintWidth != webdata->getWidth () || m_paintHeight != webdata->getHeight ()) {
+	return;
+    }
 
     glActiveTexture (GL_TEXTURE0);
     // Upload into the wallpaper color texture. The framebuffer handle is not a
     // texture and leaves the visible web wallpaper blank when bound here.
     glBindTexture (GL_TEXTURE_2D, webdata->getWallpaperTexture ());
-    glTexImage2D (GL_TEXTURE_2D, 0, GL_RGBA, width, height, 0, GL_BGRA_EXT, GL_UNSIGNED_BYTE, buffer);
+    glTexSubImage2D (
+	GL_TEXTURE_2D, 0, 0, 0, m_paintWidth, m_paintHeight, GL_BGRA_EXT, GL_UNSIGNED_BYTE, m_pixels.data ()
+    );
     glBindTexture (GL_TEXTURE_2D, 0);
 }
 

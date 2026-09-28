@@ -416,8 +416,8 @@ void GLPlayer::init () {
     mpv_set_option_string (this->m_handle, "untimed", "no");
     if (this->m_nonBlocking) {
 	// With BLOCK_FOR_TARGET_TIME=0, ask mpv to deliver frames at their target
-	// time instead of its default early render lead. Standalone videos keep
-	// their normal blocking presentation and audio/video synchronization.
+	// time instead of its default early render lead, retaining the real-time
+	// scheduler and audio/video synchronization without blocking the renderer.
 	mpv_set_option_string (this->m_handle, "video-timing-offset", "0");
     }
 
