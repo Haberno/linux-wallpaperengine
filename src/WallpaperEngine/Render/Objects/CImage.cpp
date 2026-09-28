@@ -2094,6 +2094,11 @@ void CImage::render () {
 
     auto cur = this->m_activePasses.begin ();
     const auto end = this->m_activePasses.end ();
+    // Native exports the effected image before its layer blend samples the scene.
+    // Baking that presentation pass into a hidden texture adds the background a
+    // second time when another layer consumes it (Razer's radial light mask).
+    const bool skipSceneBlending = !m_finalPassDrawsToScene && m_finalPassRouting.has_value ()
+	&& m_materials.colorBlending.material != nullptr;
     auto command = m_swapCommands.begin ();
     for (size_t index = 0; index <= renderPassCount; ++index) {
 	for (; command != m_swapCommands.end () && command->beforePass == index; ++command) {
@@ -2104,6 +2109,7 @@ void CImage::render () {
 	}
 	if (cur == end || *cur != m_passes[index]) continue;
 	auto* pass = *cur++;
+	if (skipSceneBlending && pass == m_finalPassRouting->pass) continue;
 	glColorMask (true, true, true, true);
 	if (m_finalPassRouting && pass == m_finalPassRouting->pass && this->m_finalPassDrawsToScene) {
 	    if (this->m_hasPuppetClipping) {
@@ -2126,7 +2132,9 @@ void CImage::render () {
     // Preserve the working-buffer routes: visible layers and explicit effect
     // bindings may also depend on them. No additional texture allocation is needed.
     if (renderPassCount == m_passes.size () && !m_finalPassDrawsToScene && m_finalPassRouting.has_value ()) {
-	const auto& result = m_finalPassRouting->offscreenTarget;
+	const auto result = skipSceneBlending
+	    ? std::static_pointer_cast<const CFBO> (m_finalPassRouting->input)
+	    : m_finalPassRouting->offscreenTarget;
 	if (result != m_mainFBO) {
 	    GLint readFramebuffer, drawFramebuffer;
 	    glGetIntegerv (GL_READ_FRAMEBUFFER_BINDING, &readFramebuffer);
