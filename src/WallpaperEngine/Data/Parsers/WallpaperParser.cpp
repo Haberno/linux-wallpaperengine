@@ -51,6 +51,11 @@ SceneUniquePtr WallpaperParser::parseScene (const JSON& file, Project& project) 
     const auto& properties = project.properties;
     // 3D scenes author the projection values in "general", 2D scenes in "camera"
     const auto& projectionSource = isPerspective ? general : camera;
+    // Native applies the general table (fov/nearz/farz) to 2D scenes as well; perspective
+    // particles in 2D scenes depend on it. Keep the camera block as the legacy fallback.
+    const auto projectionValueSource = [&general, &projectionSource] (const char* key) -> const JSON& {
+	return general.find (key) != general.end () ? general : projectionSource;
+    };
     // Runtime zoom is also authored in general by 2D scenes. Reading only the
     // editor camera silently drops their overscan and exposes clear color when
     // parallax moves a canvas-sized background. Keep the legacy camera fallback.
@@ -227,9 +232,9 @@ SceneUniquePtr WallpaperParser::parseScene (const JSON& file, Project& project) 
                     .height = isPerspective || projection.optional ("auto", false) ? 0 : projection.require <int> ("height", "Projection must have a height"),
                     .isAuto = !isPerspective && projection.optional ("auto", false),
                     .isPerspective = isPerspective,
-                    .nearz = projectionSource.user ("nearz", properties, isPerspective ? 0.1f : 0.0f),
-                    .farz = projectionSource.user ("farz", properties, 1000.0f),
-		    .fov = projectionSource.user ("fov", properties, 50.0f),
+                    .nearz = projectionValueSource ("nearz").user ("nearz", properties, isPerspective ? 0.1f : 0.0f),
+                    .farz = projectionValueSource ("farz").user ("farz", properties, 1000.0f),
+		    .fov = projectionValueSource ("fov").user ("fov", properties, 50.0f),
 		    .zoom = zoomSource.user ("zoom", properties, 1.0f)
                 }
             },
