@@ -197,24 +197,15 @@ bool CTexture::isBlockCompressedPayload (
 }
 
 void CTexture::setupResolution () {
-    if (this->isAnimated ()) {
+    if (this->m_header->freeImageFormat != FIF_UNKNOWN) {
+	// Encoded images upload their mip dimensions, including animated atlases
+	// whose TEXI storage dimensions still describe power-of-two padding.
+	const auto& mipmap = this->m_header->images.at (0).front ();
+	this->m_resolution = { mipmap->width, mipmap->height, this->m_header->width, this->m_header->height };
+    } else {
 	// Shader resolution describes the atlas; getRealWidth/Height describe its animation canvas.
 	this->m_resolution = { this->m_header->textureWidth, this->m_header->textureHeight, this->m_header->width,
 			       this->m_header->height };
-    } else {
-	if (this->m_header->freeImageFormat != FIF_UNKNOWN) {
-	    // wpengine-texture format always has one mipmap
-	    // get first image size
-	    const auto element = this->m_header->images.find (0)->second.begin ();
-
-	    // set the texture resolution
-	    this->m_resolution
-		= { (*element)->width, (*element)->height, this->m_header->width, this->m_header->height };
-	} else {
-	    // set the texture resolution
-	    this->m_resolution = { this->m_header->textureWidth, this->m_header->textureHeight, this->m_header->width,
-				   this->m_header->height };
-	}
     }
 }
 
