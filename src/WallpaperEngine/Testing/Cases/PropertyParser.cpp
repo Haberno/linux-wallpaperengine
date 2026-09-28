@@ -1,6 +1,7 @@
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/catch_approx.hpp>
 
+#include <array>
 #include <limits>
 
 #include "WallpaperEngine/Data/Builders/ColorBuilder.h"
@@ -16,6 +17,120 @@ using WallpaperEngine::Data::Model::PropertyAnimation;
 using WallpaperEngine::Data::Model::PropertyKeyframe;
 using WallpaperEngine::Data::Parsers::PropertyParser;
 using WallpaperEngine::Data::Parsers::UserSettingParser;
+
+TEST_CASE ("Combo visibility user bindings match exact option strings", "[user-property-binding]") {
+    const char* choices[] = { "1", "2", "3" };
+    const struct {
+	const char* condition;
+	bool seed;
+	bool visible[3];
+    } bindings[] = {
+	{ "1", false, { true, false, false } },
+	{ "2", true, { false, true, false } },
+	{ "3", false, { false, false, true } },
+	{ "absent", true, { false, false, false } },
+	{ "01", true, { false, false, false } },
+	{ "1 ", true, { false, false, false } },
+    };
+    JSON data = JSON::parse (R"({"type":"combo","value":"1","options":[
+        {"label":"Choice 1","value":"1"},{"label":"Choice 2","value":"2"},
+        {"label":"Choice 3","value":"3"}]})");
+    for (const auto& binding : bindings) {
+	for (int initial = 0; initial < 3; ++initial) {
+	    INFO ("condition=" << binding.condition << " initial=" << choices[initial]);
+	    data["value"] = choices[initial];
+	    const auto property = PropertyParser::parse (data, "choice");
+	    const auto setting = UserSettingParser::parse (JSON {
+		{ "value", binding.seed },
+		{ "user", { { "name", "choice" }, { "condition", binding.condition } } },
+	    }, { { "choice", property } });
+	    const auto authored = UserSettingParser::parse (JSON { { "value", binding.seed } }, {});
+	    CHECK (setting->value->getBool () == binding.visible[initial]);
+	    CHECK (authored->value->getBool () == binding.seed);
+	    CHECK (property->getString () == choices[initial]);
+
+	    auto observedSource = DynamicValue::UpdateSource::Initialization;
+	    const auto disconnect = setting->value->listen ([&] (const DynamicValue&, DynamicValue::UpdateSource source) {
+		observedSource = source;
+	    });
+	    // Later transitions exercise the fork's listener path, not native live IPC.
+	    for (const int selected : { 1, 2, 0 }) {
+		INFO ("selected=" << choices[selected]);
+		observedSource = DynamicValue::UpdateSource::Initialization;
+		property->update (std::string (choices[selected]), DynamicValue::UpdateSource::User);
+		CHECK (setting->value->getBool () == binding.visible[selected]);
+		CHECK (observedSource == DynamicValue::UpdateSource::User);
+		CHECK (authored->value->getBool () == binding.seed);
+	    }
+	    disconnect ();
+	}
+    }
+}
+
+TEST_CASE ("Slider user bindings splat every vector component", "[user-property-binding]") {
+    using WallpaperEngine::Data::Model::UserSettingUniquePtr;
+    const char* seeds[] = { "0.125 0.375", "0.125 0.375 0.625", "0.125 0.375 0.625 0.875" };
+    // These four initial scalar values and the distinct unbound vectors have native controls.
+    for (const float initial : { 0.5f, 0.25f, 0.0f, -0.5f }) {
+	INFO ("initial=" << initial);
+	const auto property = PropertyParser::parse (JSON {
+	    { "type", "slider" }, { "value", initial }, { "min", -1 }, { "max", 1 }, { "step", 0.125 },
+	}, "scalar");
+	std::array<UserSettingUniquePtr, 3> bound, authored;
+	for (size_t i = 0; i < bound.size (); ++i) {
+	    bound[i] = UserSettingParser::parse (JSON { { "value", seeds[i] }, { "user", "scalar" } },
+		{ { "scalar", property } });
+	    authored[i] = UserSettingParser::parse (JSON { { "value", seeds[i] } }, {});
+	}
+	const auto check = [&] (float expected) {
+	    CHECK (bound[0]->value->getVec2 () == glm::vec2 (expected, expected));
+	    CHECK (bound[1]->value->getVec3 () == glm::vec3 (expected, expected, expected));
+	    CHECK (bound[2]->value->getVec4 () == glm::vec4 (expected, expected, expected, expected));
+	    CHECK (authored[0]->value->getVec2 () == glm::vec2 (0.125f, 0.375f));
+	    CHECK (authored[1]->value->getVec3 () == glm::vec3 (0.125f, 0.375f, 0.625f));
+	    CHECK (authored[2]->value->getVec4 () == glm::vec4 (0.125f, 0.375f, 0.625f, 0.875f));
+	};
+	check (initial);
+	std::array<DynamicValue::UpdateSource, 3> sources;
+	std::array<std::function<void ()>, 3> disconnect;
+	for (size_t i = 0; i < bound.size (); ++i) {
+	    disconnect[i] = bound[i]->value->listen ([&, i] (const DynamicValue&, DynamicValue::UpdateSource source) {
+		sources[i] = source;
+	    });
+	}
+	const struct { const char* input; float expected; } updates[] = {
+	    { "0.25", 0.25f }, { "0", 0.0f }, { "-0.5", -0.5f }, { "0.5", 0.5f },
+	};
+	for (const auto& update : updates) {
+	    INFO ("updated scalar=" << update.input);
+	    sources.fill (DynamicValue::UpdateSource::Initialization);
+	    property->update (std::string (update.input), DynamicValue::UpdateSource::User);
+	    check (update.expected);
+	    for (const auto source : sources) CHECK (source == DynamicValue::UpdateSource::User);
+	}
+	for (const auto& release : disconnect) release ();
+    }
+}
+
+TEST_CASE ("User text bindings preserve numeric-looking strings", "[user-property-binding]") {
+    const auto property = PropertyParser::parse (
+	JSON { { "type", "textinput" }, { "value", "01" } }, "caption");
+    const auto setting = UserSettingParser::parse (
+	JSON { { "value", "authored caption" }, { "user", "caption" } }, { { "caption", property } });
+    CHECK (setting->value->getType () == DynamicValue::String);
+    CHECK (setting->value->getString () == "01");
+    for (const std::string text : { "0.5", "0.125 0.375", "song title with spaces", "" }) {
+	property->update (text, DynamicValue::UpdateSource::User);
+	CHECK (setting->value->getType () == DynamicValue::String);
+	CHECK (setting->value->getString () == text);
+    }
+    const auto authoredNumber = UserSettingParser::parse (JSON { { "value", "0.5" } }, {});
+    CHECK (authoredNumber->value->getType () == DynamicValue::Float);
+    CHECK (authoredNumber->value->getFloat () == 0.5f);
+    const auto authoredVector = UserSettingParser::parse (JSON { { "value", "0.125 0.375" } }, {});
+    CHECK (authoredVector->value->getType () == DynamicValue::Vec2);
+    CHECK (authoredVector->value->getVec2 () == glm::vec2 (0.125f, 0.375f));
+}
 
 TEST_CASE ("Linked property curves share their parent's pause, seek and mirror clock", "[property-animation]") {
     PropertyAnimation parent { .fps = 10.0f, .length = 10.0f, .mode = "mirror", .relative = false,
