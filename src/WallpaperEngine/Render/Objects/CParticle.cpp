@@ -1632,91 +1632,19 @@ InitializerFunc CParticle::createTurbulentVelocityRandomInitializer (const Turbu
 
     return [this, speedMin, speedMax, offsetVal, scaleVal, forwardVal, timeScaleVal, phaseMinVal, phaseMaxVal, rightVal,
 	    speedOverride] (ParticleInstance& p) {
-	// Get direction parameters
-	glm::vec3 forward = forwardVal->getVec3 ();
-	glm::vec3 right = rightVal->getVec3 ();
-	// Y-flip for coordinate system conversion
-	forward.y = -forward.y;
-	right.y = -right.y;
-
-	if (glm::length (forward) > 0.0001f) {
-	    forward = glm::normalize (forward);
-	} else {
-	    // Default forward direction when not specified (up in centered space)
-	    forward = glm::vec3 (0.0f, 1.0f, 0.0f);
-	}
-	if (glm::length (right) > 0.0001f) {
-	    right = glm::normalize (right);
-	} else {
-	    right = glm::vec3 (1.0f, 0.0f, 0.0f);
-	}
-
-	float speed = WallpaperEngine::Maths::randomFloat (m_rng, speedMin->getFloat (), speedMax->getFloat ());
-	float scale = scaleVal->getFloat ();
-	float offset = offsetVal->getFloat ();
-	float timeScale = timeScaleVal->getFloat ();
-	float phaseMin = phaseMinVal->getFloat ();
-	float phaseMax = phaseMaxVal->getFloat ();
-
-	// Sample noise at particle position + time-based offset.
-	// timescale shifts the noise field over time so particles spawned at different
-	// times get gradually changing directions (creates smooth evolving vapor stream).
-	// Position component provides spatial coherence for nearby particles.
-	glm::vec3 noisePos = p.position * 0.1f;
-	noisePos += glm::vec3 (static_cast<float> (m_time) * timeScale);
-
-	// Phase adds per-particle randomization to noise position
-	float phase = WallpaperEngine::Maths::randomFloat (m_rng, phaseMin, phaseMax);
-	glm::vec3 samplePos = noisePos + glm::vec3 (phase, phase * 0.7f, phase * 1.3f);
-
-	// Sample curl noise for direction and normalize
-	glm::vec3 result = curlNoise (samplePos);
-	float len = glm::length (result);
-	if (len < 0.0001f) {
-	    result = forward;
-	} else {
-	    result = result / len;
-	}
-
-	// Scale limits how far direction can deviate from forward
-	if (scale < 2.0f) {
-	    float cosAngle = glm::dot (result, forward);
-	    float angle = std::acos (glm::clamp (cosAngle, -1.0f, 1.0f)) / glm::pi<float> ();
-	    float maxAngle = scale / 2.0f;
-
-	    if (angle > maxAngle && maxAngle > 0.0001f) {
-		glm::vec3 axis = glm::cross (result, forward);
-		float axisLen = glm::length (axis);
-		if (axisLen > 0.0001f) {
-		    axis = axis / axisLen;
-		    float rotAngle = (angle - maxAngle) * glm::pi<float> ();
-		    glm::mat3 rot = glm::mat3 (glm::rotate (glm::mat4 (1.0f), rotAngle, axis));
-		    result = rot * result;
-		}
-	    }
-	}
-
-	// Offset rotates result around right axis (tilts up/down)
-	if (std::abs (offset) > 0.0001f) {
-	    glm::mat3 rot = glm::mat3 (glm::rotate (glm::mat4 (1.0f), -offset, right));
-	    result = rot * result;
-	}
-
-	// For 2D/orthographic particles (flags & 4 == 0), project direction onto XY plane.
-	// curlNoise is 3D but z-drift is meaningless for 2D particles and causes
-	// rope segments to diverge in depth, breaking visual connectivity.
-	if (!getScene ().getScene ().camera.projection.isPerspective && (m_particle.flags & 4) == 0) {
-	    result.z = 0.0f;
-	    float len2d = glm::length (result);
-	    if (len2d > 0.0001f) {
-		result /= len2d;
-	    }
-	}
-
-	// Apply speed and instance override
-	glm::vec3 finalVel = result * speed * speedOverride->getFloat ();
-
-	p.velocity += finalVel;
+	// Native opcode 9 rotates the authored forward vector with scalar time
+	// noise. Sampling spatial curl made adjacent ribbon births point apart.
+	const float phase = WallpaperEngine::Maths::randomFloat (m_rng, phaseMinVal->getFloat (), phaseMaxVal->getFloat ());
+	const float speed = WallpaperEngine::Maths::randomFloat (m_rng, speedMin->getFloat (), speedMax->getFloat ());
+	const float timeScale = timeScaleVal->getFloat () * m_turbulenceRate;
+	const float sample = (getScene ().getTime () + phase) * timeScale;
+	const float angle = glm::pi<float> () * scaleVal->getFloat () * simplexNoise1D (sample) + offsetVal->getFloat ();
+	const glm::vec3 direction = glm::mat3 (glm::rotate (glm::mat4 (1.0f), angle, rightVal->getVec3 ()))
+	    * forwardVal->getVec3 ();
+	const float speedMultiplier = (m_particle.flags & 16) != 0 ? 1.0f : speedOverride->getFloat ();
+	// Preserve authored forward magnitude; convert to simulation coordinates
+	// only after rotation in Wallpaper Engine's coordinate system.
+	p.velocity += direction * glm::vec3 (1.0f, -1.0f, 1.0f) * speed * speedMultiplier;
     };
 }
 
@@ -2947,10 +2875,11 @@ void CParticle::updateParticleViewProjection () {
 }
 
 void CParticle::updateParticleRenderVars () {
-    // Rope-trail geometry already contains the current, partially completed segment.
-    // A time offset of one maps every independent history from head UV 0 to tail UV 1.
+    // Native 1402366f0 supplies the elapsed fraction of the history interval.
+    // The live head supplies geometry; this phase advances its texture between samples.
     // Sprite trails use the authored length limits directly in genericparticle.
-    m_renderVar0 = m_useRopeTrailRenderer ? glm::vec4 (0.0f, 0.0f, 1.0f, 0.0f)
+    const float trailPhase = m_ropeHistoryTimer / (std::max (m_trailLength, 0.001f) / std::max (2, m_ropeSegments));
+    m_renderVar0 = m_useRopeTrailRenderer ? glm::vec4 (0.0f, 0.0f, trailPhase, 0.0f)
 					  : glm::vec4 (m_trailLength, m_trailMaxLength, m_trailMinLength, 0.0f);
 
     if (const auto texture = getTexture (); texture && texture->isAnimated () && !texture->getFrames ().empty ()) {
@@ -3143,6 +3072,7 @@ void CParticle::renderRopeTrail () {
     std::vector<glm::vec4> splineColors;
     points.reserve (static_cast<size_t> (m_ropeSegments + 1));
 
+    const float trailPhase = m_ropeHistoryTimer / (std::max (m_trailLength, 0.001f) / std::max (2, m_ropeSegments));
     auto catmullRom = [] (const glm::vec3& p0, const glm::vec3& p1, const glm::vec3& p2, const glm::vec3& p3,
 			  float t) -> glm::vec3 {
 	const float t2 = t * t;
@@ -3166,15 +3096,6 @@ void CParticle::renderRopeTrail () {
 		return;
 	    }
 
-	    if (!points.empty ()) {
-		const glm::vec3 delta = point.position - points.back ().position;
-		if (glm::dot (delta, delta) <= 0.000001f) {
-		    // Preserve the newest visual state without emitting a zero-length
-		    // segment, whose normalized tangent would be undefined in the shader.
-		    points.back () = point;
-		    return;
-		}
-	    }
 	    points.push_back (point);
 	};
 
@@ -3205,12 +3126,14 @@ void CParticle::renderRopeTrail () {
 	    const auto& point2 = points[segment + 1];
 	    const auto& point0 = (segment > 0) ? points[segment - 1] : point1;
 	    const auto& point3 = (segment + 2 < points.size ()) ? points[segment + 2] : point2;
+	    const glm::vec3 intervalDelta = point2.position - point1.position;
+	    const bool stationaryInterval = glm::dot (intervalDelta, intervalDelta) <= 0.000001f;
 
 	    for (int step = 0; step < subdivision; step++) {
 		const float t = static_cast<float> (step) / static_cast<float> (subdivision);
 		const uint32_t index = segment * subdivision + step;
-		splinePositions[index]
-		    = catmullRom (point0.position, point1.position, point2.position, point3.position, t);
+		splinePositions[index] = stationaryInterval ? point1.position
+		    : catmullRom (point0.position, point1.position, point2.position, point3.position, t);
 		// Wallpaper Engine's rope history contains positions only. Visual state
 		// remains attached to the live particle so alpha/size operators fade the
 		// complete trail instead of leaving bright historical samples behind.
@@ -3237,7 +3160,12 @@ void CParticle::renderRopeTrail () {
 
 	const uint32_t subSegmentCount = totalPoints - 1;
 	const float uvScale = (m_ropeUVScale > 0.0f) ? m_ropeUVScale : 1.0f;
-	const float trailLength = static_cast<float> (subSegmentCount) / uvScale + 1.0f;
+	// The first segment contains only trailPhase of a history interval. While
+	// filling, stretch to the birth point; once full, keep the texture duration
+	// fixed so the oldest segment disappears beyond UV 1 before being removed.
+	const float usableLength = (static_cast<float> (segmentCount - 1)
+	    + (particle.trailHistory.size () < static_cast<size_t> (m_ropeSegments) ? trailPhase : 0.0f)) / uvScale;
+	if (usableLength <= 0.0f) continue;
 
 	for (uint32_t segment = 0; segment < subSegmentCount; segment++) {
 	    if ((vertexIndex + 4) * ROPE_FLOATS_PER_VERTEX > m_vertices.size ()
@@ -3248,6 +3176,21 @@ void CParticle::renderRopeTrail () {
 
 	    const glm::vec3& positionStart = splinePositions[segment];
 	    const glm::vec3& positionEnd = splinePositions[segment + 1];
+	    const glm::vec3 delta = positionEnd - positionStart;
+	    // Keep the history index even when the live head coincides with a sample.
+	    if (glm::dot (delta, delta) <= 0.000001f) continue;
+
+	    // CPU subdivisions must preserve the native shader's history-time UVs.
+	    // Pack each smaller interval into its existing length/position inputs.
+	    const uint32_t historySegment = segment / subdivision;
+	    const float segmentFraction = static_cast<float> (segment % subdivision) / subdivision;
+	    const float intervalLength = historySegment == 0 ? trailPhase : 1.0f;
+	    if (intervalLength <= 0.0f) continue;
+	    const float intervalStart = historySegment == 0 ? segmentFraction * trailPhase
+		: static_cast<float> (historySegment - 1) + trailPhase + segmentFraction;
+	    const float shaderLength = usableLength * subdivision / (segment == 0 ? 1.0f : intervalLength);
+	    const float shaderPosition = segment == 0 ? 0.0f
+		: intervalStart * subdivision / intervalLength + 1.0f - trailPhase;
 	    const glm::vec3& positionPrevious = (segment > 0) ? splinePositions[segment - 1] : positionStart;
 	    const glm::vec3& positionAfter = (segment + 2 < totalPoints) ? splinePositions[segment + 2] : positionEnd;
 	    const float sizeStart = splineSizes[segment];
@@ -3264,11 +3207,11 @@ void CParticle::renderRopeTrail () {
 		m_vertices[base + 4] = positionEnd.x;
 		m_vertices[base + 5] = positionEnd.y;
 		m_vertices[base + 6] = positionEnd.z;
-		m_vertices[base + 7] = trailLength;
+		m_vertices[base + 7] = shaderLength + 1.0f;
 		m_vertices[base + 8] = positionPrevious.x;
 		m_vertices[base + 9] = positionPrevious.y;
 		m_vertices[base + 10] = positionPrevious.z;
-		m_vertices[base + 11] = static_cast<float> (segment);
+		m_vertices[base + 11] = shaderPosition;
 		m_vertices[base + 12] = positionAfter.x;
 		m_vertices[base + 13] = positionAfter.y;
 		m_vertices[base + 14] = positionAfter.z;

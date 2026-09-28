@@ -24,6 +24,23 @@ using WallpaperEngine::Render::Objects::calculateFixedParticleOrientation;
 using WallpaperEngine::Render::Objects::calculateBillboardParticleOrientation;
 using WallpaperEngine::Render::Objects::ParticleInstance;
 
+TEST_CASE ("turbulent velocity uses the native scalar time field", "[particle][noise]") {
+    using WallpaperEngine::Render::Utils::simplexNoise1D;
+    // Values independently decoded from native 14027b090 and its permutation.
+    const struct { float point; float expected; } samples[] = {
+        { -1.25f, -.435677737f }, { -1.0f, 0 }, { -.75f, .294581980f },
+        { -.5f, -.187470704f }, { -.25f, -.555988610f }, { 0, 0 },
+        { .1f, .303085059f }, { .25f, .599402666f }, { .4f, .589547396f },
+        { .5f, .437431663f }, { .75f, .010546131f }, { .9f, -.034237221f },
+        { 1.0f, 0 }, { 1.25f, .097989067f }, { 255.75f, -.555988610f },
+        { 256.25f, .599402666f }, { -256.75f, .294581980f }
+    };
+    for (const auto& sample : samples) {
+        CAPTURE (sample.point);
+        CHECK (simplexNoise1D (sample.point) == Catch::Approx (sample.expected).margin (0.000002f));
+    }
+}
+
 TEST_CASE ("turbulence simplex preserves native corner hashing and rank ties", "[particle][noise]") {
     using WallpaperEngine::Render::Utils::simplexNoise3D;
     CHECK (simplexNoise3D (0, 0, 0) == 0.0f);
