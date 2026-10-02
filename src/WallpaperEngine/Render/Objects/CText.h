@@ -117,6 +117,7 @@ private:
     bool initFreeType ();
     bool loadEmbeddedFont ();
     bool loadSystemFont ();
+    FT_Face fontForGlyph (uint32_t code);
     unsigned int currentFontSize () const;
     TextLayoutLimits currentLayoutLimits () const;
     glm::vec2 currentSpacing () const;
@@ -139,6 +140,8 @@ private:
 
     FT_Library m_ftLibrary = nullptr;
     FT_Face m_ftFace = nullptr;
+    std::unordered_map<std::string, FT_Face> m_fallbackFaces;
+    std::unordered_map<uint32_t, FT_Face> m_glyphFaces;
     /** shared by every text object using the same font file; must outlive m_ftFace */
     std::shared_ptr<const std::vector<uint8_t>> m_fontData;
 

@@ -401,6 +401,9 @@ CText::~CText () {
     if (m_ftFace != nullptr) {
 	FT_Done_Face (m_ftFace);
     }
+    for (const auto& [key, face] : m_fallbackFaces) {
+	FT_Done_Face (face);
+    }
     if (m_ftLibrary != nullptr) {
 	FT_Done_FreeType (m_ftLibrary);
     }
@@ -1015,6 +1018,58 @@ bool CText::loadSystemFont () {
     return true;
 }
 
+FT_Face CText::fontForGlyph (const uint32_t code) {
+    if (FT_Get_Char_Index (m_ftFace, code) != 0) return m_ftFace;
+    if (const auto found = m_glyphFaces.find (code); found != m_glyphFaces.end ()) return found->second;
+
+    // Keep the authored face's existing glyphs and line metrics. Ask Fontconfig
+    // for a matching installed face only when its charmap misses a character.
+    auto* pattern = FcPatternCreate ();
+    auto* characters = FcCharSetCreate ();
+    FcCharSetAddChar (characters, code);
+    FcPatternAddCharSet (pattern, FC_CHARSET, characters);
+    FcCharSetDestroy (characters);
+    FcPatternAddString (pattern, FC_FAMILY, reinterpret_cast<const FcChar8*> (
+	m_ftFace->family_name != nullptr ? m_ftFace->family_name : "sans-serif"));
+    FcPatternAddInteger (pattern, FC_WEIGHT,
+	m_ftFace->style_flags & FT_STYLE_FLAG_BOLD ? FC_WEIGHT_BOLD : FC_WEIGHT_REGULAR);
+    FcPatternAddInteger (pattern, FC_SLANT,
+	m_ftFace->style_flags & FT_STYLE_FLAG_ITALIC ? FC_SLANT_ITALIC : FC_SLANT_ROMAN);
+    FcPatternAddBool (pattern, FC_SCALABLE, FcTrue);
+    FcConfigSubstitute (nullptr, pattern, FcMatchPattern);
+    FcDefaultSubstitute (pattern);
+    FcResult result;
+    auto* match = FcFontMatch (nullptr, pattern, &result);
+    FcPatternDestroy (pattern);
+
+    FT_Face face = m_ftFace;
+    if (match != nullptr) {
+	FcChar8* file = nullptr;
+	int index = 0;
+	FcPatternGetInteger (match, FC_INDEX, 0, &index);
+	if (FcPatternGetString (match, FC_FILE, 0, &file) == FcResultMatch) {
+	    const std::string key = std::string (reinterpret_cast<const char*> (file)) + ":" + std::to_string (index);
+	    if (const auto found = m_fallbackFaces.find (key); found != m_fallbackFaces.end ()) {
+		face = found->second;
+	    } else {
+		FT_Face fallback = nullptr;
+		if (FT_New_Face (m_ftLibrary, reinterpret_cast<const char*> (file), index, &fallback) == 0) {
+		    if (FT_IS_SCALABLE (fallback) && FT_Get_Char_Index (fallback, code) != 0
+			&& FT_Set_Char_Size (fallback, 0, m_lastFontSize, 300, 300) == 0) {
+			m_fallbackFaces.emplace (key, fallback);
+			face = fallback;
+		    } else {
+			FT_Done_Face (fallback);
+		    }
+		}
+	    }
+	}
+	FcPatternDestroy (match);
+    }
+    m_glyphFaces.emplace (code, face);
+    return face;
+}
+
 unsigned int CText::currentFontSize () const {
     // Native keeps fractional points in FreeType's 26.6 units at 300 DPI.
     // Converting to whole pixels first changes both ink and padded line bounds.
@@ -1073,8 +1128,11 @@ void CText::rebuildTextureFrom (const std::string& text) {
     // Safe to call repeatedly: GL handles (texture, VAO, VBO) are reused when
     // already allocated, so dynamic/scripted text can regenerate the glyph
     // bitmap every time the rendered string changes without leaking.
-    FT_GlyphSlot slot = m_ftFace->glyph;
-    FT_Set_Transform (m_ftFace, nullptr, nullptr);
+    const auto loadGlyph = [this] (uint32_t code, FT_Int32 flags, FT_Vector delta = { 0, 0 }) -> FT_GlyphSlot {
+	const auto face = fontForGlyph (code);
+	FT_Set_Transform (face, nullptr, &delta);
+	return FT_Load_Char (face, code, flags) == 0 ? face->glyph : nullptr;
+    };
     m_lastSpacing = currentSpacing ();
     m_lastPadding = currentPadding ();
 
@@ -1092,9 +1150,9 @@ void CText::rebuildTextureFrom (const std::string& text) {
 	float x = 0.0f;
     };
     std::vector<Line> lines;
-    for (auto& line : layoutTextLines (text, m_lastLayoutLimits, [this, slot] (uint32_t code) {
-	     return FT_Load_Char (m_ftFace, code, FT_LOAD_DEFAULT) == 0
-		 ? static_cast<float> (slot->advance.x >> 6) + m_lastSpacing.x : 0.0f;
+    for (auto& line : layoutTextLines (text, m_lastLayoutLimits, [this, &loadGlyph] (uint32_t code) {
+	     const auto slot = loadGlyph (code, FT_LOAD_DEFAULT);
+	     return slot != nullptr ? static_cast<float> (slot->advance.x >> 6) + m_lastSpacing.x : 0.0f;
 	 })) {
 	lines.push_back ({ .text = std::move (line) });
     }
@@ -1102,8 +1160,8 @@ void CText::rebuildTextureFrom (const std::string& text) {
     float maxLineWidth = 0.0f;
     for (auto& line : lines) {
 	for (size_t offset = 0; offset < line.text.size ();) {
-	    if (FT_Load_Char (m_ftFace, static_cast<FT_ULong> (nextUtf8Codepoint (line.text, offset)), FT_LOAD_RENDER)
-		!= 0) {
+	    const auto slot = loadGlyph (nextUtf8Codepoint (line.text, offset), FT_LOAD_RENDER);
+	    if (slot == nullptr) {
 		continue;
 	    }
 	    line.width += static_cast<float> (slot->advance.x >> 6) + m_lastSpacing.x;
@@ -1128,13 +1186,12 @@ void CText::rebuildTextureFrom (const std::string& text) {
     // FreeType translates scalable glyph outlines at 26.6 precision. Keep the
     // integer pen in the bitmap destination and apply its fractional part to the
     // outline, so measuring and rasterizing use identical subpixel ink bounds.
-    const auto loadPositionedGlyph = [this] (uint32_t code, float x, float y) {
+    const auto loadPositionedGlyph = [&loadGlyph] (uint32_t code, float x, float y) {
 	FT_Vector delta = {
 	    static_cast<FT_Pos> (std::round ((x - std::floor (x)) * 64.0f)),
 	    static_cast<FT_Pos> (std::round (-(y - std::floor (y)) * 64.0f)),
 	};
-	FT_Set_Transform (m_ftFace, nullptr, &delta);
-	return FT_Load_Char (m_ftFace, static_cast<FT_ULong> (code), FT_LOAD_RENDER);
+	return loadGlyph (code, FT_LOAD_RENDER, delta);
     };
 
     // Measure the actual bitmap bounds in a first-baseline coordinate system with +y down.
@@ -1151,7 +1208,8 @@ void CText::rebuildTextureFrom (const std::string& text) {
 	const float baseline = static_cast<float> (i) * lineHeight;
 
 	for (size_t offset = 0; offset < line.text.size ();) {
-	    if (loadPositionedGlyph (nextUtf8Codepoint (line.text, offset), penX, baseline) != 0) {
+	    const auto slot = loadPositionedGlyph (nextUtf8Codepoint (line.text, offset), penX, baseline);
+	    if (slot == nullptr) {
 		continue;
 	    }
 
@@ -1193,7 +1251,8 @@ void CText::rebuildTextureFrom (const std::string& text) {
 	const float baseline = static_cast<float> (i) * lineHeight;
 
 	for (size_t offset = 0; offset < line.text.size ();) {
-	    if (loadPositionedGlyph (nextUtf8Codepoint (line.text, offset), penX, baseline) != 0) {
+	    const auto slot = loadPositionedGlyph (nextUtf8Codepoint (line.text, offset), penX, baseline);
+	    if (slot == nullptr) {
 		continue;
 	    }
 
@@ -1389,6 +1448,9 @@ void CText::render () {
     if (fontSize != m_lastFontSize) {
 	m_lastFontSize = fontSize;
 	FT_Set_Char_Size (m_ftFace, 0, m_lastFontSize, 300, 300);
+	for (const auto& [key, face] : m_fallbackFaces) {
+	    FT_Set_Char_Size (face, 0, m_lastFontSize, 300, 300);
+	}
 	rebuildTextureFrom (renderedText);
 	rebuiltGlyphs = true;
     } else if (renderedText != m_lastRenderedText || currentLayoutLimits () != m_lastLayoutLimits
