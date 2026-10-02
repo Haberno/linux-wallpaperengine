@@ -996,3 +996,131 @@ TEST_CASE ("control point attraction fades through the full authored radius", "[
     CHECK (calculateControlPointAttraction (glm::vec3 (0.0f), 200.0f, 1000.0f, 0.1f) == glm::vec3 (0.0f));
     CHECK (calculateControlPointAttraction ({ 1.0f, 0.0f, 0.0f }, 200.0f, 0.0f, 0.1f) == glm::vec3 (0.0f));
 }
+
+TEST_CASE ("two-control-point remaps retain only the measured linear subset", "[particle][remap]") {
+    WallpaperEngine::Data::Model::Project project {};
+    const auto object = WallpaperEngine::Data::Parsers::ObjectParser::parse (
+        WallpaperEngine::Data::JSON::JSON::parse (R"({"id":380,"particle":{
+            "initializer":[
+                {"name":"remapinitialvalue","input":"positionbetweentwocontrolpoints","output":"velocity","operation":"remap"},
+                {"name":"remapinitialvalue","output":"positionbetweentwocontrolpoints","operation":"remap"},
+                {"name":"remapinitialvalue","input":"positionbetweentwocontrolpoints","output":"velocity"},
+                {"name":"remapinitialvalue","input":"positionbetweentwocontrolpoints","output":"velocity","operation":"remap","transformfunction":"simplexnoise"}
+            ],"operator":[
+                {"name":"remapvalue","input":"positionbetweentwocontrolpoints","output":"velocity","operation":"remap"},
+                {"name":"remapvalue","input":"maxlifetime","output":"positionbetweentwocontrolpoints","operation":"remap"},
+                {"name":"remapvalue","output":"positionbetweentwocontrolpoints","operation":"remap"},
+                {"name":"remapvalue","input":"positionbetweentwocontrolpoints","output":"velocity","operation":"remap","flags":0},
+                {"name":"remapvalue","input":"positionbetweentwocontrolpoints","output":"velocity","operation":"remap","blendinend":0.5},
+                {"name":"remapvalue","input":"positionbetweentwocontrolpoints","output":"velocity","operation":"remap","outputcomponent":"x"},
+                {"name":"remapvalue","input":"positionbetweentwocontrolpoints","operation":"remap"},
+                {"name":"remapvalue","input":"positionbetweentwocontrolpoints","output":"velocity","operation":"remap","transformfunction":"unknown"}
+            ]}})"), project
+    );
+    const auto* particle = object->as<Particle> ();
+    REQUIRE (particle != nullptr);
+    // Dropping the new parser branches yields zero; treating unknown settings as
+    // linear remaps incorrectly admits the unsupported nodes above.
+    CHECK (particle->initializers.size () == 2);
+    CHECK (particle->operators.size () == 2);
+}
+
+TEST_CASE ("two-control-point scalar input follows the native output pair", "[particle][remap]") {
+    using WallpaperEngine::Render::Objects::applyParticleControlPointRemap;
+    using WallpaperEngine::Render::Objects::ControlPointData;
+    std::vector<ControlPointData> points (4);
+    points[0].position = { -60, 0, 0 };
+    points[1].position = { 60, 0, 0 };
+    points[2].position = { -60, 0, 0 };
+    points[3].position = { 0, 0, 0 };
+    const struct { uint32_t input0, input1, output0, output1; float velocity; int red; } cases[] = {
+        { 0, 1, 0, 1, 15, 147 }, { 2, 3, 0, 1, 15, 147 }, { 0, 1, 2, 3, 30, 166 }
+    };
+    for (const bool initializer : { true, false }) {
+        for (const auto& sample : cases) {
+            CAPTURE (initializer, sample.input0, sample.output0);
+            WallpaperEngine::Data::Model::Project project {};
+            auto data = WallpaperEngine::Data::JSON::JSON::parse (R"({"id":381,"particle":{}})");
+            data["particle"][initializer ? "initializer" : "operator"] = {
+                { { "name", initializer ? "remapinitialvalue" : "remapvalue" },
+                  { "input", "positionbetweentwocontrolpoints" }, { "output", "velocity" },
+                  { "operation", "remap" }, { "outputrangemax", "60 0 0" },
+                  { "inputcontrolpoint0", sample.input0 }, { "inputcontrolpoint1", sample.input1 },
+                  { "outputcontrolpoint0", sample.output0 }, { "outputcontrolpoint1", sample.output1 } }
+            };
+            const auto object = WallpaperEngine::Data::Parsers::ObjectParser::parse (data, project);
+            const auto* definition = object->as<Particle> ();
+            REQUIRE (definition != nullptr);
+            const ControlPointRemap* remap;
+            if (initializer) {
+                REQUIRE (definition->initializers.size () == 1);
+                const auto* parsed = definition->initializers.front ()->as<ControlPointRemapInitializer> ();
+                REQUIRE (parsed != nullptr);
+                remap = &parsed->remap;
+            } else {
+                REQUIRE (definition->operators.size () == 1);
+                const auto* parsed = definition->operators.front ()->as<ControlPointRemapOperator> ();
+                REQUIRE (parsed != nullptr);
+                remap = &parsed->remap;
+            }
+            ParticleInstance particle;
+            particle.position = { -30, 0, 0 };
+            particle.velocity = { 20, 0, 0 };
+            applyParticleControlPointRemap (particle, *remap, points, initializer);
+            CHECK (particle.velocity.x == Catch::Approx (sample.velocity));
+            CHECK (particle.velocity.y == 0);
+            CHECK (particle.velocity.z == 0);
+            // Current native binary, frozen priority probes, .5 + velocity / 200.
+            CHECK (std::lround (255 * (.5f + particle.velocity.x / 200)) == sample.red);
+        }
+    }
+}
+
+TEST_CASE ("two-control-point scalar output preserves perpendicular simulation position", "[particle][remap]") {
+    using WallpaperEngine::Render::Objects::applyParticleControlPointRemap;
+    using WallpaperEngine::Render::Objects::ControlPointData;
+    std::vector<ControlPointData> points (2);
+    points[0].position = { -60, 0, 0 };
+    points[1].position = { 60, 0, 0 };
+    for (const bool initializer : { true, false }) {
+        WallpaperEngine::Data::Model::Project project {};
+        auto data = WallpaperEngine::Data::JSON::JSON::parse (R"({"id":382,"particle":{}})");
+        data["particle"][initializer ? "initializer" : "operator"] = {
+            { { "name", initializer ? "remapinitialvalue" : "remapvalue" },
+              { "input", "maxlifetime" }, { "output", "positionbetweentwocontrolpoints" },
+              { "operation", "remap" }, { "inputrangemax", 200 } }
+        };
+        const auto object = WallpaperEngine::Data::Parsers::ObjectParser::parse (data, project);
+        const auto* definition = object->as<Particle> ();
+        REQUIRE (definition != nullptr);
+        const ControlPointRemap* remap;
+        if (initializer) {
+            REQUIRE (definition->initializers.size () == 1);
+            const auto* parsed = definition->initializers.front ()->as<ControlPointRemapInitializer> ();
+            REQUIRE (parsed != nullptr);
+            remap = &parsed->remap;
+        } else {
+            REQUIRE (definition->operators.size () == 1);
+            const auto* parsed = definition->operators.front ()->as<ControlPointRemapOperator> ();
+            REQUIRE (parsed != nullptr);
+            remap = &parsed->remap;
+        }
+        ParticleInstance particle;
+        // Native readback is (0,45,40); the fork already reflects simulation Y.
+        particle.position = { -30, -45, 40 };
+        particle.velocity = { 20, 0, 0 };
+        particle.lifetime = 100;
+        applyParticleControlPointRemap (particle, *remap, points, initializer);
+        CHECK (particle.position.x == Catch::Approx (0).margin (.001f));
+        CHECK (particle.position.y == -45);
+        CHECK (particle.position.z == 40);
+        CHECK (particle.velocity == glm::vec3 (20, 0, 0));
+        // Reapplying a remap replaces the fraction instead of accumulating it.
+        applyParticleControlPointRemap (particle, *remap, points, initializer);
+        CHECK (particle.position == glm::vec3 (0, -45, 40));
+        points[1].position = points[0].position;
+        applyParticleControlPointRemap (particle, *remap, points, initializer);
+        CHECK (particle.position == glm::vec3 (0, -45, 40));
+        points[1].position = { 60, 0, 0 };
+    }
+}

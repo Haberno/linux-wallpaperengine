@@ -1473,6 +1473,62 @@ EmitterFunc CParticle::createSphereEmitter (const ParticleEmitter& emitter) {
     };
 }
 
+void WallpaperEngine::Render::Objects::applyParticleControlPointRemap (
+    ParticleInstance& particle, const ControlPointRemap& remap,
+    const std::vector<ControlPointData>& controlPoints, const bool initializer
+) {
+    // Native allocates the input pair too, but this scalar input branch reads
+    // the OUTPUT pair (14023d074 / 140244c5e; paired native readback).
+    const glm::vec3 start = controlPoints[remap.outputControlPoint0].position;
+    const glm::vec3 delta = controlPoints[remap.outputControlPoint1].position - start;
+    const float lengthSquared = glm::dot (delta, delta);
+    constexpr float epsilon = std::numeric_limits<float>::epsilon ();
+    // Coincident/tiny output behavior is outside the measured subset. Leave the
+    // particle unchanged instead of inventing a shared native degeneracy rule.
+    if (lengthSquared <= (initializer ? epsilon * epsilon : 0.0f)) return;
+    const float fraction = glm::dot (particle.position - start, delta) / lengthSquared;
+    const float input = remap.mode == ControlPointRemap::Mode::PositionToVelocity ? fraction : particle.lifetime;
+    const glm::vec3 minimum = remap.inputRangeMin->value->getVec3 ();
+    glm::vec3 span = remap.inputRangeMax->value->getVec3 () - minimum;
+    // Both native parsers replace exactly equal range endpoints with FLT_EPSILON.
+    for (int axis = 0; axis < 3; ++axis) if (span[axis] == 0.0f) span[axis] = epsilon;
+    const glm::vec3 normalized = glm::clamp ((glm::vec3 (input) - minimum) / span, glm::vec3 (0), glm::vec3 (1));
+    const glm::vec3 mapped = remap.outputRangeMin->value->getVec3 ()
+        + normalized * (remap.outputRangeMax->value->getVec3 () - remap.outputRangeMin->value->getVec3 ());
+    if (remap.mode == ControlPointRemap::Mode::PositionToVelocity) {
+        // Authored velocity uses the same Y-up coordinates as velocityrandom.
+        particle.velocity = mapped * glm::vec3 (1.0f, -1.0f, 1.0f);
+    } else {
+        // Only replace the longitudinal fraction; retain perpendicular offset.
+        particle.position += delta * (mapped.x - fraction);
+    }
+}
+
+InitializerFunc CParticle::createControlPointRemapInitializer (const ControlPointRemapInitializer& init) {
+    const auto& remap = init.remap;
+    includeControlPoint (remap.inputControlPoint0);
+    includeControlPoint (remap.inputControlPoint1);
+    includeControlPoint (remap.outputControlPoint0);
+    includeControlPoint (remap.outputControlPoint1);
+    return [this, &remap] (ParticleInstance& particle) {
+        applyParticleControlPointRemap (particle, remap, m_controlPoints, true);
+    };
+}
+
+OperatorFunc CParticle::createControlPointRemapOperator (const ControlPointRemapOperator& op) {
+    const auto& remap = op.remap;
+    includeControlPoint (remap.inputControlPoint0);
+    includeControlPoint (remap.inputControlPoint1);
+    includeControlPoint (remap.outputControlPoint0);
+    includeControlPoint (remap.outputControlPoint1);
+    return [&remap] (std::vector<ParticleInstance>& particles, uint32_t count,
+                     const std::vector<ControlPointData>& controlPoints, float, float) {
+        for (uint32_t i = 0; i < count; ++i) {
+            if (particles[i].alive) applyParticleControlPointRemap (particles[i], remap, controlPoints, false);
+        }
+    };
+}
+
 // ========== INITIALIZERS ==========
 
 void CParticle::setupInitializers () {
@@ -1483,7 +1539,9 @@ void CParticle::setupInitializers () {
 
 	InitializerFunc func;
 
-	if (initializer->is<ColorRandomInitializer> ()) {
+	if (initializer->is<ControlPointRemapInitializer> ()) {
+	    func = createControlPointRemapInitializer (*initializer->as<ControlPointRemapInitializer> ());
+	} else if (initializer->is<ColorRandomInitializer> ()) {
 	    func = createColorRandomInitializer (*initializer->as<ColorRandomInitializer> ());
 	} else if (initializer->is<SizeRandomInitializer> ()) {
 	    func = createSizeRandomInitializer (*initializer->as<SizeRandomInitializer> ());
@@ -1867,7 +1925,9 @@ void CParticle::setupOperators () {
 
 	OperatorFunc func;
 
-	if (op->is<MovementOperator> ()) {
+	if (op->is<ControlPointRemapOperator> ()) {
+	    func = createControlPointRemapOperator (*op->as<ControlPointRemapOperator> ());
+	} else if (op->is<MovementOperator> ()) {
 	    func = createMovementOperator (*op->as<MovementOperator> ());
 	} else if (op->is<CapVelocityOperator> ()) {
 	    func = createCapVelocityOperator (*op->as<CapVelocityOperator> ());

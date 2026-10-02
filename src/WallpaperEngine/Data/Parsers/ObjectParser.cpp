@@ -976,10 +976,53 @@ ParticleEmitter ObjectParser::parseParticleEmitter (const JSON& it) {
     }
 }
 
+static std::optional<ControlPointRemap> parseControlPointRemap (
+    const JSON& it, const Properties& properties, const bool initializer
+) {
+    const auto input = it.optional<std::string> ("input", initializer ? "maxlifetime" : "lifetimefraction");
+    const auto output = it.optional<std::string> ("output", "size");
+    const auto operation = it.optional<std::string> ("operation", "multiply");
+    const auto transform = it.optional<std::string> ("transformfunction", "none");
+    const bool positionInput = input == "positionbetweentwocontrolpoints" && output == "velocity";
+    const bool positionOutput = input == "maxlifetime" && output == "positionbetweentwocontrolpoints";
+    const bool defaultBlend = initializer || (it.optional ("blendinstart", 0.0f) == 0.0f
+        && it.optional ("blendinend", 0.0f) == 0.0f && it.optional ("blendoutstart", 1.0f) == 1.0f
+        && it.optional ("blendoutend", 1.0f) == 1.0f);
+    if ((!positionInput && !positionOutput) || operation != "remap" || transform != "none"
+        || it.optional<std::string> ("inputcomponent", "all") != "all"
+        || it.optional<std::string> ("outputcomponent", "all") != "all"
+        || it.optional ("flags", 1u) != 1u || !defaultBlend) {
+        // Keep unsupported transforms explicit: a noise remap is not a linear remap.
+        sLog.error ("Unsupported particle ", initializer ? "remapinitialvalue" : "remapvalue",
+                    " settings (input=", input, ", output=", output, ", operation=", operation,
+                    ", transform=", transform, "); skipping");
+        return std::nullopt;
+    }
+    const auto point = [&it] (const char* key, const int fallback) {
+        return std::min (static_cast<uint32_t> (it.optional (key, fallback)), 7u);
+    };
+    return ControlPointRemap {
+        .mode = positionInput ? ControlPointRemap::Mode::PositionToVelocity
+                              : ControlPointRemap::Mode::LifetimeToPosition,
+        .inputRangeMin = it.user ("inputrangemin", properties, 0.0f),
+        .inputRangeMax = it.user ("inputrangemax", properties, 1.0f),
+        .outputRangeMin = it.user ("outputrangemin", properties, 0.0f),
+        .outputRangeMax = it.user ("outputrangemax", properties, 1.0f),
+        .inputControlPoint0 = point ("inputcontrolpoint0", 0),
+        .inputControlPoint1 = point ("inputcontrolpoint1", 1),
+        .outputControlPoint0 = point ("outputcontrolpoint0", 0),
+        .outputControlPoint1 = point ("outputcontrolpoint1", 1),
+    };
+}
+
 ParticleInitializerUniquePtr ObjectParser::parseParticleInitializer (const JSON& it, const Properties& properties) {
     std::string name = it.optional<std::string> ("name", "");
 
-    if (name == "colorrandom") {
+    if (name == "remapinitialvalue") {
+        auto remap = parseControlPointRemap (it, properties, true);
+        if (remap) return std::make_unique<ControlPointRemapInitializer> (std::move (*remap));
+        return nullptr;
+    } else if (name == "colorrandom") {
 	auto color = [&] (const char* key, const Color& defaultValue) {
 	    const auto value = it.optional (key);
 	    if (value && value->is_string ()) {
@@ -1065,7 +1108,11 @@ ParticleInitializerUniquePtr ObjectParser::parseParticleInitializer (const JSON&
 ParticleOperatorUniquePtr ObjectParser::parseParticleOperator (const JSON& it, const Properties& properties) {
     std::string name = it.optional<std::string> ("name", "");
 
-    if (name == "movement") {
+    if (name == "remapvalue") {
+        auto remap = parseControlPointRemap (it, properties, false);
+        if (remap) return std::make_unique<ControlPointRemapOperator> (std::move (*remap));
+        return nullptr;
+    } else if (name == "movement") {
 	return std::make_unique<MovementOperator> (
 	    it.user ("drag", properties, 0.0f), it.user ("gravity", properties, glm::vec3 (0.0f))
 	);

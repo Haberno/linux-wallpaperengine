@@ -230,6 +230,26 @@ public:
     virtual ~ParticleInitializerBase () = default;
 };
 
+// The measured, linear two-control-point subset of native remap operations.
+struct ControlPointRemap {
+    enum class Mode { PositionToVelocity, LifetimeToPosition };
+    Mode mode;
+    UserSettingUniquePtr inputRangeMin;
+    UserSettingUniquePtr inputRangeMax;
+    UserSettingUniquePtr outputRangeMin;
+    UserSettingUniquePtr outputRangeMax;
+    uint32_t inputControlPoint0;
+    uint32_t inputControlPoint1;
+    uint32_t outputControlPoint0;
+    uint32_t outputControlPoint1;
+};
+
+class ControlPointRemapInitializer : public ParticleInitializerBase {
+public:
+    explicit ControlPointRemapInitializer (ControlPointRemap remap) : remap (std::move (remap)) { }
+    ControlPointRemap remap;
+};
+
 class ColorRandomInitializer : public ParticleInitializerBase {
 public:
     ColorRandomInitializer (UserSettingUniquePtr min, UserSettingUniquePtr max, float exponent = 1.0f) :
@@ -388,6 +408,12 @@ using ParticleInitializerUniquePtr = std::unique_ptr<ParticleInitializerBase>;
 class ParticleOperatorBase : public TypeCaster {
 public:
     virtual ~ParticleOperatorBase () = default;
+};
+
+class ControlPointRemapOperator : public ParticleOperatorBase {
+public:
+    explicit ControlPointRemapOperator (ControlPointRemap remap) : remap (std::move (remap)) { }
+    ControlPointRemap remap;
 };
 
 class MovementOperator : public ParticleOperatorBase {

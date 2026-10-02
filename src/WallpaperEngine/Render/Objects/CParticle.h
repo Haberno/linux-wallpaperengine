@@ -153,6 +153,11 @@ struct ControlPointData {
     void sampleVelocity (const glm::vec3& simulationPosition, float frameTime);
 };
 
+void applyParticleControlPointRemap (
+    ParticleInstance& particle, const ControlPointRemap& remap,
+    const std::vector<ControlPointData>& controlPoints, bool initializer
+);
+
 /**
  * Particle emitter function
  */
@@ -210,6 +215,7 @@ protected:
     EmitterFunc createSphereEmitter (const ParticleEmitter& emitter);
 
     // Initializer creators
+    InitializerFunc createControlPointRemapInitializer (const ControlPointRemapInitializer& init);
     InitializerFunc createColorRandomInitializer (const ColorRandomInitializer& init);
     InitializerFunc createSizeRandomInitializer (const SizeRandomInitializer& init);
     InitializerFunc createAlphaRandomInitializer (const AlphaRandomInitializer& init);
@@ -226,6 +232,7 @@ protected:
     createMapSequenceBetweenControlPointsInitializer (const MapSequenceBetweenControlPointsInitializer& init);
 
     // Operator creators
+    OperatorFunc createControlPointRemapOperator (const ControlPointRemapOperator& op);
     OperatorFunc createMovementOperator (const MovementOperator& op);
     OperatorFunc createReduceMovementNearControlPointOperator (const ReduceMovementNearControlPointOperator& op);
     OperatorFunc createCapVelocityOperator (const CapVelocityOperator& op);
