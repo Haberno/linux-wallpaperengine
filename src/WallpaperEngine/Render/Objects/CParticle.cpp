@@ -678,7 +678,8 @@ bool CParticle::hasLivingParticles () const {
 }
 
 bool CParticle::hasPendingEmission () const {
-    if (m_pendingEmission > 0 || (m_emitting && m_pendingEmitterCount > 0)) return true;
+    // Pause suspends scheduled births; play must still find the retained slot.
+    if (m_pendingEmission > 0 || m_pendingEmitterCount > 0) return true;
     for (const auto& child : m_children) {
 	if (child.renderer->hasPendingEmission ()) return true;
     }
