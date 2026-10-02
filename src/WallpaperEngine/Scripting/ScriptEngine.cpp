@@ -94,7 +94,7 @@ JSModuleDef* scriptengine_module_loader (JSContext* ctx, const char* module, voi
     return it->second->getDefinition ();
 }
 
-JSValue ScriptEngine::dynamicToJs (DynamicValue& value) const {
+JSValue ScriptEngine::dynamicToJs (DynamicValue& value, const bool snapshotVectors) const {
     switch (value.getType ()) {
 	case DynamicValue::Null:
 	    return JS_NULL;
@@ -107,11 +107,14 @@ JSValue ScriptEngine::dynamicToJs (DynamicValue& value) const {
 	case DynamicValue::Boolean:
 	    return JS_NewBool (this->m_context, value.getBool ());
 	case DynamicValue::Vec2:
-	    return this->m_adapters.vec2->instantiate (value);
+	    return snapshotVectors ? this->m_adapters.vec2->instantiate (value, true)
+		: this->m_adapters.vec2->instantiate (value);
 	case DynamicValue::Vec3:
-	    return this->m_adapters.vec3->instantiate (value);
+	    return snapshotVectors ? this->m_adapters.vec3->instantiate (value, true)
+		: this->m_adapters.vec3->instantiate (value);
 	case DynamicValue::Vec4:
-	    return this->m_adapters.vec4->instantiate (value);
+	    return snapshotVectors ? this->m_adapters.vec4->instantiate (value, true)
+		: this->m_adapters.vec4->instantiate (value);
 	default:
 	    return JS_UNDEFINED;
     }
@@ -119,15 +122,9 @@ JSValue ScriptEngine::dynamicToJs (DynamicValue& value) const {
 
 // Wallpaper Engine's SceneScript API exposes object angles in degrees while the scene
 // data stores radians (see the authored values vs. the angle scripts in e.g. workshop
-// scene 3589454154). Angle properties therefore cross the script boundary as plain
-// degree objects instead of live radian adapters.
+// scene 3589454154). Angle properties therefore cross the script boundary as
+// independent degree-valued snapshots.
 static bool isAnglesProperty (const std::string& key) { return key.rfind ("angles_", 0) == 0; }
-
-static bool isControlPointProperty (const std::string& key) {
-    const size_t index = key.starts_with ("instance.controlpointangle") ? 26 : 21;
-    return key.starts_with ("instance.controlpoint") && key.size () > index + 1
-	&& key[index] >= '0' && key[index] <= '7' && key[index + 1] == '_';
-}
 
 static std::string normalizeSceneScriptModuleSyntax (const std::string& source) {
     // Workshop scripts may put an aliased import in the middle of a minified
@@ -253,8 +250,8 @@ static void jsToAngles (JSContext* ctx, JSValue result, JSValue argument, Dynami
     }
 
     const glm::vec3 degrees (xVal, yVal, zVal);
-    // Unlike ordinary vectors, the degree argument is a copy. An unchanged copy
-    // must not overwrite direct layer assignments or rotateObjectSpace() calls.
+    // This angle-specific fallback accepts in-place edits to the degree snapshot.
+    // An unchanged snapshot must not overwrite direct layer assignments or rotateObjectSpace() calls.
     if (!JS_IsObject (result) && degrees == initialDegrees) return;
     source.update (glm::radians (degrees), DynamicValue::UpdateSource::Script);
 }
@@ -268,9 +265,9 @@ static void jsToDynamicValue (JSContext* ctx, JSValue val, DynamicValue& source)
     int tag = JS_VALUE_GET_TAG (val);
 
     if (tag == JS_TAG_UNDEFINED || tag == JS_TAG_UNINITIALIZED || tag == JS_TAG_NULL) {
-	// no return value means "keep the current value": scripts that mutate the passed
-	// vector in place already wrote through the live adapter, and hooks that don't
-	// exist (e.g. a missing init) come back as undefined through call()
+	// No return value means "keep the current value". Callback vector arguments
+	// are snapshots; mutating them alone does not write back to the property.
+	// Missing hooks also return undefined through call().
 	return;
     }
 
@@ -948,9 +945,10 @@ void ScriptEngine::callLifecycleHook (const std::string& key, LoadedModule& load
 
     const bool angles = isAnglesProperty (key);
     const glm::vec3 initialDegrees = angles ? glm::degrees (loaded.value.getVec3 ()) : glm::vec3 (0.0f);
+    // Scripts retain init/update arguments as base values. They must not follow
+    // later property writes, or audio scale multipliers compound every frame.
     JSValue args[] = { angles ? anglesToJs (*this->m_adapters.vec3, loaded.value)
-	: isControlPointProperty (key) ? this->m_adapters.vec3->instantiate (loaded.value, true)
-	: this->dynamicToJs (loaded.value) };
+	: this->dynamicToJs (loaded.value, true) };
     JSValue result = this->call (loaded.module, 1, args, hook);
 
     ScopeGuard guard2 ([this, args, result] () {
@@ -1213,8 +1211,7 @@ void ScriptEngine::tick () {
 	const bool angles = isAnglesProperty (key);
 	const glm::vec3 initialDegrees = angles ? glm::degrees (module.value.getVec3 ()) : glm::vec3 (0.0f);
 	JSValue args[] = { angles ? anglesToJs (*this->m_adapters.vec3, module.value)
-	    : isControlPointProperty (key) ? this->m_adapters.vec3->instantiate (module.value, true)
-	    : this->dynamicToJs (module.value) };
+	    : this->dynamicToJs (module.value, true) };
 	JSValue result = this->call (module.module, 1, args, "update");
 	ScopeGuard guard ([result, args, this] () {
 	    JS_FreeValue (this->m_context, result);
@@ -1274,8 +1271,7 @@ void ScriptEngine::dispatchAnimationEvent (
 	const bool angles = isAnglesProperty (key);
 	const glm::vec3 initialDegrees = angles ? glm::degrees (module.value.getVec3 ()) : glm::vec3 (0.0f);
 	JSValue args[] = { eventValue, angles ? anglesToJs (*m_adapters.vec3, module.value)
-	    : isControlPointProperty (key) ? m_adapters.vec3->instantiate (module.value, true)
-	    : dynamicToJs (module.value) };
+	    : dynamicToJs (module.value, true) };
 	JSValue result = call (module.module, 2, args, "animationEvent");
 	if (JS_IsException (result)) {
 	    logJSException (m_context, key.c_str ());

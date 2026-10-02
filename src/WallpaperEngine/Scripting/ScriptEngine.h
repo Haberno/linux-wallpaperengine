@@ -92,7 +92,7 @@ public:
     /** Send the initial or changed application language, once per scene-wide broadcast. */
     void dispatchGeneralSettings ();
     void applyUserProperties (JSValue changed, LoadedModule* target = nullptr);
-    JSValue dynamicToJs (DynamicValue& value) const;
+    JSValue dynamicToJs (DynamicValue& value, bool snapshotVectors = false) const;
 
     /**
      * Evaluate a WallpaperEngine script's update() function.
