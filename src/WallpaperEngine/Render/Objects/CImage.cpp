@@ -209,6 +209,7 @@ CImage::CImage (Wallpapers::CScene& scene, const Image& image) :
     glm::vec3 origin = transform.origin;
     glm::vec2 size = this->getSize ();
     glm::vec3 scale = transform.scale;
+    const uint32_t interpolationFlags = image.noInterpolation ? TextureFlags_NoInterpolation : TextureFlags_NoFlags;
 
     // Native composition layers have two authored forms. A layer with children
     // owns an isolated subtree surface; a childless layer is a full-frame stack
@@ -218,7 +219,7 @@ CImage::CImage (Wallpapers::CScene& scene, const Image& image) :
 	const glm::vec2 compositionSize = scene.getOutputSize ();
 	this->m_compositionFBO = scene.create (
 	    "_rt_compositionLayer_" + std::to_string (image.id), scene.getColorFormat (),
-	    TextureFlags_ClampUVs, 1.0f, compositionSize, compositionSize, true
+	    TextureFlags_ClampUVs | interpolationFlags, 1.0f, compositionSize, compositionSize, true
 	);
 	// Every pass created for this image receives an FBOProvider parented to the
 	// image, so this alias also redirects an authored texture slot named
@@ -328,10 +329,10 @@ CImage::CImage (Wallpapers::CScene& scene, const Image& image) :
     nameB << "_rt_imageLayerComposite_" << this->getImage ().id << "_b";
 
     this->m_currentMainFBO = this->m_mainFBO = scene.create (
-	nameA.str (), scene.getColorFormat (), this->m_texture->getFlags (), 1, m_effectSize, m_effectSize
+	nameA.str (), scene.getColorFormat (), this->m_texture->getFlags () | interpolationFlags, 1, m_effectSize, m_effectSize
     );
     this->m_currentSubFBO = this->m_subFBO = scene.create (
-	nameB.str (), scene.getColorFormat (), this->m_texture->getFlags (), 1, m_effectSize, m_effectSize
+	nameB.str (), scene.getColorFormat (), this->m_texture->getFlags () | interpolationFlags, 1, m_effectSize, m_effectSize
     );
 
     // build a list of vertices, these might need some change later (or maybe invert the camera)
