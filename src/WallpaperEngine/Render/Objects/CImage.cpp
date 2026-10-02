@@ -343,11 +343,12 @@ CImage::CImage (Wallpapers::CScene& scene, const Image& image) :
     float height = 1.0f;
 
     if (this->getTexture ()->isAnimated ()) {
-	// animated images use different coordinates as they're essentially a texture atlas
+	// Legacy quads use TEXI image/storage dimensions. Page dimensions belong
+	// only to the affine frame transform; using them here crops the frame twice.
 	width = static_cast<float> (this->getTexture ()->getRealWidth ())
-	    / static_cast<float> (this->getTexture ()->getTextureWidth (0));
+	    / this->getTexture ()->getResolution ()->x;
 	height = static_cast<float> (this->getTexture ()->getRealHeight ())
-	    / static_cast<float> (this->getTexture ()->getTextureHeight (0));
+	    / this->getTexture ()->getResolution ()->y;
     }
     // calculate the correct texCoord limits for the texture based on the texture screen size and real size
     else if (
@@ -2369,8 +2370,12 @@ void CImage::uploadGeometryBuffers (const glm::vec2& size) {
 
     float width = 1.0f;
     float height = 1.0f;
-    if (this->getTexture () != nullptr
-	&& (!this->getTexture ()->isAnimated () || usesLegacyAnimationUvs (*this->getTexture ()))
+    if (this->getTexture () != nullptr && usesLegacyAnimationUvs (*this->getTexture ())) {
+	width = static_cast<float> (this->getTexture ()->getRealWidth ())
+	    / this->getTexture ()->getResolution ()->x;
+	height = static_cast<float> (this->getTexture ()->getRealHeight ())
+	    / this->getTexture ()->getResolution ()->y;
+    } else if (this->getTexture () != nullptr && !this->getTexture ()->isAnimated ()
 	&& (this->getTexture ()->getTextureWidth (0) != this->getTexture ()->getRealWidth ()
 	    || this->getTexture ()->getTextureHeight (0) != this->getTexture ()->getRealHeight ())) {
 	width = static_cast<float> (this->getTexture ()->getRealWidth ())
