@@ -212,12 +212,8 @@ void Camera::updateMatrices () {
 	glm::radians (glm::clamp (this->getFov (), 1.0f, 179.0f)), this->m_width / this->m_height, nearz, farz
     );
 
-    // Wallpaper Engine applies zoom to the projection scale. This is equivalent
-    // to the standard optical FOV conversion and keeps authored FOV animation
-    // independent from the path's zoom channel.
-    const float zoom = glm::max (this->getZoom (), 0.0001f);
-    this->m_projection[0][0] *= zoom;
-    this->m_projection[1][1] *= zoom;
+    // Native perspective framing uses FOV alone. The separate zoom channel is
+    // orthographic; legacy 3D paths can retain large editor zoom values.
     if (this->m_isYFlipped) {
 	this->m_projection[1][1] *= -1.0f;
     }

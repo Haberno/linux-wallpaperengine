@@ -63,9 +63,8 @@ public:
     [[nodiscard]] Scripting::ScriptEngine& getScriptEngine () const;
     [[nodiscard]] Camera& getCamera () const;
 
-    /** Camera pose pushed by thisScene.setCameraTransforms(). Once a script has taken the camera it
-     *  owns it for the rest of the scene, overriding both the camera layers and any active camera
-     *  path; the pose persists until the script pushes a new one. */
+    /** Persistent pose pushed by thisScene.setCameraTransforms(), used when no
+     *  visible camera layer or active camera path owns the rendered camera. */
     void setScriptCameraTransform (const CameraTransform& transform);
 
     [[nodiscard]] const Scene& getScene () const;
@@ -312,7 +311,7 @@ private:
     void updateFogState ();
     void initializeBloom ();
     void updateBloomState ();
-    void updateCameraObject ();
+    bool updateCameraObject ();
     void updateCameraPath (float deltaTime);
     [[nodiscard]] const CameraPathSource* findActiveCameraPathSource () const;
     struct FrameRenderEntry {

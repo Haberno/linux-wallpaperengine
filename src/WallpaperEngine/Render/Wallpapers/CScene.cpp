@@ -902,7 +902,7 @@ void CScene::renderFrame (const glm::ivec4& viewport) {
     // Apply camera-rig movement from this tick to the frame being rendered. A
     // non-empty path still owns the final transform, but uses this pose as its
     // live fallback for any channels it does not animate.
-    this->updateCameraObject ();
+    const bool cameraObjectActive = this->updateCameraObject ();
     const bool pathOwnsCamera
 	= this->m_activeCameraPathSource != nullptr && this->m_activeCameraPathIndex.has_value ();
     if (pathOwnsCamera) {
@@ -911,17 +911,9 @@ void CScene::renderFrame (const glm::ivec4& viewport) {
 	    path.evaluate (this->m_cameraPathElapsed, this->m_camera->getDefaultTransform ())
 	);
     }
-    // A script that called setCameraTransforms took the camera on purpose (mouse-drag orbit
-    // controllers do this every frame); it wins over the layer rig. The pose is deliberately sticky
-    // rather than per-tick: the rig sits somewhere entirely different from where a controller puts
-    // the camera, so falling back to it on any frame the script does not produce a usable pose would
-    // snap the view across the scene and back.
-    //
-    // Camera paths outrank it, though. Scenes ship the stock camera-controller script whether or not
-    // they use it, and its own header says so: "This won't have any effect if camera paths are used
-    // in the scene." Letting the script win instead pins the camera wherever the controller starts
-    // and every authored shot is discarded.
-    if (this->m_scriptCameraTransform.has_value () && !pathOwnsCamera) {
+    // Native gives visible camera layers priority even when their path list is
+    // empty. Keep the script pose as a persistent fallback for free-camera mode.
+    if (this->m_scriptCameraTransform.has_value () && !cameraObjectActive && !pathOwnsCamera) {
 	CameraTransform transform = *this->m_scriptCameraTransform;
 	// CameraTransforms owns eye/center/up/zoom; FOV remains a scene or camera-layer property.
 	transform.fov = this->m_camera->getDefaultTransform ().fov;
@@ -1418,19 +1410,27 @@ const CameraPathSource* CScene::findActiveCameraPathSource () const {
     for (const CameraPathSource& source : this->getScene ().camera.paths) {
 	if (!source.objectId.has_value ()) {
 	    active = &source;
+	}
+    }
+
+    for (const int id : this->getScene ().camera.objectIds) {
+	const CObject* object = this->getObject (id);
+	if (object == nullptr || !object->getObject ().groupVisible->value->getBool ()
+	    || !object->isVisibleThroughParents ()) {
 	    continue;
 	}
-
-	const CObject* object = this->getObject (*source.objectId);
-	if (object != nullptr && object->getObject ().groupVisible->value->getBool ()) {
-	    // Later visible camera objects override earlier/default cameras.
-	    active = &source;
-	}
+	// A selected camera owns the view even when its path is empty or absent.
+	// Its static pose must not inherit an older camera's or the scene's path.
+	const auto source = std::ranges::find_if (
+	    this->getScene ().camera.paths,
+	    [id] (const CameraPathSource& candidate) { return candidate.objectId == id; }
+	);
+	active = source != this->getScene ().camera.paths.end () ? &*source : nullptr;
     }
     return active;
 }
 
-void CScene::updateCameraObject () {
+bool CScene::updateCameraObject () {
     const CObject* active = nullptr;
     const SceneData::Camera::ObjectProjection* activeProjection = nullptr;
     for (const int id : this->getScene ().camera.objectIds) {
@@ -1470,7 +1470,7 @@ void CScene::updateCameraObject () {
 	if (!pathActive && !this->m_scriptCameraTransform.has_value ()) {
 	    this->m_camera->resetTransform ();
 	}
-	return;
+	return false;
     }
 
     const float sceneTime = this->getTime ();
@@ -1485,12 +1485,10 @@ void CScene::updateCameraObject () {
 	active->resolveWorldMatrix (), fov, zoom
     );
     const bool pathActive = this->m_activeCameraPathSource != nullptr && this->m_activeCameraPathIndex.has_value ();
-    // Track the layer pose as the default, but only snap the live camera back to it when nothing
-    // else owns the camera. Drag controllers read getCameraTransforms() at the top of every tick and
-    // integrate from it, so re-applying the layer pose here would hand them a camera that resets
-    // between frames and make them oscillate against their own smoothing.
-    const bool scriptOwnsCamera = this->m_scriptCameraTransform.has_value ();
-    this->m_camera->setDefaultTransform (transform, !pathActive && !scriptOwnsCamera);
+    // A selected layer supplies the pose even if a hidden free-camera script
+    // keeps submitting transforms. Its path, when present, is evaluated next.
+    this->m_camera->setDefaultTransform (transform, !pathActive);
+    return true;
 }
 
 // Playback modes, straight off the reference runtime's advance step. A path
@@ -1657,10 +1655,11 @@ void CScene::updateLightState () {
 
 		for (int cascade = 0; cascade < 3; cascade++) {
 		    const int feature = features[cascade];
+		    // Perspective framing uses FOV alone; orthographic zoom must not shrink shadow coverage.
 		    this->m_lights.shadowMatrices[feature]
 			= Objects::CLight::calculateDirectionalShadowViewProjection (
 			    camera.getEye (), camera.getCenter (), camera.getUp (), camera.getFov (),
-			    camera.getWidth () / std::max (camera.getHeight (), 1.0f), camera.getZoom (), cameraNear,
+			    camera.getWidth () / std::max (camera.getHeight (), 1.0f), 1.0f, cameraNear,
 			    cascadeFar[cascade], light->getWorldDirection (),
 			    this->m_lights.shadowViewports[feature].z
 			);
