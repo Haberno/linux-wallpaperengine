@@ -557,7 +557,7 @@ void CParticle::render () {
 	}
 	refreshInstanceParameters ();
     }
-    if (!m_particle.visible->value->getBool ()) return;
+    if (!m_particle.visible->value->getBool () || !isVisibleThroughParents ()) return;
 
     // All children start with the parent, including systems with no root emitter.
     if (m_time == 0.0) {
