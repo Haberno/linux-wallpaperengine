@@ -10,6 +10,7 @@
 #include <cstddef>
 #include <glm/vec4.hpp>
 #include <memory>
+#include <optional>
 #include <mpv/client.h>
 #include <mpv/render.h>
 #include <mpv/render_gl.h>
@@ -78,6 +79,9 @@ public:
     /** Parsed metadata, including a packed source when the texture has variants. */
     [[nodiscard]] const Texture& getHeader () const;
     [[nodiscard]] GLPlayer* getVideoPlayer () const { return m_player.get (); }
+    /** Selected GIFs share a clock while their scene cache entry is retained. */
+    void startUserAnimation (double sceneTime, uint32_t sceneFrame);
+    void updateUserAnimation (double sceneTime, uint32_t sceneFrame) const;
 
 private:
     /**
@@ -110,5 +114,12 @@ private:
     Data::Parsers::TextureParser::VariantSelector m_variantSelector;
     std::vector<uint32_t> m_variantSelection;
     void refreshVariant ();
+    struct UserAnimation {
+	uint32_t frame = 0;
+	uint32_t update = 0;
+	double frameTime = 0.0;
+	double duration = 0.0;
+    };
+    mutable std::optional<UserAnimation> m_userAnimation;
 };
 } // namespace WallpaperEngine::Assets

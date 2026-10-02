@@ -296,7 +296,7 @@ private:
     mutable std::map<const TextureProvider*, VideoActivity> m_videoActivity;
     uint32_t m_sceneFrame = 0;
     void updateVideoActivity ();
-    mutable std::map<std::string, std::shared_ptr<const TextureProvider>> m_userTextures;
+    mutable std::map<std::string, std::shared_ptr<const CTexture>> m_userTextures;
     std::vector<Objects::Effects::CPass*> m_userTexturePasses;
     std::set<std::string> m_sampledRenderTargets;
     /** Release raw-owned render objects, including during constructor unwinding. */

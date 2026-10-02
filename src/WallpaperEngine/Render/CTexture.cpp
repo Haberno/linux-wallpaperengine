@@ -3,6 +3,7 @@
 #include "WallpaperEngine/Logging/Log.h"
 
 #include <algorithm>
+#include <cmath>
 #include <ranges>
 #include <lz4.h>
 
@@ -287,12 +288,53 @@ void CTexture::setupOpenGLParameters (const uint32_t textureID) const {
 }
 
 GLuint CTexture::getTextureID (const uint32_t imageIndex) const {
+    if (m_userAnimation) {
+	return m_textureID[m_header->frames[m_userAnimation->frame]->frameNumber];
+    }
     // ensure we do not go out of bounds
     if (imageIndex >= this->m_header->imageCount) {
 	return this->m_textureID[0];
     }
 
     return this->m_textureID[imageIndex];
+}
+
+void CTexture::startUserAnimation (const double sceneTime, const uint32_t sceneFrame) {
+    if (!isAnimated () || m_header->frames.empty ()) return;
+    m_userAnimation = UserAnimation { .update = sceneFrame, .frameTime = sceneTime };
+    for (const auto& frame : m_header->frames) {
+	if (frame->frametime <= 0.0f) {
+	    // Zero-delay frames must be displayed for one update, even after a hitch.
+	    m_userAnimation->duration = 0.0;
+	    return;
+	}
+	m_userAnimation->duration += frame->frametime;
+    }
+}
+
+void CTexture::updateUserAnimation (const double sceneTime, const uint32_t sceneFrame) const {
+    if (!m_userAnimation || m_userAnimation->update == sceneFrame) return;
+    auto& animation = *m_userAnimation;
+    animation.update = sceneFrame;
+    const auto& frames = m_header->frames;
+    if (frames[animation.frame]->frametime <= 0.0f) {
+	animation.frame = (animation.frame + 1) % frames.size ();
+	animation.frameTime = sceneTime;
+	return;
+    }
+    if (animation.duration > 0.0 && sceneTime > animation.frameTime) {
+	// Bound catch-up work after long pauses without skipping a zero-delay frame.
+	animation.frameTime += std::floor ((sceneTime - animation.frameTime) / animation.duration)
+	    * animation.duration;
+    }
+    while (sceneTime - animation.frameTime >= frames[animation.frame]->frametime) {
+	animation.frameTime += frames[animation.frame]->frametime;
+	animation.frame = (animation.frame + 1) % frames.size ();
+	if (frames[animation.frame]->frametime <= 0.0f) {
+	    animation.frameTime = sceneTime;
+	    break;
+	}
+    }
 }
 
 uint32_t CTexture::getTextureWidth (const uint32_t imageIndex) const {

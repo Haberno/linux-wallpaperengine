@@ -935,6 +935,11 @@ void CScene::renderFrame (const glm::ivec4& viewport) {
     if (changedUserTextures) {
 	std::erase_if (m_userTextures, [] (const auto& entry) { return entry.second.use_count () == 1; });
     }
+    // Shared GIFs advance once per scene update, including hidden consumers;
+    // multiple material passes and texture slots all sample the same playhead.
+    for (const auto& texture : m_userTextures | std::views::values) {
+	texture->updateUserAnimation (getTime (), m_sceneFrame);
+    }
 
     // refresh light uniform state after scripts have moved the lights
     this->updateLightState ();
@@ -2092,6 +2097,7 @@ std::shared_ptr<const TextureProvider> CScene::resolveUserTexture (const std::st
     });
     parsed->anisotropy = 1.0f;
     auto texture = std::make_shared<CTexture> (getContext (), std::move (parsed));
+    texture->startUserAnimation (getTime (), m_sceneFrame);
     m_userTextures.emplace (key, texture);
     return texture;
 }

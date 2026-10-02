@@ -566,6 +566,16 @@ TEST_CASE ("selected GIFs retain animated logical canvases and frame delays", "[
 	    }
 	}
     }
+    // A zero delay advances on the next render update; preserve it for playback
+    // instead of inventing a 100 ms duration in the decoder.
+    std::string zeroDelay (bytes, sizeof (bytes) - 1);
+    for (size_t frame = 0; frame < 4; ++frame) {
+	zeroDelay[60 + frame * 26] = 0;
+    }
+    const auto zeroTexture = TextureParser::parseImage (zeroDelay, Json { { "nomip", true } });
+    REQUIRE (zeroTexture->frames.size () == 4);
+    for (const auto& frame : zeroTexture->frames) CHECK (frame->frametime == 0.0f);
+
     // Variable authored delays and source metadata must survive the animation path.
     std::string varied (bytes, sizeof (bytes) - 1);
     for (size_t frame = 0; frame < 4; ++frame) {

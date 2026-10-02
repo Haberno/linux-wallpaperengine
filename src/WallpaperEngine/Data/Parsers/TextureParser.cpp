@@ -36,17 +36,16 @@ struct GifImage {
     float frametime;
 };
 
-std::vector<unsigned char> gifDecoderInput (const std::string& contents, size_t maxFrames) {
+std::vector<unsigned char> gifDecoderInput (
+    const std::string& contents, size_t maxFrames, std::vector<int>& frameDelays
+) {
     const auto* bytes = reinterpret_cast<const unsigned char*> (contents.data ());
     const size_t paletteSize = size_t (2) << (bytes[10] & 7);
-    const size_t paletteBytes = paletteSize * 3;
+    const size_t paletteBytes = (bytes[10] & 0x80) ? paletteSize * 3 : 0;
     const size_t background = bytes[11];
-    if (!(bytes[10] & 0x80)) return { contents.begin (), contents.end () };
     if (paletteBytes > contents.size () - 13) throw std::runtime_error ("Truncated GIF palette");
-    if (background >= paletteSize
-	|| (background != 0 && bytes[13 + background * 3] == bytes[15 + background * 3])) {
-	return { contents.begin (), contents.end () };
-    }
+    const bool normalizeBackground = paletteBytes != 0 && background < paletteSize
+	&& (background == 0 || bytes[13 + background * 3] != bytes[15 + background * 3]);
 
     // Native uses BGR for the logical background, but RGB for drawn palette pixels.
     // Give global-palette frames their original palette locally before changing only
@@ -54,6 +53,7 @@ std::vector<unsigned char> gifDecoderInput (const std::string& contents, size_t 
     std::vector<size_t> globalFrames;
     size_t cursor = 13 + paletteBytes;
     size_t frames = 0;
+    int delay = -1;
     const auto skip = [&] (size_t count) {
 	if (count > contents.size () - cursor) throw std::runtime_error ("Truncated GIF block");
 	cursor += count;
@@ -71,9 +71,19 @@ std::vector<unsigned char> gifDecoderInput (const std::string& contents, size_t 
 	if (tag == 0x3b) break;
 	if (tag == 0x21) {
 	    skip (1); // Extension label, then length-prefixed subblocks.
+	    if (bytes[cursor - 1] == 0xf9) {
+		const size_t control = cursor;
+		skip (5);
+		if (bytes[control] != 4) throw std::runtime_error ("Invalid GIF control block");
+		// FFmpeg's GIF parser replaces zero delays with 100 ms. Keep the
+		// authored delay separately so the renderer can advance zero per update.
+		delay = bytes[control + 2] | (bytes[control + 3] << 8);
+	    }
 	    skipBlocks ();
 	} else if (tag == 0x2c) {
 	    if (++frames > maxFrames) throw std::runtime_error ("GIF animation has too many frames");
+	    frameDelays.push_back (delay);
+	    delay = -1;
 	    skip (9);
 	    const size_t flags = cursor - 1;
 	    if (bytes[flags] & 0x80) skip ((size_t (2) << (bytes[flags] & 7)) * 3);
@@ -84,6 +94,7 @@ std::vector<unsigned char> gifDecoderInput (const std::string& contents, size_t 
 	    throw std::runtime_error ("Invalid GIF block");
 	}
     }
+    if (!normalizeBackground) return { contents.begin (), contents.end () };
     constexpr size_t maxInputBytes = std::numeric_limits<int>::max () - AV_INPUT_BUFFER_PADDING_SIZE;
     const size_t baseSize = contents.size () - (background == 0 ? paletteBytes : 0);
     if (globalFrames.size () > (maxInputBytes - baseSize) / paletteBytes) {
@@ -152,7 +163,8 @@ std::vector<GifImage> decodeGifImages (const std::string& contents, int& width, 
 	throw std::runtime_error ("Cannot initialize GIF decoder");
     }
 
-    std::vector<unsigned char> input = gifDecoderInput (contents, maxFrames);
+    std::vector<int> frameDelays;
+    std::vector<unsigned char> input = gifDecoderInput (contents, maxFrames, frameDelays);
     const int inputSize = static_cast<int> (input.size ());
     input.resize (input.size () + AV_INPUT_BUFFER_PADDING_SIZE, 0);
     int position = 0;
@@ -209,8 +221,10 @@ std::vector<GifImage> decodeGifImages (const std::string& contents, int& width, 
 	    if (!converter) {
 		throw std::runtime_error ("Cannot convert GIF frame");
 	    }
+	    if (images.size () >= frameDelays.size ()) throw std::runtime_error ("Unexpected GIF frame");
+	    const auto delay = frameDelays[images.size ()];
 	    GifImage image { std::make_unique<unsigned char[]> (frameBytes),
-			     static_cast<float> (packet->duration > 0 ? packet->duration : 10) / 100.0f };
+			     static_cast<float> (delay >= 0 ? delay : packet->duration > 0 ? packet->duration : 10) / 100.0f };
 	    unsigned char* planes[4] = { image.pixels.get (), nullptr, nullptr, nullptr };
 	    const int strides[4] = { width * 4, 0, 0, 0 };
 	    if (sws_scale (converter, frame->data, frame->linesize, 0, height, planes, strides) != height) {
