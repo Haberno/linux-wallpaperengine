@@ -1303,6 +1303,13 @@ int scriptableobject_property_set (
     ScopeGuard guard ([=] { JS_FreeCString (ctx, name); });
 
     if (std::strcmp (name, "pointsize") == 0 && container->object.getObject ().is<Text> ()) name = "pointSize";
+    if (std::strcmp (name, "name") == 0 && JS_IsString (val)) {
+	const char* text = JS_ToCString (ctx, val);
+	if (text == nullptr) return -1;
+	const_cast<Object&> (container->object.getObject ()).name = text;
+	JS_FreeCString (ctx, text);
+	return 1;
+    }
     if (!container->object.getProperties ().contains (name)) {
 	// Keep native image/text size separate until its engine behavior is implemented.
 	if (std::strcmp (name, "size") == 0
