@@ -369,12 +369,14 @@ CText::CText (Wallpapers::CScene& scene, const Text& text) :
 	registerProperty ("visible_fx" + std::to_string (effect->id), *effect->visible);
 	int passIndex = 0;
 	for (const auto& pass : effect->passOverrides) {
+	    const auto scope = "effect_" + std::to_string (effect->id) + "_pass"
+		+ std::to_string (passIndex) + "_";
 	    for (const auto& [name, setting] : pass->constants) {
 		if (setting->value != nullptr && (setting->value->getScriptSource ().has_value ()
 		    || setting->animation != nullptr)) {
-		    const auto key = name + "_fx" + std::to_string (effect->id) + "_p" + std::to_string (passIndex);
-		    registerProperty (key, *setting);
-		    if (setting->animation != nullptr) registerAnimation (key, *setting->animation);
+		    registerProperty (scope + name, *setting, scope);
+		    if (setting->animation != nullptr && !setting->animation->name.empty ())
+			registerAnimation (setting->animation->name, *setting->animation);
 		}
 	    }
 	    ++passIndex;

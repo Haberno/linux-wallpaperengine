@@ -1504,13 +1504,15 @@ void CImage::setup () {
 	    {
 		int passIndex = 0;
 		for (const auto& passOverride : cur->passOverrides) {
+		    const auto scope = "effect_" + std::to_string (cur->id) + "_pass"
+			+ std::to_string (passIndex) + "_";
 		    for (const auto& [constantName, setting] : passOverride->constants) {
 			if (setting->value != nullptr && (setting->value->getScriptSource ().has_value ()
 			    || setting->animation != nullptr)) {
-			    const auto key = constantName + "_fx" + std::to_string (cur->id) + "_p"
-				+ std::to_string (passIndex);
-			    registerProperty (key, *setting);
-			    if (setting->animation != nullptr) registerAnimation (key, *setting->animation);
+			    // Linked channels name their parent within this material pass.
+			    registerProperty (scope + constantName, *setting, scope);
+			    if (setting->animation != nullptr && !setting->animation->name.empty ())
+				registerAnimation (setting->animation->name, *setting->animation);
 			}
 		    }
 		    ++passIndex;

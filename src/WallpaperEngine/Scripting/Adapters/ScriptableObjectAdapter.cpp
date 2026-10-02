@@ -823,7 +823,7 @@ static JSValue effect_material_get_animation (
     ScopeGuard releaseName ([&] { JS_FreeCString (ctx, name); });
     for (const auto& [property, setting] : effect.passOverrides[passIndex]->constants) {
 	if (setting->animation == nullptr || setting->animation->name != name) continue;
-	const auto key = property + "_fx" + std::to_string (effect.id) + "_p" + std::to_string (passIndex);
+	const auto key = "effect_" + std::to_string (effect.id) + "_pass" + std::to_string (passIndex) + "_" + property;
 	JSValue animationKey = JS_NewString (ctx, key.c_str ());
 	JSValue result = property_animation_controller (ctx, data[0], animationKey);
 	JS_FreeValue (ctx, animationKey);
