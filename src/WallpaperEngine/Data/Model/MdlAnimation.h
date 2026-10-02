@@ -57,6 +57,11 @@ struct MdlAttachment {
     glm::mat4 local = glm::mat4 (1.0f);
 };
 
+struct MdlHitBox {
+    glm::vec3 halfExtents = glm::vec3 (0.0f);
+    glm::mat4 local = glm::mat4 (1.0f);
+};
+
 struct MdlBoneFrame {
     glm::vec3 translation = glm::vec3 (0.0f);
     glm::quat rotation = glm::quat (1.0f, 0.0f, 0.0f, 0.0f);
@@ -116,6 +121,9 @@ struct MdlAnimationClip {
 
 struct MdlAnimationData {
     std::vector<MdlBone> bones = {};
+    std::vector<MdlHitBox> hitBoxes;
+    /** Native tests the serialized bone indices from back to front. */
+    std::vector<uint32_t> hitBoxOrder;
     std::vector<MdlBoneControl> controls;
     std::vector<float> boneLengths;
     std::vector<std::map<uint32_t, glm::vec3>> boneDirections;
@@ -171,6 +179,10 @@ public:
     );
     [[nodiscard]] static std::optional<glm::mat4> attachmentTransform (
 	const MdlAnimationData& animationData, const std::vector<glm::mat4>& worldBones, const std::string& name
+    );
+    [[nodiscard]] static std::optional<std::string> hitBox (
+	const MdlAnimationData& animationData, const std::vector<glm::mat4>& worldBones,
+	const glm::vec3& rayOrigin, const glm::vec3& rayDirection
     );
 };
 } // namespace WallpaperEngine::Data::Model

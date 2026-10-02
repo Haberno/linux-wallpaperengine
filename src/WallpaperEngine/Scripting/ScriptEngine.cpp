@@ -1311,12 +1311,15 @@ void ScriptEngine::dispatchAnimationEvent (
     }
 }
 
-JSValue ScriptEngine::makeCursorEvent (const glm::vec3& worldPosition, const glm::vec3& localPosition) {
+JSValue ScriptEngine::makeCursorEvent (
+    const glm::vec3& worldPosition, const glm::vec3& localPosition, const std::optional<std::string>& hitBox
+) {
     DynamicValue world (worldPosition);
     DynamicValue local (localPosition);
     JSValue event = JS_NewObject (this->m_context);
     JS_SetPropertyStr (this->m_context, event, "worldPosition", this->m_adapters.vec3->instantiate (world, true));
     JS_SetPropertyStr (this->m_context, event, "localPosition", this->m_adapters.vec3->instantiate (local, true));
+    if (hitBox) JS_SetPropertyStr (m_context, event, "hitBox", JS_NewString (m_context, hitBox->c_str ()));
     return event;
 }
 
@@ -1329,6 +1332,10 @@ void ScriptEngine::dispatchCursorEvents () {
 	= worldPosition - this->m_lastCursorWorldPosition.value_or (worldPosition + glm::vec3 (1.0f));
     const bool moved = !this->m_lastCursorWorldPosition.has_value ()
 	|| glm::dot (cursorDelta, cursorDelta) > 1e-8f;
+    // Native only resolves bone boxes on button transitions or while a press
+    // that began inside a layer remains active; ordinary hover omits hitBox.
+    const bool selectHitBox = leftDown != m_cursorLeftDown
+	|| std::ranges::any_of (m_scriptModules, [] (const auto& entry) { return entry.second.cursorPressedInside; });
 
     using CursorModule = std::pair<const std::string*, LoadedModule*>;
     std::unordered_map<Render::Objects::CImage*, std::vector<CursorModule>> modules;
@@ -1349,6 +1356,7 @@ void ScriptEngine::dispatchCursorEvents () {
 	if (found == modules.end () && !image->getObject ().disablePropagation) continue;
 	const auto localPosition = image->cursorLocalPosition (worldPosition);
 	const bool inside = localPosition.has_value ();
+	const auto hitBox = selectHitBox ? image->cursorHitBox (worldPosition) : std::nullopt;
 
 	if (found != modules.end ()) {
 	    const auto callCursorHook = [&] (const char* hook, auto accepts) {
@@ -1360,7 +1368,7 @@ void ScriptEngine::dispatchCursorEvents () {
 		    const glm::vec3 local = localPosition.value_or (glm::vec3 (0.0f));
 		    const glm::vec3 hit = inside && !m_scene.getCamera ().isOrthogonal ()
 			? glm::vec3 (image->resolveWorldMatrix () * glm::vec4 (local, 1.0f)) : worldPosition;
-		    JSValue event = makeCursorEvent (hit, local);
+		    JSValue event = makeCursorEvent (hit, local, hitBox);
 		    JSValue result = call (module->module, 1, &event, hook);
 		    if (JS_IsException (result)) logJSException (m_context, key->c_str ());
 		    JS_FreeValue (m_context, result);

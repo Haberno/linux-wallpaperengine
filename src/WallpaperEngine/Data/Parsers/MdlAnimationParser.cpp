@@ -416,6 +416,22 @@ void parseSkeleton (
 	if (offset < sectionEnd) {
 	    parseControlChains (data, offset, sectionEnd, version, result);
 	}
+	// MDLS puppet tails store one bone-local box per bone, followed by an
+	// independent priority list (native 140263430 / 14026360d).
+	if (offset < sectionEnd && readValue<uint8_t> (data, offset, sectionEnd)) {
+	    result.hitBoxes.resize (boneCount);
+	    for (auto& box : result.hitBoxes) {
+		for (int component = 0; component < 3; ++component)
+		    box.halfExtents[component] = readValue<float> (data, offset, sectionEnd);
+		for (int column = 0; column < 4; ++column)
+		    for (int row = 0; row < 4; ++row)
+			box.local[column][row] = readValue<float> (data, offset, sectionEnd);
+	    }
+	}
+	if (offset < sectionEnd && readValue<uint8_t> (data, offset, sectionEnd)) {
+	    for (uint32_t bone = 0; bone < boneCount; ++bone)
+		result.hitBoxOrder.push_back (std::min (readValue<uint32_t> (data, offset, sectionEnd), boneCount - 1));
+	}
     }
 }
 

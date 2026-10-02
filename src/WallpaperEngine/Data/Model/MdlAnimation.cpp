@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <limits>
 
 #include <glm/gtc/matrix_transform.hpp>
 #define GLM_ENABLE_EXPERIMENTAL
@@ -460,4 +461,45 @@ std::optional<glm::mat4> MdlAnimationEvaluator::attachmentTransform (
 	return std::nullopt;
     }
     return worldBones[attachment->second.bone] * attachment->second.local;
+}
+
+std::optional<std::string> MdlAnimationEvaluator::hitBox (
+    const MdlAnimationData& animationData, const std::vector<glm::mat4>& worldBones,
+    const glm::vec3& rayOrigin, const glm::vec3& rayDirection
+) {
+    for (auto entry = animationData.hitBoxOrder.rbegin (); entry != animationData.hitBoxOrder.rend (); ++entry) {
+	const auto bone = *entry;
+	if (bone >= animationData.hitBoxes.size () || bone >= worldBones.size ()) continue;
+	const auto& box = animationData.hitBoxes[bone];
+	const glm::mat4 transform = worldBones[bone] * box.local;
+	const float determinant = glm::determinant (transform);
+	if (!std::isfinite (determinant) || determinant == 0.0f) continue;
+	const glm::mat4 inverse = glm::inverse (transform);
+	const glm::vec3 origin = glm::vec3 (inverse * glm::vec4 (rayOrigin, 1.0f));
+	const glm::vec3 direction = glm::vec3 (inverse * glm::vec4 (rayDirection, 0.0f));
+	float near = -std::numeric_limits<float>::infinity ();
+	float far = std::numeric_limits<float>::infinity ();
+	bool intersects = true;
+	for (int axis = 0; axis < 3; ++axis) {
+	    if (!std::isfinite (origin[axis]) || !std::isfinite (direction[axis])) {
+		intersects = false;
+		break;
+	    }
+	    if (direction[axis] == 0.0f) {
+		if (std::abs (origin[axis]) > box.halfExtents[axis]) intersects = false;
+		continue;
+	    }
+	    const float first = (-box.halfExtents[axis] - origin[axis]) / direction[axis];
+	    const float second = (box.halfExtents[axis] - origin[axis]) / direction[axis];
+	    near = std::max (near, std::min (first, second));
+	    far = std::min (far, std::max (first, second));
+	}
+	// Native selects the first intersecting box in authored order, not the
+	// nearest triangle or bone. It tests the whole cursor line in this space.
+	if (intersects && near <= far) {
+	    const auto& name = animationData.bones[bone].name;
+	    return name.empty () ? std::to_string (bone) : name;
+	}
+    }
+    return std::nullopt;
 }

@@ -66,6 +66,7 @@ public:
     /** Return cursor coordinates local to this image when the world-space point
      *  intersects its authored quad; std::nullopt means the point is outside. */
     [[nodiscard]] std::optional<glm::vec3> cursorLocalPosition (const glm::vec3& worldPosition) const;
+    [[nodiscard]] std::optional<std::string> cursorHitBox (const glm::vec3& worldPosition) const;
     /** Intersect a perspective cursor ray with a transformed image's local Z=0 plane. */
     [[nodiscard]] static std::optional<glm::vec3> intersectCursorPlane (
 	const glm::mat4& world, const glm::mat4& viewProjection,

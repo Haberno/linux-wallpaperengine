@@ -195,7 +195,9 @@ private:
     void initializeModule (const std::string& key, LoadedModule& module);
     void dispatchScreenResize ();
     void dispatchCursorEvents ();
-    JSValue makeCursorEvent (const glm::vec3& worldPosition, const glm::vec3& localPosition);
+    JSValue makeCursorEvent (
+	const glm::vec3& worldPosition, const glm::vec3& localPosition, const std::optional<std::string>& hitBox
+    );
 
     void installBuiltins ();
 

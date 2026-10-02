@@ -2772,6 +2772,35 @@ std::optional<glm::vec3> CImage::cursorLocalPosition (const glm::vec3& worldPosi
     return local;
 }
 
+std::optional<std::string> CImage::cursorHitBox (const glm::vec3& worldPosition) const {
+    if (!m_hasPuppetMesh || m_puppetAnimation.hitBoxes.empty ()) return std::nullopt;
+    const glm::mat4 world = cursorPlaneTransform (resolveLayerModelMatrix ());
+    const float determinant = glm::determinant (world);
+    if (!std::isfinite (determinant) || determinant == 0.0f) return std::nullopt;
+    const auto& camera = getScene ().getCamera ();
+    glm::vec3 origin;
+    glm::vec3 direction;
+    if (camera.isOrthogonal ()) {
+	glm::vec3 position = worldPosition;
+	if (!getImage ().model->fullscreen) {
+	    const glm::vec2 offset = resolveParallaxOffset ();
+	    position -= glm::vec3 (offset.x, -offset.y, 0.0f);
+	}
+	const glm::mat4 inverse = glm::inverse (world);
+	origin = glm::vec3 (inverse * glm::vec4 (position, 1.0f));
+	direction = glm::vec3 (inverse * glm::vec4 (0.0f, 0.0f, 1.0f, 0.0f));
+    } else {
+	glm::vec2 ndc = *getScene ().getMousePositionNormalized () * 2.0f - 1.0f;
+	if (camera.isYFlipped ()) ndc.y = -ndc.y;
+	const glm::mat4 inverse = glm::inverse (camera.getProjection () * camera.getLookAt () * world);
+	const glm::vec4 near = inverse * glm::vec4 (ndc, -1.0f, 1.0f);
+	const glm::vec4 far = inverse * glm::vec4 (ndc, 1.0f, 1.0f);
+	origin = glm::vec3 (near) / near.w;
+	direction = glm::vec3 (far) / far.w - origin;
+    }
+    return MdlAnimationEvaluator::hitBox (m_puppetAnimation, m_puppetWorldBones, origin, direction);
+}
+
 GLuint CImage::getSceneSpacePosition () const { return this->m_sceneSpacePosition; }
 
 GLuint CImage::getCopySpacePosition () const { return this->m_copySpacePosition; }
