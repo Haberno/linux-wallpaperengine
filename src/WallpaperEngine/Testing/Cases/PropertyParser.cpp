@@ -5,9 +5,12 @@
 #include <limits>
 
 #include "WallpaperEngine/Data/Builders/ColorBuilder.h"
+#include "WallpaperEngine/Data/Model/Project.h"
 #include "WallpaperEngine/Data/Model/Property.h"
 #include "WallpaperEngine/Data/Model/PropertyAnimation.h"
+#include "WallpaperEngine/Data/Model/Wallpaper.h"
 #include "WallpaperEngine/Data/Parsers/PropertyParser.h"
+#include "WallpaperEngine/Data/Parsers/ObjectParser.h"
 #include "WallpaperEngine/Data/Parsers/UserSettingParser.h"
 
 using WallpaperEngine::Data::Builders::ColorBuilder;
@@ -17,6 +20,50 @@ using WallpaperEngine::Data::Model::PropertyAnimation;
 using WallpaperEngine::Data::Model::PropertyKeyframe;
 using WallpaperEngine::Data::Parsers::PropertyParser;
 using WallpaperEngine::Data::Parsers::UserSettingParser;
+
+TEST_CASE ("Particle instance user links retain live project properties", "[user-property-binding][particle-instance-binding]") {
+    using namespace WallpaperEngine::Data::Model;
+    Project project {};
+    const auto property = PropertyParser::parse (JSON {
+	{ "type", "slider" }, { "value", .75f }, { "min", -1 }, { "max", 1 }, { "step", .25f },
+    }, "scalar");
+    project.properties.emplace ("scalar", property);
+    JSON overrides = JSON::object ();
+    for (const auto* name : { "alpha", "size", "count", "speed", "lifetime", "brightness", "rate" }) {
+	overrides[name] = { { "value", 3.0f }, { "user", "scalar" } };
+    }
+    overrides["colorn"] = { { "value", "0.125 0.375 0.625" }, { "user", "scalar" } };
+    for (int id = 0; id < PARTICLE_CONTROL_POINT_COUNT; ++id) {
+	for (const auto* prefix : { "controlpoint", "controlpointangle" }) {
+	    overrides[std::string (prefix) + std::to_string (id)] = {
+		{ "value", "1 2 3" }, { "user", "scalar" },
+	    };
+	}
+    }
+    const auto object = WallpaperEngine::Data::Parsers::ObjectParser::parse (JSON {
+	{ "id", 98 }, { "particle", JSON::object () }, { "instanceoverride", overrides },
+    }, project);
+    const auto* particle = object->as<Particle> ();
+    REQUIRE (particle != nullptr);
+    const auto& instance = particle->instanceOverride;
+    const auto check = [&] (float expected) {
+	for (const auto* setting : { instance.alpha.get (), instance.size.get (), instance.count.get (),
+		instance.speed.get (), instance.lifetime.get (), instance.brightness.get (), instance.rate.get () }) {
+	    CHECK (setting->property == property);
+	    CHECK (setting->value->getFloat () == expected);
+	}
+	CHECK (instance.colorn->value->getVec3 () == glm::vec3 (expected));
+	for (int id = 0; id < PARTICLE_CONTROL_POINT_COUNT; ++id) {
+	    CHECK (instance.controlPointOffsets.at (id)->value->getVec3 () == glm::vec3 (expected));
+	    CHECK (instance.controlPointAngles.at (id)->value->getVec3 () == glm::vec3 (expected));
+	}
+    };
+    check (.75f);
+    for (const float value : { .25f, -.5f, 0.0f, .75f }) {
+	property->update (value, DynamicValue::UpdateSource::User);
+	check (value);
+    }
+}
 
 TEST_CASE ("Combo visibility user bindings match exact option strings", "[user-property-binding]") {
     const char* choices[] = { "1", "2", "3" };
