@@ -60,23 +60,32 @@ JSValue engine_get_daytime (JSContext* ctx, JSValueConst this_val, int argc, JSV
     return JS_NewFloat64 (ctx, g_Daytime);
 }
 
-// engine.registerAsset(file, precache) -> IAssetHandle, per Wallpaper Engine's own SceneScript
-// declarations (ui/dist/monaco/autocomplete/lib.sceneScript.d.ts): "Load an asset to be used in a
-// SceneScript-based layer creation. This function MUST be called at the root global level of the
-// script." The handle is interchangeable with a path wherever createLayer takes a configuration.
-//
-// Scripts call this at module scope for every font/material they might use, so a missing binding
-// throws "not a function" while the module is still evaluating and takes the whole layer with it.
-// `precache` is accepted and ignored: this engine resolves assets from the container on first use,
-// so there is nothing to warm up.
-JSValue engine_register_asset (JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+// Native registration returns the first path string, then null for duplicate or invalid
+// declarations. Retain the first boolean flag; material precaching is not implemented here.
+JSValue engine_register_asset (
+    JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv, int magic, JSValueConst* data
+) {
+    auto* engine = engineForGetter (ctx, data);
+    if (engine == nullptr) {
+	return JS_EXCEPTION;
+    }
+    auto* assets = engine->getEngine ().getRegisteringAssets ();
+    if (assets == nullptr) {
+	return JS_ThrowSyntaxError (ctx, "registerAsset can only be called from global scope.");
+    }
     if (argc < 1 || !JS_IsString (argv[0])) {
-	return JS_UNDEFINED;
+	return JS_NULL;
     }
 
-    JSValue handle = JS_NewObject (ctx);
-    JS_SetPropertyStr (ctx, handle, "file", JS_DupValue (ctx, argv[0]));
-    return handle;
+    const char* path = JS_ToCString (ctx, argv[0]);
+    if (path == nullptr) {
+	return JS_EXCEPTION;
+    }
+    const bool precache = argc > 1 && JS_IsBool (argv[1]) && JS_ToBool (ctx, argv[1]);
+    const bool inserted = assets->emplace (path, precache).second;
+    JSValue result = inserted ? JS_NewString (ctx, path) : JS_NULL;
+    JS_FreeCString (ctx, path);
+    return result;
 }
 
 // Layer scripts inherit from the native engine object via Object.create(). Their
@@ -425,7 +434,7 @@ EngineObject::EngineObject (ScriptEngine& engine, Render::Wallpapers::CScene& sc
     );
     JS_DefinePropertyValueStr (
 	this->m_engine.getContext (), this->m_instance, "registerAsset",
-	JS_NewCFunction (this->m_engine.getContext (), engine_register_asset, "registerAsset", 2),
+	JS_NewCFunctionData (this->m_engine.getContext (), engine_register_asset, 2, 0, 1, &instanceId),
 	JS_PROP_ENUMERABLE
     );
     JS_DefinePropertyValueStr (

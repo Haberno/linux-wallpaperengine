@@ -61,6 +61,7 @@ public:
 	bool cursorInside = false;
 	bool cursorPressedInside = false;
 	std::optional<Media::MediaSource::MediaInfo> lastMedia;
+	std::map<std::string, bool> registeredAssets;
     };
     struct JSObjectAdapters {
 	std::unique_ptr<Adapters::VectorAdapter<4>> vec4;
@@ -79,6 +80,7 @@ public:
     JSContext* getContext () const { return m_context; }
     JSValue getGlobalThis () const { return m_globalThis; }
     LoadedModule* getRunningModule () const { return m_runningModule; }
+    std::map<std::string, bool>* getRegisteringAssets () const { return m_registeringAssets; }
     // Workshop id exported by the currently-running script module (`export let __workshopId = '...'`),
     // or "" if none. Scripts use it to resolve their own workshop-scoped asset paths at runtime.
     [[nodiscard]] std::string getRunningModuleWorkshopId () const;
@@ -219,6 +221,8 @@ private:
     std::list<std::pair<const std::string*, LoadedModule*>> m_scriptModuleOrder;
 
     LoadedModule* m_runningModule = nullptr;
+    // Non-null only while an authored module's global body is evaluating.
+    std::map<std::string, bool>* m_registeringAssets = nullptr;
     bool m_sceneLayersReady = false;
     bool m_initializingScripts = false;
     std::string m_lastGeneralLanguage;

@@ -468,8 +468,8 @@ JSValue scene_create_layer (JSContext* ctx, JSValueConst this_val, int argc, JSV
     }
 
     auto* container = get_opaque (this_val);
-    // createLayer takes "String|Object|IAssetHandle" - the handle engine.registerAsset() hands back
-    // carries the path on .file, and a plain configuration object spells it the same way.
+    // registerAsset returns a path string. Also accept an object with a file path
+    // or a complete layer configuration.
     JSValue source = JS_DupValue (ctx, argv[0]);
 
     if (JS_IsObject (source)) {

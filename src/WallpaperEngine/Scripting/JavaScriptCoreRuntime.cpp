@@ -57,6 +57,7 @@ struct JSContext {
     std::vector<std::unique_ptr<JSModuleDef>> modules;
     JSObjectRef defineProperty = nullptr, hasOwnProperty = nullptr, stringify = nullptr, functionProto = nullptr;
     JSObjectRef objectProto = nullptr;
+    JSObjectRef syntaxError = nullptr;
 };
 struct Native {
     JSContext* ctx;
@@ -414,11 +415,13 @@ JSContext* JS_NewContext (JSRuntime* rt) {
     c->defineProperty = get ("Object.defineProperty");
     c->hasOwnProperty = get ("Object.prototype.hasOwnProperty");
     c->objectProto = get ("Object.prototype");
+    c->syntaxError = get ("SyntaxError");
     c->stringify = get ("JSON.stringify");
     c->functionProto = get ("Function.prototype");
     JSValueProtect (c->jsc, c->defineProperty);
     JSValueProtect (c->jsc, c->hasOwnProperty);
     JSValueProtect (c->jsc, c->objectProto);
+    JSValueProtect (c->jsc, c->syntaxError);
     JSValueProtect (c->jsc, c->stringify);
     JSValueProtect (c->jsc, c->functionProto);
     return c;
@@ -468,6 +471,7 @@ void JS_FreeRuntime (JSRuntime* rt) {
 	JSValueUnprotect (c->jsc, c->defineProperty);
 	JSValueUnprotect (c->jsc, c->hasOwnProperty);
 	JSValueUnprotect (c->jsc, c->objectProto);
+	JSValueUnprotect (c->jsc, c->syntaxError);
 	JSValueUnprotect (c->jsc, c->stringify);
 	JSValueUnprotect (c->jsc, c->functionProto);
 	JSGlobalContextRelease (c->jsc);
@@ -916,7 +920,7 @@ static JSValue throwError (JSContext* c, const char* type, const char* fmt, va_l
     vasprintf (&message, fmt, args);
     Str key (type), msg (message ? message : "");
     free (message);
-    auto ctor = JSValueToObject (
+    auto ctor = std::strcmp (type, "SyntaxError") == 0 ? c->syntaxError : JSValueToObject (
 	c->jsc, JSObjectGetProperty (c->jsc, JSContextGetGlobalObject (c->jsc), key, nullptr), nullptr
     );
     auto arg = JSValueMakeString (c->jsc, msg);
@@ -932,4 +936,5 @@ static JSValue throwError (JSContext* c, const char* type, const char* fmt, va_l
 	return r;                                                                                                      \
     }
 THROW(JS_ThrowTypeError,"TypeError") THROW(JS_ThrowRangeError,"RangeError") THROW(JS_ThrowReferenceError,"ReferenceError") THROW(JS_ThrowInternalError,"Error")
+THROW(JS_ThrowSyntaxError,"SyntaxError")
 }

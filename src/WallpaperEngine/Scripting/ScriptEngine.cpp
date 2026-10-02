@@ -643,7 +643,14 @@ ScriptLayerHandle ScriptEngine::createLayerScript (
 	<< "})();\n";
 
     const std::string evalScript = wrapper.str ();
-    JSValue result = JS_Eval (ctx, evalScript.c_str (), evalScript.size (), "<layer-script>", JS_EVAL_TYPE_GLOBAL);
+    std::map<std::string, bool> registeredAssets;
+    JSValue result;
+    {
+	auto* previousAssets = this->m_registeringAssets;
+	ScopeGuard restoreAssets ([&] { this->m_registeringAssets = previousAssets; });
+	this->m_registeringAssets = &registeredAssets;
+	result = JS_Eval (ctx, evalScript.c_str (), evalScript.size (), "<layer-script>", JS_EVAL_TYPE_GLOBAL);
+    }
 
     // Unset seeds so they don't leak into the next createLayerScript call.
     JS_SetPropertyStr (ctx, globalObj, "__layerSeedProps", JS_UNDEFINED);
@@ -685,6 +692,9 @@ void ScriptEngine::tickLayer (ScriptLayerHandle handle, double time, double delt
     }
 
     auto callHook = [&] (const char* prop, const char* tag) {
+	auto* previousAssets = this->m_registeringAssets;
+	ScopeGuard restoreAssets ([&] { this->m_registeringAssets = previousAssets; });
+	this->m_registeringAssets = nullptr;
 	JSValue fn = JS_GetPropertyStr (ctx, layerObj, prop);
 	if (JS_IsFunction (ctx, fn)) {
 	    JSValue ret = JS_Call (ctx, fn, layerObj, 0, nullptr);
@@ -749,6 +759,9 @@ void ScriptEngine::destroyLayer (ScriptLayerHandle handle) {
     if (!JS_IsUndefined (layerObj) && !JS_IsNull (layerObj)) {
 	JSValue fn = JS_GetPropertyStr (ctx, layerObj, "_destroy");
 	if (JS_IsFunction (ctx, fn)) {
+	    auto* previousAssets = this->m_registeringAssets;
+	    ScopeGuard restoreAssets ([&] { this->m_registeringAssets = previousAssets; });
+	    this->m_registeringAssets = nullptr;
 	    JSValue ret = JS_Call (ctx, fn, layerObj, 0, nullptr);
 	    if (JS_IsException (ret)) {
 		logJSException (ctx, "layer.destroy");
@@ -773,6 +786,9 @@ void ScriptEngine::destroyLayer (ScriptLayerHandle handle) {
 }
 
 JSValue ScriptEngine::call (JSValue module, int argc, JSValue argv[], const char* name) {
+    auto* previousAssets = this->m_registeringAssets;
+    ScopeGuard restoreAssets ([&] { this->m_registeringAssets = previousAssets; });
+    this->m_registeringAssets = nullptr;
     // check if there's an update method and run it
     JSValue function = JS_GetPropertyStr (this->m_context, module, name);
     ScopeGuard guard ([&] () { JS_FreeValue (this->m_context, function); });
@@ -904,7 +920,14 @@ void ScriptEngine::queueScript (const std::string& key, DynamicValue& currentVal
 	    << "})()";
 
     const std::string wrapped = wrapper.str ();
-    JSValue module = JS_Eval (this->m_context, wrapped.c_str (), wrapped.size (), key.c_str (), JS_EVAL_TYPE_GLOBAL);
+    std::map<std::string, bool> registeredAssets;
+    JSValue module;
+    {
+	auto* previousAssets = this->m_registeringAssets;
+	ScopeGuard restoreAssets ([&] { this->m_registeringAssets = previousAssets; });
+	this->m_registeringAssets = &registeredAssets;
+	module = JS_Eval (this->m_context, wrapped.c_str (), wrapped.size (), key.c_str (), JS_EVAL_TYPE_GLOBAL);
+    }
 
     if (JS_IsException (module)) {
 	logJSException (this->m_context, key.c_str ());
@@ -924,6 +947,7 @@ void ScriptEngine::queueScript (const std::string& key, DynamicValue& currentVal
 		|| body.find ("cursorLeave") != std::string::npos || body.find ("cursorMove") != std::string::npos
 		|| body.find ("cursorDown") != std::string::npos || body.find ("cursorUp") != std::string::npos
 		|| body.find ("cursorClick") != std::string::npos,
+	    .registeredAssets = std::move (registeredAssets),
 	}
     );
 
