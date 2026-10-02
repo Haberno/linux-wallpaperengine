@@ -4,6 +4,7 @@
 #include "WallpaperEngine/Render/RenderContext.h"
 
 #include <GL/glew.h>
+#include <chrono>
 #include <deque>
 #include <map>
 #include <mpv/client.h>
@@ -89,6 +90,8 @@ private:
     void processEvent (const mpv_event& event) const;
     void completeCommand (int error) const;
     void updateActivityPause ();
+    void startAudioFade ();
+    void updateAudioFade (std::chrono::steady_clock::time_point now);
 
 protected:
     bool m_doWeOwnFramebuffer;
@@ -99,6 +102,8 @@ protected:
     mpv_handle* m_handle = nullptr;
     mpv_render_context* m_renderContext = nullptr;
     double m_volume = 0.0f;
+    double m_audioVolume = 0.0;
+    std::optional<std::chrono::steady_clock::time_point> m_audioFadeNextTick;
     bool m_muted = false;
     bool m_nonBlocking = false;
     bool m_paused = false;

@@ -87,9 +87,7 @@ void GLPlayer::setMuted () {
 	return;
     }
     this->m_muted = true;
-    if (this->m_handle) {
-	this->queueCommand ({ "set", "mute", "yes" });
-    }
+    this->startAudioFade ();
 }
 
 void GLPlayer::clearMuted () {
@@ -101,6 +99,7 @@ void GLPlayer::clearMuted () {
     if (this->m_handle) {
 	this->queueCommand ({ "set", "mute", "no" });
     }
+    this->startAudioFade ();
 }
 
 void GLPlayer::setVolume (double volume) {
@@ -109,8 +108,10 @@ void GLPlayer::setVolume (double volume) {
 	return;
     }
     this->m_volume = volume;
+    this->m_audioVolume = this->m_muted || this->m_paused ? 0.0 : volume;
     if (this->m_handle) {
-	this->queueCommand ({ "set", "volume", std::to_string (volume) });
+	this->queueCommand ({ "set", "volume", std::to_string (this->m_audioVolume) });
+	this->startAudioFade ();
     }
 }
 
@@ -120,9 +121,7 @@ void GLPlayer::setPaused () {
 	return;
     }
     this->m_paused = true;
-    if (this->m_handle) {
-	this->queueCommand ({ "set", "pause", "yes" });
-    }
+    this->startAudioFade ();
 }
 
 void GLPlayer::clearPaused () {
@@ -134,6 +133,38 @@ void GLPlayer::clearPaused () {
     this->m_pausedSeek.reset ();
     if (this->m_handle && !this->m_activitySuspended) {
 	this->queueCommand ({ "set", "pause", "no" });
+    }
+    this->startAudioFade ();
+}
+
+void GLPlayer::startAudioFade () {
+    if (!this->m_handle) return;
+    const double target = this->m_muted || this->m_paused ? 0.0 : this->m_volume;
+    if (this->m_audioVolume == target) {
+	this->m_audioFadeNextTick.reset ();
+	if (this->m_muted) this->queueCommand ({ "set", "mute", "yes" });
+	if (this->m_paused) this->queueCommand ({ "set", "pause", "yes" });
+	return;
+    }
+    if (!this->m_audioFadeNextTick) {
+	this->m_audioFadeNextTick = std::chrono::steady_clock::now () + std::chrono::milliseconds (25);
+    }
+    mpv_wakeup (this->m_handle);
+}
+
+void GLPlayer::updateAudioFade (const std::chrono::steady_clock::time_point now) {
+    if (!this->m_audioFadeNextTick || now < *this->m_audioFadeNextTick) return;
+    // Native video timer 101 steps every 25 ms: normalized gain falls by
+    // volume*.03+.02 and rises by volume*.01+.01. MPV uses percent units.
+    const double target = this->m_muted || this->m_paused ? 0.0 : this->m_volume;
+    const double step = this->m_audioVolume > target ? this->m_volume * 0.03 + 2.0 : this->m_volume * 0.01 + 1.0;
+    this->m_audioVolume = this->m_audioVolume > target
+	? std::max (target, this->m_audioVolume - step) : std::min (target, this->m_audioVolume + step);
+    this->queueCommand ({ "set", "volume", std::to_string (this->m_audioVolume) });
+    if (this->m_audioVolume == target) {
+	this->startAudioFade ();
+    } else {
+	this->m_audioFadeNextTick = now + std::chrono::milliseconds (25);
     }
 }
 
@@ -184,6 +215,7 @@ void GLPlayer::resumePlayback () {
     if (this->m_handle && !this->m_activitySuspended) {
 	this->queueCommand ({ "set", "pause", "no" });
     }
+    this->startAudioFade ();
 }
 
 void GLPlayer::stopPlayback () {
@@ -430,7 +462,9 @@ void GLPlayer::init () {
     mpv_set_property_string (this->m_handle, "loop-file", this->m_loop ? "inf" : "no");
     mpv_set_property (this->m_handle, "speed", MPV_FORMAT_DOUBLE, &this->m_rate);
     if (this->m_scriptControlled) mpv_set_property_string (this->m_handle, "keep-open", "yes");
-    mpv_set_property (this->m_handle, "volume", MPV_FORMAT_DOUBLE, &this->m_volume);
+    this->m_audioFadeNextTick.reset ();
+    this->m_audioVolume = this->m_muted || this->m_paused ? 0.0 : this->m_volume;
+    mpv_set_property (this->m_handle, "volume", MPV_FORMAT_DOUBLE, &this->m_audioVolume);
 
     mpv_observe_property (this->m_handle, 0, "time-pos", MPV_FORMAT_DOUBLE);
     mpv_observe_property (this->m_handle, 0, "duration", MPV_FORMAT_DOUBLE);
@@ -492,11 +526,20 @@ void GLPlayer::play () {
     // The worker never calls OpenGL or waits for the render thread under a lock.
     this->m_eventThread = std::jthread ([this] (const std::stop_token stop) {
 	while (!stop.stop_requested ()) {
-	    const mpv_event* event = mpv_wait_event (this->m_handle, -1);
+	    double timeout = -1;
+	    {
+		const std::lock_guard lock (this->m_playbackMutex);
+		if (this->m_audioFadeNextTick) {
+		    timeout = std::max (0.0, std::chrono::duration<double> (
+			*this->m_audioFadeNextTick - std::chrono::steady_clock::now ()).count ());
+		}
+	    }
+	    const mpv_event* event = mpv_wait_event (this->m_handle, timeout);
 	    const std::lock_guard lock (this->m_playbackMutex);
 	    if (event != nullptr) {
 		this->processEvent (*event);
 	    }
+	    this->updateAudioFade (std::chrono::steady_clock::now ());
 	    this->submitCommand ();
 	}
     });
@@ -509,6 +552,7 @@ void GLPlayer::stop () {
 	this->m_eventThread.join ();
     }
     this->m_loaded = false;
+    this->m_audioFadeNextTick.reset ();
     this->m_commands.clear ();
     this->m_commandInFlight = false;
     this->m_pendingSeek.reset ();
