@@ -302,8 +302,10 @@ private:
     int m_controlPointStartIndex = 0;
 
     void setupChildren ();
+    void spawnEventChild (FollowChildSystem& child, const ParticleInstance& particle);
     void updateFollowChildren (uint32_t firstNewParticle);
     [[nodiscard]] bool hasLivingParticles () const;
+    [[nodiscard]] bool hasPendingEmission () const;
     [[nodiscard]] const ParticleInstanceOverride& getInstanceOverride () const;
 
     std::vector<ParticleInstance> m_particles;
@@ -315,6 +317,7 @@ private:
     uint32_t m_maxParticles { DEFAULT_MAX_PARTICLES };
 
     std::vector<EmitterFunc> m_emitters;
+    size_t m_pendingEmitterCount = 0;
     std::vector<InitializerFunc> m_initializers;
     std::vector<OperatorFunc> m_operators;
     bool m_hasAlphaOperators { false };

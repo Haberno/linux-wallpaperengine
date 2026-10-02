@@ -414,7 +414,7 @@ const ParticleInstanceOverride& CParticle::getInstanceOverride () const {
 
 void CParticle::setupChildren () {
     const auto supported = [] (const ParticleChild& child) {
-	return (child.type == "static" || (child.type == "eventfollow" && child.maxCount > 0))
+	return (child.type == "static" || ((child.type == "eventfollow" || child.type == "eventdeath") && child.maxCount > 0))
 	    && !child.particleFile.empty ();
     };
     size_t remainingChildren = std::ranges::count_if (m_particle.children, supported);
@@ -464,7 +464,8 @@ void CParticle::setupChildren () {
 		FollowChildSystem system { .definition = std::move (definition), .settings = &child, .instances = {} };
 		// Prepare a bounded pool on the load worker. Spawning an event child must
 		// never parse assets or compile shaders in the middle of a rendered frame.
-		const auto capacity = std::min (std::max (child.maxCount, 0), static_cast<int> (m_maxParticles));
+		const auto capacity = child.type == "eventdeath" ? child.maxCount
+		    : std::min (child.maxCount, static_cast<int> (m_maxParticles));
 		for (int i = 0; i < capacity; ++i) {
 		    if (root->m_childSystemCount >= branchEnd) break;
 		    ++root->m_childSystemCount;
@@ -676,28 +677,50 @@ bool CParticle::hasLivingParticles () const {
     return false;
 }
 
+bool CParticle::hasPendingEmission () const {
+    if (m_pendingEmission > 0 || (m_emitting && m_pendingEmitterCount > 0)) return true;
+    for (const auto& child : m_children) {
+	if (child.renderer->hasPendingEmission ()) return true;
+    }
+    for (const auto& child : m_followChildren) {
+	for (const auto& instance : child.instances) {
+	    if (instance.parentSerial != 0 && instance.renderer->hasPendingEmission ()) return true;
+	}
+    }
+    return false;
+}
+
+void CParticle::spawnEventChild (FollowChildSystem& child, const ParticleInstance& particle) {
+    if (WallpaperEngine::Maths::randomFloat (m_rng, 0.0f, 1.0f) >= child.settings->probability) return;
+    const auto slot = std::find_if (child.instances.begin (), child.instances.end (), [] (const auto& instance) {
+	return instance.parentSerial == 0 && !instance.renderer->hasLivingParticles ();
+    });
+    if (slot == child.instances.end ()) return;
+    slot->parentSerial = particle.serial;
+    auto& renderer = *slot->renderer;
+    renderer.stop ();
+    renderer.m_simulationTime = 0.0f;
+    renderer.m_propagateColorOverride = m_propagateColorOverride;
+    // Native samples raw overrides on first activation. Recycling retains
+    // the cache, including any explicit root refresh since the previous use.
+    if (!slot->hasStarted) {
+	renderer.activateInstanceParameters ();
+	slot->hasStarted = true;
+    }
+    const glm::mat4 flipY = glm::scale (glm::mat4 (1.0f), glm::vec3 (1.0f, -1.0f, 1.0f));
+    const glm::mat4 parentToLocal = glm::inverse (flipY * renderer.resolveWorldMatrix () * flipY);
+    renderer.m_followPosition = glm::vec3 (parentToLocal * glm::vec4 (particle.position, 1.0f));
+    renderer.m_time = g_Time;
+    renderer.play ();
+}
+
 void CParticle::updateFollowChildren (const uint32_t firstNewParticle) {
     for (auto& child : m_followChildren) {
+	if (child.settings->type == "eventdeath") {
+	    continue;
+	}
 	for (uint32_t i = firstNewParticle; i < m_particleCount; ++i) {
-	    const auto& particle = m_particles[i];
-	    if (!particle.isAlive () || WallpaperEngine::Maths::randomFloat (m_rng, 0.0f, 1.0f)
-		>= child.settings->probability) continue;
-	    const auto slot = std::find_if (child.instances.begin (), child.instances.end (), [] (const auto& instance) {
-		return instance.parentSerial == 0 && !instance.renderer->hasLivingParticles ();
-	    });
-	    if (slot == child.instances.end ()) break;
-	    slot->parentSerial = particle.serial;
-	    slot->renderer->stop ();
-	    slot->renderer->m_simulationTime = 0.0f;
-	    slot->renderer->m_propagateColorOverride = m_propagateColorOverride;
-	    // Native samples raw overrides on first activation. Recycling retains
-	    // the cache, including any explicit root refresh since the previous use.
-	    if (!slot->hasStarted) {
-		slot->renderer->activateInstanceParameters ();
-		slot->hasStarted = true;
-	    }
-	    slot->renderer->m_time = g_Time;
-	    slot->renderer->play ();
+	    if (m_particles[i].isAlive ()) spawnEventChild (child, m_particles[i]);
 	}
 	for (auto& instance : child.instances) {
 	    if (instance.parentSerial == 0) continue;
@@ -835,6 +858,17 @@ void CParticle::updateControlPoints (const float frameTime) {
 }
 
 void CParticle::update (float dt) {
+    // Release drained bursts before another death on this frame needs the slot.
+    for (auto& child : m_followChildren) {
+	if (child.settings->type != "eventdeath") continue;
+	for (auto& instance : child.instances) {
+	    if (instance.parentSerial != 0 && instance.renderer->m_simulationTime > 0.0f
+		&& !instance.renderer->hasLivingParticles () && !instance.renderer->hasPendingEmission ()) {
+		instance.parentSerial = 0;
+		instance.renderer->pause ();
+	    }
+	}
+    }
     // Reclaim this frame's expired slots before emitting. A full one-particle
     // glow otherwise rejects its replacement, then disappears for one frame.
     uint32_t writeIdx = 0;
@@ -844,6 +878,11 @@ void CParticle::update (float dt) {
 	if (particle.isAlive ()) {
 	    if (writeIdx != readIdx) m_particles[writeIdx] = std::move (particle);
 	    ++writeIdx;
+	} else {
+	    // Death bursts keep the last simulated tip before this slot is reused.
+	    for (auto& child : m_followChildren) {
+		if (child.settings->type == "eventdeath") spawnEventChild (child, particle);
+	    }
 	}
     }
     if (dt > 0.0f) m_particleCount = writeIdx;
@@ -851,6 +890,7 @@ void CParticle::update (float dt) {
     // Pausing stops new emission; bubbles already released keep moving and aging.
     const uint32_t firstNewParticle = m_particleCount;
     if (m_emitting && dt > 0.0f) {
+	m_pendingEmitterCount = 0;
 	for (auto& emitter : m_emitters) {
 	    emitter (m_particles, m_particleCount, dt, 0);
 	}
@@ -1006,6 +1046,7 @@ const glm::vec3& CParticle::getCompositeColor () const { return getColor (); }
 // ========== EMITTERS ==========
 
 void CParticle::setupEmitters () {
+    m_pendingEmitterCount = 0;
     for (const auto& emitter : m_particle.emitters) {
 	EmitterFunc func;
 
@@ -1019,6 +1060,7 @@ void CParticle::setupEmitters () {
 	}
 
 	if (func) {
+	    if (emitter.instantaneous > 0 || emitter.rate > 0.0f) ++m_pendingEmitterCount;
 	    m_emitters.push_back (std::move (func));
 	}
     }
@@ -1053,6 +1095,11 @@ EmitterFunc CParticle::createBoxEmitter (const ParticleEmitter& emitter) {
 	 randomPeriodicEmission, emissionTimer = 0.0f, delayTimer = emitter.delay, durationTimer = 0.0f,
 	 periodicTimer = 0.0f, emittedThisPeriod = 0u,
 	 instantaneousEmitted = false] (std::vector<ParticleInstance>& particles, uint32_t& count, float dt, uint32_t burst) mutable {
+	    const Data::Utils::ScopeGuard pending ([&] {
+		if (burst == 0 && (emitter.duration <= 0.0f || durationTimer < emitter.duration)
+		    && ((!instantaneousEmitted && emitter.instantaneous > 0) || emitter.rate > 0.0f))
+		    ++m_pendingEmitterCount;
+	    });
 	    if (burst == 0) {
 		// Handle delay
 		if (delayTimer > 0.0f) {
@@ -1209,6 +1256,7 @@ EmitterFunc CParticle::createBoxEmitter (const ParticleEmitter& emitter) {
 EmitterFunc CParticle::createSphereEmitter (const ParticleEmitter& emitter) {
     includeControlPoint (emitter.controlPoint);
     DynamicValue* countOverride = getInstanceOverride ().count->value.get ();
+    DynamicValue* speedOverride = getInstanceOverride ().speed->value.get ();
 
     // Convert emitter origin from screen space (Y down) to centered space (Y up)
     glm::vec3 transformedEmitterOrigin = emitter.origin;
@@ -1219,11 +1267,15 @@ EmitterFunc CParticle::createSphereEmitter (const ParticleEmitter& emitter) {
     bool limitOnePerFrame = (emitter.flags & 2) != 0;
     bool randomPeriodicEmission = (emitter.flags & 4) != 0;
 
-    return [this, emitter, transformedEmitterOrigin, controlPointIndex, countOverride, limitOnePerFrame,
+    return [this, emitter, transformedEmitterOrigin, controlPointIndex, countOverride, speedOverride, limitOnePerFrame,
 	    randomPeriodicEmission, emissionTimer = 0.0f, delayTimer = emitter.delay, durationTimer = 0.0f,
 	    periodicTimer = 0.0f, emittedThisPeriod = 0u,
 	    remaining
 	    = emitter.instantaneous] (std::vector<ParticleInstance>& particles, uint32_t& count, float dt, uint32_t burst) mutable {
+	const Data::Utils::ScopeGuard pending ([&] {
+	    if (burst == 0 && (emitter.duration <= 0.0f || durationTimer < emitter.duration)
+		&& (remaining > 0 || emitter.rate > 0.0f)) ++m_pendingEmitterCount;
+	});
 	if (burst == 0) {
 	    if (delayTimer > 0.0f) {
 		delayTimer -= dt;
@@ -1383,7 +1435,8 @@ EmitterFunc CParticle::createSphereEmitter (const ParticleEmitter& emitter) {
 		}
 		if (glm::dot (direction, direction) > 0.0f) direction = glm::normalize (direction);
 		float speed = WallpaperEngine::Maths::randomFloat (m_rng, emitter.speedMin, emitter.speedMax);
-		p.velocity = direction * speed;
+		const float speedMultiplier = (m_particle.flags & 16) != 0 ? 1.0f : speedOverride->getFloat ();
+		p.velocity = direction * speed * speedMultiplier;
 	    } else {
 		// No emitter speed specified, velocity will be set by initializers
 		p.velocity = glm::vec3 (0.0f);
@@ -1857,12 +1910,15 @@ OperatorFunc CParticle::createMovementOperator (const MovementOperator& op) {
     DynamicValue* gravityValue = op.gravity->value.get ();
     DynamicValue* speedOverride = getInstanceOverride ().speed->value.get ();
 
-    return [dragValue, gravityValue, speedOverride] (
+    return [this, dragValue, gravityValue, speedOverride] (
 	       std::vector<ParticleInstance>& particles, uint32_t count, const std::vector<ControlPointData>&, float,
 	       float dt
 	   ) {
 	float speed = speedOverride->getFloat ();
 	float drag = dragValue->getFloat ();
+	// Native 140237720 uses the scene frame interval before instance rate.
+	// Position/gravity keep raw dt; only drag receives the adjusted force dt.
+	const float forceDt = dt * std::pow (std::min (0.025f / getScene ().getDeltaTime (), 1.0f), 0.7f);
 	glm::vec3 gravity = gravityValue->getVec3 ();
 	// Flip gravity Y for centered space
 	gravity.y = -gravity.y;
@@ -1878,13 +1934,7 @@ OperatorFunc CParticle::createMovementOperator (const MovementOperator& op) {
 	    p.velocity += gravity * dt * speed;
 	    p.position += p.velocity * dt;
 
-	    // Apply drag (velocity decay)
-	    // Clamp to prevent velocity reversal if drag*dt > 1.0
-	    float dragFactor = 1.0f - (drag * dt);
-	    if (dragFactor < 0.0f) {
-		dragFactor = 0.0f;
-	    }
-	    p.velocity *= dragFactor;
+	    p.velocity *= 1.0f - std::min (drag * forceDt, 1.0f - std::numeric_limits<float>::epsilon ());
 	}
     };
 }
