@@ -180,6 +180,19 @@ glm::mat3 WallpaperEngine::Render::Objects::calculateFixedParticleOrientation (
     };
 }
 
+glm::vec3 WallpaperEngine::Render::Objects::calculateUprightRopeForward (
+    const glm::vec3& axis, const glm::mat3& model, const glm::vec3& cameraForward, const bool worldSpace
+) {
+    const float axisLength = glm::dot (axis, axis);
+    const glm::vec3 normalizedAxis = axisLength > 0.0f ? axis / std::sqrt (axisLength) : glm::vec3 (0, 1, 0);
+    // Native 1402298b0 locks upright to the authored axis. Renderer flag 1
+    // instead uses world Y, independently of the authored axis.
+    const glm::vec3 up = worldSpace ? glm::vec3 (0, 1, 0) : model * normalizedAxis;
+    const glm::vec3 forward = glm::transpose (model) * glm::cross (up, glm::cross (cameraForward, up));
+    const float lengthSquared = glm::dot (forward, forward);
+    return lengthSquared > 0.0f ? forward / std::sqrt (lengthSquared) : cameraForward;
+}
+
 glm::mat3 WallpaperEngine::Render::Objects::calculateBillboardParticleOrientation (
     const glm::mat4& modelInverse, const glm::mat4& cameraWorld, const float roll
 ) {
@@ -2944,6 +2957,20 @@ void CParticle::updateMatrices () {
 	m_orientationRight = orientation[0];
 	m_orientationUp = orientation[1];
 	m_orientationForward = orientation[2];
+    }
+    if (m_useRopeRenderer && !m_particle.renderers.empty ()) {
+	const auto& renderer = m_particle.renderers[0];
+	if (renderer.orientation == "upright") {
+	    glm::mat3 authoredModel = glm::mat3 (m_modelMatrix * flipY);
+	    if (!is3D) authoredModel = glm::mat3 (flipY) * authoredModel;
+	    const glm::vec3 cameraForward (glm::inverse (getScene ().getCamera ().getLookAt ())[2]);
+	    m_orientationForward = glm::mat3 (flipY)
+		* calculateUprightRopeForward (renderer.axis, authoredModel, cameraForward, (renderer.flags & 1) != 0);
+	} else if (renderer.orientation != "fixed") {
+	    // Sprite tangents are local already, but the stock rope vertex shader
+	    // applies g_ModelMatrixInverse itself. Supply the world-facing vector.
+	    m_orientationForward = glm::mat3 (m_modelMatrix) * m_orientationForward;
+	}
     }
 
     this->updateParticleRenderVars ();

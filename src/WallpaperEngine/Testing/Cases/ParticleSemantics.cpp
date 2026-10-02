@@ -910,6 +910,28 @@ TEST_CASE ("fixed particle orientation matches native draw helper vectors", "[pa
     CHECK (calculateFixedParticleOrientation (glm::vec3 (0), glm::mat3 (0.0f), false) == expected[0]);
 }
 
+TEST_CASE ("upright rope facing preserves the native locked axis", "[particle][rope]") {
+    using WallpaperEngine::Render::Objects::calculateUprightRopeForward;
+    // Native pitched-camera captures: screen 14px, upright Y 8px, upright Z
+    // 12px, upright Z with renderer flag 1 back to 8px. These normals produce
+    // the distinct Y and Z ribbon widths rather than a camera-facing lookalike.
+    const glm::vec3 cameraForward (0, .8f, .6f);
+    for (const glm::vec3 axis : { glm::vec3 (0), glm::vec3 (0, 1, 0), glm::vec3 (0, 5, 0) }) {
+	const auto actual = calculateUprightRopeForward (axis, glm::mat3 (1), cameraForward, false);
+	CHECK (actual.x == Catch::Approx (0).margin (.000001f));
+	CHECK (actual.y == Catch::Approx (0).margin (.000001f));
+	CHECK (actual.z == Catch::Approx (1).margin (.000001f));
+    }
+    const auto axisZ = calculateUprightRopeForward ({ 0, 0, 5 }, glm::mat3 (1), cameraForward, false);
+    CHECK (axisZ.x == Catch::Approx (0).margin (.000001f));
+    CHECK (axisZ.y == Catch::Approx (1).margin (.000001f));
+    CHECK (axisZ.z == Catch::Approx (0).margin (.000001f));
+    const auto world = calculateUprightRopeForward ({ 0, 0, 5 }, glm::mat3 (1), cameraForward, true);
+    CHECK (world.x == Catch::Approx (0).margin (.000001f));
+    CHECK (world.y == Catch::Approx (0).margin (.000001f));
+    CHECK (world.z == Catch::Approx (1).margin (.000001f));
+}
+
 TEST_CASE ("control point spaces match native mirrored-layer results", "[particle]") {
     // Executed the installed wallpaper64.exe's 14022bd40 with Sea's actual
     // overrides. Native local=(4885.391113,361.117310), world=(-865.697021,-1178.376709).
