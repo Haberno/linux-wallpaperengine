@@ -12,6 +12,7 @@
 #endif
 #include <catch2/catch_test_macros.hpp>
 
+#include <array>
 #include <cstdlib>
 #include <fstream>
 #include <sstream>
@@ -657,4 +658,123 @@ TEST_CASE ("single-frame selected GIFs retain native static background colors", 
     CHECK (pixels[14 * 4 + 1] == 0);
     CHECK (pixels[14 * 4 + 2] == 0);
     CHECK (pixels[14 * 4 + 3] == 255);
+}
+
+TEST_CASE ("animated GIF backgrounds preserve native palette and disposal semantics", "[texture][user-image][gif][gif-background]") {
+    using Json = WallpaperEngine::Data::JSON::JSON;
+    // Native 2.8.42 controls: global background is BGR; foreground stays RGB.
+    // Background index zero and absent global tables remain transparent.
+    struct Probe {
+	const char* name;
+	bool global;
+	int background;
+	int local; // 0: none, 1: first frame, 2: every frame.
+	std::array<bool, 4> transparent;
+	int disposal;
+	bool holes = false;
+    };
+    const Probe probes[] = {
+	{ "global opaque", true, 5, 0, { false, false, false, false }, 2 },
+	{ "global transparent", true, 5, 0, { true, true, true, true }, 2 },
+	{ "background zero", true, 0, 0, { false, false, false, false }, 2 },
+	{ "local first", true, 5, 1, { false, false, false, false }, 2 },
+	{ "local only", false, 5, 2, { false, false, false, false }, 2 },
+	{ "restore previous", true, 5, 0, { false, false, false, false }, 3 },
+	{ "opaque then transparent", true, 5, 0, { false, true, true, true }, 2 },
+	{ "transparent then opaque", true, 5, 0, { true, false, false, false }, 2 },
+	{ "transparent holes", true, 5, 0, { false, true, true, true }, 2, true },
+    };
+    const unsigned char palette[] = {
+	37, 83, 211, 255, 0, 0, 0, 255, 0, 0, 0, 255,
+	255, 255, 0, 17, 51, 239, 239, 51, 17, 0, 0, 0
+    };
+    const std::array<std::array<uint16_t, 4>, 4> rectangles = {{
+	{ 2, 1, 4, 2 }, { 2, 1, 4, 2 }, { 8, 4, 2, 2 }, { 5, 3, 1, 1 }
+    }};
+    using Pixel = std::array<unsigned char, 4>;
+    const Pixel clear { 0, 0, 0, 0 }, background { 239, 51, 17, 255 };
+    const Pixel red { 255, 0, 0, 255 }, green { 0, 255, 0, 255 };
+    const Pixel blue { 0, 0, 255, 255 }, yellow { 255, 255, 0, 255 };
+    for (const auto& probe : probes) {
+	CAPTURE (probe.name);
+	std::string bytes ("GIF89a\x0c\x00\x08\x00", 10);
+	bytes += static_cast<char> (probe.global ? 0xf2 : 0x72);
+	bytes += static_cast<char> (probe.background);
+	bytes += '\0';
+	if (probe.global) bytes.append (reinterpret_cast<const char*> (palette), sizeof (palette));
+	bytes.append ("\x21\xff\x0bNETSCAPE2.0\x03\x01\x00\x00\x00", 19);
+	for (size_t frame = 0; frame < 4; ++frame) {
+	    const int disposal = frame == 1 ? probe.disposal : frame == 2 ? 3 : 1;
+	    bytes.append ("\x21\xf9\x04", 3);
+	    bytes += static_cast<char> ((disposal << 2) | probe.transparent[frame]);
+	    bytes.append ("\x50\x00\x00\x00", 4);
+	    bytes += ',';
+	    for (const auto coordinate : rectangles[frame]) appendValue (bytes, coordinate);
+	    const bool local = probe.local == 2 || (probe.local == 1 && frame == 0);
+	    bytes += static_cast<char> (local ? 0x82 : 0);
+	    if (local) {
+		std::string colors (reinterpret_cast<const char*> (palette), sizeof (palette));
+		colors.replace (15, 3, "\x3d\xad\x1d", 3);
+		bytes += colors;
+	    }
+	    const auto count = rectangles[frame][2] * rectangles[frame][3];
+	    bytes += '\x03'; // Clear before each pixel keeps LZW codes four bits wide.
+	    bytes += static_cast<char> (count + 1);
+	    for (int pixel = 0; pixel < count; ++pixel) {
+		const int color = frame == 0 ? (pixel % 4 < 2 ? 1 : 5)
+		    : frame == 1 && probe.holes && pixel % 2 != 0 ? 0 : static_cast<int> (frame) + 1;
+		bytes += static_cast<char> (8 | (color << 4));
+	    }
+	    bytes.append ("\x09\x00", 2);
+	}
+	bytes += ';';
+	struct Truncation { const char* probe; size_t length; const char* block; };
+	const Truncation truncations[] = {
+	    { "global opaque", 36, "global palette" },
+	    { "global opaque", 45, "application extension payload" },
+	    { "global opaque", 70, "image descriptor" },
+	    { "global opaque", 74, "LZW minimum code size" },
+	    { "global opaque", 80, "image subblock payload" },
+	    { "global opaque", 85, "image subblock terminator" },
+	    { "local first", 97, "local palette" },
+	    { "local first", 102, "local image subblock payload" },
+	};
+	for (const auto& truncated : truncations) {
+	    if (std::string (probe.name) != truncated.probe) continue;
+	    CAPTURE (truncated.block, truncated.length);
+	    CHECK_THROWS (TextureParser::parseImage (bytes.substr (0, truncated.length), Json::object ()));
+	}
+	const auto texture = TextureParser::parseImage (bytes, Json { { "nomip", true } });
+	REQUIRE (texture->isAnimated ());
+	REQUIRE (texture->frames.size () == 4);
+	REQUIRE (texture->images.size () == 4);
+	const bool hasBackground = probe.global && probe.background != 0;
+	const Pixel initial = hasBackground && !probe.transparent[0] ? background : clear;
+	const Pixel foreground = probe.local ? Pixel { 61, 173, 29, 255 } : Pixel { 17, 51, 239, 255 };
+	const Pixel disposed = hasBackground && !probe.transparent[1] ? background : clear;
+	for (size_t frame = 0; frame < 4; ++frame) {
+	    CAPTURE (frame);
+	    CHECK (texture->frames[frame]->frametime == 0.8f);
+	    const auto& mip = texture->images.at (frame).front ();
+	    REQUIRE (mip->uncompressedSize == 12 * 8 * 4);
+	    const std::array<Pixel, 7> expected = {
+		initial,
+		frame == 1 ? green : frame == 0 || probe.disposal == 3 ? red : disposed,
+		frame == 1 ? green : frame == 0 || probe.disposal == 3 ? foreground : disposed,
+		frame == 2 ? blue : initial,
+		frame == 3 ? yellow : initial,
+		frame == 1 ? (probe.holes ? red : green) : frame == 0 || probe.disposal == 3 ? red : disposed,
+		frame == 1 ? (probe.holes ? foreground : green)
+		    : frame == 0 || probe.disposal == 3 ? foreground : disposed,
+	    };
+	    const std::array<size_t, 7> positions = { 0, 14, 16, 56, 41, 15, 17 };
+	    for (size_t sample = 0; sample < positions.size (); ++sample) {
+		CAPTURE (sample);
+		for (size_t channel = 0; channel < 4; ++channel) {
+		    CHECK (static_cast<unsigned char> (mip->uncompressedData[positions[sample] * 4 + channel])
+			== expected[sample][channel]);
+		}
+	    }
+	}
+    }
 }

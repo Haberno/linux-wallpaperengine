@@ -36,6 +36,79 @@ struct GifImage {
     float frametime;
 };
 
+std::vector<unsigned char> gifDecoderInput (const std::string& contents, size_t maxFrames) {
+    const auto* bytes = reinterpret_cast<const unsigned char*> (contents.data ());
+    const size_t paletteSize = size_t (2) << (bytes[10] & 7);
+    const size_t paletteBytes = paletteSize * 3;
+    const size_t background = bytes[11];
+    if (!(bytes[10] & 0x80)) return { contents.begin (), contents.end () };
+    if (paletteBytes > contents.size () - 13) throw std::runtime_error ("Truncated GIF palette");
+    if (background >= paletteSize
+	|| (background != 0 && bytes[13 + background * 3] == bytes[15 + background * 3])) {
+	return { contents.begin (), contents.end () };
+    }
+
+    // Native uses BGR for the logical background, but RGB for drawn palette pixels.
+    // Give global-palette frames their original palette locally before changing only
+    // the decoder's background. A zero background index behaves like no global table.
+    std::vector<size_t> globalFrames;
+    size_t cursor = 13 + paletteBytes;
+    size_t frames = 0;
+    const auto skip = [&] (size_t count) {
+	if (count > contents.size () - cursor) throw std::runtime_error ("Truncated GIF block");
+	cursor += count;
+    };
+    const auto skipBlocks = [&] {
+	for (;;) {
+	    skip (1);
+	    const size_t count = bytes[cursor - 1];
+	    if (count == 0) break;
+	    skip (count);
+	}
+    };
+    while (cursor < contents.size ()) {
+	const unsigned char tag = bytes[cursor++];
+	if (tag == 0x3b) break;
+	if (tag == 0x21) {
+	    skip (1); // Extension label, then length-prefixed subblocks.
+	    skipBlocks ();
+	} else if (tag == 0x2c) {
+	    if (++frames > maxFrames) throw std::runtime_error ("GIF animation has too many frames");
+	    skip (9);
+	    const size_t flags = cursor - 1;
+	    if (bytes[flags] & 0x80) skip ((size_t (2) << (bytes[flags] & 7)) * 3);
+	    else globalFrames.push_back (flags);
+	    skip (1); // LZW minimum code size; pixel data remains untouched.
+	    skipBlocks ();
+	} else {
+	    throw std::runtime_error ("Invalid GIF block");
+	}
+    }
+    constexpr size_t maxInputBytes = std::numeric_limits<int>::max () - AV_INPUT_BUFFER_PADDING_SIZE;
+    const size_t baseSize = contents.size () - (background == 0 ? paletteBytes : 0);
+    if (globalFrames.size () > (maxInputBytes - baseSize) / paletteBytes) {
+	throw std::runtime_error ("Source image is too large");
+    }
+    std::vector<unsigned char> input;
+    input.reserve (baseSize + globalFrames.size () * paletteBytes + AV_INPUT_BUFFER_PADDING_SIZE);
+    input.insert (input.end (), contents.begin (), contents.begin () + 13);
+    if (background == 0) {
+	input[10] &= 0x7f;
+    } else {
+	input.insert (input.end (), contents.begin () + 13, contents.begin () + 13 + paletteBytes);
+	std::swap (input[13 + background * 3], input[15 + background * 3]);
+    }
+    size_t copied = 13 + paletteBytes;
+    for (const size_t flags : globalFrames) {
+	input.insert (input.end (), contents.begin () + copied, contents.begin () + flags);
+	input.push_back ((bytes[flags] & 0x78) | 0x80 | (bytes[10] & 7));
+	input.insert (input.end (), contents.begin () + 13, contents.begin () + 13 + paletteBytes);
+	copied = flags + 1;
+    }
+    input.insert (input.end (), contents.begin () + copied, contents.end ());
+    return input;
+}
+
 std::vector<GifImage> decodeGifImages (const std::string& contents, int& width, int& height) {
     // Match the packed texture payload/frame limits before allocating decoded canvases.
     constexpr size_t maxDecodedBytes = 1u << 30;
@@ -79,9 +152,9 @@ std::vector<GifImage> decodeGifImages (const std::string& contents, int& width, 
 	throw std::runtime_error ("Cannot initialize GIF decoder");
     }
 
-    std::vector<unsigned char> input (contents.begin (), contents.end ());
-    input.resize (contents.size () + AV_INPUT_BUFFER_PADDING_SIZE, 0);
-    const int inputSize = static_cast<int> (contents.size ());
+    std::vector<unsigned char> input = gifDecoderInput (contents, maxFrames);
+    const int inputSize = static_cast<int> (input.size ());
+    input.resize (input.size () + AV_INPUT_BUFFER_PADDING_SIZE, 0);
     int position = 0;
     std::vector<GifImage> images;
     size_t packets = 0;
