@@ -1454,6 +1454,14 @@ bool CScene::updateCameraObject () {
 	// Scenes without a camera layer still have live projection properties. Refresh
 	// the fallback without claiming a runtime pose for the editor's 2D camera.
 	CameraTransform transform = this->m_camera->getDefaultTransform ();
+	if (!this->m_camera->isOrthogonal ()) {
+	    // Native restores the scene pose when the last camera layer is hidden.
+	    // The previous visible layer may have replaced the resting transform.
+	    const auto& configuration = this->getScene ().camera.configuration;
+	    transform.eye = configuration.eye;
+	    transform.center = configuration.center;
+	    transform.up = configuration.up;
+	}
 	const auto& projection = this->getScene ().camera.projection;
 	transform.fov = projection.fov->evaluateFloat (this->getTime ());
 	transform.zoom = projection.zoom->evaluateFloat (this->getTime ());

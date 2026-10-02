@@ -135,28 +135,6 @@ SceneUniquePtr WallpaperParser::parseScene (const JSON& file, Project& project) 
 	}
     }
 
-    if (isPerspective) {
-	for (const auto& cur : objects) {
-	    if (!cur.is_object () || cur.find ("camera") == cur.end ()) {
-		continue;
-	    }
-
-	    const auto origin = cur.optional ("origin", glm::vec3 (0.0f));
-	    const auto angles = cur.optional ("angles", glm::vec3 (0.0f));
-
-	    // same rotation order and radian units as object transforms (see CObject)
-	    glm::mat4 rotation = glm::mat4 (1.0f);
-	    rotation = glm::rotate (rotation, angles.z, glm::vec3 (0.0f, 0.0f, 1.0f));
-	    rotation = glm::rotate (rotation, angles.y, glm::vec3 (0.0f, 1.0f, 0.0f));
-	    rotation = glm::rotate (rotation, angles.x, glm::vec3 (1.0f, 0.0f, 0.0f));
-
-	    eye = origin;
-	    center = origin + glm::vec3 (rotation * glm::vec4 (0.0f, 0.0f, -1.0f, 0.0f));
-	    up = glm::vec3 (rotation * glm::vec4 (0.0f, 1.0f, 0.0f, 0.0f));
-	    break;
-	}
-    }
-
     auto result = std::make_unique <Scene> (
         WallpaperData {
             .filename = "",
