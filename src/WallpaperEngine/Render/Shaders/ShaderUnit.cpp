@@ -1579,32 +1579,34 @@ std::string ShaderUnit::applyFragmentTexCoordCompatibility (std::string source) 
 
     const std::string original = source;
     static const std::regex wideTexCoordDecl (R"(\bvarying\s+vec[34]\s+v_TexCoord\s*;)");
-    static const std::regex narrowTexCoordDecl (R"(\bvarying\s+vec2\s+v_TexCoord\s*;)");
-
-    const bool linkedHasWideTexCoord = this->m_link != nullptr
-	&& std::regex_search (this->m_link->m_preprocessed, wideTexCoordDecl);
-    const bool linkedHasNarrowTexCoord = this->m_link != nullptr
-	&& std::regex_search (this->m_link->m_preprocessed, narrowTexCoordDecl);
-
-    if (std::regex_search (source, narrowTexCoordDecl) && linkedHasWideTexCoord && !linkedHasNarrowTexCoord) {
-	// the linked vertex shader outputs a wider v_TexCoord, so glslang widens this input at
-	// link time and every bare (vec2) use of it becomes an implicit vec4 truncation; widen
-	// the declaration ourselves and qualify all uses with .xy. If both units declare vec2
-	// and vec4 variants behind matching combo branches, preserve those branches: widening
-	// the fragment's inactive vec2 declaration makes its active interface disagree with the
-	// vertex shader when the combo selects the narrow path (as in Fragments' generic shader).
-	// Declarations are shielded first so their identifiers are not treated as expression uses.
-	static const std::regex anyTexCoordDecl (R"(\bvarying\s+(vec[234])\s+v_TexCoord\s*;)");
-	static const std::regex bareTexCoordUse (R"(\bv_TexCoord\b(?!\s*\.))");
-	static const std::regex shieldedNarrowDecl (R"(\bvarying\s+vec2\s+V_TEXCOORD_DECL\s*;)");
-	static const std::regex shieldedDecl ("V_TEXCOORD_DECL");
-	source = std::regex_replace (source, anyTexCoordDecl, "varying $1 V_TEXCOORD_DECL;");
-	source = std::regex_replace (source, bareTexCoordUse, "v_TexCoord.xy");
-	source = std::regex_replace (source, shieldedNarrowDecl, "varying vec4 v_TexCoord;");
-	source = std::regex_replace (source, shieldedDecl, "v_TexCoord");
-    } else if (std::regex_search (source, wideTexCoordDecl)) {
+    static const std::string declarationPrefix = R"(\bvarying\s+(?:(?:lowp|mediump|highp)\s+)?)";
+    static const std::regex narrowTexCoordDecl (declarationPrefix + R"(vec2\s+(v_TexCoord[0-9]*)\s*;)");
+    std::set<std::string> narrowNames;
+    for (std::sregex_iterator it (source.begin (), source.end (), narrowTexCoordDecl), end; it != end; ++it) {
+	narrowNames.insert ((*it)[1].str ());
+    }
+    for (const auto& name : narrowNames) {
+	std::smatch linkedDeclaration;
+	if (m_link == nullptr
+	    || !std::regex_search (m_link->m_preprocessed, linkedDeclaration,
+		std::regex (declarationPrefix + "(vec[34])\\s+" + name + "\\s*;"))
+	    || std::regex_search (m_link->m_preprocessed,
+		std::regex (declarationPrefix + "vec2\\s+" + name + "\\s*;"))) {
+	    continue;
+	}
+	// Widen before parsing: glslang otherwise folds vec2.wz to .yx and loses
+	// animated higher components. Keep bare vec2 reads and matching combo branches.
+	const std::regex anyDeclaration ("(" + declarationPrefix + ")(vec[234])\\s+" + name + "\\s*;");
+	const std::regex bareUse ("\\b" + name + "\\b(?!\\s*\\.)");
+	const std::regex shieldedNarrow ("(" + declarationPrefix + ")vec2\\s+V_TEXCOORD_DECL\\s*;");
+	source = std::regex_replace (source, anyDeclaration, "$1$2 V_TEXCOORD_DECL;");
+	source = std::regex_replace (source, bareUse, name + ".xy");
+	source = std::regex_replace (source, shieldedNarrow, "$1" + linkedDeclaration[1].str () + " " + name + ";");
+	source = std::regex_replace (source, std::regex ("V_TEXCOORD_DECL"), name);
+    }
+    if (std::regex_search (source, wideTexCoordDecl)) {
 	static const std::regex texCoordBeforeVec2 (R"(\bv_TexCoord\b(\s*[-+*/]\s*(?:CAST2|vec2)\s*\())");
-	static const std::regex vec2BeforeTexCoord (R"(((?:CAST2|vec2)\s*\([^)]+\)\s*[-+*/]\s*)\bv_TexCoord\b)");
+	static const std::regex vec2BeforeTexCoord (R"(((?:CAST2|vec2)\s*\([^)]+\)\s*[-+*/]\s*)\bv_TexCoord\b(?!\s*\.))");
 	static const std::regex sampledTexCoord (
 	    R"(((?:texSample2D|texSample2DLod)\s*\([^,]+,\s*)\bv_TexCoord\b(?!\s*\.))"
 	);

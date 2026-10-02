@@ -673,6 +673,28 @@ TEST_CASE ("conditionally included headers do not contribute early macros", "[sh
     CHECK (uniform < includedHelper);
 }
 
+TEST_CASE ("numbered TexCoord inputs retain animated higher components", "[shader][texcoord-width]") {
+    for (const std::string qualifier : { "", "mediump ", "highp " }) {
+	for (const std::string name : { "v_TexCoord", "v_TexCoord1" }) {
+	    INFO ("qualifier=" << qualifier << " name=" << name);
+	    const auto sources = compileLinked (
+		"uniform float g_Time;\nvarying " + qualifier + "vec4 " + name + ";\n"
+		"void main() { " + name + " = vec4(.25, .5, .75, g_Time); gl_Position = vec4(0); }\n",
+		"varying " + qualifier + "vec2 " + name + ";\n"
+		"void main() { vec2 uv = " + name + "; gl_FragColor = vec4(" + name + ".wz, "
+		"vec2(0.0) + " + name + ".zw) + vec4(uv, 0, 0); }\n", {}
+	    );
+	    const auto translated = GLSLContext::get ().toGlsl (sources.first, sources.second);
+	    REQUIRE_FALSE (translated.second.empty ());
+	    // Inspect emitted executable GLSL, excluding the appended original-source diagnostic.
+	    const std::string executable = translated.second.substr (0, translated.second.find ("#if 0"));
+	    CHECK_THAT (executable, Catch::Matchers::ContainsSubstring (name + ".wz"));
+	    CHECK_THAT (executable, Catch::Matchers::ContainsSubstring (name + ".zw"));
+	    CHECK_THAT (executable, Catch::Matchers::ContainsSubstring (name + ".xy"));
+	}
+    }
+}
+
 TEST_CASE ("matching conditional TexCoord widths stay synchronized", "[shader][compat]") {
     const std::string vertexSource =
 	"uniform float g_Test;\n"
