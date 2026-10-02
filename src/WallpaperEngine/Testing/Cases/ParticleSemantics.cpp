@@ -24,6 +24,58 @@ using WallpaperEngine::Render::Objects::calculateFixedParticleOrientation;
 using WallpaperEngine::Render::Objects::calculateBillboardParticleOrientation;
 using WallpaperEngine::Render::Objects::ParticleInstance;
 
+TEST_CASE ("particle lifetime floors the final scaled sample", "[particle][lifetime]") {
+    using WallpaperEngine::Render::Objects::calculateParticleLifetime;
+    const struct { float minimum, maximum, exponent, fraction, multiplier, expected; } cases[] = {
+        { 0, 0, 1, .5f, 1, .001f },
+        { -1, -1, 1, .5f, 1, .001f },
+        { .0002f, .0002f, 1, .5f, 1, .001f },
+        { .001f, .001f, 1, .5f, 1, .001f },
+        { .002f, .002f, 1, .5f, .25f, .001f },
+        { .002f, .002f, 1, .5f, 0, .001f },
+        { -.002f, -.002f, 1, .5f, -2, .004f },
+        { -1, .002f, 0, .5f, 1, .002f },
+        { 1, 5, 2, .5f, 2, 4 },
+        { 5, 1, 1, .25f, 1, 4 }
+    };
+    for (const auto& value : cases) {
+        CAPTURE (value.minimum, value.maximum, value.exponent, value.multiplier);
+        CHECK (calculateParticleLifetime (value.minimum, value.maximum, value.exponent,
+                                         value.fraction, value.multiplier)
+               == Catch::Approx (value.expected).margin (0.0000001f));
+    }
+    ParticleInstance particle;
+    CHECK (particle.lifetime == 1.0f);
+    particle.alive = true;
+    particle.lifetime = calculateParticleLifetime (0, 0, 1, .5f, 1);
+    particle.age = .0005f;
+    CHECK (particle.isAlive ());
+    CHECK (particle.getLifetimePos () == Catch::Approx (.5f));
+    particle.age = .0015f;
+    CHECK_FALSE (particle.isAlive ());
+}
+
+TEST_CASE ("spark lifetimes retain the authored native exponent", "[particle][lifetime]") {
+    WallpaperEngine::Data::Model::Project project {};
+    const auto object = WallpaperEngine::Data::Parsers::ObjectParser::parse (
+        WallpaperEngine::Data::JSON::JSON::parse (R"({"id":379,"particle":{"initializer":[
+            {"name":"lifetimerandom","min":1,"max":5},
+            {"name":"lifetimerandom","min":1,"max":5,"exponent":0},
+            {"name":"lifetimerandom","min":1,"max":5,"exponent":10},
+            {"name":"lifetimerandom","min":1,"max":5,"exponent":{"value":4}}
+        ]}})"), project
+    );
+    const auto* particle = object->as<Particle> ();
+    REQUIRE (particle != nullptr);
+    REQUIRE (particle->initializers.size () == 4);
+    const float exponents[] = { 1, 0, 10, 4 };
+    for (size_t i = 0; i < particle->initializers.size (); ++i) {
+        const auto* initializer = particle->initializers[i]->as<LifetimeRandomInitializer> ();
+        REQUIRE (initializer != nullptr);
+        CHECK (initializer->exponent->value->getFloat () == exponents[i]);
+    }
+}
+
 TEST_CASE ("turbulent velocity uses the native scalar time field", "[particle][noise]") {
     using WallpaperEngine::Render::Utils::simplexNoise1D;
     // Values independently decoded from native 14027b090 and its permutation.

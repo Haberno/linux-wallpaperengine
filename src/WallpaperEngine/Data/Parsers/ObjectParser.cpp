@@ -1003,7 +1003,8 @@ ParticleInitializerUniquePtr ObjectParser::parseParticleInitializer (const JSON&
 	);
     } else if (name == "lifetimerandom") {
 	return std::make_unique<LifetimeRandomInitializer> (
-	    it.user ("min", properties, 0.0f), it.user ("max", properties, 1.0f)
+	    it.user ("min", properties, 0.0f), it.user ("max", properties, 1.0f),
+	    it.user ("exponent", properties, 1.0f)
 	);
     } else if (name == "velocityrandom") {
 	return std::make_unique<VelocityRandomInitializer> (

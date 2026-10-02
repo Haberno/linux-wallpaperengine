@@ -26,6 +26,9 @@ constexpr uint32_t DEFAULT_MAX_PARTICLES = 1000;
 
 [[nodiscard]] float calculateParticleSimulationDelta (float elapsed, float rate);
 [[nodiscard]] float calculateParticleEmissionRate (float emitterRate, float count);
+[[nodiscard]] float calculateParticleLifetime (
+    float minimum, float maximum, float exponent, float fraction, float multiplier
+);
 [[nodiscard]] glm::vec3 calculateParticleVelocityCap (
     const glm::vec3& velocity, float maxSpeed, float lifetimePosition, glm::vec4 blendTimes
 );

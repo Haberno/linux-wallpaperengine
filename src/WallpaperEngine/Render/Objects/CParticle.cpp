@@ -27,6 +27,15 @@ float WallpaperEngine::Render::Objects::calculateParticleEmissionRate (const flo
     return glm::max (emitterRate, 0.0f) * glm::max (count, 0.0f);
 }
 
+float WallpaperEngine::Render::Objects::calculateParticleLifetime (
+    const float minimum, const float maximum, const float exponent, float fraction, const float multiplier
+) {
+    if (exponent != 1.0f) fraction = std::pow (fraction, exponent);
+    const float lifetime = (minimum + (maximum - minimum) * fraction) * multiplier;
+    // Native birth opcode 1 floors the final, instance-scaled sample (14023b637).
+    return lifetime <= 0.001f ? 0.001f : lifetime;
+}
+
 float WallpaperEngine::Render::Objects::calculateParticleAudioResponse (
     const float* left, const float* right, const int mode, const glm::vec2& bounds,
     const float exponent, const int frequencyStart, const int frequencyEnd
@@ -1509,12 +1518,15 @@ InitializerFunc CParticle::createAlphaRandomInitializer (const AlphaRandomInitia
 InitializerFunc CParticle::createLifetimeRandomInitializer (const LifetimeRandomInitializer& init) {
     DynamicValue* minValue = init.min->value.get ();
     DynamicValue* maxValue = init.max->value.get ();
+    DynamicValue* exponentValue = init.exponent->value.get ();
     DynamicValue* lifetimeOverride = getInstanceOverride ().lifetime->value.get ();
 
-    return [this, minValue, maxValue, lifetimeOverride] (ParticleInstance& p) {
+    return [this, minValue, maxValue, exponentValue, lifetimeOverride] (ParticleInstance& p) {
 	const float lifetimeMultiplier = (m_particle.flags & 64) != 0 ? 1.0f : lifetimeOverride->getFloat ();
-	p.lifetime = WallpaperEngine::Maths::randomFloat (m_rng, minValue->getFloat (), maxValue->getFloat ())
-	    * lifetimeMultiplier;
+	p.lifetime = calculateParticleLifetime (
+	    minValue->getFloat (), maxValue->getFloat (), exponentValue->getFloat (),
+	    WallpaperEngine::Maths::randomFloat (m_rng, 0.0f, 1.0f), lifetimeMultiplier
+	);
 	p.initial.lifetime = p.lifetime;
     };
 }
