@@ -11,6 +11,7 @@
 
 #include <GLFW/glfw3native.h>
 
+#include <cmath>
 #include <unistd.h>
 
 using namespace WallpaperEngine::Render::Drivers;
@@ -110,11 +111,13 @@ uint32_t GLFWOpenGLDriver::getFrameCounter () const { return this->m_frameCounte
 std::chrono::steady_clock::duration GLFWOpenGLDriver::getLastFrameWait () const { return this->m_lastFrameWait; }
 
 void GLFWOpenGLDriver::dispatchEventQueue () {
-    static double previousFrameEnd = 0.0;
+    static double nextFrameEnd = 0.0;
     const double minimumTime = 1.0 / this->m_context.settings.render.maximumFPS;
-    // Cooperative loading does useful work between dispatches. Include that work
-    // in the frame budget instead of sleeping for a whole extra frame after it.
-    const double startTime = previousFrameEnd > 0.0 ? previousFrameEnd : this->getRenderTime ();
+    // Keep a deadline so scheduler lateness does not become permanent FPS drift.
+    // Work done between dispatches still consumes the same frame budget.
+    if (nextFrameEnd == 0.0) {
+	nextFrameEnd = this->getRenderTime () + minimumTime;
+    }
     // clear the screen
     glClear (GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
@@ -160,14 +163,18 @@ void GLFWOpenGLDriver::dispatchEventQueue () {
 
     // ensure the frame time is correct to not overrun FPS
     m_lastFrameWait = {};
-    if ((endTime - startTime) < minimumTime) {
-	const double wait = minimumTime - (endTime - startTime);
-	usleep (wait * CLOCKS_PER_SEC);
+    if (endTime < nextFrameEnd) {
+	usleep ((nextFrameEnd - endTime) * CLOCKS_PER_SEC);
 	m_lastFrameWait = std::chrono::duration_cast<std::chrono::steady_clock::duration> (
-	    std::chrono::duration<double> (wait)
+	    std::chrono::duration<double> (this->getRenderTime () - endTime)
 	);
     }
-    previousFrameEnd = this->getRenderTime ();
+    const double frameEnd = this->getRenderTime ();
+    nextFrameEnd += minimumTime;
+    if (nextFrameEnd <= frameEnd) {
+	// Skip missed intervals after a stall; never queue catch-up frames.
+	nextFrameEnd += minimumTime * (std::floor ((frameEnd - nextFrameEnd) / minimumTime) + 1.0);
+    }
 }
 
 void* GLFWOpenGLDriver::getProcAddress (const char* name) const {
