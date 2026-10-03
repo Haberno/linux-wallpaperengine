@@ -7,7 +7,7 @@ namespace WallpaperEngine::Render::Objects { class CLight; }
 namespace WallpaperEngine::Render::Wallpapers {
 class CScene;
 
-/** Authored spot and unshadowed point volumes, using the installed native shaders. */
+/** Authored spot and point volumes, using the installed native shaders. */
 class VolumetricLights {
 public:
     explicit VolumetricLights (CScene& scene);
