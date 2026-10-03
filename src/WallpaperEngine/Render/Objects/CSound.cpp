@@ -2,18 +2,23 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdlib>
+#include <glm/geometric.hpp>
 
 #include "CSound.h"
 
 #include "WallpaperEngine/Audio/Drivers/AudioDriver.h"
 #include "WallpaperEngine/FileSystem/Container.h"
 #include "WallpaperEngine/Logging/Log.h"
+#include "WallpaperEngine/Render/Camera.h"
 
 using namespace WallpaperEngine::Render::Objects;
 
 CSound::CSound (Wallpapers::CScene& scene, const Sound& sound) :
     CObject (scene, sound), ScriptableObject (scene, sound), m_sound (sound), m_playing (!sound.startSilent) {
     this->registerProperty ("volume", *this->m_sound.volume->value);
+    this->registerProperty ("spatialization", *this->m_sound.spatialization->value);
+    this->registerProperty ("attenuation", *this->m_sound.attenuation->value);
+    this->registerProperty ("mindistance", *this->m_sound.minDistance->value);
     this->registerProperty ("mintime", *this->m_sound.minTime->value);
     this->registerProperty ("maxtime", *this->m_sound.maxTime->value);
     if (!this->getScene ().isLoading ()) this->activate ();
@@ -91,7 +96,25 @@ bool CSound::attachPendingStream () {
 	return true;
     }
     auto stream = this->m_pendingStream.get ();
-    stream->setGain (this->getGain ());
+    this->m_attenuation = 1.0f;
+    this->m_minDistance = 1.0f;
+    this->m_distanceGain = 1.0f;
+    // Sample the original channel layout before attaching to the SDL callback.
+#if FF_API_OLD_CHANNEL_LAYOUT
+    this->m_sourceChannels = stream->getContext ()->channels;
+#else
+    this->m_sourceChannels = stream->getContext ()->ch_layout.nb_channels;
+#endif
+    if (this->m_sound.spatialization->value->getBool ()) {
+	const float time = this->getScene ().getTime ();
+	const float attenuation = this->m_sound.attenuation->evaluateFloat (time);
+	const float minDistance = this->m_sound.minDistance->evaluateFloat (time);
+	// OpenAL rejects negative source parameters, retaining their unity defaults.
+	if (attenuation >= 0.0f) this->m_attenuation = attenuation;
+	if (minDistance >= 0.0f) this->m_minDistance = minDistance;
+	this->updateDistanceGain ();
+    }
+    stream->setGain (this->getGain () * this->m_distanceGain);
     stream->setPaused (!this->m_playing);
     this->m_nextStartRemaining = std::max (0.0, stream->getDuration () + this->m_pendingDelay);
     this->m_lastCompletion = 0;
@@ -100,7 +123,8 @@ bool CSound::attachPendingStream () {
     if (std::getenv ("WPE_SOUND_TRACE") != nullptr) {
 	sLog.out (
 	    "Sound layer ", this->m_sound.id, " start file=", this->m_pendingFile,
-	    " mode=", this->m_sound.playbackmode.value_or ("loop"), " next=", this->m_nextStartRemaining
+	    " mode=", this->m_sound.playbackmode.value_or ("loop"), " next=", this->m_nextStartRemaining,
+	    " distance_gain=", this->m_distanceGain, " channels=", this->m_sourceChannels
 	);
     }
     const int id = this->getScene ().getAudioContext ().addStream (stream.get ());
@@ -148,9 +172,11 @@ void CSound::render () {
     auto& audioContext = this->getScene ().getAudioContext ();
     const bool active = audioContext.isActiveSoundPlayer (this->m_wallpaperKey, this->m_soundKey, this);
     const auto mode = this->m_sound.playbackmode.value_or ("loop");
+    // Scheduling follows authored volume, independently of distance attenuation.
     const float gain = this->getGain ();
+    this->updateDistanceGain ();
     for (const auto& [id, stream] : this->m_audioStreams) {
-	stream->setGain (gain);
+	stream->setGain (gain * this->m_distanceGain);
 	stream->setPaused (!this->m_playing);
     }
 
@@ -264,4 +290,38 @@ float CSound::getGain () const {
     // Native sound gain (FUN_1401f4c20) squares the authored layer volume.
     const float gain = volume * volume;
     return std::isfinite (gain) ? gain : 0.0f;
+}
+
+float CSound::calculateDistanceGain (
+    const glm::vec3& source, const glm::vec3& listener, const bool orthogonal, const glm::vec2& canvas,
+    const float attenuation, const float minDistance, const int sourceChannels
+) {
+    // OpenAL's default spatialization only attenuates mono buffers.
+    if (sourceChannels != 1 || !(minDistance > 0.0f)) return 1.0f;
+    float distance = glm::length (source - listener);
+    if (orthogonal) {
+	// Native 1401f5460 normalizes the listener-space position before applying
+	// depth relative to one quarter of the authored canvas width plus height.
+	const float depth = (canvas.x + canvas.y) * 0.25f;
+	distance = std::max (0.0f, depth - source.z) / depth;
+    }
+    // Native OpenAL Soft 1.21.1 uses inverse-distance-clamped attenuation.
+    // Zero reference distance or a nonpositive denominator leaves unity gain.
+    const float denominator = minDistance + attenuation * (std::max (distance, minDistance) - minDistance);
+    return denominator > 0.0f ? minDistance / denominator : 1.0f;
+}
+
+void CSound::updateDistanceGain () {
+    if (!this->m_sound.spatialization->value->getBool ()) return;
+    // Turning spatialization off stops position updates; native handles retain
+    // their previous position and gain until the next playback is created.
+    const auto& camera = this->getScene ().getCamera ();
+    const glm::vec3 source (this->resolveWorldMatrix ()[3]);
+    // Native orthographic normalization at the listener produces an invalid
+    // position, which OpenAL rejects while retaining the previous position.
+    if (camera.isOrthogonal () && source == camera.getEye ()) return;
+    this->m_distanceGain = calculateDistanceGain (
+	source, camera.getEye (), camera.isOrthogonal (),
+	{ camera.getWidth (), camera.getHeight () }, this->m_attenuation, this->m_minDistance, this->m_sourceChannels
+    );
 }

@@ -1,3 +1,8 @@
+#include "WallpaperEngine/Render/Objects/CSound.h"
+#ifdef CHECK
+#undef CHECK
+#endif
+
 #include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
 
@@ -328,4 +333,49 @@ TEST_CASE ("single audio completion waits for decoded and resampled output tails
     REQUIRE (stream.getPlaybackCompletionCount () == 1);
     REQUIRE (output == std::array<float, 34> {});
     stream.setPaused (true);
+}
+
+TEST_CASE ("sound distance attenuation retains authored fields and native defaults", "[audio][spatial][parser]") {
+    using WallpaperEngine::Data::JSON::JSON;
+    using WallpaperEngine::Data::Model::Project;
+    using WallpaperEngine::Data::Model::Sound;
+    using WallpaperEngine::Data::Parsers::ObjectParser;
+    const Project project {};
+    auto data = JSON::parse (R"({"id":1,"name":"sound","sound":[]})");
+    const auto defaults = ObjectParser::parse (data, project);
+    REQUIRE_FALSE (defaults->as<Sound> ()->spatialization->value->getBool ());
+    REQUIRE (defaults->as<Sound> ()->attenuation->evaluateFloat (0.0f) == 1.0f);
+    REQUIRE (defaults->as<Sound> ()->minDistance->evaluateFloat (0.0f) == 1.0f);
+    data["spatialization"] = JSON::parse (R"({"value":true})");
+    data["attenuation"] = 0.25;
+    data["mindistance"] = 3.0;
+    const auto authored = ObjectParser::parse (data, project);
+    REQUIRE (authored->as<Sound> ()->spatialization->value->getBool ());
+    REQUIRE (authored->as<Sound> ()->attenuation->evaluateFloat (0.0f) == 0.25f);
+    REQUIRE (authored->as<Sound> ()->minDistance->evaluateFloat (0.0f) == 3.0f);
+}
+
+TEST_CASE ("sound distance attenuation follows the native listener space", "[audio][spatial]") {
+    using WallpaperEngine::Render::Objects::CSound;
+    const glm::vec3 listener (10, 20, 30);
+    const glm::vec2 canvas (800, 400);
+    // Reference distance is a unity-gain plateau, and rolloff zero disables fading.
+    REQUIRE (CSound::calculateDistanceGain ({ 10, 20, 32 }, listener, false, canvas, 0.25f, 3.0f, 1) == 1.0f);
+    REQUIRE (CSound::calculateDistanceGain ({ 10, 20, 33 }, listener, false, canvas, 0.25f, 3.0f, 1) == 1.0f);
+    REQUIRE (CSound::calculateDistanceGain ({ 10, 20, 45 }, listener, false, canvas, 0.25f, 3.0f, 1)
+             == Catch::Approx (0.5f));
+    REQUIRE (CSound::calculateDistanceGain ({ 10, 20, 45 }, listener, false, canvas, 0.0f, 3.0f, 1) == 1.0f);
+    // 3-4-5 offset proves all world axes participate in perspective distance.
+    REQUIRE (CSound::calculateDistanceGain ({ 13, 24, 30 }, listener, false, canvas, 1.0f, 1.0f, 1)
+             == Catch::Approx (0.2f));
+    // Stereo and multichannel sources stay nonspatial with native defaults.
+    REQUIRE (CSound::calculateDistanceGain ({ 13, 24, 30 }, listener, false, canvas, 1.0f, 1.0f, 2) == 1.0f);
+    REQUIRE (CSound::calculateDistanceGain ({ 13, 24, 30 }, listener, false, canvas, 1.0f, 1.0f, 6) == 1.0f);
+    // Orthographic X/Y do not change distance; negative source depth moves it away.
+    REQUIRE (CSound::calculateDistanceGain ({ 50, 80, 0 }, listener, true, canvas, 1.0f, 1.0f, 1) == 1.0f);
+    REQUIRE (CSound::calculateDistanceGain ({ 5000, -4000, -300 }, listener, true, canvas, 1.0f, 1.0f, 1)
+             == Catch::Approx (0.5f));
+    REQUIRE (CSound::calculateDistanceGain ({ 50, 80, 600 }, listener, true, canvas, 1.0f, 1.0f, 1) == 1.0f);
+    REQUIRE (CSound::calculateDistanceGain ({ 10, 20, 45 }, listener, false, canvas, 1.0f, 0.0f, 1) == 1.0f);
+    REQUIRE (CSound::calculateDistanceGain (listener, listener, false, canvas, 1.0f, 0.0f, 1) == 1.0f);
 }

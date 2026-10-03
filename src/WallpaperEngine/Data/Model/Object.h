@@ -176,6 +176,10 @@ public:
 struct SoundData {
     /** Authored volume, including user properties, scripts and keyframes. */
     UserSettingUniquePtr volume;
+    /** Position-dependent attenuation for mono sound sources. */
+    UserSettingUniquePtr spatialization;
+    UserSettingUniquePtr attenuation;
+    UserSettingUniquePtr minDistance;
     /** Wait for a script or event to start this layer. */
     bool startSilent = false;
     /** Delay between randomly selected sounds, in seconds. */

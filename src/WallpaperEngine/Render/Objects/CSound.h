@@ -29,6 +29,11 @@ public:
     void stop ();
     /** Authored playback state, independent of output volume and duplicate-screen ownership. */
     [[nodiscard]] bool isPlaying () const { return m_playing && !m_waiting; }
+    /** Native mono-source distance gain; directional panning is separate. */
+    [[nodiscard]] static float calculateDistanceGain (
+	const glm::vec3& source, const glm::vec3& listener, bool orthogonal, const glm::vec2& canvas,
+	float attenuation, float minDistance, int sourceChannels
+    );
 
 protected:
     void load ();
@@ -36,6 +41,7 @@ protected:
     bool attachPendingStream ();
     void unload (bool recordSingleCompletion = false);
     [[nodiscard]] float getGain () const;
+    void updateDistanceGain ();
 
 private:
     std::map<int, Audio::AudioStream*> m_audioStreams = {};
@@ -56,6 +62,11 @@ private:
     bool m_started = false;
     double m_nextStartRemaining = 0.0;
     float m_previousTime = 0.0f;
+    /** OpenAL retains each handle's attenuation settings until the next playback. */
+    float m_attenuation = 1.0f;
+    float m_minDistance = 1.0f;
+    float m_distanceGain = 1.0f;
+    int m_sourceChannels = 0;
     uint32_t m_lastCompletion = 0;
     std::mt19937 m_random { std::random_device {}() };
 };
