@@ -192,6 +192,7 @@ protected:
 
     /** Optional scene-local fade composited over the rendered wallpaper. */
     [[nodiscard]] virtual float getSceneFadeAlpha () const;
+    [[nodiscard]] virtual glm::vec4 getColorCorrection () const;
 
 private:
     /** The texture used for the scene output */
@@ -206,6 +207,7 @@ private:
     GLint g_SceneFadeAlpha = GL_NONE;
     GLint g_Contrast = GL_NONE;
     GLint g_Saturation = GL_NONE;
+    GLint g_ColorCorrection = GL_NONE;
     GLint g_Fps = GL_NONE;
     GLint g_FpsOutput = GL_NONE;
     float m_fps = -1.0f;

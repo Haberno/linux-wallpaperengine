@@ -27,6 +27,7 @@ public:
 
 protected:
     void renderFrame (const glm::ivec4& viewport) override;
+    [[nodiscard]] glm::vec4 getColorCorrection () const override;
 
     friend class CWallpaper;
 

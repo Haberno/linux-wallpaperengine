@@ -6,6 +6,8 @@
 #include "WallpaperEngine/VideoPlayback/MPV/GLPlayer.h"
 
 #include <algorithm>
+#include <charconv>
+#include <cmath>
 
 using namespace WallpaperEngine;
 using namespace WallpaperEngine::Render;
@@ -88,4 +90,39 @@ WallpaperState::TextureUVs CVideo::getPresentationUVs () const {
 	std::swap (uvs.ustart, uvs.uend);
     }
     return uvs;
+}
+
+glm::vec4 CVideo::getColorCorrection () const {
+    const auto& properties = this->getVideo ().project.properties;
+    const auto& overrides = this->getContext ().getApp ().getContext ().settings.general.properties;
+    const auto property = properties.find ("wec_e");
+    bool enabled = property != properties.end ()
+	&& property->second->getType () == Data::Model::DynamicValue::Boolean
+	&& property->second->getBool ();
+    if (const auto override = overrides.find ("wec_e"); override != overrides.end ()) {
+	enabled = override->second == "true" || override->second == "1";
+    }
+    if (!enabled) return { 1.0f, 1.0f, 1.0f, 0.0f };
+
+    const auto read = [&] (const std::string& name) {
+	float value = 50.0f;
+	if (const auto setting = properties.find (name); setting != properties.end ()) {
+	    const auto type = setting->second->getType ();
+	    if (type == Data::Model::DynamicValue::Float || type == Data::Model::DynamicValue::Int)
+		value = setting->second->getFloat ();
+	}
+	if (const auto override = overrides.find (name); override != overrides.end ()) {
+	    const auto& text = override->second;
+	    float parsed;
+	    const auto result = std::from_chars (text.data (), text.data () + text.size (), parsed);
+	    if (result.ec == std::errc {} && result.ptr == text.data () + text.size () && std::isfinite (parsed))
+		value = parsed;
+	}
+	return value;
+    };
+    // Native Scene DX11 maps 0..100 sliders to ccsimple's brightness,
+    // contrast, HSV saturation and hue parameters; their neutral value is 50.
+    return { std::pow (read ("wec_brs") / 50.0f, 2.0f),
+	     std::pow (read ("wec_con") / 50.0f, 0.5f),
+	     std::pow (read ("wec_sa") / 50.0f, 0.5f), read ("wec_hue") / 100.0f - 0.5f };
 }

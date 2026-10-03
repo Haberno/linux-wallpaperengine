@@ -139,6 +139,7 @@ void CWallpaper::setupShaders () {
 		    "uniform float g_SceneFadeAlpha;\n"
 		    "uniform float g_Contrast;\n"
 		    "uniform float g_Saturation;\n"
+		    "uniform vec4 g_ColorCorrection;\n"
 		    "uniform float g_Fps;\n"
 		    "uniform vec3 g_FpsOutput;\n"
 		    "uniform float g_LoadTimes[7];\n"
@@ -289,8 +290,26 @@ void CWallpaper::setupShaders () {
 		    "    if ((GLYPHS[c] & (1 << (p.y % 6 * 3 + p.x % 4))) != 0)\n"
 		    "        out_FragColor = vec4 (0.65, 1.0, 0.65, 1.0);\n"
 		    "}\n"
+		    "vec3 nativeColorCorrection (vec3 color, vec4 params) {\n"
+		    "    if (params == vec4 (1.0, 1.0, 1.0, 0.0)) return color;\n"
+		    "    color = mix (vec3 (0.5), color, params.y);\n"
+		    "    float value = max (color.r, max (color.g, color.b));\n"
+		    "    float chroma = value - min (color.r, min (color.g, color.b));\n"
+		    "    float hue = 0.0;\n"
+		    "    if (chroma > 0.0) {\n"
+		    "        float denominator = 6.0 * chroma + 1e-10;\n"
+		    "        if (value == color.r) hue = (color.g - color.b) / denominator + (color.g < color.b ? 1.0 : 0.0);\n"
+		    "        else if (value == color.g) hue = (color.b - color.r) / denominator + 1.0 / 3.0;\n"
+		    "        else hue = (color.r - color.g) / denominator + 2.0 / 3.0;\n"
+		    "    }\n"
+		    "    float saturation = chroma / (value + 1e-10) * params.z;\n"
+		    "    vec3 phase = fract (vec3 (hue + params.w) + vec3 (1.0, 2.0 / 3.0, 1.0 / 3.0));\n"
+		    "    vec3 pureColor = clamp (abs (phase * 6.0 - vec3 (3.0)) - vec3 (1.0), vec3 (0.0), vec3 (1.0));\n"
+		    "    return value * params.x * mix (vec3 (1.0), pureColor, saturation);\n"
+		    "}\n"
 		    "void main () {\n"
 		    "vec3 sceneColor = texture (g_Texture0, v_TexCoord).rgb;\n"
+		    "sceneColor = nativeColorCorrection (sceneColor, g_ColorCorrection);\n"
 		    // materials/util/fade.json uses the fade shader's default tint (0.315,
 		    // 0.135, 0.1125), multiplied by 0.7 in fade.frag. Scheme-color overrides
 		    // can replace this once Linux-side desktop scheme integration exists.
@@ -371,6 +390,7 @@ void CWallpaper::setupShaders () {
     this->g_SceneFadeAlpha = glGetUniformLocation (this->m_shader, "g_SceneFadeAlpha");
     this->g_Contrast = glGetUniformLocation (this->m_shader, "g_Contrast");
     this->g_Saturation = glGetUniformLocation (this->m_shader, "g_Saturation");
+    this->g_ColorCorrection = glGetUniformLocation (this->m_shader, "g_ColorCorrection");
     this->g_Fps = glGetUniformLocation (this->m_shader, "g_Fps");
     this->g_FpsOutput = glGetUniformLocation (this->m_shader, "g_FpsOutput");
     this->g_LoadTimes = glGetUniformLocation (this->m_shader, "g_LoadTimes");
@@ -537,6 +557,8 @@ void CWallpaper::render (
     glUniform1f (this->g_SceneFadeAlpha, this->getSceneFadeAlpha ());
     glUniform1f (this->g_Contrast, this->m_contrast);
     glUniform1f (this->g_Saturation, this->m_saturation);
+    const auto correction = this->getColorCorrection ();
+    glUniform4f (this->g_ColorCorrection, correction.x, correction.y, correction.z, correction.w);
     glUniform1f (this->g_Fps, this->m_fps);
     const float outputScale = logicalSize.x > 0 ? static_cast<float> (viewport.z) / logicalSize.x : 1.0f;
     glUniform3f (this->g_FpsOutput, viewport.z, viewport.w, outputScale);
@@ -554,6 +576,8 @@ void CWallpaper::render (
 void CWallpaper::setPause (bool newState) { }
 
 float CWallpaper::getSceneFadeAlpha () const { return 0.0f; }
+
+glm::vec4 CWallpaper::getColorCorrection () const { return { 1.0f, 1.0f, 1.0f, 0.0f }; }
 
 void CWallpaper::setupFramebuffers (bool sceneDepthBuffer, glm::vec2 size, uint32_t samples, TextureFormat format) {
     this->setBackbufferFormat (format);
