@@ -117,9 +117,10 @@ void VolumetricLights::resize () {
         size.x, size.y, 0, GL_DEPTH_COMPONENT, GL_FLOAT, nullptr);
 }
 
-GLuint VolumetricLights::frontProgram (bool shadow, bool fullscreen, bool cookie) {
+GLuint VolumetricLights::frontProgram (bool shadow, bool fullscreen, bool cookie, bool point) {
     const auto& fog = m_scene.getFog ();
-    const int key = shadow | (fullscreen << 1) | (fog.distanceEnabled << 2) | (fog.heightEnabled << 3) | (cookie << 4);
+    const int key = shadow | (fullscreen << 1) | (fog.distanceEnabled << 2) | (fog.heightEnabled << 3)
+        | (cookie << 4) | (point << 5);
     if (const auto found = m_frontPrograms.find (key); found != m_frontPrograms.end ()) return found->second;
     ComboMap combos {
         { "SHADOW", shadow }, { "FULLSCREEN", fullscreen }, { "QUALITY", 4 },
@@ -127,10 +128,11 @@ GLuint VolumetricLights::frontProgram (bool shadow, bool fullscreen, bool cookie
     };
     // The stock sampler declaration uses #ifdef COOKIE, so omit disabled keys.
     if (cookie) combos.emplace ("COOKIE", 1);
+    if (point) combos.emplace ("POINTLIGHT", 1);
     return m_frontPrograms[key] = compile (m_scene, "volumetricsfront", combos, true);
 }
 
-void VolumetricLights::draw (GLuint program, bool fullscreen, bool cookie) {
+void VolumetricLights::draw (GLuint program, bool fullscreen, bool cookie, bool point) {
     const GLint position = glGetAttribLocation (program, "a_Position");
     const GLint uv = glGetAttribLocation (program, "a_TexCoord");
     glBindBuffer (GL_ARRAY_BUFFER, m_vertexBuffer);
@@ -140,7 +142,8 @@ void VolumetricLights::draw (GLuint program, bool fullscreen, bool cookie) {
         glEnableVertexAttribArray (uv);
         glVertexAttribPointer (uv, 2, GL_FLOAT, GL_FALSE, 5 * sizeof (float), reinterpret_cast<void*> (3 * sizeof (float)));
     }
-    glDrawArrays (GL_TRIANGLES, fullscreen ? 420 : cookie ? 384 : 0, fullscreen ? 3 : cookie ? 36 : 384);
+    glDrawArrays (GL_TRIANGLES, fullscreen ? 420 : point ? 423 : cookie ? 384 : 0,
+        fullscreen ? 3 : point ? 3312 : cookie ? 36 : 384);
     glDisableVertexAttribArray (position);
     if (uv >= 0) glDisableVertexAttribArray (uv);
 }
@@ -178,6 +181,24 @@ void VolumetricLights::render (
         vertex (corners[0]); vertex (corners[3]); vertex (corners[2]);
         for (int index : {0,1,2,0,2,3}) vertex (corners[index] + glm::vec3 (0, 0, 1));
         vertex ({ -1,-1,0 }, { 0,0 }); vertex ({ 3,-1,0 }, { 2,0 }); vertex ({ -1,3,0 }, { 0,2 });
+        // Native 14025c660: 24 longitude segments, 23 latitude rings and two
+        // poles. Point volumes scale this unit sphere by their authored radius.
+        const auto sphere = [] (int latitude, int longitude) {
+            const float a = float (latitude) * (glm::pi<float> () / 24.0f);
+            const float b = float (longitude) * (glm::two_pi<float> () / 24.0f);
+            return glm::vec3 (std::cos (b) * std::sin (a), std::cos (a), std::sin (b) * std::sin (a));
+        };
+        for (int latitude = 1; latitude < 23; ++latitude) {
+            for (int longitude = 0; longitude < 24; ++longitude) {
+                const auto p = sphere (latitude, longitude), q = sphere (latitude, longitude + 1);
+                const auto r = sphere (latitude + 1, longitude), s = sphere (latitude + 1, longitude + 1);
+                vertex (p); vertex (q); vertex (r); vertex (q); vertex (s); vertex (r);
+            }
+        }
+        for (int longitude = 0; longitude < 24; ++longitude) {
+            vertex ({ 0,1,0 }); vertex (sphere (1, longitude + 1)); vertex (sphere (1, longitude));
+            vertex ({ 0,-1,0 }); vertex (sphere (23, longitude)); vertex (sphere (23, longitude + 1));
+        }
         glGenVertexArrays (1, &m_vertexArray);
         glGenBuffers (1, &m_vertexBuffer);
         glBindBuffer (GL_ARRAY_BUFFER, m_vertexBuffer);
@@ -221,19 +242,27 @@ void VolumetricLights::render (
     size_t spot = 0;
     for (const auto* light : lightObjects) {
         const auto& data = light->getLight ();
-        if (data.type != LightData::Type_Spot) continue;
-        const size_t index = spot++;
+        const bool point = data.type == LightData::Type_Point;
+        // Point-shadow sampling also needs per-atlas-cell GL coordinate conversion.
+        if ((point && data.castShadow) || (!point && data.type != LightData::Type_Spot)) continue;
+        const size_t index = point ? 0 : spot++;
         if (std::ranges::find (batch, light) == batch.end ()) continue;
         if (!data.castVolumetrics->value->getBool () || data.density->evaluateFloat (time) <= 0
             || glm::length (light->getPremultipliedColor ()) <= 0) continue;
         const auto origin = light->getWorldPosition (), direction = light->getWorldDirection ();
         const float radius = data.radius->evaluateFloat (time);
         if (radius <= 0) continue;
-        const bool cookie = data.useCookie;
-        const auto lightProjection = nativeClip () * (cookie ? light->getCookieProjection ()
-            : Objects::CLight::calculateSpotShadowViewProjection (
-                origin, direction, data.outerCone->evaluateFloat (time), radius));
-        const auto inverseLight = glm::inverse (lightProjection);
+        const bool cookie = !point && data.useCookie;
+        glm::mat4 lightProjection (1.0f), volumeTransform (1.0f);
+        if (point) {
+            volumeTransform[0][0] = volumeTransform[1][1] = volumeTransform[2][2] = radius;
+            volumeTransform[3] = glm::vec4 (origin, 1.0f);
+        } else {
+            lightProjection = nativeClip () * (cookie ? light->getCookieProjection ()
+                : Objects::CLight::calculateSpotShadowViewProjection (
+                    origin, direction, data.outerCone->evaluateFloat (time), radius));
+            volumeTransform = glm::inverse (lightProjection);
+        }
         glViewport (0, 0, m_back->getRealWidth (), m_back->getRealHeight ());
         glBindFramebuffer (GL_FRAMEBUFFER, m_back->getFramebuffer ());
         glDepthMask (GL_TRUE);
@@ -247,21 +276,23 @@ void VolumetricLights::render (
         glDisable (GL_BLEND);
         glUseProgram (m_backProgram);
         matrix (m_backProgram, "g_ViewProjectionMatrix", viewProjection);
-        matrix (m_backProgram, "g_AltViewProjectionMatrix", inverseLight);
-        draw (m_backProgram, false, cookie);
-        const auto cameraPoint = camera.getEye () + glm::normalize (camera.getCenter () - camera.getEye ()) * (cookie ? 0.1f : camera.getNearZ ());
+        matrix (m_backProgram, "g_AltViewProjectionMatrix", volumeTransform);
+        draw (m_backProgram, false, cookie, point);
+        const auto cameraPoint = camera.getEye () + glm::normalize (camera.getCenter () - camera.getEye ())
+            * (point ? 0.2f : cookie ? 0.1f : camera.getNearZ ());
         const auto delta = cameraPoint - origin;
         const float axial = glm::dot (delta, direction);
         const glm::vec4 clipPoint = lightProjection * glm::vec4 (cameraPoint, 1.0f);
-        const bool inside = cookie ? clipPoint.w > 0 && std::abs (clipPoint.x) <= clipPoint.w
+        const bool inside = point ? glm::dot (delta, delta) < radius * radius
+            : cookie ? clipPoint.w > 0 && std::abs (clipPoint.x) <= clipPoint.w
             && std::abs (clipPoint.y) <= clipPoint.w && clipPoint.z >= 0 && clipPoint.z <= clipPoint.w
             : axial >= 0 && axial <= radius
             && glm::length (delta - direction * axial) <= axial * std::tan (glm::radians (data.outerCone->evaluateFloat (time)));
         // Script-created lights can outnumber the scene's load-time shadow slots.
-        const int feature = index < lights.spotShadowFeatures.size () ? lights.spotShadowFeatures[index] : -1;
+        const int feature = !point && index < lights.spotShadowFeatures.size () ? lights.spotShadowFeatures[index] : -1;
         const bool shadow = feature >= 0 && index < lights.spotShadowEnabled.size ()
             && lights.spotShadowEnabled[index] > .5f;
-        const GLuint program = frontProgram (shadow, inside, cookie);
+        const GLuint program = frontProgram (shadow, inside, cookie, point);
         glBindFramebuffer (GL_FRAMEBUFFER, m_lightBuffer->getFramebuffer ());
         glDisable (GL_DEPTH_TEST);
         glDepthMask (GL_FALSE);
@@ -272,7 +303,7 @@ void VolumetricLights::render (
         glBlendFuncSeparate (GL_ONE, GL_ONE, GL_ZERO, GL_ONE);
         glUseProgram (program);
         matrix (program, "g_ViewProjectionMatrix", viewProjection);
-        matrix (program, "g_AltViewProjectionMatrix", inverseLight);
+        matrix (program, "g_AltViewProjectionMatrix", volumeTransform);
         matrix (program, "g_EffectModelMatrix", glm::inverse (viewProjection));
         auto samplingProjection = shadow ? nativeClip () * lights.shadowMatrices[feature] : lightProjection;
         // Raster/depth reconstruction uses flipped clip Y, image cookies do not.
@@ -282,7 +313,7 @@ void VolumetricLights::render (
         const auto cones = Objects::CLight::calculateSpotConeCosines (data.innerCone->evaluateFloat (time), data.outerCone->evaluateFloat (time));
         vector (program, "g_RenderVar1", { radius * .99f, cones.x, cones.y, data.intensity->evaluateFloat (time) });
         vector (program, "g_RenderVar2", glm::vec4 (origin, data.density->evaluateFloat (time)));
-        vector (program, "g_RenderVar3", glm::vec4 (direction, 0));
+        vector (program, "g_RenderVar3", point ? glm::vec4 (0) : glm::vec4 (direction, 0));
         vector (program, "g_RenderVar4", glm::vec4 (data.color->evaluateVec3 (time), data.volumetricsExponent->evaluateFloat (time)));
         vector (program, "g_Texture1Resolution", { m_size.x, m_size.y, m_size.x, m_size.y });
         vector (program, "g_Texture3Resolution", *m_back->getResolution ());
@@ -306,7 +337,7 @@ void VolumetricLights::render (
             glBindSampler (2, 0);
             glUniform1i (glGetUniformLocation (program, "g_Texture2"), 2);
         }
-        draw (program, inside, cookie);
+        draw (program, inside, cookie, point);
     }
     glBindFramebuffer (GL_FRAMEBUFFER, target->getDrawFramebuffer ());
     glViewport (0, 0, m_size.x, m_size.y);

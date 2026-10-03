@@ -1128,7 +1128,8 @@ void CScene::renderFrame (const glm::ivec4& viewport) {
 	}
 	if (auto* light = dynamic_cast<Objects::CLight*> (cur); light != nullptr) {
 	    if (!this->m_camera->isOrthogonal () && enabledByDebug (light)
-	        && light->getLight ().type == LightData::Type_Spot
+	        && (light->getLight ().type == LightData::Type_Spot
+	            || (light->getLight ().type == LightData::Type_Point && !light->getLight ().castShadow))
 	        && light->getLight ().castVolumetrics->value->getBool ()) {
 	        volumeBatch.push_back (light);
 	    }

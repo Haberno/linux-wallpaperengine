@@ -7,7 +7,7 @@ namespace WallpaperEngine::Render::Objects { class CLight; }
 namespace WallpaperEngine::Render::Wallpapers {
 class CScene;
 
-/** Authored spotlight volumes, using the installed native front/back shaders. */
+/** Authored spot and unshadowed point volumes, using the installed native shaders. */
 class VolumetricLights {
 public:
     explicit VolumetricLights (CScene& scene);
@@ -16,8 +16,8 @@ public:
 
 private:
     void resize ();
-    GLuint frontProgram (bool shadow, bool fullscreen, bool cookie);
-    void draw (GLuint program, bool fullscreen, bool cookie = false);
+    GLuint frontProgram (bool shadow, bool fullscreen, bool cookie, bool point);
+    void draw (GLuint program, bool fullscreen, bool cookie = false, bool point = false);
     CScene& m_scene;
     std::map<int, GLuint> m_frontPrograms;
     GLuint m_backProgram = GL_NONE;
