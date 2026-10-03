@@ -1256,12 +1256,12 @@ ParticleOperatorUniquePtr ObjectParser::parseParticleOperator (const JSON& it, c
 	    v2 && !it.optional ("ringradius") ? nullptr : it.user ("ringradius", properties, 300.0f), v2 && !it.optional ("ringwidth") ? nullptr : it.user ("ringwidth", properties, 50.0f),
 	    v2 && !it.optional ("ringpulldistance") ? nullptr : it.user ("ringpulldistance", properties, 50.0f), v2 && !it.optional ("ringpullforce") ? nullptr : it.user ("ringpullforce", properties, 10.0f),
 	    it.user ("audioprocessingmode", properties, 0),
-	    it.user ("audioprocessingbounds", properties, glm::vec2 (v2 ? .8f : 0.0f, 1.0f)), v2,
+	    it.user ("audioprocessingbounds", properties, it.contains ("audioprocessingbounds") ? glm::vec2 (0.0f) : glm::vec2 (.8f, 1.0f)), v2,
 	    glm::vec4 (it.optional ("blendinstart", 0.0f), it.optional ("blendinend", 0.0f),
 		       it.optional ("blendoutstart", 1.0f), it.optional ("blendoutend", 1.0f)),
-	    it.user ("audioprocessingexponent", properties, 2.0f),
+	    it.user ("audioprocessingexponent", properties, it.contains ("audioprocessingexponent") ? 0.0f : 2.0f),
 	    it.user ("audioprocessingfrequencystart", properties, 0),
-	    it.user ("audioprocessingfrequencyend", properties, 1)
+	    it.user ("audioprocessingfrequencyend", properties, it.contains ("audioprocessingfrequencyend") ? 0 : 1)
 	);
     } else if (name == "controlpointattract") {
 	return std::make_unique<ControlPointAttractOperator> (

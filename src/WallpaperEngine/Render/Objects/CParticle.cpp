@@ -2552,30 +2552,27 @@ OperatorFunc CParticle::createVortexOperator (const VortexOperator& op) {
     DynamicValue* ringWidthValue = op.ringWidth->value.get ();
     DynamicValue* ringPullDistanceValue = op.ringPullDistance->value.get ();
     DynamicValue* ringPullForceValue = op.ringPullForce->value.get ();
-    DynamicValue* audioModeValue = op.audioProcessingMode->value.get ();
     DynamicValue* speedOverride = getInstanceOverride ().speed->value.get ();
-
-    // Check if audio processing is enabled
-    int audioMode = static_cast<int> (audioModeValue->getFloat ());
 
     // Extract flag bits
     bool infiniteAxis = (flags & 1) != 0;
     bool maintainDistance = (flags & 2) != 0;
     bool ringShape = (flags & 4) != 0;
 
-    return [this, controlPoint, axisValue, offsetValue, distanceInnerValue, distanceOuterValue, speedInnerValue,
+    return [this, &op, controlPoint, axisValue, offsetValue, distanceInnerValue, distanceOuterValue, speedInnerValue,
 	    speedOuterValue, centerForceValue, ringRadiusValue, ringWidthValue, ringPullDistanceValue,
-	    ringPullForceValue, audioMode, infiniteAxis, maintainDistance, ringShape, speedOverride] (
+	    ringPullForceValue, infiniteAxis, maintainDistance, ringShape, speedOverride] (
 	       std::vector<ParticleInstance>& particles, uint32_t count,
 	       const std::vector<ControlPointData>& controlPoints, float, float dt
 	   ) {
-	// Audio modulation (when implemented, this will sample from audio context)
-	float audioAmplitude = 0.0f; // TODO: Sample from AudioContext when audio processing is implemented
-
-	// If audio mode is enabled but no audio, skip vortex entirely
-	if (audioMode > 0 && audioAmplitude == 0.0f) {
-	    return;
-	}
+	const auto& recorder = getScene ().getAudioContext ().getRecorder ();
+	auto firstBand = std::min (static_cast<uint32_t> (op.audioProcessingFrequencyStart->value->getInt ()), 15u);
+	auto lastBand = std::min (static_cast<uint32_t> (op.audioProcessingFrequencyEnd->value->getInt ()), 15u);
+	if (firstBand > lastBand) std::swap (firstBand, lastBand);
+	const float audio = calculateParticleAudioResponse (
+	    recorder.audio16Left, recorder.audio16Right, op.audioProcessingMode->value->getInt (),
+	    op.audioProcessingBounds->value->getVec2 (), op.audioProcessingExponent->value->getFloat (), firstBand, lastBand
+	);
 
 	glm::vec3 axis = axisValue->getVec3 ();
 	glm::vec3 offset = offsetValue->getVec3 ();
@@ -2589,11 +2586,9 @@ OperatorFunc CParticle::createVortexOperator (const VortexOperator& op) {
 	float ringPullDistance = ringPullDistanceValue->getFloat ();
 	float ringPullForce = ringPullForceValue->getFloat ();
 
-	// Apply audio modulation to speeds
-	if (audioMode > 0) {
-	    speedInner *= (1.0f + audioAmplitude);
-	    speedOuter *= (1.0f + audioAmplitude);
-	}
+	// Native legacy vortex uses the same audio response as V2 for spin only.
+	speedInner *= audio;
+	speedOuter *= audio;
 
 	// Get vortex center from control point
 	glm::vec3 center = glm::vec3 (0.0f);

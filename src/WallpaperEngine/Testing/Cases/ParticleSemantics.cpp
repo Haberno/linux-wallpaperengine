@@ -304,12 +304,42 @@ TEST_CASE ("vortex v2 preserves its own blending and projection defaults", "[par
     CHECK (authored->audioProcessingExponent->value->getFloat () == 3.0f);
     CHECK (authored->audioProcessingFrequencyStart->value->getInt () == 8);
     CHECK (authored->audioProcessingFrequencyEnd->value->getInt () == 4);
-    CHECK (legacy->audioProcessingBounds->value->getVec2 () == glm::vec2 (0, 1));
+    CHECK (legacy->audioProcessingBounds->value->getVec2 () == glm::vec2 (.8f, 1));
+    CHECK (legacy->audioProcessingExponent->value->getFloat () == 2.0f);
+    CHECK (legacy->audioProcessingFrequencyStart->value->getInt () == 0);
+    CHECK (legacy->audioProcessingFrequencyEnd->value->getInt () == 1);
     CHECK (legacy->distanceInner->value->getFloat () == 500.0f);
     CHECK (authored->controlPoint == 7);
     CHECK (authored->flags == 3);
     CHECK (authored->speedInner->value->getFloat () == 20.0f);
     CHECK (authored->blendTimes == glm::vec4 (.2f, .4f, .6f, .8f));
+}
+
+TEST_CASE ("vortex audio distinguishes missing defaults from explicit null", "[particle][vortex][vortex-audio]") {
+    for (const auto* name : { "vortex", "vortex_v2" }) {
+        WallpaperEngine::Data::Model::Project project {};
+        auto data = WallpaperEngine::Data::JSON::JSON::parse (R"({"id":392,"particle":{"operator":[
+            {}, {"audioprocessingmode":null,"audioprocessingbounds":null,
+                 "audioprocessingexponent":null,"audioprocessingfrequencystart":null,"audioprocessingfrequencyend":null},
+            {"audioprocessingmode":3,"audioprocessingbounds":"1 0.8",
+             "audioprocessingexponent":0.5,"audioprocessingfrequencystart":-1,"audioprocessingfrequencyend":99}
+        ]}})");
+        for (auto& node : data["particle"]["operator"]) node["name"] = name;
+        const auto object = WallpaperEngine::Data::Parsers::ObjectParser::parse (data, project);
+        const auto* particle = object->as<Particle> ();
+        REQUIRE (particle != nullptr);
+        REQUIRE (particle->operators.size () == 3);
+        for (size_t i = 0; i < 3; ++i) {
+            const auto* op = particle->operators[i]->as<VortexOperator> ();
+            REQUIRE (op != nullptr);
+            CHECK (op->audioProcessingMode->value->getInt () == (i == 2 ? 3 : 0));
+            CHECK (op->audioProcessingBounds->value->getVec2 ()
+                   == (i == 0 ? glm::vec2 (.8f, 1) : i == 1 ? glm::vec2 (0) : glm::vec2 (1, .8f)));
+            CHECK (op->audioProcessingExponent->value->getFloat () == (i == 0 ? 2.0f : i == 1 ? 0.0f : .5f));
+            CHECK (op->audioProcessingFrequencyStart->value->getInt () == (i == 2 ? -1 : 0));
+            CHECK (op->audioProcessingFrequencyEnd->value->getInt () == (i == 0 ? 1 : i == 1 ? 0 : 99));
+        }
+    }
 }
 
 TEST_CASE ("vortex v2 weights spin and predicted radius together", "[particle][vortex]") {
