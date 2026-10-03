@@ -125,6 +125,21 @@ void ShaderUnit::preprocess () {
     this->m_preprocessed = spliceShaderLines (this->m_content);
     this->m_includes = "";
 
+    // CPU puppet skinning supplies native mask alpha separately from color alpha:
+    // clippingmaskimage4 uses raw target weights, without spatial modifiers.
+    if (this->m_file == "clippingmaskimage4" && this->m_combos.contains ("PUPPET_MORPH_ALPHA")
+	&& this->m_combos.at ("PUPPET_MORPH_ALPHA") != 0) {
+	if (this->m_type == GLSLContext::UnitType_Vertex) {
+	    this->m_preprocessed = "attribute vec4 a_Color;\nvarying float v_PuppetMaskAlpha;\n"
+		+ std::regex_replace (this->m_preprocessed, std::regex (R"(\bvoid\s+main\s*\(\s*\)\s*\{)"),
+		    "void main() {\nv_PuppetMaskAlpha = a_Color.x;");
+	} else {
+	    this->m_preprocessed = "varying float v_PuppetMaskAlpha;\n"
+		+ std::regex_replace (this->m_preprocessed, std::regex (R"(\bcolor\.r\s*\*=\s*color\.a\s*;)"),
+		    "color.a *= v_PuppetMaskAlpha;\ncolor.r *= color.a;");
+	}
+    }
+
     this->preprocessIncludes ();
     this->preprocessRequires ();
     this->preprocessVaryingDeclarations ();

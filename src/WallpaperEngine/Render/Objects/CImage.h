@@ -204,7 +204,11 @@ private:
     size_t m_puppetPositionBufferBytes = 0;
     GLuint m_puppetVertexColor = GL_NONE;
     size_t m_puppetColorBufferBytes = 0;
-    std::vector<glm::vec4> m_puppetColors;
+    struct PuppetVertexColor {
+	glm::vec4 color;
+	float maskAlpha;
+    };
+    std::vector<PuppetVertexColor> m_puppetColors;
     GLuint m_puppetTexCoord = GL_NONE;
     GLuint m_puppetTexCoordFirstPass = GL_NONE;
     GLuint m_puppetIndices = GL_NONE;

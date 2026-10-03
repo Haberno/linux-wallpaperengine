@@ -180,3 +180,21 @@ TEST_CASE ("Puppet morph alpha multiplies signed target factors before interpola
     CHECK (evaluatePuppetMorph (body, targets, 1, { 10, 0, 0 }).w == Catch::Approx (.375f));
     CHECK (evaluatePuppetMorph (body, targets, 1, { 15, 0, 0 }).w == 0);
 }
+
+TEST_CASE ("Puppet clipping mask alpha ignores the position modifier", "[mdl][morph-mask-alpha]") {
+    MdlSubmesh body { .flags = 0x3000, .vertexTag = 0x0181000e, .morphScale = 1, .morphVertexCount = 1 };
+    body.morphTargets = { MdlMorphTarget { .positionDeltas = { 0, 0, 0 }, .alphaValues = { 0 },
+        .modifier = MdlMorphModifier { .boneIndex = 0, .rule = 2, .range = { 0, 10 } } } };
+    const std::vector<float> weights { .5f };
+    const std::vector<glm::mat4> world { glm::mat4 (1) };
+    const auto targets = preparePuppetMorphTargets (body, weights, 1, world);
+    float maskAlpha = 0;
+    CHECK (evaluatePuppetMorph (body, targets, 1, { 0, 0, 0 }, &maskAlpha).w == 1);
+    CHECK (maskAlpha == Catch::Approx (.5f));
+    CHECK (evaluatePuppetMorph (body, targets, 1, { 5, 0, 0 }, &maskAlpha).w == Catch::Approx (.75f));
+    CHECK (maskAlpha == Catch::Approx (.5f));
+    CHECK (evaluatePuppetMorph (body, targets, 1, { 10, 0, 0 }, &maskAlpha).w == Catch::Approx (.5f));
+    CHECK (maskAlpha == Catch::Approx (.5f));
+    CHECK (evaluatePuppetMorph (body, targets, 0, {}, &maskAlpha).w == 1);
+    CHECK (maskAlpha == 1);
+}

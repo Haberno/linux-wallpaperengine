@@ -51,8 +51,9 @@ inline std::vector<MdlPuppetMorphTarget> preparePuppetMorphTargets (
 /** Returns the model-space XYZ offset and native multiplicative vertex alpha. */
 inline glm::vec4 evaluatePuppetMorph (
     const MdlSubmesh& body, std::span<const MdlPuppetMorphTarget> targets, float morphIndex,
-    const glm::vec3& unmorphedSkinnedPosition
+    const glm::vec3& unmorphedSkinnedPosition, float* maskAlpha = nullptr
 ) {
+    if (maskAlpha) *maskAlpha = 1.0f;
     if (!std::isfinite (morphIndex) || morphIndex < 1.0f || morphIndex >= body.morphVertexCount + 1.0f)
 	return glm::vec4 (0, 0, 0, 1);
     const size_t component = (static_cast<size_t> (morphIndex) - 1) * 3;
@@ -71,6 +72,9 @@ inline glm::vec4 evaluatePuppetMorph (
 	if (vertex < target.alphaValues.size ()) {
 	    const float alpha = std::max (target.alphaValues[vertex] / 32767.0f, -1.0f);
 	    delta.w *= alpha * weight + 1.0f - weight;
+	    // clippingmaskimage4 uses the raw clip weight for alpha, even when
+	    // its position and the ordinary color shader use spatial modifiers.
+	    if (maskAlpha) *maskAlpha *= alpha * selected.weight + 1.0f - selected.weight;
 	}
     }
     return delta * glm::vec4 (glm::vec3 (body.morphScale), 1.0f);

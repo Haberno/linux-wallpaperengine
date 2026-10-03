@@ -956,6 +956,7 @@ void CImage::updatePuppetPositionBuffer (const glm::vec2& size) {
 	);
 
 	float vertexAlpha = 1.0f;
+	float maskAlpha = 1.0f;
 	if (!morphTargets.empty ()) {
 	    glm::vec3 unmorphedSkinned (0.0f);
 	    const size_t vertex = index / 3;
@@ -969,12 +970,12 @@ void CImage::updatePuppetPositionBuffer (const glm::vec2& size) {
 		}
 	    }
 	    const float morphIndex = body.vertices[vertex * body.strideBytes / sizeof (float) + 3];
-	    const auto morph = evaluatePuppetMorph (body, morphTargets, morphIndex, unmorphedSkinned);
+	    const auto morph = evaluatePuppetMorph (body, morphTargets, morphIndex, unmorphedSkinned, &maskAlpha);
 	    position += glm::vec3 (morph);
 	    vertexAlpha = morph.w;
 	}
 
-	if (morphColor) this->m_puppetColors.emplace_back (1, 1, 1, vertexAlpha);
+	if (morphColor) this->m_puppetColors.push_back ({ glm::vec4 (1, 1, 1, vertexAlpha), maskAlpha });
 	if (!this->m_puppetSkinBones.empty ()) {
 	    const size_t vertex = index / 3;
 	    const glm::vec4 rest (position, 1.0f);
@@ -1014,7 +1015,7 @@ void CImage::updatePuppetPositionBuffer (const glm::vec2& size) {
     if (morphColor) {
 	if (this->m_puppetVertexColor == GL_NONE) glGenBuffers (1, &this->m_puppetVertexColor);
 	glBindBuffer (GL_ARRAY_BUFFER, this->m_puppetVertexColor);
-	const size_t bytes = this->m_puppetColors.size () * sizeof (glm::vec4);
+	const size_t bytes = this->m_puppetColors.size () * sizeof (PuppetVertexColor);
 	if (bytes != this->m_puppetColorBufferBytes) {
 	    glBufferData (GL_ARRAY_BUFFER, bytes, this->m_puppetColors.data (), GL_DYNAMIC_DRAW);
 	    this->m_puppetColorBufferBytes = bytes;
@@ -1259,10 +1260,12 @@ void CImage::setupPuppetRangeGeometryCallback (
 	    const auto& shader = pass->getPass ().shader;
 	    const GLint color = glGetAttribLocation (pass->getProgramID (), "a_Color");
 	    if (this->hasPuppetMorphAlpha () && color >= 0 && !isPrelighting
-		&& (shader == "genericimage3" || shader == "genericimage4")) {
+		&& (shader == "genericimage3" || shader == "genericimage4" || shader == "clippingmaskimage4")) {
 		glEnableVertexAttribArray (color);
 		glBindBuffer (GL_ARRAY_BUFFER, this->m_puppetVertexColor);
-		glVertexAttribPointer (color, 4, GL_FLOAT, GL_FALSE, 0, nullptr);
+		const bool mask = shader == "clippingmaskimage4";
+		glVertexAttribPointer (color, mask ? 1 : 4, GL_FLOAT, GL_FALSE, sizeof (PuppetVertexColor),
+		    mask ? reinterpret_cast<const void*> (offsetof (PuppetVertexColor, maskAlpha)) : nullptr);
 	    }
 
 	    if (texCoord >= 0) {

@@ -39,7 +39,7 @@ const glm::mat4 CPass::s_defaultMatrix = glm::mat4 (1.0f);
 namespace {
 bool usesPuppetMorphAlpha (const CRenderable& renderable, const MaterialPass& pass) {
     return renderable.is<CImage> () && static_cast<const CImage&> (renderable).hasPuppetMorphAlpha ()
-	&& (pass.shader == "genericimage3" || pass.shader == "genericimage4");
+	&& (pass.shader == "genericimage3" || pass.shader == "genericimage4" || pass.shader == "clippingmaskimage4");
 }
 
 TextureMap mergedTextures (const TextureMap& material, const TextureMap& overrides) {
@@ -829,7 +829,7 @@ void CPass::setupShaders () {
     }
 
     if (usesPuppetMorphAlpha (this->m_renderable, this->m_pass))
-	this->m_combos.insert_or_assign ("VERTEXCOLOR", 1);
+	this->m_combos.insert_or_assign (this->m_pass.shader == "clippingmaskimage4" ? "PUPPET_MORPH_ALPHA" : "VERTEXCOLOR", 1);
 
     this->m_combos.insert_or_assign ("HDR", this->m_renderable.getScene ().isHdr () ? 1 : 0);
 

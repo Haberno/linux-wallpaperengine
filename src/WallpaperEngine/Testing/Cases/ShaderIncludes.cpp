@@ -903,3 +903,37 @@ TEST_CASE ("native volume samplers retain defaults and compile RGB and RGBA read
     REQUIRE_FALSE (translated.second.empty ());
     CHECK_THAT (translated.second, Catch::Matchers::ContainsSubstring ("sampler3D"));
 }
+
+TEST_CASE ("CPU puppet mask alpha precedes coverage multiplication and inversion", "[shader][puppet-mask-alpha]") {
+    const auto assets = shaderAssets ("");
+    const ShaderConstantMap constants;
+    const TextureMap textures;
+    const ComboMap overrides;
+    const std::string vertexSource = "attribute vec3 a_Position;\nvoid main() { gl_Position = vec4(a_Position, 1.0); }";
+    const std::string fragmentSource = "void main() { vec4 color = vec4(.5);\ncolor.r *= color.a;\n"
+        "color.r = 1.0 - color.r;\ngl_FragColor = color; }";
+    for (const bool maskShader : { false, true }) {
+        for (const int enabled : { 0, 1 }) {
+            const ComboMap combos { { "PUPPET_MORPH_ALPHA", enabled } };
+            const std::string name = maskShader ? "clippingmaskimage4" : "custom-mask";
+            ShaderUnit vertex (GLSLContext::UnitType_Vertex, name, vertexSource, *assets,
+                constants, textures, textures, combos, overrides);
+            ShaderUnit fragment (GLSLContext::UnitType_Fragment, name, fragmentSource, *assets,
+                constants, textures, textures, combos, overrides);
+            vertex.linkToUnit (&fragment);
+            fragment.linkToUnit (&vertex);
+            const auto& compiledVertex = vertex.compile ();
+            const auto& compiledFragment = fragment.compile ();
+            const bool injected = maskShader && enabled;
+            CHECK ((compiledVertex.find ("v_PuppetMaskAlpha = a_Color.x") != std::string::npos) == injected);
+            CHECK ((compiledFragment.find ("color.a *= v_PuppetMaskAlpha") != std::string::npos) == injected);
+            if (injected) {
+                CHECK (compiledFragment.find ("color.a *= v_PuppetMaskAlpha") < compiledFragment.find ("color.r *= color.a"));
+                CHECK (compiledFragment.find ("color.r *= color.a") < compiledFragment.find ("color.r = 1.0 - color.r"));
+            }
+            const auto translated = GLSLContext::get ().toGlsl (compiledVertex, compiledFragment);
+            REQUIRE_FALSE (translated.first.empty ());
+            REQUIRE_FALSE (translated.second.empty ());
+        }
+    }
+}
