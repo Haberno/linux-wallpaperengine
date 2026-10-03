@@ -201,6 +201,7 @@ CImage::CImage (Wallpapers::CScene& scene, const Image& image) :
     this->registerProperty ("color", *image.color);
     this->registerProperty ("parallaxDepth", *image.parallaxDepth);
     this->registerProperty ("nointerpolation", *image.noInterpolation);
+    this->registerProperty ("perspective", *image.perspective);
 
     // get scene width and height to calculate positions
     auto scene_width = static_cast<float> (scene.getWidth ());
@@ -2561,8 +2562,19 @@ void CImage::updateScreenSpacePosition () {
 	this->m_effectTextureProjectionMatrixInverse = glm::mat4 (1.0f);
     }
 
-    this->m_sceneViewProjectionMatrix
-	= this->getScene ().getCamera ().getProjection () * this->getScene ().getCamera ().getLookAt ();
+    const auto& camera = this->getScene ().getCamera ();
+    this->m_sceneViewProjectionMatrix = camera.getProjection () * camera.getLookAt ();
+    if (this->m_image.perspective->value->getBool () && !this->m_image.model->fullscreen) {
+	// Native image draws use the same virtual camera as mixed-scene models.
+	// The quad is already centered and Y-flipped; retain its existing transforms.
+	const float fov = glm::radians (glm::clamp (camera.getFov (), 0.1f, 179.9f));
+	const float distance = 1.0f / (std::tan (fov * 0.5f) * camera.getProjection ()[1][1]);
+	glm::mat4 view = camera.getLookAt ();
+	view[3][2] = -distance;
+	const auto& output = this->getScene ().getOutputSize ();
+	this->m_sceneViewProjectionMatrix = glm::perspective (fov, output.x / output.y, 5.0f,
+	    glm::max (15000.0f, distance + 1000.0f)) * view;
+    }
     glm::mat4 model (1.0f);
 
     // The 2D geometry buffer stores authoring-space X/Y only. Preserve the

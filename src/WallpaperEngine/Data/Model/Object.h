@@ -142,6 +142,8 @@ struct ImageData {
     bool copyBackground;
     /** Point filtering for this layer's automatic composition buffers. */
     UserSettingUniquePtr noInterpolation;
+    /** Use the scene virtual perspective camera for this image. */
+    UserSettingUniquePtr perspective;
     /** The material in use for this image */
     ModelUniquePtr model;
     /** The effects applied to this image after the material is rendered */
