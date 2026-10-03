@@ -19,6 +19,7 @@
 
 #include "WallpaperEngine/Data/Model/DynamicValue.h"
 #include "WallpaperEngine/Data/Model/Material.h"
+#include "WallpaperEngine/Data/Model/MdlMorph.h"
 #include "WallpaperEngine/Data/Model/Object.h"
 #include "WallpaperEngine/Data/Model/UserSetting.h"
 #include "WallpaperEngine/Data/Parsers/MaterialParser.h"
@@ -880,6 +881,7 @@ void CImage::selectPuppetAnimations (const float sceneTime) {
 		    .weight = weight,
 		    .additive = layer->additive->value->getBool (),
 		    .frame = (playback.stopped ? 0.0f : playback.time) * animation->fps,
+		    .enabled = visible || playback.visibilityWeight > 0.0f,
 		}
 	    );
 	}
@@ -933,6 +935,11 @@ void CImage::updatePuppetPositionBuffer (const glm::vec2& size) {
 	this->m_puppetBlendMap[static_cast<glm::length_t> (track)] = pose.blendWeights[track];
     }
 
+    const auto& body = mesh.submeshes.front ();
+    const auto morphTargets = preparePuppetMorphTargets (
+	body, pose.puppetMorphWeights, pose.puppetMorphMask, this->m_puppetWorldBones
+    );
+
     this->m_puppetPositions.clear ();
     this->m_puppetPositions.reserve (this->m_puppetRawPositions.size ());
     for (size_t index = 0; index + 2 < this->m_puppetRawPositions.size (); index += 3) {
@@ -940,6 +947,22 @@ void CImage::updatePuppetPositionBuffer (const glm::vec2& size) {
 	    this->m_puppetRawPositions[index], this->m_puppetRawPositions[index + 1],
 	    this->m_puppetRawPositions[index + 2]
 	);
+
+	if (!morphTargets.empty ()) {
+	    glm::vec3 unmorphedSkinned (0.0f);
+	    const size_t vertex = index / 3;
+	    if ((body.flags & 0x2000) != 0) {
+		// Modifiers use raw weighted skinning, before any target changes position.
+		for (size_t influence = 0; influence < 4; ++influence) {
+		    const float weight = this->m_puppetBlendWeights[vertex * 4 + influence];
+		    const uint32_t bone = this->m_puppetBlendIndices[vertex * 4 + influence];
+		    if (bone < this->m_puppetSkinBones.size ())
+			unmorphedSkinned += weight * glm::vec3 (this->m_puppetSkinBones[bone] * glm::vec4 (position, 1));
+		}
+	    }
+	    const float morphIndex = body.vertices[vertex * body.strideBytes / sizeof (float) + 3];
+	    position += evaluatePuppetMorphOffset (body, morphTargets, morphIndex, unmorphedSkinned);
+	}
 
 	if (!this->m_puppetSkinBones.empty ()) {
 	    const size_t vertex = index / 3;
