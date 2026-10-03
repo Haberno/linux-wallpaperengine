@@ -102,7 +102,7 @@ def capture(engine, root, scene, extra_args=()):
     return result, stats
 
 
-def run(engine, root, uniforms_only=False):
+def run(engine, root, uniforms_only=False, inactive_reflections_only=False):
     results = []
 
     def check(name, actual, expected):
@@ -116,6 +116,7 @@ uniform sampler2D g_Texture0;
 uniform float g_Texture0MipMapInfo;
 uniform float g_Texture1MipMapInfo;
 uniform float g_Texture9MipMapInfo;
+uniform sampler2D g_Texture2; // {"hidden":true,"default":"_rt_Reflection"}
 #if 0
 uniform sampler2D g_Texture3; // {"hidden":true,"default":"_rt_MipMappedFrameBuffer"}
 #endif
@@ -132,15 +133,26 @@ void main() {
     gl_FragColor = vec4(valid ? vec3(0, 1, 0) : vec3(1, 0, 0), 1);
 }
 """)
+    # Legacy generic2 declares a default reflection sampler unconditionally,
+    # then compiles out its use. Both shader stages must ignore inactive defaults.
+    (probe / "shaders/probe.vert").write_text(
+        'uniform sampler2D g_Texture4; // {"hidden":true,"default":"_rt_Reflection"}\n' + VERTEX)
     write_json(probe / "materials/probe.json", material("probe", ["four", "single"]))
     image, stats = capture(engine, probe, scene)
     check("compiled-out reflection sampler does not allocate a snapshot",
           "_rt_MipMappedFrameBuffer@" in stats, False)
+    check("inactive legacy reflection defaults are not resolved in either shader stage",
+          "_rt_Reflection" in (probe / "engine.log").read_text(), False)
     for x, name in zip((40, 120, 200, 280), (
         "authored mip payload reaches explicit LOD0 and LOD3",
         "four-level texture reports count4 rather than maxLOD3",
         "single-level bound texture reports count1", "absent slot9 reports fallback1")):
         check(name, image.getpixel((x, 90)), GREEN)
+
+    if inactive_reflections_only:
+        (root / "checks.json").write_text(json.dumps(results, indent=2))
+        assert all(result["passed"] for result in results), results
+        return
 
     if not uniforms_only:
         # Sample an unchanged checkerboard region, far from this probe. After
@@ -283,9 +295,10 @@ if __name__ == "__main__":
     parser.add_argument("engine", type=Path)
     parser.add_argument("--artifacts", type=Path)
     parser.add_argument("--uniforms-only", action="store_true")
+    parser.add_argument("--inactive-reflections-only", action="store_true")
     args = parser.parse_args()
     if args.artifacts:
-        run(args.engine.resolve(), args.artifacts.resolve(), args.uniforms_only)
+        run(args.engine.resolve(), args.artifacts.resolve(), args.uniforms_only, args.inactive_reflections_only)
     else:
         with tempfile.TemporaryDirectory(prefix="lwe-reflections-") as directory:
-            run(args.engine.resolve(), Path(directory), args.uniforms_only)
+            run(args.engine.resolve(), Path(directory), args.uniforms_only, args.inactive_reflections_only)

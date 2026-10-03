@@ -1209,7 +1209,7 @@ void CPass::setupTextureUniforms () {
     for (const auto& [index, textureName] : this->m_shader->getVertex ().getTextures ()) {
 	// Shader metadata includes disabled #if branches. They must not request a
 	// reflection snapshot when the compiled material has no reflection sampler.
-	if (textureName == "_rt_MipMappedFrameBuffer"
+	if ((textureName == "_rt_MipMappedFrameBuffer" || textureName == "_rt_Reflection")
 	    && glGetUniformLocation (this->m_programID, ("g_Texture" + std::to_string (index)).c_str ()) < 0) {
 	    continue;
 	}
@@ -1229,7 +1229,7 @@ void CPass::setupTextureUniforms () {
     }
 
     for (const auto& [index, textureName] : this->m_shader->getFragment ().getTextures ()) {
-	if (textureName == "_rt_MipMappedFrameBuffer"
+	if ((textureName == "_rt_MipMappedFrameBuffer" || textureName == "_rt_Reflection")
 	    && glGetUniformLocation (this->m_programID, ("g_Texture" + std::to_string (index)).c_str ()) < 0) {
 	    continue;
 	}
