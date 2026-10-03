@@ -36,7 +36,6 @@ ObjectUniquePtr ObjectParser::parse (const JSON& it, const Project& project) {
     const auto textIt = it.find ("text");
     const auto modelIt = it.find ("model");
     const auto lightIt = it.find ("light");
-    // use shape to refer to VolumeLight
     const auto shapeIt = it.find ("shape");
     // the runtime camera of a 3D scene is an object too, but WallpaperParser consumes it
     // (origin/angles/fov/zoom plus its path/queuemode) before the object list is built
@@ -107,7 +106,34 @@ ObjectUniquePtr ObjectParser::parse (const JSON& it, const Project& project) {
     } else if (lightIt != it.end () && lightIt->is_string ()) {
 	return parseLight (it, project, std::move (basedata), *lightIt);
     } else if (shapeIt != it.end () && !shapeIt->is_null ()) {
-	sLog.error ("VolumeLight objects are not supported yet");
+	if (shapeIt->is_string () && shapeIt->get<std::string> () == "quad") {
+	    const auto effects = it.optional ("effects");
+	    if (effects && effects->size () > 1) {
+		sLog.error ("Shapes with multiple effects are unsupported");
+		return std::make_unique<Object> (std::move (basedata));
+	    }
+	    auto parsedEffects = effects ? parseEffects (*effects, project) : std::vector<ImageEffectUniquePtr> {};
+	    for (const auto& effect : parsedEffects) {
+		bool direct = effect->effect->fbos.empty ();
+		for (const auto& pass : effect->effect->passes) {
+		    direct &= pass->material.has_value () && !pass->target && !pass->source && !pass->command;
+		}
+		if (!direct) {
+		    sLog.error ("Shapes require direct material effects without private targets");
+		    return std::make_unique<Object> (std::move (basedata));
+		}
+		for (const auto& pass : effect->passOverrides) pass->combos.insert_or_assign ("DIRECTDRAW", 1);
+	    }
+	    return std::make_unique<Shape> (std::move (basedata), ShapeData {
+		.perspective = it.user ("perspective", project.properties, false),
+		.parallaxDepth = it.user ("parallaxDepth", project.properties, glm::vec2 (1.0f)),
+		.alpha = it.user ("alpha", project.properties, 1.0f),
+		.color = it.color ("color", project.properties, Builders::ColorBuilder::White),
+		.brightness = it.user ("brightness", project.properties, 1.0f),
+		.effects = std::move (parsedEffects),
+	    });
+	}
+	sLog.error ("Unsupported shape type: ", shapeIt->dump ());
     } else if (cameraIt != it.end ()) {
 	// already handled by WallpaperParser, nothing to render for it
     } else {

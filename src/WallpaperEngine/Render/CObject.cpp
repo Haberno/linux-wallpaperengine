@@ -136,6 +136,8 @@ glm::vec2 CObject::resolveParallaxOffset () const {
     // script assignments also apply when the field was absent from the scene.
     if (current->is<Image> ()) {
 	depth = current->as<Image> ()->parallaxDepth->value->getVec2 ();
+    } else if (current->is<Shape> ()) {
+	depth = current->as<Shape> ()->parallaxDepth->value->getVec2 ();
     } else if (current->authoredParallaxDepth.has_value ()) {
 	// Read the live typed property so user settings and SceneScript changes keep working.
 	if (current->is<Particle> ()) {

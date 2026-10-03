@@ -114,6 +114,20 @@ struct ImageAnimationLayer {
     UserSettingUniquePtr blendTime;
 };
 
+struct ShapeData {
+    UserSettingUniquePtr perspective;
+    UserSettingUniquePtr parallaxDepth;
+    UserSettingUniquePtr alpha;
+    UserSettingUniquePtr color;
+    UserSettingUniquePtr brightness;
+    std::vector<ImageEffectUniquePtr> effects;
+};
+
+class Shape : public Object, public ShapeData {
+public:
+    Shape (ObjectData data, ShapeData shape) : Object (std::move (data)), ShapeData (std::move (shape)) { }
+};
+
 struct ImageData {
     /** The scale of the image */
     UserSettingUniquePtr scale;

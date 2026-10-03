@@ -823,6 +823,7 @@ static const std::vector<ImageEffectUniquePtr>* scriptable_effects (JSValueConst
     const auto& object = container->object.getObject ();
     if (object.is<Image> ()) return &object.as<Image> ()->effects;
     if (object.is<Text> ()) return &object.as<Text> ()->effects;
+    if (object.is<Shape> ()) return &object.as<Shape> ()->effects;
     return nullptr;
 }
 
