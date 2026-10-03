@@ -237,6 +237,7 @@ private:
     glm::mat4 m_effectSceneModel = glm::mat4 (1.0f);
     glm::mat4 m_effectSceneProjection = glm::mat4 (1.0f);
     glm::mat4 m_effectSceneProjectionInverse = glm::mat4 (1.0f);
+    glm::mat4 m_framebufferReadProjection = glm::mat4 (1.0f);
     glm::mat4 m_modelViewProjectionPassInverse = {};
     glm::mat4 m_modelViewProjectionCopyInverse = {};
 

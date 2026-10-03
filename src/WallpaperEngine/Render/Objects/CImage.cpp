@@ -1814,6 +1814,10 @@ void CImage::setupPasses () {
 	pass->setEffectTextureProjectionMatrix (
 	    &this->m_effectTextureProjectionMatrix, &this->m_effectTextureProjectionMatrixInverse
 	);
+	if (!isFirstPass) {
+	    // Intermediate quads draw in NDC, but background reads follow the layer's scene placement.
+	    pass->addUniform ("g_EffectModelViewProjectionMatrix", &this->m_framebufferReadProjection);
+	}
 
 	writesToTarget = this->configurePassTarget (pass, drawTo, asInput, effectInput, inTargetEffectSequence);
 	if (!writesToTarget && this->shouldRenderFinalPass (lastMaterial != m_activePasses.rend () && pass == *lastMaterial)) {
@@ -1901,6 +1905,9 @@ void CImage::updateFinalPassVisibility (const bool force) {
 	pass->setPosition (route.offscreenPosition);
 	pass->setModelViewProjectionMatrix (route.offscreenProjection);
 	pass->setModelViewProjectionMatrixInverse (route.offscreenProjectionInverse);
+	pass->addUniform ("g_EffectModelViewProjectionMatrix",
+	    route.offscreenPosition == this->getPassSpacePosition ()
+		? &this->m_framebufferReadProjection : route.offscreenProjection);
 	pass->setModelMatrix (&this->m_modelMatrix);
 	pass->setViewProjectionMatrix (pass == this->m_prelightingPass
 	    ? &this->m_sceneViewProjectionMatrix : &this->m_viewProjectionMatrix);
@@ -1938,7 +1945,11 @@ void CImage::updateFinalPassVisibility (const bool force) {
 	pass->setModelMatrix (&this->m_effectSceneModel);
 	pass->setModelViewProjectionMatrix (&this->m_effectSceneProjection);
 	pass->setModelViewProjectionMatrixInverse (&this->m_effectSceneProjectionInverse);
+	projection = &this->m_effectSceneProjection;
     }
+
+    // Scene draws already carry the layer transform in their vertex/MVP pair.
+    pass->addUniform ("g_EffectModelViewProjectionMatrix", projection);
 
     // Hidden composite textures use the undeformed image quad. Build puppet
     // scene geometry once, and restore it whenever this layer becomes visible.
@@ -2474,6 +2485,9 @@ void CImage::updateEffectSceneMatrix () {
 	(this->m_pos.w - this->m_pos.y) / this->m_size.y, 1.0f));
     this->m_effectSceneProjection = this->m_sceneViewProjectionMatrix * this->m_effectSceneModel;
     this->m_effectSceneProjectionInverse = glm::inverse (this->m_effectSceneProjection);
+    this->m_framebufferReadProjection = glm::scale (
+	this->m_effectSceneProjection, glm::vec3 (this->m_size * glm::vec2 (0.5f, -0.5f), 1.0f)
+    );
 }
 
 void CImage::updateScreenSpacePosition () {
