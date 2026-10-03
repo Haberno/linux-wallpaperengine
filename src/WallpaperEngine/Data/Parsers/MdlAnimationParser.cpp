@@ -567,7 +567,7 @@ bool readBoneScalarTracks (
     }
 }
 
-void readAnimationEvents (
+std::optional<size_t> readAnimationEvents (
     const std::vector<char>& data, size_t offset, const size_t recordEnd, const int version,
     const std::vector<MdlAnimationClip>& previousClips, MdlAnimationClip& animation
 ) {
@@ -578,7 +578,7 @@ void readAnimationEvents (
 	if (version >= 4 && readValue<uint8_t> (data, offset, recordEnd) != 0) {
 	    // Native 140264cec uses the MDLV submesh count, not the skeleton size.
 	    // Section-only data cannot locate the following metadata without this header.
-	    if (findSection (data, "MDLV", 0) != 0) return;
+	    if (findSection (data, "MDLV", 0) != 0) return std::nullopt;
 	    size_t headerOffset = SECTION_HEADER_SIZE + 2 * sizeof (uint32_t);
 	    const auto submeshCount = readValue<uint32_t> (data, headerOffset, data.size ());
 	    std::vector<std::vector<MdlMorphTrack>> morphTracks;
@@ -593,7 +593,7 @@ void readAnimationEvents (
 		    track.target = readValue<uint16_t> (data, offset, recordEnd);
 		    const auto bytes = readValue<uint32_t> (data, offset, recordEnd);
 		    if (bytes != (static_cast<size_t> (animation.frameCount) + 1) * sizeof (float)
-			|| bytes > recordEnd - offset) return;
+			|| bytes > recordEnd - offset) return std::nullopt;
 		    track.frames.resize (static_cast<size_t> (animation.frameCount) + 1);
 		    for (auto& value : track.frames) value = readValue<float> (data, offset, recordEnd);
 		    morphTracks.back ().push_back (std::move (track));
@@ -607,7 +607,7 @@ void readAnimationEvents (
 	    for (int axis = 0; axis < 3; ++axis) bounds.maximum[axis] = readValue<float> (data, offset, recordEnd);
 	    animation.bounds = bounds;
 	}
-	if (version >= 6 && !readBoneScalarTracks (data, offset, recordEnd, animation, &animation.depthTracks)) return;
+	if (version >= 6 && !readBoneScalarTracks (data, offset, recordEnd, animation, &animation.depthTracks)) return std::nullopt;
 	if ((animation.flags & 1) != 0) {
 	    const auto sourceIndex = readValue<uint16_t> (data, offset, recordEnd);
 	    const auto firstFrame = readValue<uint32_t> (data, offset, recordEnd);
@@ -647,7 +647,7 @@ void readAnimationEvents (
 	    }
 	}
 	const auto count = readValue<uint32_t> (data, offset, recordEnd);
-	if (count > (recordEnd - offset) / 5) return;
+	if (count > (recordEnd - offset) / 5) return std::nullopt;
 	std::vector<PropertyAnimation::Event> events;
 	for (uint32_t i = 0; i < count; ++i) {
 	    const float time = readValue<float> (data, offset, recordEnd);
@@ -661,9 +661,11 @@ void readAnimationEvents (
 	    events.push_back ({ .frame = frame, .name = payload["name"].get<std::string> () });
 	}
 	if (offset == recordEnd) animation.events = std::move (events);
+	return offset;
     } catch (const std::exception&) {
 	// Keep usable bone data when a newer/unknown optional metadata encoding is present.
     }
+    return std::nullopt;
 }
 
 void parseAnimations (
@@ -759,7 +761,17 @@ void parseAnimations (
 
 	size_t recordEnd = sectionEnd;
 	if (index + 1 < animationCount) {
-	    const auto next = findNextAnimationRecord (data, offset, sectionEnd, result.bones.size ());
+	    // Morph samples can resemble an event-only clip header. Consume the known
+	    // versioned metadata first; scan only if that layout cannot reach a clip.
+	    // A header-only probe avoids copying the existing bone/control frame data.
+	    MdlAnimationClip metadata;
+	    metadata.fps = animation.fps;
+	    metadata.frameCount = animation.frameCount;
+	    metadata.flags = animation.flags;
+	    metadata.boneFrames.resize (animation.boneFrames.size ());
+	    auto next = readAnimationEvents (data, offset, sectionEnd, version.back () - '0', {}, metadata);
+	    if (!next || !animationRecordFits (data, *next, sectionEnd, result.bones.size ()))
+		next = findNextAnimationRecord (data, offset, sectionEnd, result.bones.size ());
 	    if (!next.has_value ()) {
 		throw std::runtime_error ("could not locate the next animation record in " + filename);
 	    }

@@ -1143,3 +1143,64 @@ TEST_CASE ("Spring torque caps quaternion components before timestep integration
     for (int component = 0; component < 4; ++component)
 	CHECK (untouched[component] == Catch::Approx (input[component]).margin (1e-6f));
 }
+
+TEST_CASE ("MDLA morph samples cannot become a following clip header", "[mdl][morph-weights][morph-boundary]") {
+    auto bytes = makeAnimatedModelSections (1);
+    const std::string marker = "MDLA0006";
+    const auto header = std::search (bytes.begin (), bytes.end (), marker.begin (), marker.end ());
+    REQUIRE (header != bytes.end ());
+    const size_t sectionEndOffset = std::distance (bytes.begin (), header) + marker.size () + 1;
+    bytes.resize (sectionEndOffset);
+    appendValue<uint32_t> (bytes, 0);
+    appendValue<uint32_t> (bytes, 3);
+    const std::array samples { 0.7f, 0.0f, 0.6f };
+    for (uint32_t clip = 0; clip < samples.size (); ++clip) {
+        appendValue<uint32_t> (bytes, clip + 1);
+        appendValue<uint32_t> (bytes, 0);
+        appendString (bytes, "clip" + std::to_string (clip + 1));
+        appendString (bytes, "loop");
+        appendValue<float> (bytes, 1);
+        appendValue<uint32_t> (bytes, 1);
+        appendValue<uint32_t> (bytes, 0);
+        appendValue<uint32_t> (bytes, 2);
+        for (int bone = 0; bone < 2; ++bone) {
+            appendValue<uint32_t> (bytes, 0);
+            appendValue<uint32_t> (bytes, 72);
+            appendFrame (bytes, glm::vec3 (0));
+            appendFrame (bytes, glm::vec3 (0));
+        }
+        appendValue<uint32_t> (bytes, 0); // No blend tracks.
+        appendValue<uint8_t> (bytes, 0); // No early bone scalar tracks.
+        appendValue<uint8_t> (bytes, 1); // One submesh's morph tracks follow.
+        appendValue<uint32_t> (bytes, 1);
+        appendValue<float> (bytes, 0);
+        appendValue<uint16_t> (bytes, 1);
+        appendValue<uint16_t> (bytes, 0);
+        appendValue<uint32_t> (bytes, 8);
+        appendValue<float> (bytes, samples[clip]);
+        appendValue<float> (bytes, samples[clip]);
+        for (int axis = 0; axis < 6; ++axis) appendValue<float> (bytes, 0);
+        appendValue<uint8_t> (bytes, 0); // No depth tracks.
+        appendValue<uint32_t> (bytes, 0); // No events.
+    }
+    patchU32 (bytes, sectionEndOffset, bytes.size ());
+    const auto parsed = MdlAnimationParser::parse (bytes, "layered-morph.mdl");
+    REQUIRE (parsed.animations.size () == 3);
+    for (size_t index = 0; index < samples.size (); ++index) {
+        const auto& clip = parsed.animations[index];
+        CHECK (clip.id == index + 1);
+        CHECK (clip.fps == 1);
+        CHECK (clip.frameCount == 1);
+        REQUIRE (clip.morphTracks.size () == 1);
+        REQUIRE (clip.morphTracks[0].size () == 1);
+        CHECK (clip.morphTracks[0][0].target == 0);
+        CHECK (clip.morphTracks[0][0].frames == std::vector<float> { samples[index], samples[index] });
+    }
+    const MdlActiveAnimation base { .animation = &parsed.animations[0], .frame = 0 };
+    const MdlActiveAnimation clear { .animation = &parsed.animations[1], .frame = 0 };
+    const MdlActiveAnimation partial { .animation = &parsed.animations[2], .weight = 0.5f, .frame = 0 };
+    const auto pose = MdlAnimationEvaluator::evaluate (parsed, { base, clear, partial });
+    CHECK (pose.puppetMorphMask == 1);
+    REQUIRE (pose.puppetMorphWeights.size () == 1);
+    CHECK (pose.puppetMorphWeights[0] == Catch::Approx (0.65f));
+}
