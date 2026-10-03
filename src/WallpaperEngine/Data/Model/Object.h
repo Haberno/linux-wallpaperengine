@@ -251,6 +251,7 @@ public:
 // The measured two-control-point and lifetime-noise subsets of native remaps.
 struct ControlPointRemap {
     enum class Mode { PositionToVelocity, LifetimeToPosition, LifetimeNoiseToVelocity, LifetimeFbmToSpeed };
+    enum class Operation { Remap, Multiply, Add, Subtract };
     Mode mode;
     UserSettingUniquePtr inputRangeMin;
     UserSettingUniquePtr inputRangeMax;
@@ -261,6 +262,8 @@ struct ControlPointRemap {
     uint32_t outputControlPoint0;
     uint32_t outputControlPoint1;
     float transformInputScale { 2.0f };
+    Operation operation { Operation::Remap };
+    uint32_t flags { 1 };
 };
 
 class ControlPointRemapInitializer : public ParticleInitializerBase {

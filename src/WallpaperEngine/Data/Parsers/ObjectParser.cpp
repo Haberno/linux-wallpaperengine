@@ -1015,18 +1015,22 @@ static std::optional<ControlPointRemap> parseControlPointRemap (
     const auto transform = it.optional<std::string> ("transformfunction", "none");
     const bool positionInput = input == "positionbetweentwocontrolpoints" && output == "velocity";
     const bool positionOutput = input == "maxlifetime" && output == "positionbetweentwocontrolpoints";
+    const bool positionArithmetic = positionOutput
+        && (operation == "multiply" || operation == "add" || operation == "subtract");
     const bool noiseVelocity = !initializer && input == "lifetimefraction" && output == "velocity"
         && transform == "simplexnoise";
     const bool noiseSpeed = !initializer && input == "lifetimefraction" && output == "speed"
         && transform == "fbmnoise" && it.optional ("transformoctaves", 3) == 3;
+    const auto flags = it.optional ("flags", 1u);
+    const bool supportedFlags = noiseVelocity ? flags == 1u : noiseSpeed ? flags == 3u : flags <= 3u;
     const bool defaultBlend = initializer || (it.optional ("blendinstart", 0.0f) == 0.0f
         && it.optional ("blendinend", 0.0f) == 0.0f && it.optional ("blendoutstart", 1.0f) == 1.0f
         && it.optional ("blendoutend", 1.0f) == 1.0f);
     if ((!noiseVelocity && !noiseSpeed && ((!positionInput && !positionOutput) || transform != "none"))
-        || operation != (noiseSpeed ? "multiply" : "remap")
+        || (operation != (noiseSpeed ? "multiply" : "remap") && !positionArithmetic)
         || it.optional<std::string> ("inputcomponent", "all") != "all"
         || it.optional<std::string> ("outputcomponent", "all") != "all"
-        || it.optional ("flags", 1u) != (noiseSpeed ? 3u : 1u) || !defaultBlend) {
+        || !supportedFlags || !defaultBlend) {
         // Keep unmeasured pairs, transforms, flags and octave counts explicit.
         sLog.error ("Unsupported particle ", initializer ? "remapinitialvalue" : "remapvalue",
                     " settings (input=", input, ", output=", output, ", operation=", operation,
@@ -1050,6 +1054,11 @@ static std::optional<ControlPointRemap> parseControlPointRemap (
         .outputControlPoint0 = point ("outputcontrolpoint0", 0),
         .outputControlPoint1 = point ("outputcontrolpoint1", 1),
         .transformInputScale = it.optional ("transforminputscale", 2.0f),
+        .operation = operation == "multiply" ? ControlPointRemap::Operation::Multiply
+                   : operation == "add" ? ControlPointRemap::Operation::Add
+                   : operation == "subtract" ? ControlPointRemap::Operation::Subtract
+                   : ControlPointRemap::Operation::Remap,
+        .flags = flags,
     };
 }
 

@@ -1555,15 +1555,26 @@ void WallpaperEngine::Render::Objects::applyParticleControlPointRemap (
     glm::vec3 span = remap.inputRangeMax->value->getVec3 () - minimum;
     // Both native parsers replace exactly equal range endpoints with FLT_EPSILON.
     for (int axis = 0; axis < 3; ++axis) if (span[axis] == 0.0f) span[axis] = epsilon;
-    const glm::vec3 normalized = glm::clamp ((glm::vec3 (input) - minimum) / span, glm::vec3 (0), glm::vec3 (1));
-    const glm::vec3 mapped = remap.outputRangeMin->value->getVec3 ()
+    glm::vec3 normalized = (glm::vec3 (input) - minimum) / span;
+    if (remap.flags & 1u) normalized = glm::clamp (normalized, glm::vec3 (0), glm::vec3 (1));
+    glm::vec3 mapped = remap.outputRangeMin->value->getVec3 ()
         + normalized * (remap.outputRangeMax->value->getVec3 () - remap.outputRangeMin->value->getVec3 ());
+    // Output saturation applies before arithmetic, not to the final position.
+    if (remap.flags & 2u) mapped = glm::clamp (mapped, glm::vec3 (0), glm::vec3 (1));
     if (remap.mode == ControlPointRemap::Mode::PositionToVelocity) {
         // Authored velocity uses the same Y-up coordinates as velocityrandom.
         particle.velocity = mapped * glm::vec3 (1.0f, -1.0f, 1.0f);
     } else {
-        // Only replace the longitudinal fraction; retain perpendicular offset.
-        particle.position += delta * (mapped.x - fraction);
+        // Native arithmetic acts on the current longitudinal fraction, not XYZ.
+        // Keep perpendicular offset and do not clamp the operated fraction.
+        float result = mapped.x;
+        switch (remap.operation) {
+            case ControlPointRemap::Operation::Remap: break;
+            case ControlPointRemap::Operation::Multiply: result = fraction * mapped.x; break;
+            case ControlPointRemap::Operation::Add: result = fraction + mapped.x; break;
+            case ControlPointRemap::Operation::Subtract: result = fraction - mapped.x; break;
+        }
+        particle.position += delta * (result - fraction);
     }
 }
 

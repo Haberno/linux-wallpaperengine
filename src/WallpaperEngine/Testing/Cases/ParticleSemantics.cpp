@@ -1061,7 +1061,7 @@ TEST_CASE ("two-control-point remaps retain only the measured linear subset", "[
                 {"name":"remapvalue","input":"positionbetweentwocontrolpoints","output":"velocity","operation":"remap"},
                 {"name":"remapvalue","input":"maxlifetime","output":"positionbetweentwocontrolpoints","operation":"remap"},
                 {"name":"remapvalue","output":"positionbetweentwocontrolpoints","operation":"remap"},
-                {"name":"remapvalue","input":"positionbetweentwocontrolpoints","output":"velocity","operation":"remap","flags":0},
+                {"name":"remapvalue","input":"positionbetweentwocontrolpoints","output":"velocity","operation":"remap","flags":4},
                 {"name":"remapvalue","input":"positionbetweentwocontrolpoints","output":"velocity","operation":"remap","blendinend":0.5},
                 {"name":"remapvalue","input":"positionbetweentwocontrolpoints","output":"velocity","operation":"remap","outputcomponent":"x"},
                 {"name":"remapvalue","input":"positionbetweentwocontrolpoints","operation":"remap"},
@@ -1173,6 +1173,180 @@ TEST_CASE ("two-control-point scalar output preserves perpendicular simulation p
         applyParticleControlPointRemap (particle, *remap, points, initializer);
         CHECK (particle.position == glm::vec3 (0, -45, 40));
         points[1].position = { 60, 0, 0 };
+    }
+}
+
+TEST_CASE ("two-control-point position arithmetic preserves residual and composes", "[particle][remap][remap-arithmetic]") {
+    using WallpaperEngine::Render::Objects::applyParticleControlPointRemap;
+    using WallpaperEngine::Render::Objects::ControlPointData;
+    const struct { const char* operation; float first, second; } cases[] = {
+        { "remap", .5f, .5f }, { "multiply", .125f, .0625f },
+        { "add", .75f, 1.25f }, { "subtract", -.25f, -.75f },
+        { nullptr, .125f, .0625f }
+    };
+    std::vector<ControlPointData> points (2);
+    points[0].position = { 10, -20, 30 };
+    points[1].position = { 130, 140, -10 };
+    const glm::vec3 delta = points[1].position - points[0].position;
+    const glm::vec3 residual (20, -10, 20); // Perpendicular to this oblique pair.
+    for (const bool initializer : { true, false }) {
+        for (const auto& entry : cases) {
+            INFO ("initializer=" << initializer << ", operation=" << (entry.operation ? entry.operation : "default"));
+            WallpaperEngine::Data::Model::Project project {};
+            auto data = WallpaperEngine::Data::JSON::JSON::parse (R"({"id":385,"particle":{}})");
+            auto node = WallpaperEngine::Data::JSON::JSON::parse (R"({
+                "input":"maxlifetime","output":"positionbetweentwocontrolpoints","inputrangemax":200
+            })");
+            node["name"] = initializer ? "remapinitialvalue" : "remapvalue";
+            if (entry.operation) node["operation"] = entry.operation;
+            data["particle"][initializer ? "initializer" : "operator"] = { node };
+            const auto object = WallpaperEngine::Data::Parsers::ObjectParser::parse (data, project);
+            const auto* definition = object->as<Particle> ();
+            REQUIRE (definition != nullptr);
+            const ControlPointRemap* remap;
+            if (initializer) {
+                REQUIRE (definition->initializers.size () == 1);
+                const auto* parsed = definition->initializers.front ()->as<ControlPointRemapInitializer> ();
+                REQUIRE (parsed != nullptr);
+                remap = &parsed->remap;
+            } else {
+                REQUIRE (definition->operators.size () == 1);
+                const auto* parsed = definition->operators.front ()->as<ControlPointRemapOperator> ();
+                REQUIRE (parsed != nullptr);
+                remap = &parsed->remap;
+            }
+            ParticleInstance particle;
+            particle.position = points[0].position + delta * .25f + residual;
+            particle.velocity = { 7, -11, 13 };
+            particle.lifetime = 100;
+            for (const float fraction : { entry.first, entry.second }) {
+                applyParticleControlPointRemap (particle, *remap, points, initializer);
+                const glm::vec3 expected = points[0].position + delta * fraction + residual;
+                CHECK (particle.position.x == Catch::Approx (expected.x).margin (.001f));
+                CHECK (particle.position.y == Catch::Approx (expected.y).margin (.001f));
+                CHECK (particle.position.z == Catch::Approx (expected.z).margin (.001f));
+                CHECK (particle.velocity == glm::vec3 (7, -11, 13));
+            }
+        }
+    }
+}
+
+TEST_CASE ("two-control-point position arithmetic rejects unmeasured settings", "[particle][remap][remap-arithmetic]") {
+    WallpaperEngine::Data::Model::Project project {};
+    const auto object = WallpaperEngine::Data::Parsers::ObjectParser::parse (
+        WallpaperEngine::Data::JSON::JSON::parse (R"({"id":386,"particle":{"operator":[
+            {"name":"remapvalue","input":"maxlifetime","output":"positionbetweentwocontrolpoints","operation":"divide"},
+            {"name":"remapvalue","input":"maxlifetime","output":"positionbetweentwocontrolpoints","operation":"add","flags":4},
+            {"name":"remapvalue","input":"maxlifetime","output":"positionbetweentwocontrolpoints","operation":"add","transformfunction":"simplexnoise"},
+            {"name":"remapvalue","input":"maxlifetime","output":"positionbetweentwocontrolpoints","operation":"add","blendinend":0.5},
+            {"name":"remapvalue","input":"maxlifetime","output":"positionbetweentwocontrolpoints","operation":"add","outputcomponent":"x"},
+            {"name":"remapvalue","input":"positionbetweentwocontrolpoints","output":"velocity","operation":"add"},
+            {"name":"remapvalue","output":"positionbetweentwocontrolpoints","operation":"add"}
+        ]}})"), project);
+    const auto* definition = object->as<Particle> ();
+    REQUIRE (definition != nullptr);
+    CHECK (definition->operators.empty ());
+}
+
+TEST_CASE ("two-control-point remap flags clamp independent mapping stages", "[particle][remap][remap-flags]") {
+    using WallpaperEngine::Render::Objects::applyParticleControlPointRemap;
+    using WallpaperEngine::Render::Objects::ControlPointData;
+    const struct { uint32_t flags; float input; glm::vec3 mapped; } cases[] = {
+        { 0, -.25f, { -3, 1.5f, .125f } }, { 0, .25f, { -1, 2.5f, .375f } }, { 0, 1.25f, { 3, 4.5f, .875f } },
+        { 1, -.25f, { -2, 2, .25f } }, { 1, .25f, { -1, 2.5f, .375f } }, { 1, 1.25f, { 2, 4, .75f } },
+        { 2, -.25f, { 0, 1, .125f } }, { 2, .25f, { 0, 1, .375f } }, { 2, 1.25f, { 1, 1, .875f } },
+        { 3, -.25f, { 0, 1, .25f } }, { 3, .25f, { 0, 1, .375f } }, { 3, 1.25f, { 1, 1, .75f } }
+    };
+    std::vector<ControlPointData> points (2);
+    points[0].position = { -60, 0, 0 };
+    points[1].position = { 60, 0, 0 };
+    for (const bool initializer : { true, false }) {
+        for (const bool positionInput : { true, false }) {
+            for (const auto& entry : cases) {
+                INFO ("initializer=" << initializer << ", positionInput=" << positionInput
+                      << ", flags=" << entry.flags << ", input=" << entry.input);
+                WallpaperEngine::Data::Model::Project project {};
+                auto data = WallpaperEngine::Data::JSON::JSON::parse (R"({"id":387,"particle":{}})");
+                auto node = WallpaperEngine::Data::JSON::JSON::parse (R"({"operation":"remap"})");
+                node["name"] = initializer ? "remapinitialvalue" : "remapvalue";
+                node["input"] = positionInput ? "positionbetweentwocontrolpoints" : "maxlifetime";
+                node["output"] = positionInput ? "velocity" : "positionbetweentwocontrolpoints";
+                node["flags"] = entry.flags;
+                node["inputrangemin"] = positionInput ? 0 : 100;
+                node["inputrangemax"] = positionInput ? 1 : 200;
+                if (positionInput) {
+                    node["outputrangemin"] = "-2 2 0.25";
+                    node["outputrangemax"] = "2 4 0.75";
+                } else {
+                    node["outputrangemin"] = -2;
+                    node["outputrangemax"] = 2;
+                }
+                data["particle"][initializer ? "initializer" : "operator"] = { node };
+                const auto object = WallpaperEngine::Data::Parsers::ObjectParser::parse (data, project);
+                const auto* definition = object->as<Particle> ();
+                REQUIRE (definition != nullptr);
+                const ControlPointRemap* remap;
+                if (initializer) {
+                    REQUIRE (definition->initializers.size () == 1);
+                    const auto* parsed = definition->initializers.front ()->as<ControlPointRemapInitializer> ();
+                    REQUIRE (parsed != nullptr);
+                    remap = &parsed->remap;
+                } else {
+                    REQUIRE (definition->operators.size () == 1);
+                    const auto* parsed = definition->operators.front ()->as<ControlPointRemapOperator> ();
+                    REQUIRE (parsed != nullptr);
+                    remap = &parsed->remap;
+                }
+                ParticleInstance particle;
+                particle.position = { -60 + 120 * entry.input, -45, 40 };
+                particle.velocity = { 7, -11, 13 };
+                particle.lifetime = 100 + 100 * entry.input;
+                applyParticleControlPointRemap (particle, *remap, points, initializer);
+                if (positionInput) {
+                    CHECK (particle.velocity == entry.mapped * glm::vec3 (1, -1, 1));
+                    CHECK (particle.position == glm::vec3 (-60 + 120 * entry.input, -45, 40));
+                } else {
+                    CHECK (particle.position == glm::vec3 (-60 + 120 * entry.mapped.x, -45, 40));
+                    CHECK (particle.velocity == glm::vec3 (7, -11, 13));
+                }
+            }
+        }
+    }
+}
+
+TEST_CASE ("two-control-point output clamp precedes position arithmetic", "[particle][remap][remap-flags]") {
+    using WallpaperEngine::Render::Objects::applyParticleControlPointRemap;
+    using WallpaperEngine::Render::Objects::ControlPointData;
+    std::vector<ControlPointData> points (2);
+    points[0].position = { -60, 0, 0 };
+    points[1].position = { 60, 0, 0 };
+    for (const bool initializer : { true, false }) {
+        WallpaperEngine::Data::Model::Project project {};
+        auto data = WallpaperEngine::Data::JSON::JSON::parse (R"({"id":388,"particle":{}})");
+        auto node = WallpaperEngine::Data::JSON::JSON::parse (R"({
+            "input":"maxlifetime","output":"positionbetweentwocontrolpoints",
+            "operation":"add","flags":3,"outputrangemin":2,"outputrangemax":2
+        })");
+        node["name"] = initializer ? "remapinitialvalue" : "remapvalue";
+        data["particle"][initializer ? "initializer" : "operator"] = { node };
+        const auto object = WallpaperEngine::Data::Parsers::ObjectParser::parse (data, project);
+        const auto* definition = object->as<Particle> ();
+        REQUIRE (definition != nullptr);
+        const ControlPointRemap* remap;
+        if (initializer) {
+            REQUIRE (definition->initializers.size () == 1);
+            remap = &definition->initializers.front ()->as<ControlPointRemapInitializer> ()->remap;
+        } else {
+            REQUIRE (definition->operators.size () == 1);
+            remap = &definition->operators.front ()->as<ControlPointRemapOperator> ()->remap;
+        }
+        ParticleInstance particle;
+        particle.position = { 30, -45, 40 };
+        particle.lifetime = 100;
+        applyParticleControlPointRemap (particle, *remap, points, initializer);
+        CHECK (particle.position == glm::vec3 (150, -45, 40));
+        applyParticleControlPointRemap (particle, *remap, points, initializer);
+        CHECK (particle.position == glm::vec3 (270, -45, 40));
     }
 }
 
