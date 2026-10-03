@@ -9,6 +9,7 @@
 #include <vector>
 
 #include <catch2/catch_approx.hpp>
+#include <catch2/generators/catch_generators.hpp>
 #include <catch2/catch_test_macros.hpp>
 #include <glm/gtc/matrix_transform.hpp>
 
@@ -59,8 +60,23 @@ void appendFrame (std::vector<char>& data, const glm::vec3& translation) {
     }
 }
 
-std::vector<char> makeAnimatedModelSections () {
+std::vector<char> makeAnimatedModelSections (const uint32_t submeshCount = 0) {
     std::vector<char> data;
+    if (submeshCount != 0) {
+	appendMarker (data, "MDLV0016");
+	appendValue<uint32_t> (data, 15); // default vertex tag
+	appendValue<uint32_t> (data, 1); // materials per submesh
+	appendValue (data, submeshCount);
+	for (uint32_t submesh = 0; submesh < submeshCount; ++submesh) {
+	    appendString (data, "materials/test.json");
+	    appendValue<uint32_t> (data, 0); // submesh flags
+	    appendValue<uint32_t> (data, 15); // vertex tag
+	    appendValue<uint32_t> (data, 3 * 48); // three unskinned vertices
+	    data.resize (data.size () + 3 * 48, '\0');
+	    appendValue<uint32_t> (data, 3 * sizeof (uint16_t));
+	    for (uint16_t index = 0; index < 3; ++index) appendValue (data, index);
+	}
+    }
 
     appendMarker (data, "MDLS0002");
     const size_t skeletonEndOffset = data.size ();
@@ -333,8 +349,10 @@ TEST_CASE ("MDLS reference transforms survive parsing with or without controls",
     }
 }
 
-TEST_CASE ("MDLA events follow versioned tracks and cropped clip metadata", "[mdl][animation]") {
-    auto data = makeAnimatedModelSections ();
+TEST_CASE ("MDLA events follow versioned tracks and cropped clip metadata", "[mdl][animation][morph-metadata]") {
+    const auto submeshCount = GENERATE (1u, 2u, 3u);
+    CAPTURE (submeshCount);
+    auto data = makeAnimatedModelSections (submeshCount);
     const std::string marker = "MDLA0006";
     const auto begin = std::search (data.begin (), data.end (), marker.begin (), marker.end ());
     data.resize (std::distance (data.begin (), begin));
@@ -357,9 +375,10 @@ TEST_CASE ("MDLA events follow versioned tracks and cropped clip metadata", "[md
     }
     appendValue<uint32_t> (data, 0); // blend tracks
     appendValue<uint8_t> (data, 0); // earlier scalar tracks
-    appendValue<uint8_t> (data, 1); // v4 constraint tracks
-    for (int bone = 0; bone < 2; ++bone) {
-	appendValue<uint32_t> (data, 1);
+    appendValue<uint8_t> (data, 1); // v4 morph tracks, one record per submesh
+    for (uint32_t submesh = 0; submesh < submeshCount; ++submesh) {
+	appendValue<uint32_t> (data, submesh == 2 ? 0 : 1);
+	if (submesh == 2) continue; // Submeshes without tracks still have a flags record.
 	appendValue<float> (data, 1);
 	appendValue<uint16_t> (data, 1);
 	appendValue<uint16_t> (data, 0);
@@ -371,7 +390,7 @@ TEST_CASE ("MDLA events follow versioned tracks and cropped clip metadata", "[md
     for (int bone = 0; bone < 2; ++bone) {
 	appendValue<uint32_t> (data, 0);
 	appendValue<uint32_t> (data, 61 * sizeof (float));
-	for (int frame = 0; frame < 61; ++frame) appendValue<float> (data, 1);
+	for (int frame = 0; frame < 61; ++frame) appendValue<float> (data, bone + 1);
     }
     appendValue<uint16_t> (data, 0); // source clip/range descriptor, flags bit 0
     for (const uint32_t field : { 128u, 188u, 0u, UINT32_MAX }) appendValue<uint32_t> (data, field);
@@ -382,10 +401,17 @@ TEST_CASE ("MDLA events follow versioned tracks and cropped clip metadata", "[md
     appendString (data, R"({"frame":45,"name":"cry"})");
     patchU32 (data, endField, data.size ());
 
+    const auto mesh = WallpaperEngine::Data::Parsers::MdlParser::parse (data, "events.mdl");
+    REQUIRE (mesh.submeshes.size () == submeshCount);
     const auto parsed = MdlAnimationParser::parse (data, "events.mdl");
     REQUIRE (parsed.animations.size () == 1);
     const auto& clip = parsed.animations.front ();
     CHECK (clip.flags == 0x401);
+    REQUIRE (clip.depthTracks.size () == 2);
+    REQUIRE (clip.depthTracks[0].size () == 61);
+    REQUIRE (clip.depthTracks[1].size () == 61);
+    CHECK (clip.depthTracks[0][60] == Catch::Approx (1));
+    CHECK (clip.depthTracks[1][60] == Catch::Approx (2));
     REQUIRE (clip.events.size () == 2);
     CHECK (clip.events[0].frame == Catch::Approx (59));
     CHECK (clip.events[0].name == "end");

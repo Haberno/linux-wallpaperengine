@@ -524,7 +524,7 @@ bool readBlendTracks (
 
 /**
  * The early per-bone scalar block stores opacity; MDLA0006 repeats this layout
- * after its constraints and bounds for depth. Only the latter is retained.
+ * after its morph tracks and bounds for depth. Only the latter is retained.
  */
 bool readBoneScalarTracks (
     const std::vector<char>& data, size_t& offset, const size_t sectionEnd, const MdlAnimationClip& animation,
@@ -567,14 +567,19 @@ bool readBoneScalarTracks (
 
 void readAnimationEvents (
     const std::vector<char>& data, size_t offset, const size_t recordEnd, const int version,
-    const size_t skeletonBoneCount, const std::vector<MdlAnimationClip>& previousClips, MdlAnimationClip& animation
+    const std::vector<MdlAnimationClip>& previousClips, MdlAnimationClip& animation
 ) {
-    // Native MDLA loader: version-4 constraints, version-5 bounds, version-6
+    // Native MDLA loader: version-4 morph tracks, version-5 bounds, version-6
     // scalar tracks, optional clip range (flags bit 0), then timed JSON markers.
     // Consume complete records; never search sample bytes for event-looking JSON.
     try {
 	if (version >= 4 && readValue<uint8_t> (data, offset, recordEnd) != 0) {
-	    for (size_t bone = 0; bone < skeletonBoneCount; ++bone) {
+	    // Native 140264cec uses the MDLV submesh count, not the skeleton size.
+	    // Section-only data cannot locate the following metadata without this header.
+	    if (findSection (data, "MDLV", 0) != 0) return;
+	    size_t headerOffset = SECTION_HEADER_SIZE + 2 * sizeof (uint32_t);
+	    const auto submeshCount = readValue<uint32_t> (data, headerOffset, data.size ());
+	    for (uint32_t submesh = 0; submesh < submeshCount; ++submesh) {
 		const auto flags = readValue<uint32_t> (data, offset, recordEnd);
 		if ((flags & 1) == 0) continue;
 		readValue<float> (data, offset, recordEnd);
@@ -740,7 +745,7 @@ void parseAnimations (
 	    }
 	    recordEnd = *next;
 	}
-	readAnimationEvents (data, offset, recordEnd, version.back () - '0', result.bones.size (), result.animations, animation);
+	readAnimationEvents (data, offset, recordEnd, version.back () - '0', result.animations, animation);
 	result.animations.push_back (std::move (animation));
 	offset = recordEnd;
     }
