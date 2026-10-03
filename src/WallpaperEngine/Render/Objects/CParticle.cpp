@@ -1600,7 +1600,20 @@ void WallpaperEngine::Render::Objects::applyParticleControlPointRemap (
         // Authored velocity uses the same Y-up coordinates as velocityrandom.
         glm::vec3 target = mapped * glm::vec3 (1.0f, -1.0f, 1.0f);
         switch (remap.operation) {
-            case ControlPointRemap::Operation::Remap: break;
+            case ControlPointRemap::Operation::Remap: {
+                if (!initializer) {
+                    glm::vec4 blendTimes = remap.blendTimes;
+                    blendTimes.x = std::min (blendTimes.x, blendTimes.y - 0.0001f);
+                    blendTimes.w = std::max (blendTimes.w, blendTimes.z + 0.0001f);
+                    // Native blended all-component remap reuses mapped X for
+                    // Y/Z, even where the selected envelope has full weight.
+                    if ((blendTimes.y > 0.01f || blendTimes.z < 0.99f)
+                        && (blendTimes.z - blendTimes.y > 0.01f || blendTimes.y - blendTimes.x > 0.01f
+                            || blendTimes.w - blendTimes.z > 0.01f))
+                        target = glm::vec3 (mapped.x, -mapped.x, mapped.x);
+                }
+                break;
+            }
             // Multipliers are dimensionless factors, not reflected velocity deltas.
             case ControlPointRemap::Operation::Multiply: target = particle.velocity * mapped; break;
             case ControlPointRemap::Operation::Add: target = particle.velocity + target; break;
