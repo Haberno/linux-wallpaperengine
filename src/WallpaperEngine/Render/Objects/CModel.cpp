@@ -221,9 +221,6 @@ CModel::CModel (Wallpapers::CScene& scene, const Model3D& model) :
 	    if (value->animation != nullptr) registerAnimation (prefix + name, *value->animation);
 	}
     }
-    if (model.animationLayers.empty () && !model.animationData.animations.empty ()) {
-	addLayer (nullptr, &model.animationData.animations.front ());
-    }
 }
 
 CModel::~CModel () {
