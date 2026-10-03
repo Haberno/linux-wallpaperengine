@@ -968,17 +968,21 @@ void CParticle::update (float dt) {
 	return;
     }
 
-    // Native restores birth color/alpha/size before the ordered
-    // operator chain. Reset once, so oscillators do not accumulate per frame.
-    for (uint32_t i = 0; i < m_particleCount; ++i) {
-        if (m_hasColorOperators) m_particles[i].color = m_particles[i].initial.color;
-        if (m_hasAlphaOperators) m_particles[i].alpha = m_particles[i].initial.alpha;
-        m_particles[i].size = m_particles[i].initial.size;
-    }
-
-    // Apply operators to living particles (including alphafade)
-    for (auto& op : m_operators) {
-	op (m_particles, m_particleCount, *operatorControlPoints, m_simulationTime, dt);
+    // Native 140237754 repeats only operator dispatch at configured FPS 1..20.
+    // Aging, emission, simulation time and control-point history advance once.
+    const int fps = getScene ().getContext ().getApp ().getContext ().settings.render.maximumFPS;
+    const int substeps = fps >= 1 && fps <= 20 ? 2 : 1;
+    const float operatorDt = dt / static_cast<float> (substeps);
+    for (int step = 0; step < substeps; ++step) {
+	// Each native dispatch restores birth color/alpha/size before operators.
+	for (uint32_t i = 0; i < m_particleCount; ++i) {
+	    if (m_hasColorOperators) m_particles[i].color = m_particles[i].initial.color;
+	    if (m_hasAlphaOperators) m_particles[i].alpha = m_particles[i].initial.alpha;
+	    m_particles[i].size = m_particles[i].initial.size;
+	}
+	for (auto& op : m_operators) {
+	    op (m_particles, m_particleCount, *operatorControlPoints, m_simulationTime, operatorDt);
+	}
     }
 
     updateRopeTrailHistory (dt);
