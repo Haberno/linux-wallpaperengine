@@ -154,6 +154,7 @@ struct SceneData {
 	    UserSettingUniquePtr nearz;
 	    UserSettingUniquePtr farz;
 	    UserSettingUniquePtr fov;
+	    UserSettingUniquePtr perspectiveOverrideFov;
 	    UserSettingUniquePtr zoom;
 	} projection;
     } camera;

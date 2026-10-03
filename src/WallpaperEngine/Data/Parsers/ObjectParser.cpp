@@ -297,6 +297,7 @@ ObjectParser::parseModel3D (const JSON& it, const Project& project, ObjectData b
 		.animationLayers = std::move (animationLayers),
 		.materials = std::move (materials),
 		.castShadow = it.user ("castshadow", project.properties, true),
+		.perspective = it.user ("perspective", project.properties, false),
 	    }
 	);
     } catch (const std::exception& e) {

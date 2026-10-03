@@ -38,6 +38,7 @@ public:
     [[nodiscard]] float getWidth () const;
     [[nodiscard]] float getHeight () const;
     [[nodiscard]] float getFov () const;
+    [[nodiscard]] float getDefaultFov (float sceneTime) const;
     [[nodiscard]] float getNearZ () const;
     [[nodiscard]] float getFarZ () const;
     [[nodiscard]] float getZoom () const;

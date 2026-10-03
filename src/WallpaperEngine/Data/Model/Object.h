@@ -838,6 +838,8 @@ struct Model3DData {
     std::vector<MaterialUniquePtr> materials;
     /** Whether this model participates in light-space shadow rendering. */
     UserSettingUniquePtr castShadow;
+    /** Use the scene's virtual perspective camera on an orthographic canvas. */
+    UserSettingUniquePtr perspective;
 };
 
 class Model3D : public Object, public Model3DData {

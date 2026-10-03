@@ -14,7 +14,7 @@ Camera::Camera (Wallpapers::CScene& scene, const SceneData::Camera& camera) :
 	.center = camera.configuration.center,
 	.eye = camera.configuration.eye,
 	.up = camera.configuration.up,
-	.fov = camera.projection.fov->evaluateFloat (0.0f),
+	.fov = this->getDefaultFov (0.0f),
 	.zoom = camera.projection.zoom->evaluateFloat (0.0f),
     };
     this->m_transform = this->m_defaultTransform;
@@ -42,6 +42,12 @@ float Camera::getWidth () const { return this->m_width; }
 float Camera::getHeight () const { return this->m_height; }
 
 float Camera::getFov () const { return this->m_transform.fov; }
+
+float Camera::getDefaultFov (const float sceneTime) const {
+    const auto& projection = this->m_camera.projection;
+    return (projection.isPerspective ? projection.fov : projection.perspectiveOverrideFov)
+	->evaluateFloat (sceneTime);
+}
 
 float Camera::getNearZ () const { return this->m_camera.projection.nearz->value->getFloat (); }
 
@@ -89,7 +95,7 @@ void Camera::setTransform (const CameraTransform& transform) {
 void Camera::resetTransform () {
     // Keep live user-property changes to the resting projection values.
     const float sceneTime = this->m_scene.getTime ();
-    this->m_defaultTransform.fov = this->m_camera.projection.fov->evaluateFloat (sceneTime);
+    this->m_defaultTransform.fov = this->getDefaultFov (sceneTime);
     this->m_defaultTransform.zoom = this->m_camera.projection.zoom->evaluateFloat (sceneTime);
     this->m_transform = this->m_defaultTransform;
     this->updateMatrices ();

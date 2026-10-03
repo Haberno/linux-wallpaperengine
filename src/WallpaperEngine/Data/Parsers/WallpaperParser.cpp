@@ -213,6 +213,7 @@ SceneUniquePtr WallpaperParser::parseScene (const JSON& file, Project& project) 
                     .nearz = projectionValueSource ("nearz").user ("nearz", properties, isPerspective ? 0.1f : 0.0f),
                     .farz = projectionValueSource ("farz").user ("farz", properties, 1000.0f),
 		    .fov = projectionValueSource ("fov").user ("fov", properties, 50.0f),
+		    .perspectiveOverrideFov = general.user ("perspectiveoverridefov", properties, 95.0f),
 		    .zoom = zoomSource.user ("zoom", properties, 1.0f)
                 }
             },

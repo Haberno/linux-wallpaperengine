@@ -303,27 +303,30 @@ TEST_CASE ("2D scenes read projection planes and fov from general", "[scene-defa
 	project.assetLocator = std::make_unique<WallpaperEngine::Assets::AssetLocator> (std::move (filesystem));
 	const auto wallpaper = WallpaperParser::parse (JSON ("scene.json"), project);
 	const auto& projection = wallpaper->as<Scene> ()->camera.projection;
-	return glm::vec3 (
+	return glm::vec4 (
 	    projection.nearz->evaluateFloat (0.0f), projection.farz->evaluateFloat (0.0f),
-	    projection.fov->evaluateFloat (0.0f)
+	    projection.fov->evaluateFloat (0.0f), projection.perspectiveOverrideFov->evaluateFloat (0.0f)
 	);
     };
     // Native applies the general table (nearz/farz/fov) to every scene. Space Balls
     // (3594400060) lost its perspective particles to the old camera-block defaults:
     // a zero near plane collapses every particle onto the far plane.
-    const glm::vec3 authored = parsed (
-	R"({"orthogonalprojection":{"width":3840,"height":2160},"nearz":0.01,"farz":10000,"fov":40})", ""
+    const glm::vec4 authored = parsed (
+	R"({"orthogonalprojection":{"width":3840,"height":2160},"nearz":0.01,"farz":10000,"fov":40,"perspectiveoverridefov":30})", ""
     );
     CHECK (authored.x == Catch::Approx (0.01f));
     CHECK (authored.y == Catch::Approx (10000.0f));
     CHECK (authored.z == Catch::Approx (40.0f));
+    CHECK (authored.w == Catch::Approx (30.0f));
     // Camera-block values remain a fallback for scenes that only author them there.
-    const glm::vec3 legacy = parsed (
+    const glm::vec4 legacy = parsed (
 	R"({"orthogonalprojection":{"width":1920,"height":1080}})", R"(,"nearz":0.5,"farz":2000,"fov":60)"
     );
     CHECK (legacy.x == Catch::Approx (0.5f));
     CHECK (legacy.y == Catch::Approx (2000.0f));
     CHECK (legacy.z == Catch::Approx (60.0f));
+    CHECK (legacy.w == Catch::Approx (95.0f));
+    CHECK (parsed (R"({"perspectiveoverridefov":{"value":120}})", "").w == Catch::Approx (120.0f));
 }
 
 TEST_CASE ("scene bloom defaults match native LDR settings without replacing authored values", "[scene-defaults][bloom]") {

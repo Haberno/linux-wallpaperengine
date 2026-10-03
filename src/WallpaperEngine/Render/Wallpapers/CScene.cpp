@@ -1242,6 +1242,7 @@ void CScene::registerFogScripts () {
     queue ("camerashakeroughness", scene.camera.shake.roughness);
     queue ("camerashakespeed", scene.camera.shake.speed);
     queue ("fov", scene.camera.projection.fov);
+    queue ("perspectiveoverridefov", scene.camera.projection.perspectiveOverrideFov);
     queue ("zoom", scene.camera.projection.zoom);
     queue ("nearz", scene.camera.projection.nearz);
     queue ("farz", scene.camera.projection.farz);
@@ -1468,7 +1469,7 @@ bool CScene::updateCameraObject () {
 	    transform.up = configuration.up;
 	}
 	const auto& projection = this->getScene ().camera.projection;
-	transform.fov = projection.fov->evaluateFloat (this->getTime ());
+	transform.fov = this->m_camera->getDefaultFov (this->getTime ());
 	transform.zoom = projection.zoom->evaluateFloat (this->getTime ());
 	this->m_camera->setDefaultTransform (transform, false);
 	const bool pathActive = this->m_activeCameraPathSource != nullptr
@@ -1490,7 +1491,7 @@ bool CScene::updateCameraObject () {
     const auto& fallback = this->getScene ().camera.projection;
     const float fov = activeProjection != nullptr && activeProjection->fov != nullptr
 	? activeProjection->fov->evaluateFloat (sceneTime)
-	: fallback.fov->evaluateFloat (sceneTime);
+	: this->m_camera->getDefaultFov (sceneTime);
     const float zoom = activeProjection != nullptr && activeProjection->zoom != nullptr
 	? activeProjection->zoom->evaluateFloat (sceneTime)
 	: fallback.zoom->evaluateFloat (sceneTime);

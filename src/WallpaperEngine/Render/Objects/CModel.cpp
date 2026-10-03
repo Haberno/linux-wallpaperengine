@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cmath>
 #include <numeric>
 #include <ranges>
 #include <sstream>
@@ -44,6 +45,7 @@ CModel::CModel (Wallpapers::CScene& scene, const Model3D& model) :
     // keep calculating their pivot even though current IModelLayer docs omit the field.
     this->registerProperty ("size", this->m_size);
     this->registerProperty ("castshadow", *model.castShadow->value);
+    this->registerProperty ("perspective", *model.perspective->value);
     for (size_t materialIndex = 0; materialIndex < model.materials.size (); ++materialIndex) {
 	const auto& material = *model.materials[materialIndex];
 	for (size_t passIndex = 0; passIndex < material.passes.size (); ++passIndex) {
@@ -533,13 +535,27 @@ void CModel::updateMatrices () {
 
     this->m_modelMatrix = this->resolveModelMatrix ();
     this->m_viewProjectionMatrix = camera.getProjection () * camera.getLookAt ();
+    const bool perspective = camera.isOrthogonal () && this->m_model.perspective->value->getBool ();
+    if (perspective) {
+	// Native derives the virtual eye from the current orthographic scale,
+	// preserving the size of geometry on Z=0 while giving depth perspective.
+	const float fov = glm::radians (glm::clamp (camera.getFov (), 0.1f, 179.9f));
+	const float distance = 1.0f / (std::tan (fov * 0.5f) * camera.getProjection ()[1][1]);
+	glm::mat4 view = camera.getLookAt ();
+	view[3][2] = -distance;
+	const auto& output = this->getScene ().getOutputSize ();
+	const glm::mat4 projection = glm::perspective (fov, output.x / output.y, 5.0f,
+	    glm::max (15000.0f, distance + 1000.0f));
+	this->m_viewProjectionMatrix = projection * view;
+	this->m_eyePosition = glm::vec3 (glm::inverse (view)[3]);
+    }
     this->m_modelViewProjectionMatrix = this->m_viewProjectionMatrix * this->m_modelMatrix;
     this->m_modelViewProjectionMatrixInverse = glm::inverse (this->m_modelViewProjectionMatrix);
     this->m_normalMatrix = glm::inverseTranspose (glm::mat3 (this->m_modelMatrix));
-    if (camera.isOrthogonal ()) {
+    if (!perspective && camera.isOrthogonal ()) {
 	const float depth = glm::max (glm::abs (camera.getNearZ ()), glm::abs (camera.getFarZ ()));
 	this->m_eyePosition = glm::vec3 (0.0f, 0.0f, depth);
-    } else {
+    } else if (!perspective) {
 	this->m_eyePosition = camera.getEye ();
     }
 
