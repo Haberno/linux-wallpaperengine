@@ -2441,3 +2441,67 @@ TEST_CASE ("two-control-point size remaps clamp mapped values before size arithm
         }
     }
 }
+
+TEST_CASE ("two-control-point projection multiplies speed after clamps and envelope", "[particle][remap][remap-position-speed]") {
+    using WallpaperEngine::Render::Objects::applyParticleControlPointRemap;
+    using WallpaperEngine::Render::Objects::ControlPointData;
+    const struct { glm::vec3 position; uint32_t flags; float age; glm::vec3 initial, operated; } cases[] = {
+        { { 2, 33, -1 }, 1, 4, { 6, -8, 0 }, { 6, -8, 0 } },
+        { { 2, 33, -1 }, 1, 2, { 6, -8, 0 }, { 9, -12, 0 } },
+        { { 2, 33, -1 }, 1, 0, { 6, -8, 0 }, { 12, -16, 0 } },
+        { { -14, 1, 15 }, 0, 2, { -6, 8, 0 }, { 3, -4, 0 } },
+        { { -14, 1, 15 }, 1, 2, { 0, 0, 0 }, { 6, -8, 0 } },
+        { { 34, 97, -33 }, 0, 2, { 30, -40, 0 }, { 21, -28, 0 } },
+        { { 34, 97, -33 }, 2, 2, { 12, -16, 0 }, { 12, -16, 0 } },
+        { { 34, 97, -33 }, 3, 2, { 12, -16, 0 }, { 12, -16, 0 } }
+    };
+    std::vector<ControlPointData> points (4);
+    points[0].position = { 1000, 0, 0 };
+    points[1].position = { 1100, 0, 0 };
+    points[2].position = { -12, 20, 7 };
+    points[3].position = { 20, 84, -25 };
+    for (const bool initializer : { true, false }) {
+        DYNAMIC_SECTION ("initializer=" << initializer) {
+            for (const auto& sample : cases) {
+                INFO ("flags=" << sample.flags << ", age=" << sample.age);
+                WallpaperEngine::Data::Model::Project project {};
+                auto data = WallpaperEngine::Data::JSON::JSON::parse (R"({"id":399,"particle":{}})");
+                auto node = WallpaperEngine::Data::JSON::JSON::parse (R"({
+                    "input":"positionbetweentwocontrolpoints","output":"speed","outputrangemax":2,
+                    "inputcontrolpoint0":0,"inputcontrolpoint1":1,
+                    "outputcontrolpoint0":2,"outputcontrolpoint1":3,
+                    "blendinstart":0,"blendinend":0.5
+                })");
+                node["name"] = initializer ? "remapinitialvalue" : "remapvalue";
+                node["flags"] = sample.flags;
+                data["particle"][initializer ? "initializer" : "operator"] = { node };
+                const auto object = WallpaperEngine::Data::Parsers::ObjectParser::parse (data, project);
+                const auto* definition = object->as<Particle> ();
+                REQUIRE (definition != nullptr);
+                REQUIRE ((initializer ? definition->initializers.size () : definition->operators.size ()) == 1);
+                const ControlPointRemap* remap = nullptr;
+                if (initializer) {
+                    const auto* parsed = definition->initializers.front ()->as<ControlPointRemapInitializer> ();
+                    REQUIRE (parsed != nullptr);
+                    remap = &parsed->remap;
+                } else {
+                    const auto* parsed = definition->operators.front ()->as<ControlPointRemapOperator> ();
+                    REQUIRE (parsed != nullptr);
+                    remap = &parsed->remap;
+                }
+                ParticleInstance particle;
+                particle.position = sample.position;
+                particle.velocity = { 12, -16, 0 };
+                particle.lifetime = 8;
+                particle.age = sample.age;
+                applyParticleControlPointRemap (particle, *remap, points, initializer);
+                CHECK (particle.velocity == (initializer ? sample.initial : sample.operated));
+                CHECK (particle.position == sample.position);
+                CHECK (particle.age == sample.age);
+                particle.velocity = glm::vec3 (0);
+                applyParticleControlPointRemap (particle, *remap, points, initializer);
+                CHECK (particle.velocity == glm::vec3 (0));
+            }
+        }
+    }
+}

@@ -1564,7 +1564,8 @@ void WallpaperEngine::Render::Objects::applyParticleControlPointRemap (
     const float fraction = glm::dot (particle.position - start, delta) / lengthSquared;
     const float input = remap.mode == ControlPointRemap::Mode::PositionToVelocity
                       || remap.mode == ControlPointRemap::Mode::PositionToPosition
-                      || remap.mode == ControlPointRemap::Mode::PositionToSize ? fraction
+                      || remap.mode == ControlPointRemap::Mode::PositionToSize
+                      || remap.mode == ControlPointRemap::Mode::PositionToSpeed ? fraction
                       : remap.mode == ControlPointRemap::Mode::LifetimeFractionToPosition ? particle.getLifetimePos ()
                       : particle.lifetime;
     const glm::vec3 minimum = remap.inputRangeMin->value->getVec3 ();
@@ -1577,7 +1578,10 @@ void WallpaperEngine::Render::Objects::applyParticleControlPointRemap (
         + normalized * (remap.outputRangeMax->value->getVec3 () - remap.outputRangeMin->value->getVec3 ());
     // Output saturation applies before arithmetic, not to the final position.
     if (remap.flags & 2u) mapped = glm::clamp (mapped, glm::vec3 (0), glm::vec3 (1));
-    if (remap.mode == ControlPointRemap::Mode::PositionToVelocity) {
+    if (remap.mode == ControlPointRemap::Mode::PositionToSpeed) {
+        const float multiplier = mapped.x;
+        particle.velocity *= weight == 1.0f ? multiplier : 1.0f + (multiplier - 1.0f) * weight;
+    } else if (remap.mode == ControlPointRemap::Mode::PositionToVelocity) {
         // Authored velocity uses the same Y-up coordinates as velocityrandom.
         const glm::vec3 target = mapped * glm::vec3 (1.0f, -1.0f, 1.0f);
         particle.velocity = weight == 1.0f ? target : particle.velocity + (target - particle.velocity) * weight;

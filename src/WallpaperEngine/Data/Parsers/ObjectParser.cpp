@@ -1023,11 +1023,12 @@ static std::optional<ControlPointRemap> parseControlPointRemap (
     const auto operation = it.optional<std::string> ("operation", "multiply");
     const auto transform = it.optional<std::string> ("transformfunction", "none");
     const bool positionInput = input == "positionbetweentwocontrolpoints"
-        && (output == "velocity" || output == "positionbetweentwocontrolpoints" || output == "size");
+        && (output == "velocity" || output == "positionbetweentwocontrolpoints" || output == "size" || output == "speed");
     const bool fractionInput = !initializer && input == "lifetimefraction";
     const bool positionOutput = (input == "maxlifetime" || fractionInput || positionInput)
         && output == "positionbetweentwocontrolpoints";
     const bool sizeOutput = positionInput && output == "size";
+    const bool speedOutput = positionInput && output == "speed";
     const bool scalarArithmetic = (positionOutput || sizeOutput)
         && (operation == "multiply" || operation == "add" || operation == "subtract");
     const bool noiseVelocity = !initializer && input == "lifetimefraction" && output == "velocity"
@@ -1040,7 +1041,7 @@ static std::optional<ControlPointRemap> parseControlPointRemap (
         it.optional ("blendinstart", 0.0f), it.optional ("blendinend", 0.0f),
         it.optional ("blendoutstart", 1.0f), it.optional ("blendoutend", 1.0f));
     if ((!noiseVelocity && !noiseSpeed && ((!positionInput && !positionOutput) || transform != "none"))
-        || (operation != (noiseSpeed ? "multiply" : "remap") && !scalarArithmetic)
+        || (operation != (noiseSpeed || speedOutput ? "multiply" : "remap") && !scalarArithmetic)
         || it.optional<std::string> ("inputcomponent", "all") != "all"
         || it.optional<std::string> ("outputcomponent", "all") != "all"
         || !supportedFlags) {
@@ -1056,6 +1057,7 @@ static std::optional<ControlPointRemap> parseControlPointRemap (
     return ControlPointRemap {
         .mode = noiseVelocity ? ControlPointRemap::Mode::LifetimeNoiseToVelocity
                               : noiseSpeed ? ControlPointRemap::Mode::LifetimeFbmToSpeed
+                              : speedOutput ? ControlPointRemap::Mode::PositionToSpeed
                               : sizeOutput ? ControlPointRemap::Mode::PositionToSize
                               : positionInput && positionOutput ? ControlPointRemap::Mode::PositionToPosition
                               : positionInput ? ControlPointRemap::Mode::PositionToVelocity
