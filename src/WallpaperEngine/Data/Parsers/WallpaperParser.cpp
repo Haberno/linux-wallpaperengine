@@ -2,9 +2,11 @@
 
 #include <glm/gtc/matrix_transform.hpp>
 #include <map>
+#include <set>
 
 #include "ObjectParser.h"
 #include "CameraPathParser.h"
+#include "MaterialParser.h"
 #include "WallpaperEngine/Data/Model/Project.h"
 #include "WallpaperEngine/Data/Model/Wallpaper.h"
 #include "WallpaperEngine/Data/Utils/JsonTelemetry.h"
@@ -220,6 +222,21 @@ SceneUniquePtr WallpaperParser::parseScene (const JSON& file, Project& project) 
             .objects = parseObjects (objects, project),
         }
     );
+
+    if (const auto precache = scene.optional ("precache"); precache && precache->is_array ()) {
+	std::set<std::string> loaded;
+	for (const auto& entry : *precache) {
+	    if (!entry.is_string ()) continue;
+	    const auto filename = entry.get<std::string> ();
+	    // Native scene loading only dispatches the nine-byte materials prefix.
+	    if (!filename.starts_with ("materials") || !loaded.insert (filename).second) continue;
+	    try {
+		result->precachedMaterials.emplace_back (MaterialParser::load (project, filename));
+	    } catch (const std::exception& error) {
+		sLog.error ("Cannot precache material ", filename, ": ", error.what ());
+	    }
+	}
+    }
 
     WallpaperEngine::Data::Utils::JsonTelemetry::scan (scene, file.get<std::string> ());
 

@@ -845,6 +845,10 @@ std::set<std::string> collectProjectTextures (const Project& project) {
 	return result;
     }
 
+    for (const auto& material : project.wallpaper->as<Scene> ()->precachedMaterials) {
+	collectMaterialTextures (*material, result);
+    }
+
     for (const auto& object : project.wallpaper->as<Scene> ()->objects) {
 	if (object->is<Image> ()) {
 	    const auto* image = object->as<Image> ();

@@ -69,6 +69,20 @@ CScene::CScene (
     // remain authored units, while perspective cameras use the output aspect.
     this->m_outputSize = context.getSceneOutputSize (screenName);
     this->m_textureReduction = context.getTextureReduction (wallpaper, context.getTextureQualityOutputSize (screenName));
+    std::set<std::string> precachedTextures;
+    for (const auto& material : scene->precachedMaterials) {
+	for (const auto& pass : material->passes) {
+	    for (const auto& [slot, name] : pass->textures) {
+		if (name.empty () || name.starts_with ("_rt_") || name.starts_with ("_alias_")
+		    || name.starts_with ('$') || !precachedTextures.insert (name).second) continue;
+		try {
+		    this->m_precachedTextures.emplace_back (this->resolveTexture (name));
+		} catch (const std::exception& error) {
+		    sLog.error ("Cannot precache texture ", name, ": ", error.what ());
+		}
+	    }
+	}
+    }
     // Module-scope scene scripts can query the output during registration.
     this->registerFogScripts ();
     this->updateFogState ();

@@ -7,6 +7,7 @@
 #include <utility>
 
 #include "Object.h"
+#include "Material.h"
 #include "CameraPath.h"
 #include "Types.h"
 #include "WallpaperEngine/Data/Utils/TypeCaster.h"
@@ -159,6 +160,8 @@ struct SceneData {
 	} projection;
     } camera;
 
+    /** Explicit scene-load material dependencies, independent of authored layers. */
+    std::vector<MaterialUniquePtr> precachedMaterials;
     ObjectList objects;
 };
 

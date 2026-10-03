@@ -330,6 +330,8 @@ private:
     bool m_hdrEnabled = false;
     /** Selected once before object construction, independent of later output target resizes. */
     uint32_t m_textureReduction = 1;
+    /** Keep explicit material dependencies alive for later runtime-created layers. */
+    std::vector<std::shared_ptr<const TextureProvider>> m_precachedTextures;
     std::unique_ptr<HdrBloom> m_hdrBloom;
     ObjectUniquePtr m_bloomObjectData;
     CObject* m_bloomObject = nullptr;
