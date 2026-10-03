@@ -1031,12 +1031,11 @@ static std::optional<ControlPointRemap> parseControlPointRemap (
     const glm::vec4 blendTimes = initializer ? glm::vec4 (0.0f, 0.0f, 1.0f, 1.0f) : glm::vec4 (
         it.optional ("blendinstart", 0.0f), it.optional ("blendinend", 0.0f),
         it.optional ("blendoutstart", 1.0f), it.optional ("blendoutend", 1.0f));
-    const bool defaultBlend = blendTimes == glm::vec4 (0.0f, 0.0f, 1.0f, 1.0f);
     if ((!noiseVelocity && !noiseSpeed && ((!positionInput && !positionOutput) || transform != "none"))
         || (operation != (noiseSpeed ? "multiply" : "remap") && !positionArithmetic)
         || it.optional<std::string> ("inputcomponent", "all") != "all"
         || it.optional<std::string> ("outputcomponent", "all") != "all"
-        || !supportedFlags || ((noiseVelocity || noiseSpeed) && !defaultBlend)) {
+        || !supportedFlags) {
         // Keep unmeasured pairs, transforms, flags and octave counts explicit.
         sLog.error ("Unsupported particle ", initializer ? "remapinitialvalue" : "remapvalue",
                     " settings (input=", input, ", output=", output, ", operation=", operation,

@@ -1515,6 +1515,7 @@ void WallpaperEngine::Render::Objects::applyParticleControlPointRemap (
     ParticleInstance& particle, const ControlPointRemap& remap,
     const std::vector<ControlPointData>& controlPoints, const bool initializer
 ) {
+    const float weight = initializer ? 1.0f : particleOperatorBlend (particle.getLifetimePos (), remap.blendTimes);
     if (remap.mode == ControlPointRemap::Mode::LifetimeNoiseToVelocity
         || remap.mode == ControlPointRemap::Mode::LifetimeFbmToSpeed) {
         const float minimum = remap.inputRangeMin->value->getFloat ();
@@ -1531,7 +1532,9 @@ void WallpaperEngine::Render::Objects::applyParticleControlPointRemap (
             const float mapped = outputMin + noise * (remap.outputRangeMax->value->getFloat () - outputMin);
             // Native speed multiplication preserves direction; flags 3 clamp
             // the mapped scalar as well as the normalized input.
-            particle.velocity *= glm::clamp (mapped, 0.0f, 1.0f);
+            const float multiplier = glm::clamp (mapped, 0.0f, 1.0f);
+            // Native blends the operated speed against its current value.
+            particle.velocity *= weight == 1.0f ? multiplier : 1.0f + (multiplier - 1.0f) * weight;
             return;
         }
         const glm::vec3 noise {
@@ -1542,10 +1545,10 @@ void WallpaperEngine::Render::Objects::applyParticleControlPointRemap (
         const glm::vec3 outputMin = remap.outputRangeMin->value->getVec3 ();
         const glm::vec3 mapped = outputMin + (noise * .5f + .5f)
             * (remap.outputRangeMax->value->getVec3 () - outputMin);
-        particle.velocity = mapped * glm::vec3 (1.0f, -1.0f, 1.0f);
+        const glm::vec3 target = mapped * glm::vec3 (1.0f, -1.0f, 1.0f);
+        particle.velocity = weight == 1.0f ? target : particle.velocity + (target - particle.velocity) * weight;
         return;
     }
-    const float weight = initializer ? 1.0f : particleOperatorBlend (particle.getLifetimePos (), remap.blendTimes);
     // Native allocates the input pair too, but this scalar input branch reads
     // the OUTPUT pair (14023d074 / 140244c5e; paired native readback).
     const glm::vec3 start = controlPoints[remap.outputControlPoint0].position;

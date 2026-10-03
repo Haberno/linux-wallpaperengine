@@ -1195,7 +1195,7 @@ TEST_CASE ("two-control-point remaps retain only the measured linear subset", "[
                 {"name":"remapvalue","input":"maxlifetime","output":"positionbetweentwocontrolpoints","operation":"remap"},
                 {"name":"remapvalue","input":"speed","output":"positionbetweentwocontrolpoints","operation":"remap"},
                 {"name":"remapvalue","input":"positionbetweentwocontrolpoints","output":"velocity","operation":"remap","flags":4},
-                {"name":"remapvalue","input":"lifetimefraction","output":"velocity","operation":"remap","transformfunction":"simplexnoise","blendinend":0.5},
+                {"name":"remapvalue","input":"lifetimefraction","output":"velocity","operation":"remap","transformfunction":"simplexnoise","inputcomponent":"x"},
                 {"name":"remapvalue","input":"positionbetweentwocontrolpoints","output":"velocity","operation":"remap","outputcomponent":"x"},
                 {"name":"remapvalue","input":"positionbetweentwocontrolpoints","operation":"remap"},
                 {"name":"remapvalue","input":"positionbetweentwocontrolpoints","output":"velocity","operation":"remap","transformfunction":"unknown"}
@@ -1371,7 +1371,7 @@ TEST_CASE ("two-control-point position arithmetic rejects unmeasured settings", 
             {"name":"remapvalue","input":"maxlifetime","output":"positionbetweentwocontrolpoints","operation":"divide"},
             {"name":"remapvalue","input":"maxlifetime","output":"positionbetweentwocontrolpoints","operation":"add","flags":4},
             {"name":"remapvalue","input":"maxlifetime","output":"positionbetweentwocontrolpoints","operation":"add","transformfunction":"simplexnoise"},
-            {"name":"remapvalue","input":"lifetimefraction","output":"speed","operation":"multiply","transformfunction":"fbmnoise","flags":3,"blendinend":0.5},
+            {"name":"remapvalue","input":"lifetimefraction","output":"speed","operation":"multiply","transformfunction":"fbmnoise","flags":3,"transformoctaves":2},
             {"name":"remapvalue","input":"maxlifetime","output":"positionbetweentwocontrolpoints","operation":"add","outputcomponent":"x"},
             {"name":"remapvalue","input":"positionbetweentwocontrolpoints","output":"velocity","operation":"add"},
             {"name":"remapvalue","input":"speed","output":"positionbetweentwocontrolpoints","operation":"add"}
@@ -1605,6 +1605,123 @@ TEST_CASE ("two-control-point velocity envelopes blend current velocity", "[part
         CHECK (particle.position == glm::vec3 (-30, -45, 40));
         applyParticleControlPointRemap (particle, init->remap, points, true);
         CHECK (particle.velocity == glm::vec3 (20, -40, 60));
+    }
+}
+
+TEST_CASE ("simplex remap envelopes blend mapped velocity without moving the noise sample", "[particle][remap][remap-noise-envelope]") {
+    using WallpaperEngine::Render::Objects::applyParticleControlPointRemap;
+    const struct { glm::vec4 envelope; glm::vec3 expected; } cases[] = {
+        { { 0, 0, 1, 1 }, { -51.527244f, 663.42810f, .59818530f } },
+        { { .5f, .75f, 1, 1 }, { 8, -12, 16 } },
+        { { 0, .5f, 1, 1 }, { -21.763622f, 325.71405f, 8.29909265f } },
+        { { 0, .5f, 0, .5f }, { -6.881811f, 156.857025f, 12.149546325f } },
+        { { 0, 0, 0, .25f }, { 8, -12, 16 } }
+    };
+    for (const auto& sample : cases) {
+        WallpaperEngine::Data::Model::Project project {};
+        auto data = WallpaperEngine::Data::JSON::JSON::parse (R"({"id":389,"particle":{"operator":[{
+            "name":"remapvalue","operation":"remap","output":"velocity",
+            "outputrangemin":"-100 -200 0","outputrangemax":"100 -1200 1",
+            "transformfunction":"simplexnoise","transforminputscale":10
+        }]}})");
+        auto& node = data["particle"]["operator"][0];
+        node["blendinstart"] = sample.envelope.x;
+        node["blendinend"] = sample.envelope.y;
+        node["blendoutstart"] = sample.envelope.z;
+        node["blendoutend"] = sample.envelope.w;
+        const auto object = WallpaperEngine::Data::Parsers::ObjectParser::parse (data, project);
+        const auto* definition = object->as<Particle> ();
+        REQUIRE (definition != nullptr);
+        REQUIRE (definition->operators.size () == 1);
+        const auto* parsed = definition->operators.front ()->as<ControlPointRemapOperator> ();
+        REQUIRE (parsed != nullptr);
+        ParticleInstance particle;
+        particle.lifetime = 8;
+        particle.age = 2;
+        particle.oscillationRandom = .5f;
+        particle.velocity = { 8, -12, 16 };
+        particle.position = { 12, 34, 56 };
+        // Literal native noise samples at x=2.5; unchanged blended velocity
+        // instructions 1402490af..1402490c7 interpolate AFTER mapping.
+        applyParticleControlPointRemap (particle, parsed->remap, {}, false);
+        for (int axis = 0; axis < 3; ++axis) {
+            CHECK (particle.velocity[axis] == Catch::Approx (sample.expected[axis]).margin (.0002f));
+        }
+        CHECK (particle.position == glm::vec3 (12, 34, 56));
+        CHECK (particle.age == 2);
+        CHECK (particle.oscillationRandom == .5f);
+    }
+}
+
+TEST_CASE ("noise remap envelopes follow normalized age through both fades", "[particle][remap][remap-noise-envelope]") {
+    using WallpaperEngine::Render::Objects::applyParticleControlPointRemap;
+    WallpaperEngine::Data::Model::Project project {};
+    const auto object = WallpaperEngine::Data::Parsers::ObjectParser::parse (
+        WallpaperEngine::Data::JSON::JSON::parse (R"({"id":390,"particle":{"operator":[{
+            "name":"remapvalue","operation":"remap","output":"velocity",
+            "outputrangemin":"20 40 60","outputrangemax":"20 40 60",
+            "transformfunction":"simplexnoise","blendinstart":0,"blendinend":0.5,
+            "blendoutstart":0.5,"blendoutend":1
+        }]}})"), project);
+    const auto* definition = object->as<Particle> ();
+    REQUIRE (definition != nullptr);
+    REQUIRE (definition->operators.size () == 1);
+    const auto* parsed = definition->operators.front ()->as<ControlPointRemapOperator> ();
+    REQUIRE (parsed != nullptr);
+    const struct { float fraction; glm::vec3 expected; } cases[] = {
+        { 0, { 8, -12, 16 } }, { .25f, { 14, -26, 38 } },
+        { .5f, { 20, -40, 60 } }, { .75f, { 14, -26, 38 } }, { 1, { 8, -12, 16 } }
+    };
+    for (const float lifetime : { 4.0f, 8.0f }) {
+        for (const auto& sample : cases) {
+            ParticleInstance particle;
+            particle.lifetime = lifetime;
+            particle.age = lifetime * sample.fraction;
+            particle.oscillationRandom = .5f;
+            particle.velocity = { 8, -12, 16 };
+            applyParticleControlPointRemap (particle, parsed->remap, {}, false);
+            CHECK (particle.velocity == sample.expected);
+        }
+    }
+}
+
+TEST_CASE ("FBM remap envelopes blend speed after saturation and multiplication", "[particle][remap][remap-noise-envelope]") {
+    using WallpaperEngine::Render::Objects::applyParticleControlPointRemap;
+    WallpaperEngine::Data::Model::Project project {};
+    const auto object = WallpaperEngine::Data::Parsers::ObjectParser::parse (
+        WallpaperEngine::Data::JSON::JSON::parse (R"({"id":391,"particle":{"operator":[{
+            "name":"remapvalue","output":"speed","outputrangemin":-5,"outputrangemax":7,
+            "transformfunction":"fbmnoise","transforminputscale":8,"flags":3,
+            "blendinstart":0,"blendinend":0.25,"blendoutstart":0.5,"blendoutend":1
+        }]}})"), project);
+    const auto* definition = object->as<Particle> ();
+    REQUIRE (definition != nullptr);
+    REQUIRE (definition->operators.size () == 1);
+    const auto* parsed = definition->operators.front ()->as<ControlPointRemapOperator> ();
+    REQUIRE (parsed != nullptr);
+    const struct { float fraction; glm::vec3 expected; } cases[] = {
+        { 0, { -30, 40, -50 } },
+        { .0625f, { -22.5f, 30, -37.5f } },
+        { .125f, { -26.0173575f, 34.68981f, -43.3622625f } },
+        { .25f, { -30, 40, -50 } },
+        { 1, { -30, 40, -50 } }
+    };
+    for (const auto& sample : cases) {
+        ParticleInstance particle;
+        particle.age = sample.fraction * 8;
+        particle.lifetime = 8;
+        particle.oscillationRandom = .5f;
+        particle.velocity = { -30, 40, -50 };
+        // Native FBM x=1 maps to .73449050. At weight .5 the speed
+        // multiplier is .86724525. 140248241..258 applies operation→blend.
+        applyParticleControlPointRemap (particle, parsed->remap, {}, false);
+        for (int axis = 0; axis < 3; ++axis) {
+            CHECK (particle.velocity[axis] == Catch::Approx (sample.expected[axis]).margin (.0001f));
+        }
+        CHECK (particle.oscillationRandom == .5f);
+        particle.velocity = glm::vec3 (0);
+        applyParticleControlPointRemap (particle, parsed->remap, {}, false);
+        CHECK (particle.velocity == glm::vec3 (0));
     }
 }
 
