@@ -1121,9 +1121,9 @@ void CText::drawBackground (const glm::mat4& mvp, const float alpha) {
 
 glm::vec2 CText::getSize () {
     const auto surfaceSize = [this] {
-        // Native effects/opaque backgrounds add padding to the generated mesh;
+        // Native offscreen surfaces/opaque backgrounds add padding to the mesh;
         // direct text ignores padding. Keep the cached line box unpadded.
-        const glm::vec2 padding = !m_text.effects.empty () || m_text.opaqueBackground->value->getBool ()
+        const glm::vec2 padding = m_effectsEnabled || !m_text.effects.empty () || m_text.opaqueBackground->value->getBool ()
             ? glm::min (currentPadding (), glm::vec2 (512.0f)) : glm::vec2 (0);
         return m_scriptSize + padding * 2.0f;
     };
@@ -1199,9 +1199,7 @@ std::optional<glm::mat3> CText::transformAttachmentToTexture (
 ) {
     const auto& camera = getScene ().getCamera ();
     const Object& object = source.getObject ();
-    // Sampled/blend-only surfaces retain a separate native padding contract.
-    if (!camera.isOrthogonal () || (m_effectsEnabled && m_text.effects.empty ()
-        && !m_text.opaqueBackground->value->getBool ())) return std::nullopt;
+    if (!camera.isOrthogonal ()) return std::nullopt;
     const bool virtualReceiver = m_text.perspective->value->getBool ();
     bool virtualSource = false;
     if (object.is<Image> ()) {
