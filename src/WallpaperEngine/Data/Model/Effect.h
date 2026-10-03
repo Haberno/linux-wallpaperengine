@@ -17,8 +17,8 @@ struct FBO {
     bool unique;
     /** Named effect targets clamp by default; uvs=repeat enables wrapping. */
     bool repeat = false;
-    /** Optional maximum edge length for aspect-preserving simulation targets. */
-    int fit = 0;
+    /** Native maximum edge length; 0xffff leaves the source extents unchanged. */
+    uint16_t fit = 0xffff;
     /** Native explicit extents; values above 4096 inherit the source dimension. */
     uint16_t width = 0xffff;
     uint16_t height = 0xffff;

@@ -41,7 +41,7 @@ glm::uvec2 FBOProvider::calculateEffectTargetExtent (const FBO& base, const glm:
     if (base.width <= 4096) result.x = base.width;
     if (base.height <= 4096) result.y = base.height;
     const auto longest = std::max (result.x, result.y);
-    if (base.fit > 0 && base.fit <= 4096 && static_cast<uint32_t> (base.fit) < longest) {
+    if (base.fit <= 4096 && static_cast<uint32_t> (base.fit) < longest) {
 	result = glm::uvec2 (glm::vec2 (result) * (static_cast<float> (base.fit) / longest));
     }
     return result;

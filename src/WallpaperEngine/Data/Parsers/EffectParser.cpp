@@ -207,7 +207,7 @@ std::vector<FBOUniquePtr> EffectParser::parseFBOs (const JSON& it, const JSON& c
 		.scale = cur.optional ("scale", 1.0f),
 		.unique = cur.optional ("unique", false),
 		.repeat = uvs.has_value () && uvs->is_string () && uvs->get<std::string> () == "repeat",
-		.fit = cur.optional ("fit", 0),
+		.fit = cur.optional ("fit", uint16_t (0xffff)),
 		.width = cur.optional ("width", uint16_t (0xffff)),
 		.height = cur.optional ("height", uint16_t (0xffff)),
 	    })

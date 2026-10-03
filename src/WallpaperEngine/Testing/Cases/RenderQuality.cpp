@@ -96,12 +96,34 @@ TEST_CASE ("authored effect extents precede fit and target scale independently o
     CHECK (FBOProvider::calculateEffectTargetSize (target, { 320, 180 }, 1) == glm::uvec2 (32, 18));
     target.width = 0xffff;
     CHECK (FBOProvider::calculateEffectTargetSize (target, { 320, 180 }, 1) == glm::uvec2 (32, 18));
-    target.fit = 0;
+    target.fit = 0xffff;
     CHECK (FBOProvider::calculateEffectTargetSize (target, { 320, 180 }, 1) == glm::uvec2 (160, 90));
     CHECK (FBOProvider::calculateEffectTargetSize (target, { 1, 1 }, 1) == glm::uvec2 (2, 2));
     target.width = 0;
     target.height = 1;
-    target.fit = 0;
+    target.fit = 0xffff;
     CHECK (FBOProvider::calculateEffectTargetExtent (target, { 320, 180 }, 1) == glm::uvec2 (0, 1));
     CHECK (FBOProvider::calculateEffectTargetSize (target, { 320, 180 }, 1) == glm::uvec2 (2, 2));
+}
+
+TEST_CASE ("authored zero fit uses raw zero extents and native minimum storage", "[render-quality][fbo][fit]") {
+    WallpaperEngine::Data::Model::FBO target {
+        .name = "_rt_fit", .format = "rgba8888", .scale = 2.0f, .unique = false,
+    };
+    CHECK (target.fit == 0xffff);
+    CHECK (FBOProvider::calculateEffectTargetExtent (target, { 320, 180 }, 1) == glm::uvec2 (320, 180));
+    target.fit = 0;
+    for (const glm::vec2 size : { glm::vec2 (320, 180), glm::vec2 (180, 320) }) {
+        CHECK (FBOProvider::calculateEffectTargetExtent (target, size, 1) == glm::uvec2 (0, 0));
+        CHECK (FBOProvider::calculateEffectTargetSize (target, size, 1) == glm::uvec2 (2, 2));
+    }
+    target.width = 128;
+    target.height = 72;
+    CHECK (FBOProvider::calculateEffectTargetExtent (target, { 640, 360 }, 2) == glm::uvec2 (0, 0));
+    CHECK (FBOProvider::calculateEffectTargetSize (target, { 640, 360 }, 2) == glm::uvec2 (2, 2));
+    target.fit = 1;
+    CHECK (FBOProvider::calculateEffectTargetExtent (target, { 320, 180 }, 1) == glm::uvec2 (1, 0));
+    CHECK (FBOProvider::calculateEffectTargetSize (target, { 320, 180 }, 1) == glm::uvec2 (2, 2));
+    // The generic helper still uses zero to mean no fit cap.
+    CHECK (FBOProvider::calculateTargetSize ({ 320, 180 }, 1, true, 0) == glm::uvec2 (320, 180));
 }

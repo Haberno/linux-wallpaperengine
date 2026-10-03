@@ -125,6 +125,21 @@ TEST_CASE ("disabled effect passes retain original slots without loading their m
     CHECK (effect->passOverrides[2]->id == 12);
 }
 
+TEST_CASE ("effect fit distinguishes omission from an authored zero", "[effect][fbo][fit]") {
+    const auto instance = loadEffect (JSON::parse (R"({"passes":[],"fbos":[
+        {"name":"omitted"}, {"name":"null","fit":null}, {"name":"string","fit":"0"},
+        {"name":"zero","fit":0}, {"name":"one","fit":1}, {"name":"limit","fit":4096},
+        {"name":"outside","fit":4097}, {"name":"sentinel","fit":-1}
+    ]})"), JSON::object ());
+    const auto& targets = instance->effect->fbos;
+    REQUIRE (targets.size () == 8);
+    for (const size_t index : { 0, 1, 2, 7 }) CHECK (targets[index]->fit == 0xffff);
+    CHECK (targets[3]->fit == 0);
+    CHECK (targets[4]->fit == 1);
+    CHECK (targets[5]->fit == 4096);
+    CHECK (targets[6]->fit == 4097);
+}
+
 TEST_CASE ("only normalized cursor ripple targets receive float feedback", "[effect][cursor-ripple]") {
     for (const bool customized : { false, true }) {
         for (const std::string shader : { "effects/cursorripple_apply_force", "effects/cursorripple_simulate_force" }) {
