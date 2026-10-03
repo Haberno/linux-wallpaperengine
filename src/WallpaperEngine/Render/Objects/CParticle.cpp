@@ -1580,6 +1580,7 @@ void WallpaperEngine::Render::Objects::applyParticleControlPointRemap (
     const float input = remap.mode == ControlPointRemap::Mode::PositionToVelocity
                       || remap.mode == ControlPointRemap::Mode::PositionToPosition
                       || remap.mode == ControlPointRemap::Mode::PositionToSize
+                      || remap.mode == ControlPointRemap::Mode::PositionToOpacity
                       || remap.mode == ControlPointRemap::Mode::PositionToSpeed ? fraction
                       : remap.mode == ControlPointRemap::Mode::LifetimeFractionToPosition ? particle.getLifetimePos ()
                       : particle.lifetime;
@@ -1621,9 +1622,10 @@ void WallpaperEngine::Render::Objects::applyParticleControlPointRemap (
         }
         particle.velocity = weight == 1.0f ? target : particle.velocity + (target - particle.velocity) * weight;
     } else {
-        // Native scalar arithmetic acts on current size or longitudinal fraction.
+        // Native scalar arithmetic acts on current size/opacity or longitudinal fraction.
         // Do not clamp the operated result.
-        const float current = remap.mode == ControlPointRemap::Mode::PositionToSize ? particle.size : fraction;
+        const float current = remap.mode == ControlPointRemap::Mode::PositionToSize ? particle.size
+                            : remap.mode == ControlPointRemap::Mode::PositionToOpacity ? particle.alpha : fraction;
         float result = mapped.x;
         switch (remap.operation) {
             case ControlPointRemap::Operation::Remap: break;
@@ -1634,6 +1636,9 @@ void WallpaperEngine::Render::Objects::applyParticleControlPointRemap (
         if (remap.mode == ControlPointRemap::Mode::PositionToSize) {
             particle.size = weight == 1.0f ? result : current + (result - current) * weight;
             if (initializer) particle.initial.size = particle.size;
+        } else if (remap.mode == ControlPointRemap::Mode::PositionToOpacity) {
+            particle.alpha = weight == 1.0f ? result : current + (result - current) * weight;
+            if (initializer) particle.initial.alpha = particle.alpha;
         } else {
             // Keep the position offset perpendicular to the segment.
             particle.position += delta * ((result - fraction) * weight);
@@ -1654,6 +1659,7 @@ InitializerFunc CParticle::createControlPointRemapInitializer (const ControlPoin
 
 OperatorFunc CParticle::createControlPointRemapOperator (const ControlPointRemapOperator& op) {
     const auto& remap = op.remap;
+    if (remap.mode == ControlPointRemap::Mode::PositionToOpacity) m_hasAlphaOperators = true;
     includeControlPoint (remap.inputControlPoint0);
     includeControlPoint (remap.inputControlPoint1);
     includeControlPoint (remap.outputControlPoint0);
