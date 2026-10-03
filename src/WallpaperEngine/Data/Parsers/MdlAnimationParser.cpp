@@ -600,7 +600,10 @@ void readAnimationEvents (
 	    animation.morphTracks = std::move (morphTracks);
 	}
 	if (version >= 5) {
-	    for (int component = 0; component < 6; ++component) readValue<float> (data, offset, recordEnd);
+	    MdlAnimationBounds bounds;
+	    for (int axis = 0; axis < 3; ++axis) bounds.minimum[axis] = readValue<float> (data, offset, recordEnd);
+	    for (int axis = 0; axis < 3; ++axis) bounds.maximum[axis] = readValue<float> (data, offset, recordEnd);
+	    animation.bounds = bounds;
 	}
 	if (version >= 6 && !readBoneScalarTracks (data, offset, recordEnd, animation, &animation.depthTracks)) return;
 	if ((animation.flags & 1) != 0) {

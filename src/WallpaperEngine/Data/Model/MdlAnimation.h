@@ -101,6 +101,12 @@ struct MdlMorphTrack {
     std::vector<float> frames;
 };
 
+/** MDLA0005 whole-clip volume; older clips initialize both corners to zero. */
+struct MdlAnimationBounds {
+    glm::vec3 minimum = glm::vec3 (0.0f);
+    glm::vec3 maximum = glm::vec3 (0.0f);
+};
+
 struct MdlAnimationClip {
     uint32_t id = 0;
     std::string name = {};
@@ -109,6 +115,7 @@ struct MdlAnimationClip {
     uint32_t frameCount = 0;
     uint32_t flags = 0;
     std::vector<PropertyAnimation::Event> events;
+    MdlAnimationBounds bounds;
     /** Bit zero disables the track, preserving the pose from earlier layers. */
     std::vector<uint32_t> boneFlags = {};
     /** boneFrames[bone][frame], commonly frameCount + 1 entries for loop interpolation. */

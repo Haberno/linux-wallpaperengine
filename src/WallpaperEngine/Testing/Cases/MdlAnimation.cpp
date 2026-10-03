@@ -385,7 +385,7 @@ TEST_CASE ("MDLA events follow versioned tracks and cropped clip metadata", "[md
 	appendValue<uint32_t> (data, 61 * sizeof (float));
 	for (int frame = 0; frame < 61; ++frame) appendValue<float> (data, 1);
     }
-    for (int component = 0; component < 6; ++component) appendValue<float> (data, 0); // v5 bounds
+    for (const float component : { -2.0f, -3.0f, -4.0f, 5.0f, 6.0f, 7.0f }) appendValue<float> (data, component); // v5 bounds
     appendValue<uint8_t> (data, 1); // v6 scalar tracks
     for (int bone = 0; bone < 2; ++bone) {
 	appendValue<uint32_t> (data, 0);
@@ -407,6 +407,8 @@ TEST_CASE ("MDLA events follow versioned tracks and cropped clip metadata", "[md
     REQUIRE (parsed.animations.size () == 1);
     const auto& clip = parsed.animations.front ();
     CHECK (clip.flags == 0x401);
+    CHECK (clip.bounds.minimum == glm::vec3 (-2, -3, -4));
+    CHECK (clip.bounds.maximum == glm::vec3 (5, 6, 7));
     REQUIRE (clip.morphTracks.size () == submeshCount);
     for (uint32_t submesh = 0; submesh < submeshCount; ++submesh) {
 	if (submesh == 2) { CHECK (clip.morphTracks[submesh].empty ()); continue; }
@@ -430,6 +432,8 @@ TEST_CASE ("MDLA events follow versioned tracks and cropped clip metadata", "[md
     patchU32 (data, endField, data.size ());
     const auto truncated = MdlAnimationParser::parse (data, "truncated-event.mdl");
     REQUIRE (truncated.animations.size () == 1);
+    CHECK (truncated.animations.front ().bounds.minimum == clip.bounds.minimum);
+    CHECK (truncated.animations.front ().bounds.maximum == clip.bounds.maximum);
     CHECK (truncated.animations.front ().events.empty ());
     CHECK (truncated.animations.front ().boneFrames.size () == 2);
 }
