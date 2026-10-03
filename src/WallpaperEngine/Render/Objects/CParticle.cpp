@@ -2536,159 +2536,60 @@ OperatorFunc CParticle::createVortexV2Operator (const VortexOperator& op) {
     };
 }
 
+glm::vec3 WallpaperEngine::Render::Objects::calculateParticleLegacyVortex (
+    const glm::vec3& displacement, const glm::vec3& axis, const int flags,
+    const glm::vec2 distances, const glm::vec2 speeds, const float forceDt
+) {
+    const glm::vec3 radial = (flags & 1) != 0
+        ? displacement - axis * glm::dot (displacement, axis) : displacement;
+    const float distance = glm::length (radial);
+    // Native rsqrt is undefined at the center; keep that singular case finite.
+    if (distance <= std::numeric_limits<float>::min ()) return glm::vec3 (0.0f);
+    const float span = distances.y - distances.x;
+    const float fraction = std::clamp ((distance - distances.x) * (span == 0.0f ? 1.0f : 1.0f / span), 0.0f, 1.0f);
+    // Opcode 15 normalizes the radial vector, not the tangent. Only flag1 is read.
+    return glm::cross (axis, radial / distance) * (glm::mix (speeds.x, speeds.y, fraction) * forceDt);
+}
+
 OperatorFunc CParticle::createVortexOperator (const VortexOperator& op) {
     includeControlPoint (op.controlPoint);
     if (op.nativeV2) return createVortexV2Operator (op);
-    int controlPoint = op.controlPoint;
-    int flags = op.flags;
-    DynamicValue* axisValue = op.axis->value.get ();
-    DynamicValue* offsetValue = op.offset->value.get ();
-    DynamicValue* distanceInnerValue = op.distanceInner->value.get ();
-    DynamicValue* distanceOuterValue = op.distanceOuter->value.get ();
-    DynamicValue* speedInnerValue = op.speedInner->value.get ();
-    DynamicValue* speedOuterValue = op.speedOuter->value.get ();
-    DynamicValue* centerForceValue = op.centerForce->value.get ();
-    DynamicValue* ringRadiusValue = op.ringRadius->value.get ();
-    DynamicValue* ringWidthValue = op.ringWidth->value.get ();
-    DynamicValue* ringPullDistanceValue = op.ringPullDistance->value.get ();
-    DynamicValue* ringPullForceValue = op.ringPullForce->value.get ();
-    DynamicValue* speedOverride = getInstanceOverride ().speed->value.get ();
-
-    // Extract flag bits
-    bool infiniteAxis = (flags & 1) != 0;
-    bool maintainDistance = (flags & 2) != 0;
-    bool ringShape = (flags & 4) != 0;
-
-    return [this, &op, controlPoint, axisValue, offsetValue, distanceInnerValue, distanceOuterValue, speedInnerValue,
-	    speedOuterValue, centerForceValue, ringRadiusValue, ringWidthValue, ringPullDistanceValue,
-	    ringPullForceValue, infiniteAxis, maintainDistance, ringShape, speedOverride] (
-	       std::vector<ParticleInstance>& particles, uint32_t count,
-	       const std::vector<ControlPointData>& controlPoints, float, float dt
-	   ) {
-	const auto& recorder = getScene ().getAudioContext ().getRecorder ();
-	auto firstBand = std::min (static_cast<uint32_t> (op.audioProcessingFrequencyStart->value->getInt ()), 15u);
-	auto lastBand = std::min (static_cast<uint32_t> (op.audioProcessingFrequencyEnd->value->getInt ()), 15u);
-	if (firstBand > lastBand) std::swap (firstBand, lastBand);
-	const float audio = calculateParticleAudioResponse (
-	    recorder.audio16Left, recorder.audio16Right, op.audioProcessingMode->value->getInt (),
-	    op.audioProcessingBounds->value->getVec2 (), op.audioProcessingExponent->value->getFloat (), firstBand, lastBand
-	);
-
-	glm::vec3 axis = axisValue->getVec3 ();
-	glm::vec3 offset = offsetValue->getVec3 ();
-	float distanceInner = distanceInnerValue->getFloat ();
-	float distanceOuter = distanceOuterValue->getFloat ();
-	float speedInner = speedInnerValue->getFloat ();
-	float speedOuter = speedOuterValue->getFloat ();
-	float centerForce = centerForceValue->getFloat ();
-	float ringRadius = ringRadiusValue->getFloat ();
-	float ringWidth = ringWidthValue->getFloat ();
-	float ringPullDistance = ringPullDistanceValue->getFloat ();
-	float ringPullForce = ringPullForceValue->getFloat ();
-
-	// Native legacy vortex uses the same audio response as V2 for spin only.
-	speedInner *= audio;
-	speedOuter *= audio;
-
-	// Get vortex center from control point
-	glm::vec3 center = glm::vec3 (0.0f);
-	if (controlPoint >= 0 && controlPoint < static_cast<int> (controlPoints.size ())) {
-	    center = controlPoints[controlPoint].position + offset;
-	} else {
-	    center = offset;
-	}
-
-	// Normalize axis
-	if (glm::length (axis) > 0.0f) {
-	    axis = glm::normalize (axis);
-	} else {
-	    axis = glm::vec3 (0.0f, 0.0f, 1.0f); // Default to Z-axis
-	}
-
-	for (uint32_t i = 0; i < count; i++) {
-	    auto& p = particles[i];
-	    if (!p.alive) {
-		continue;
-	    }
-
-	    // Calculate vector from center to particle
-	    glm::vec3 toParticle = p.position - center;
-
-	    // For infinite axis mode, project onto plane perpendicular to axis (cylinder shape)
-	    // Otherwise use full 3D distance (sphere shape)
-	    float axialDistance = 0.0f;
-	    glm::vec3 radialVector = toParticle;
-	    if (infiniteAxis) {
-		// Project out the axis component
-		axialDistance = glm::dot (toParticle, axis);
-		radialVector = toParticle - axis * axialDistance;
-	    }
-
-	    float distance = glm::length (radialVector);
-
-	    // Compute tangent direction (perpendicular to both axis and radial vector)
-	    glm::vec3 tangent = glm::cross (axis, radialVector);
-	    if (glm::length (tangent) > 0.001f) {
-		tangent = glm::normalize (tangent);
-	    } else {
-		continue; // Particle is on the axis
-	    }
-
-	    // Calculate spin speed and apply forces based on mode
-	    float speed = 0.0f;
-	    glm::vec3 radialForce = glm::vec3 (0.0f);
-
-	    if (ringShape) {
-		// Ring mode: hollow center with ring-shaped influence zone
-		float ringInner = ringRadius - ringWidth * 0.5f;
-		float ringOuter = ringRadius + ringWidth * 0.5f;
-
-		if (distance < ringInner) {
-		    // Inside the ring's hollow center - no spin, but may be pulled outward
-		    speed = 0.0f;
-		} else if (distance <= ringOuter) {
-		    // Inside the ring - full effect
-		    float t = (distance - ringInner) / ringWidth;
-		    speed = glm::mix (speedInner, speedOuter, t);
-		} else if (distance <= ringOuter + ringPullDistance) {
-		    // Outside ring but within pull distance - attract toward ring
-		    float pullT = (distance - ringOuter) / ringPullDistance;
-		    speed = speedOuter * (1.0f - pullT);
-		    // Pull toward ring
-		    if (distance > 0.001f) {
-			glm::vec3 towardRing = -glm::normalize (radialVector);
-			radialForce = towardRing * ringPullForce * pullT;
-		    }
-		} else {
-		    // Too far from ring - no effect
-		    speed = 0.0f;
-		}
-	    } else {
-		// Standard vortex mode
-		float disMid = distanceOuter - distanceInner + 0.1f;
-
-		if (disMid < 0 || distance < distanceInner) {
-		    speed = speedInner;
-		} else if (distance > distanceOuter) {
-		    speed = speedOuter;
-		} else {
-		    float t = (distance - distanceInner) / disMid;
-		    speed = glm::mix (speedInner, speedOuter, t);
-		}
-	    }
-
-	    // Apply tangential velocity (spinning)
-	    p.velocity += tangent * speed * dt * ((m_particle.flags & 16) != 0 ? 1.0f : speedOverride->getFloat ());
-
-	    // Apply radial force (ring pull)
-	    p.velocity += radialForce * dt * speedOverride->getFloat ();
-
-	    // Apply center force when maintain distance is enabled
-	    if (maintainDistance && distance > 0.001f) {
-		glm::vec3 towardCenter = -glm::normalize (radialVector);
-		p.velocity += towardCenter * centerForce * dt * speedOverride->getFloat ();
-	    }
-	}
+    const bool perspective = getScene ().getScene ().camera.projection.isPerspective;
+    return [this, &op, perspective] (
+        std::vector<ParticleInstance>& particles, uint32_t count,
+        const std::vector<ControlPointData>& controlPoints, float, float dt
+    ) {
+        const auto& recorder = getScene ().getAudioContext ().getRecorder ();
+        auto firstBand = std::min (static_cast<uint32_t> (op.audioProcessingFrequencyStart->value->getInt ()), 15u);
+        auto lastBand = std::min (static_cast<uint32_t> (op.audioProcessingFrequencyEnd->value->getInt ()), 15u);
+        if (firstBand > lastBand) std::swap (firstBand, lastBand);
+        const float audio = calculateParticleAudioResponse (
+            recorder.audio16Left, recorder.audio16Right, op.audioProcessingMode->value->getInt (),
+            op.audioProcessingBounds->value->getVec2 (), op.audioProcessingExponent->value->getFloat (), firstBand, lastBand
+        );
+        const auto value = [] (const UserSettingUniquePtr& setting, float fallback) {
+            return setting ? setting->value->getFloat () : fallback;
+        };
+        const float speed = (m_particle.flags & 16) != 0 ? 1.0f : getInstanceOverride ().speed->value->getFloat ();
+        const glm::vec2 speeds = glm::vec2 (value (op.speedInner, perspective ? 1.0f : 2500.0f), op.speedOuter->value->getFloat ()) * speed * audio;
+        const glm::vec2 distances (value (op.distanceInner, perspective ? 1.0f : 500.0f),
+                                   value (op.distanceOuter, perspective ? 2.0f : 650.0f));
+        glm::vec3 axis = op.axis->value->getVec3 ();
+        axis = glm::dot (axis, axis) < .001f ? glm::vec3 (0, 0, 1) : glm::normalize (axis);
+        axis.y = -axis.y;
+        glm::vec3 center = op.offset->value->getVec3 () * glm::vec3 (1, -1, 1);
+        if (op.controlPoint >= 0 && op.controlPoint < static_cast<int> (controlPoints.size ())) {
+            center += controlPoints[op.controlPoint].position;
+        }
+        // Native opcode 15 consumes the same scene-attenuated force time as attraction.
+        const float forceDt = dt * std::pow (std::min (0.025f / getScene ().getDeltaTime (), 1.0f), 0.7f);
+        for (uint32_t i = 0; i < count; ++i) {
+            auto& particle = particles[i];
+            if (!particle.alive) continue;
+            particle.velocity += calculateParticleLegacyVortex (
+                particle.position - center, axis, op.flags, distances, speeds, forceDt
+            );
+        }
     };
 }
 

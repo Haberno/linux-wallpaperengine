@@ -1249,12 +1249,11 @@ ParticleOperatorUniquePtr ObjectParser::parseParticleOperator (const JSON& it, c
     } else if (name == "vortex" || name == "vortex_v2") {
 	const bool v2 = name == "vortex_v2";
 	return std::make_unique<VortexOperator> (
-	    v2 ? std::min (static_cast<uint32_t> (it.optional ("controlpoint", 0)), 7u)
-	       : it.optional ("controlpoint", 0),
+	    std::min (static_cast<uint32_t> (it.optional ("controlpoint", 0)), 7u),
 	    it.optional ("flags", 0) & (v2 ? 255 : -1), // 1 = infinite axis, 2 = maintain distance, 4 = ring shape
 	    it.user ("axis", properties, glm::vec3 (0.0f, 0.0f, 1.0f)),
-	    it.user ("offset", properties, glm::vec3 (0.0f)), v2 && !it.optional ("distanceinner") ? nullptr : it.user ("distanceinner", properties, 500.0f),
-	    v2 && !it.optional ("distanceouter") ? nullptr : it.user ("distanceouter", properties, 650.0f), v2 && !it.optional ("speedinner") ? nullptr : it.user ("speedinner", properties, 2500.0f),
+	    it.user ("offset", properties, glm::vec3 (0.0f)), (v2 ? !it.optional ("distanceinner") : !it.contains ("distanceinner")) ? nullptr : it.user ("distanceinner", properties, v2 ? 500.0f : 0.0f),
+	    (v2 ? !it.optional ("distanceouter") : !it.contains ("distanceouter")) ? nullptr : it.user ("distanceouter", properties, v2 ? 650.0f : 0.0f), (v2 ? !it.optional ("speedinner") : !it.contains ("speedinner")) ? nullptr : it.user ("speedinner", properties, v2 ? 2500.0f : 0.0f),
 	    it.user ("speedouter", properties, 0.0f), it.user ("centerforce", properties, 1.0f),
 	    v2 && !it.optional ("ringradius") ? nullptr : it.user ("ringradius", properties, 300.0f), v2 && !it.optional ("ringwidth") ? nullptr : it.user ("ringwidth", properties, 50.0f),
 	    v2 && !it.optional ("ringpulldistance") ? nullptr : it.user ("ringpulldistance", properties, 50.0f), v2 && !it.optional ("ringpullforce") ? nullptr : it.user ("ringpullforce", properties, 10.0f),

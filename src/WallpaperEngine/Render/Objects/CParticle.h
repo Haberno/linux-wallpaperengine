@@ -47,6 +47,10 @@ constexpr uint32_t DEFAULT_MAX_PARTICLES = 1000;
     const glm::vec3& toCenter, float strength, float radius, float deltaTime,
     bool limitToDistance = true, float lifetimeWeight = 1.0f
 );
+[[nodiscard]] glm::vec3 calculateParticleLegacyVortex (
+    const glm::vec3& displacement, const glm::vec3& axis, int flags,
+    glm::vec2 distances, glm::vec2 speeds, float forceDt
+);
 [[nodiscard]] glm::vec3 calculateParticleVortexV2 (
     const glm::vec3& displacement, const glm::vec3& velocity, const glm::vec3& axis, int flags,
     glm::vec2 distances, glm::vec2 speeds, float centerForce, glm::vec4 ring,

@@ -308,7 +308,7 @@ TEST_CASE ("vortex v2 preserves its own blending and projection defaults", "[par
     CHECK (legacy->audioProcessingExponent->value->getFloat () == 2.0f);
     CHECK (legacy->audioProcessingFrequencyStart->value->getInt () == 0);
     CHECK (legacy->audioProcessingFrequencyEnd->value->getInt () == 1);
-    CHECK (legacy->distanceInner->value->getFloat () == 500.0f);
+    CHECK (legacy->distanceInner == nullptr);
     CHECK (authored->controlPoint == 7);
     CHECK (authored->flags == 3);
     CHECK (authored->speedInner->value->getFloat () == 20.0f);
@@ -340,6 +340,73 @@ TEST_CASE ("vortex audio distinguishes missing defaults from explicit null", "[p
             CHECK (op->audioProcessingFrequencyEnd->value->getInt () == (i == 0 ? 1 : i == 1 ? 0 : 99));
         }
     }
+}
+
+TEST_CASE ("legacy vortex preserves native radial attenuation and ignores V2-only flags", "[particle][vortex][vortex-legacy]") {
+    using WallpaperEngine::Render::Objects::calculateParticleLegacyVortex;
+    const glm::vec3 position (30, 0, 40), axis (0, 0, 1);
+    for (const int flags : { 0, 2, 4, 6 }) {
+        const auto velocity = calculateParticleLegacyVortex (position, axis, flags, { 100, 200 }, { 400, 0 }, .025f);
+        CHECK (velocity.x == Catch::Approx (0));
+        CHECK (velocity.y == Catch::Approx (6));
+        CHECK (velocity.z == Catch::Approx (0));
+    }
+    for (const int flags : { 1, 3, 5, 7 }) {
+        CHECK (calculateParticleLegacyVortex (position, axis, flags, { 100, 200 }, { 400, 0 }, .025f).y
+               == Catch::Approx (10));
+    }
+    CHECK (calculateParticleLegacyVortex ({ 0, 0, 40 }, axis, 0, { 100, 200 }, { 400, 0 }, .025f)
+           == glm::vec3 (0));
+    CHECK (calculateParticleLegacyVortex ({ 40, 0, 0 }, { 0, -1, 0 }, 0, { 100, 200 }, { 400, 0 }, .025f).z
+           == Catch::Approx (10));
+}
+
+TEST_CASE ("legacy vortex falloff keeps signed and equal native ranges", "[particle][vortex][vortex-legacy]") {
+    using WallpaperEngine::Render::Objects::calculateParticleLegacyVortex;
+    const struct { float distance, minimum, maximum, expected; } cases[] = {
+        { .5f, .25f, .75f, 5 }, { 40, 60, 20, 5 }, { 10, 60, 20, 0 }, { 70, 60, 20, 10 },
+        { 40, 40, 40, 10 }, { 40.5f, 40, 40, 5 }, { 41, 40, 40, 0 }
+    };
+    for (const auto& entry : cases) {
+        INFO ("distance=" << entry.distance << ", minimum=" << entry.minimum << ", maximum=" << entry.maximum);
+        CHECK (calculateParticleLegacyVortex ({ entry.distance, 0, 0 }, { 0, 0, 1 }, 0,
+               { entry.minimum, entry.maximum }, { 400, 0 }, .025f).y == Catch::Approx (entry.expected));
+    }
+    CHECK (calculateParticleLegacyVortex ({ 40, 0, 0 }, { 0, 0, 1 }, 0, { 100, 200 }, { -400, 0 }, .0125f).y
+           == Catch::Approx (-5));
+}
+
+TEST_CASE ("legacy vortex preserves missing projection defaults and native point bounds", "[particle][vortex][vortex-legacy]") {
+    WallpaperEngine::Data::Model::Project project {};
+    const auto object = WallpaperEngine::Data::Parsers::ObjectParser::parse (
+        WallpaperEngine::Data::JSON::JSON::parse (R"({"id":393,"particle":{"operator":[
+            {"name":"vortex"},
+            {"name":"vortex","distanceinner":null,"distanceouter":null,"speedinner":null,"controlpoint":-1},
+            {"name":"vortex","distanceinner":-2,"distanceouter":3,"speedinner":-4,"controlpoint":99}
+        ]}})"), project);
+    const auto* definition = object->as<Particle> ();
+    REQUIRE (definition != nullptr);
+    REQUIRE (definition->operators.size () == 3);
+    const auto* omitted = definition->operators[0]->as<VortexOperator> ();
+    const auto* null = definition->operators[1]->as<VortexOperator> ();
+    const auto* authored = definition->operators[2]->as<VortexOperator> ();
+    REQUIRE (omitted != nullptr);
+    REQUIRE (null != nullptr);
+    REQUIRE (authored != nullptr);
+    CHECK (omitted->distanceInner == nullptr);
+    CHECK (omitted->distanceOuter == nullptr);
+    CHECK (omitted->speedInner == nullptr);
+    REQUIRE (null->distanceInner != nullptr);
+    REQUIRE (null->distanceOuter != nullptr);
+    REQUIRE (null->speedInner != nullptr);
+    CHECK (null->distanceInner->value->getFloat () == 0);
+    CHECK (null->distanceOuter->value->getFloat () == 0);
+    CHECK (null->speedInner->value->getFloat () == 0);
+    CHECK (null->controlPoint == 7);
+    CHECK (authored->controlPoint == 7);
+    CHECK (authored->distanceInner->value->getFloat () == -2);
+    CHECK (authored->distanceOuter->value->getFloat () == 3);
+    CHECK (authored->speedInner->value->getFloat () == -4);
 }
 
 TEST_CASE ("vortex v2 weights spin and predicted radius together", "[particle][vortex]") {
