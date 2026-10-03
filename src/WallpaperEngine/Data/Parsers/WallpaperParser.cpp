@@ -153,6 +153,13 @@ SceneUniquePtr WallpaperParser::parseScene (const JSON& file, Project& project) 
                 .skylight = general.user ("skylightcolor", properties, glm::vec3 (0.0f)),
                 .clear = general.user ("clearcolor", properties, glm::vec3 (1.0f)),
             },
+	    .physics = {
+		.gravityDirection = general.user ("gravitydirection", properties, glm::vec3 (0.0f, -1.0f, 0.0f)),
+		.gravityStrength = general.user ("gravitystrength", properties, 1.0f),
+		.windEnabled = general.user ("windenabled", properties, false),
+		.windDirection = general.user ("winddirection", properties, glm::vec3 (.707f, .707f, 0.0f)),
+		.windStrength = general.user ("windstrength", properties, 1.0f),
+	    },
 	    .fog = {
 		.distance = {
 		    .enabled = general.user ("fogdistance", properties, false),

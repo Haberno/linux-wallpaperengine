@@ -58,6 +58,14 @@ struct SceneData {
 	UserSettingUniquePtr skylight;
 	UserSettingUniquePtr clear;
     } colors;
+    /** Scene force properties; the kinematic-chain solver is not implemented yet. */
+    struct {
+	UserSettingUniquePtr gravityDirection;
+	UserSettingUniquePtr gravityStrength;
+	UserSettingUniquePtr windEnabled;
+	UserSettingUniquePtr windDirection;
+	UserSettingUniquePtr windStrength;
+    } physics;
     /** Distance- and world-height-based fog applied by materials whose FOG combo is enabled. */
     struct Fog {
 	struct Layer {

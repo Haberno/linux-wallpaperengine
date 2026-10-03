@@ -65,6 +65,36 @@ JSValue get_skylightcolor (JSContext* ctx, JSValueConst this_val, int argc, JSVa
     );
 }
 
+JSValue get_gravitydirection (JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    auto* container = get_opaque (this_val);
+
+    return container->getEngine ().getAdapters ().vec3->instantiate (*container->getScene ().getScene ().physics.gravityDirection->value);
+}
+
+JSValue get_gravitystrength (JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    auto* container = get_opaque (this_val);
+
+    return JS_NewFloat64 (ctx, container->getScene ().getScene ().physics.gravityStrength->value->getFloat ());
+}
+
+JSValue get_windenabled (JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    auto* container = get_opaque (this_val);
+
+    return JS_NewBool (ctx, container->getScene ().getScene ().physics.windEnabled->value->getBool ());
+}
+
+JSValue get_winddirection (JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    auto* container = get_opaque (this_val);
+
+    return container->getEngine ().getAdapters ().vec3->instantiate (*container->getScene ().getScene ().physics.windDirection->value);
+}
+
+JSValue get_windstrength (JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    auto* container = get_opaque (this_val);
+
+    return JS_NewFloat64 (ctx, container->getScene ().getScene ().physics.windStrength->value->getFloat ());
+}
+
 JSValue get_fov (JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
     auto* container = get_opaque (this_val);
 
@@ -719,6 +749,26 @@ SceneObject::SceneObject (ScriptEngine& engine, Render::Wallpapers::CScene& scen
 
     // set properties
     JS_SetOpaque (this->m_instance, this);
+    JS_DefinePropertyGetSet (
+	this->m_engine.getContext (), this->m_instance, JS_NewAtom (this->m_engine.getContext (), "gravitydirection"),
+	JS_NewCFunction (this->m_engine.getContext (), get_gravitydirection, "get", 0), JS_UNDEFINED, JS_PROP_ENUMERABLE
+    );
+    JS_DefinePropertyGetSet (
+	this->m_engine.getContext (), this->m_instance, JS_NewAtom (this->m_engine.getContext (), "gravitystrength"),
+	JS_NewCFunction (this->m_engine.getContext (), get_gravitystrength, "get", 0), JS_UNDEFINED, JS_PROP_ENUMERABLE
+    );
+    JS_DefinePropertyGetSet (
+	this->m_engine.getContext (), this->m_instance, JS_NewAtom (this->m_engine.getContext (), "windenabled"),
+	JS_NewCFunction (this->m_engine.getContext (), get_windenabled, "get", 0), JS_UNDEFINED, JS_PROP_ENUMERABLE
+    );
+    JS_DefinePropertyGetSet (
+	this->m_engine.getContext (), this->m_instance, JS_NewAtom (this->m_engine.getContext (), "winddirection"),
+	JS_NewCFunction (this->m_engine.getContext (), get_winddirection, "get", 0), JS_UNDEFINED, JS_PROP_ENUMERABLE
+    );
+    JS_DefinePropertyGetSet (
+	this->m_engine.getContext (), this->m_instance, JS_NewAtom (this->m_engine.getContext (), "windstrength"),
+	JS_NewCFunction (this->m_engine.getContext (), get_windstrength, "get", 0), JS_UNDEFINED, JS_PROP_ENUMERABLE
+    );
     JS_DefinePropertyGetSet (
 	this->m_engine.getContext (), this->m_instance, JS_NewAtom (this->m_engine.getContext (), "bloom"),
 	JS_NewCFunction (this->m_engine.getContext (), get_bloom, "get", 0),

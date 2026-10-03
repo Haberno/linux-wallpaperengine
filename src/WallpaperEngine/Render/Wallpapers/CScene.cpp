@@ -1251,6 +1251,11 @@ void CScene::registerFogScripts () {
     queue ("skylightcolor", scene.colors.skylight);
     queue ("clearcolor", scene.colors.clear);
     queue ("clearenabled", scene.clearEnabled);
+    queue ("gravitydirection", scene.physics.gravityDirection);
+    queue ("gravitystrength", scene.physics.gravityStrength);
+    queue ("windenabled", scene.physics.windEnabled);
+    queue ("winddirection", scene.physics.windDirection);
+    queue ("windstrength", scene.physics.windStrength);
     queue ("camerafade", scene.camera.fade);
     queue ("bloom", scene.camera.bloom.enabled);
     queue ("bloomstrength", scene.camera.bloom.strength);

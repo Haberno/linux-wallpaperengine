@@ -12,6 +12,8 @@
 #include "WallpaperEngine/Data/Parsers/PropertyParser.h"
 #include "WallpaperEngine/Data/Parsers/ObjectParser.h"
 #include "WallpaperEngine/Data/Parsers/UserSettingParser.h"
+#include "WallpaperEngine/Data/Parsers/WallpaperParser.h"
+#include "WallpaperEngine/FileSystem/Container.h"
 
 using WallpaperEngine::Data::Builders::ColorBuilder;
 using WallpaperEngine::Data::JSON::JSON;
@@ -517,4 +519,53 @@ TEST_CASE ("Legacy byte colors remain supported") {
     CHECK (orange.g == Catch::Approx (128.0f / 255.0f));
     CHECK (orange.b == Catch::Approx (0.0f));
     CHECK (orange.a == Catch::Approx (1.0f));
+}
+
+
+TEST_CASE ("Scene force settings retain native defaults, scripts and live property bindings", "[scene-physics-fields][parser]") {
+    using namespace WallpaperEngine::Data::Model;
+    using WallpaperEngine::Data::Parsers::WallpaperParser;
+    Project project {};
+    project.type = Project::Type_Scene;
+    const auto strength = PropertyParser::parse (JSON {
+        { "type", "slider" }, { "value", 2.5f }, { "min", -5 }, { "max", 5 },
+    }, "strength");
+    project.properties.emplace ("strength", strength);
+    const std::string script = "export function update(value) { return value; }";
+    for (const bool authored : { false, true }) {
+        JSON general = {{ "orthogonalprojection", {{ "width", 320 }, { "height", 180 }} }};
+        if (authored) {
+            general["gravitydirection"] = {{ "value", "2 -3 4" }, { "script", script }};
+            general["gravitystrength"] = {{ "value", 1.0f }, { "user", "strength" }, { "script", script }};
+            general["windenabled"] = {{ "value", true }, { "script", script }};
+            general["winddirection"] = {{ "value", "-4 5 6" }, { "script", script }};
+            general["windstrength"] = {{ "value", 3.25f }, { "script", script }};
+        }
+        const JSON data = {
+            { "camera", {{ "eye", "0 0 1" }, { "center", "0 0 0" }, { "up", "0 1 0" }} },
+            { "general", general }, { "objects", JSON::array () },
+        };
+        auto filesystem = std::make_unique<WallpaperEngine::FileSystem::Container> ();
+        filesystem->getVFS ().add ("scene.json", data.dump ());
+        project.assetLocator = std::make_unique<WallpaperEngine::Assets::AssetLocator> (std::move (filesystem));
+        const auto wallpaper = WallpaperParser::parse (JSON ("scene.json"), project);
+        REQUIRE (wallpaper->is<Scene> ());
+        const auto& physics = wallpaper->as<Scene> ()->physics;
+        CHECK (physics.gravityDirection->value->getVec3 () == (authored ? glm::vec3 (2, -3, 4) : glm::vec3 (0, -1, 0)));
+        CHECK (physics.gravityStrength->value->getFloat () == (authored ? 2.5f : 1.0f));
+        CHECK (physics.windEnabled->value->getBool () == authored);
+        CHECK (physics.windDirection->value->getVec3 () == (authored ? glm::vec3 (-4, 5, 6) : glm::vec3 (.707f, .707f, 0)));
+        CHECK (physics.windStrength->value->getFloat () == (authored ? 3.25f : 1.0f));
+        for (const auto* field : { physics.gravityDirection.get (), physics.gravityStrength.get (),
+                physics.windEnabled.get (), physics.windDirection.get (), physics.windStrength.get () }) {
+            CHECK (field->value->getScriptSource ().has_value () == authored);
+            if (authored) CHECK (field->value->getScriptSource ().value () == script);
+        }
+        if (authored) {
+            CHECK (physics.gravityStrength->property == strength);
+            strength->update (-2.0f, DynamicValue::UpdateSource::User);
+            CHECK (physics.gravityStrength->value->getFloat () == -2.0f);
+            CHECK (physics.windStrength->value->getFloat () == 3.25f);
+        }
+    }
 }
