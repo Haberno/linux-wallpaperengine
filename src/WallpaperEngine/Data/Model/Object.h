@@ -504,6 +504,15 @@ public:
     glm::vec4 blendTimes;
 };
 
+class MaintainDistanceBetweenControlPointsOperator : public ParticleOperatorBase {
+public:
+    MaintainDistanceBetweenControlPointsOperator (uint32_t start, uint32_t end, glm::vec4 blendTimes) :
+        controlPointStart (start), controlPointEnd (end), blendTimes (blendTimes) { }
+    uint32_t controlPointStart;
+    uint32_t controlPointEnd;
+    glm::vec4 blendTimes;
+};
+
 class AngularMovementOperator : public ParticleOperatorBase {
 public:
     AngularMovementOperator (UserSettingUniquePtr drag, UserSettingUniquePtr force, glm::vec4 blendTimes) :

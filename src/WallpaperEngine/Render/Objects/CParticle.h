@@ -175,6 +175,11 @@ void applyParticleDistanceConstraint (
     float distance, float variableStrength, float deltaTime, glm::vec4 blendTimes
 );
 
+void applyParticleBetweenControlPointConstraint (
+    std::vector<ParticleInstance>& particles, uint32_t count, const ControlPointData& start,
+    const ControlPointData& end, glm::vec4 blendTimes
+);
+
 void applyParticleControlPointRemap (
     ParticleInstance& particle, const ControlPointRemap& remap,
     const std::vector<ControlPointData>& controlPoints, bool initializer
@@ -260,6 +265,7 @@ protected:
     OperatorFunc createInheritEventColorOperator (const InheritEventColorOperator& op);
     OperatorFunc createReduceMovementNearControlPointOperator (const ReduceMovementNearControlPointOperator& op);
     OperatorFunc createMaintainDistanceToControlPointOperator (const MaintainDistanceToControlPointOperator& op);
+    OperatorFunc createMaintainDistanceBetweenControlPointsOperator (const MaintainDistanceBetweenControlPointsOperator& op);
     OperatorFunc createCapVelocityOperator (const CapVelocityOperator& op);
     OperatorFunc createAngularMovementOperator (const AngularMovementOperator& op);
     OperatorFunc createAlphaFadeOperator (const AlphaFadeOperator& op);

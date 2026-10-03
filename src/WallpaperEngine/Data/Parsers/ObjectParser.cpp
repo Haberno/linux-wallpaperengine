@@ -1203,6 +1203,13 @@ ParticleOperatorUniquePtr ObjectParser::parseParticleOperator (const JSON& it, c
 	    glm::vec4 (it.optional ("blendinstart", 0.0f), it.optional ("blendinend", 0.0f),
 		       it.optional ("blendoutstart", 1.0f), it.optional ("blendoutend", 1.0f))
 	);
+    } else if (name == "maintaindistancebetweencontrolpoints") {
+	return std::make_unique<MaintainDistanceBetweenControlPointsOperator> (
+	    std::min (it.optional ("controlpointstart", 0u), 7u),
+	    std::min (it.optional ("controlpointend", it.contains ("controlpointend") ? 0u : 1u), 7u),
+	    glm::vec4 (it.optional ("blendinstart", 0.0f), it.optional ("blendinend", 0.0f),
+	               it.optional ("blendoutstart", 1.0f), it.optional ("blendoutend", 1.0f))
+	);
     } else if (name == "angularmovement") {
 	return std::make_unique<AngularMovementOperator> (
 	    it.user ("drag", properties, 0.0f), it.user ("force", properties, glm::vec3 (0.0f)),

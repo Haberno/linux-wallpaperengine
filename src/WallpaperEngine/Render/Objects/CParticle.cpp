@@ -2087,6 +2087,8 @@ void CParticle::setupOperators () {
 	    func = createReduceMovementNearControlPointOperator (*op->as<ReduceMovementNearControlPointOperator> ());
 	} else if (op->is<MaintainDistanceToControlPointOperator> ()) {
 	    func = createMaintainDistanceToControlPointOperator (*op->as<MaintainDistanceToControlPointOperator> ());
+	} else if (op->is<MaintainDistanceBetweenControlPointsOperator> ()) {
+	    func = createMaintainDistanceBetweenControlPointsOperator (*op->as<MaintainDistanceBetweenControlPointsOperator> ());
 	} else if (op->is<AngularMovementOperator> ()) {
 	    func = createAngularMovementOperator (*op->as<AngularMovementOperator> ());
 	} else if (op->is<AlphaFadeOperator> ()) {
@@ -2233,6 +2235,46 @@ OperatorFunc CParticle::createMaintainDistanceToControlPointOperator (const Main
             if (!particle.alive) continue;
             applyParticleDistanceConstraint (particle, point, inverseBasis, distance, strength, dt, op.blendTimes);
         }
+    };
+}
+
+void WallpaperEngine::Render::Objects::applyParticleBetweenControlPointConstraint (
+    std::vector<ParticleInstance>& particles, const uint32_t count, const ControlPointData& start,
+    const ControlPointData& end, const glm::vec4 blendTimes
+) {
+    const glm::vec3 previousStart = start.position - start.displacement;
+    const glm::vec3 previousSegment = end.position - end.displacement - previousStart;
+    const glm::vec3 currentSegment = end.position - start.position;
+    const float previousLengthSquared = glm::dot (previousSegment, previousSegment);
+    const float currentLengthSquared = glm::dot (currentSegment, currentSegment);
+    constexpr float epsilon = std::numeric_limits<float>::epsilon ();
+    // Native opcodes 12/34 skip either segment at or below FLT_EPSILON squared.
+    if (previousLengthSquared <= epsilon * epsilon || currentLengthSquared <= epsilon * epsilon) return;
+    const float previousLength = std::sqrt (previousLengthSquared);
+    const glm::vec3 previousAxis = previousSegment / previousLength;
+    for (uint32_t index = 0; index < count; ++index) {
+        auto& particle = particles[index];
+        if (!particle.alive) continue;
+        const float distance = glm::dot (particle.position - previousStart, previousAxis);
+        const float fraction = glm::clamp (distance / previousLength, 0.0f, 1.0f);
+        // Preserve the world perpendicular residual; weight translation too.
+        particle.position += (start.displacement + currentSegment * fraction - previousAxis * distance)
+            * particleOperatorBlend (particle.getLifetimePos (), blendTimes);
+    }
+}
+
+OperatorFunc CParticle::createMaintainDistanceBetweenControlPointsOperator (
+    const MaintainDistanceBetweenControlPointsOperator& op
+) {
+    includeControlPoint (op.controlPointStart);
+    includeControlPoint (op.controlPointEnd);
+    return [&op] (
+        std::vector<ParticleInstance>& particles, uint32_t count,
+        const std::vector<ControlPointData>& controlPoints, float, float
+    ) {
+        applyParticleBetweenControlPointConstraint (
+            particles, count, controlPoints[op.controlPointStart], controlPoints[op.controlPointEnd], op.blendTimes
+        );
     };
 }
 

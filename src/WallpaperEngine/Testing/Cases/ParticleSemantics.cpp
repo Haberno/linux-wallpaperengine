@@ -1852,6 +1852,118 @@ TEST_CASE ("rain FBM remaps clamp speed multiplication without changing directio
     }
 }
 
+TEST_CASE ("between control point constraints retain the stock operator and authored envelopes", "[particle][maintain-between-points]") {
+    WallpaperEngine::Data::Model::Project project {};
+    const auto object = WallpaperEngine::Data::Parsers::ObjectParser::parse (
+        WallpaperEngine::Data::JSON::JSON::parse (R"({"id":391,"particle":{"operator":[
+            {"id":10,"name":"maintaindistancebetweencontrolpoints"},
+            {"name":"maintaindistancebetweencontrolpoints","controlpointstart":2,"controlpointend":3},
+            {"name":"maintaindistancebetweencontrolpoints","controlpointstart":-1,"controlpointend":99,
+             "blendinstart":0,"blendinend":0.5,"blendoutstart":0.5,"blendoutend":1},
+            {"name":"maintaindistancebetweencontrolpoints","controlpointstart":null,"controlpointend":null}
+        ]}})"), project);
+    const auto* definition = object->as<Particle> ();
+    REQUIRE (definition != nullptr);
+    REQUIRE (definition->operators.size () == 4);
+    const uint32_t starts[] = { 0, 2, 7, 0 };
+    const uint32_t ends[] = { 1, 3, 7, 0 };
+    for (size_t index = 0; index < definition->operators.size (); ++index) {
+        const auto* op = definition->operators[index]->as<MaintainDistanceBetweenControlPointsOperator> ();
+        REQUIRE (op != nullptr);
+        CHECK (op->controlPointStart == starts[index]);
+        CHECK (op->controlPointEnd == ends[index]);
+        CHECK (op->blendTimes == (index == 2 ? glm::vec4 (0, .5f, .5f, 1) : glm::vec4 (0, 0, 1, 1)));
+    }
+}
+
+TEST_CASE ("between point constraints weight translation and longitudinal correction together", "[particle][maintain-between-points]") {
+    using WallpaperEngine::Render::Objects::applyParticleBetweenControlPointConstraint;
+    using WallpaperEngine::Render::Objects::ControlPointData;
+    const struct {
+        glm::vec3 previousStart, previousEnd, currentStart, currentEnd, position, expected;
+    } cases[] = {
+        { { 0, 0, 0 }, { 64, 0, 0 }, { 0, 0, 0 }, { 64, 0, 0 }, { 16, 12, -8 }, { 16, 12, -8 } },
+        { { 0, 0, 0 }, { 64, 0, 0 }, { 0, 0, 0 }, { 64, 0, 0 }, { -16, 12, -8 }, { 0, 12, -8 } },
+        { { 0, 0, 0 }, { 64, 0, 0 }, { 0, 0, 0 }, { 64, 0, 0 }, { 80, 12, -8 }, { 64, 12, -8 } },
+        { { 0, 0, 0 }, { 64, 0, 0 }, { 8, -4, 12 }, { 72, -4, 12 }, { 16, 12, -8 }, { 24, 8, 4 } },
+        { { 0, 0, 0 }, { 64, 0, 0 }, { 0, 0, 0 }, { 128, 0, 0 }, { 16, 12, -8 }, { 32, 12, -8 } },
+        { { 0, 0, 0 }, { 64, 0, 0 }, { 0, 0, 0 }, { 0, 64, 0 }, { 16, 12, -8 }, { 0, 28, -8 } },
+        { { 4, -8, 12 }, { 68, 56, 76 }, { 12, 4, -8 }, { 140, 132, 120 }, { 28, 0, 28 }, { 52, 28, 24 } },
+        { { 0, 0, 0 }, { 64, 0, 0 }, { 64, 0, 0 }, { 0, 0, 0 }, { 16, 12, -8 }, { 48, 12, -8 } }
+    };
+    // Unchanged native geometry/writeback at 140242437..676 produced these
+    // independent finite-input targets within .014 (RSQRTPS approximation).
+    for (const auto& sample : cases) {
+        for (const float weight : { 0.0f, .25f, .5f, .75f, 1.0f }) {
+            ControlPointData start, end;
+            start.sampleVelocity (sample.previousStart, .1f);
+            start.sampleVelocity (sample.currentStart, .1f);
+            start.position = sample.currentStart;
+            end.sampleVelocity (sample.previousEnd, .1f);
+            end.sampleVelocity (sample.currentEnd, .1f);
+            end.position = sample.currentEnd;
+            std::vector<ParticleInstance> particles (2);
+            particles[0].alive = true;
+            particles[0].position = sample.position;
+            particles[0].velocity = { 7, -11, 13 };
+            particles[0].lifetime = 8;
+            particles[0].age = 2;
+            particles[1].position = { 90, 80, 70 };
+            const glm::vec4 envelope = weight == 0 ? glm::vec4 (.5f, .75f, 1, 1)
+                : glm::vec4 (0, .25f / weight, 1, 1);
+            applyParticleBetweenControlPointConstraint (particles, 2, start, end, envelope);
+            const glm::vec3 expected = sample.position + (sample.expected - sample.position) * weight;
+            for (int axis = 0; axis < 3; ++axis) {
+                CHECK (particles[0].position[axis] == Catch::Approx (expected[axis]).margin (.0001f));
+            }
+            CHECK (particles[0].velocity == glm::vec3 (7, -11, 13));
+            CHECK (particles[0].age == 2);
+            CHECK (particles[1].position == glm::vec3 (90, 80, 70));
+            CHECK (start.previousPosition == sample.currentStart);
+            CHECK (end.previousPosition == sample.currentEnd);
+        }
+    }
+}
+
+TEST_CASE ("between point constraints use both fades and skip short segments", "[particle][maintain-between-points]") {
+    using WallpaperEngine::Render::Objects::applyParticleBetweenControlPointConstraint;
+    using WallpaperEngine::Render::Objects::ControlPointData;
+    ControlPointData start, end;
+    end.position = { 64, 0, 0 };
+    const struct { float fraction; float expectedX; } fades[] = {
+        { 0, 80 }, { .25f, 72 }, { .5f, 64 }, { .75f, 72 }, { 1, 80 }
+    };
+    for (const float lifetime : { 4.0f, 8.0f }) {
+        for (const auto& sample : fades) {
+            std::vector<ParticleInstance> particles (2);
+            particles[0].alive = particles[1].alive = true;
+            particles[0].position = particles[1].position = { 80, 12, -8 };
+            particles[0].lifetime = lifetime;
+            particles[0].age = lifetime * sample.fraction;
+            applyParticleBetweenControlPointConstraint (particles, 1, start, end, { 0, .5f, .5f, 1 });
+            CHECK (particles[0].position == glm::vec3 (sample.expectedX, 12, -8));
+            CHECK (particles[1].position == glm::vec3 (80, 12, -8));
+        }
+    }
+    constexpr float epsilon = std::numeric_limits<float>::epsilon ();
+    const struct { glm::vec3 currentEnd, endDisplacement; } small[] = {
+        { { 0, 0, 0 }, { 0, 0, 0 } },
+        { { 64, 0, 0 }, { 64, 0, 0 } },
+        { { 0, 0, 0 }, { -64, 0, 0 } },
+        { { epsilon, 0, 0 }, { 0, 0, 0 } },
+        { { 2 * epsilon, 0, 0 }, { epsilon, 0, 0 } }
+    };
+    for (const auto& sample : small) {
+        end.position = sample.currentEnd;
+        end.displacement = sample.endDisplacement;
+        std::vector<ParticleInstance> particles (1);
+        particles[0].alive = true;
+        particles[0].position = { 80, 12, -8 };
+        applyParticleBetweenControlPointConstraint (particles, 1, start, end, { 0, 0, 1, 1 });
+        CHECK (particles[0].position == glm::vec3 (80, 12, -8));
+    }
+}
+
 TEST_CASE ("vortex orb retains its distance constraint and native point defaults", "[particle][maintain-distance]") {
     WallpaperEngine::Data::Model::Project project {};
     const auto object = WallpaperEngine::Data::Parsers::ObjectParser::parse (
