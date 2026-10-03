@@ -750,20 +750,20 @@ void CImage::loadPuppetOverlay (const MdlMesh& mesh, const glm::vec2& size) {
     );
 }
 
+const MdlAnimationClip* CImage::findPuppetAnimationClip (const uint32_t id) const {
+    const auto found = std::find_if (
+	this->m_puppetAnimation.animations.begin (), this->m_puppetAnimation.animations.end (),
+	[id] (const MdlAnimationClip& animation) { return animation.id == id; }
+    );
+    return found != this->m_puppetAnimation.animations.end () ? &*found : nullptr;
+}
+
 void CImage::selectPuppetAnimations (const float sceneTime) {
     this->m_puppetActiveLayers.clear ();
 
     if (this->m_puppetAnimation.animations.empty ()) {
 	return;
     }
-
-    const auto findAnimation = [this] (const uint32_t id) -> const MdlAnimationClip* {
-	const auto found = std::find_if (
-	    this->m_puppetAnimation.animations.begin (), this->m_puppetAnimation.animations.end (),
-	    [id] (const MdlAnimationClip& animation) { return animation.id == id; }
-	);
-	return found != this->m_puppetAnimation.animations.end () ? &*found : nullptr;
-    };
 
     // Only scene-assigned clips contribute. An embedded clip can be an unused
     // editor animation; missing or empty animationlayers must keep the rest pose.
@@ -776,6 +776,7 @@ void CImage::selectPuppetAnimations (const float sceneTime) {
 	const float blendTime = std::max (layer->blendTime->value->getFloat (), 0.0f);
 	const float rate = layer->rate->value->getFloat ();
 	const auto animationId = static_cast<uint32_t> (layer->animation->value->getInt ());
+	const MdlAnimationClip* animation = this->findPuppetAnimationClip (animationId);
 	auto& playback = this->m_puppetLayerPlayback[layer->id];
 	float deltaTime = 0.0f;
 
@@ -784,6 +785,22 @@ void CImage::selectPuppetAnimations (const float sceneTime) {
 	    playback.animation = animationId;
 	    playback.visible = visible;
 	    playback.time = sceneTime * rate;
+	    if (animation != nullptr && animation->fps > 0.0f && animation->frameCount > 0) {
+		const float duration = animation->frameCount / animation->fps;
+		if (animation->mode == "single") {
+		    // This initial scene-relative playhead represents elapsed playback, not a seek.
+		    playback.finished = playback.playing && !playback.stopped && playback.time >= duration;
+		    playback.time = std::clamp (playback.time, 0.0f, duration);
+		} else {
+		    const float period = duration * (animation->mode == "mirror" ? 2.0f : 1.0f);
+		    playback.time = std::fmod (playback.time, period);
+		    if (playback.time < 0.0f) playback.time += period;
+		    if (animation->mode == "mirror" && playback.time > duration) {
+			playback.time = period - playback.time;
+			playback.reverse = true;
+		    }
+		}
+	    }
 	    playback.lastSceneTime = sceneTime;
 	    playback.visibilityWeight = visible && blendIn ? 0.0f : visible ? 1.0f : 0.0f;
 	} else {
@@ -793,15 +810,39 @@ void CImage::selectPuppetAnimations (const float sceneTime) {
 	    // A timeline seek/reset should seek deterministic scene-driven layers too.
 	    if (deltaTime < 0.0f) {
 		playback.time = sceneTime * rate;
+		playback.reverse = playback.finished = false;
 		deltaTime = 0.0f;
-	    } else if (playback.playing && !playback.stopped) {
-		playback.time += deltaTime * rate;
+	    } else if (playback.playing && !playback.stopped && !playback.finished
+		&& animation != nullptr && animation->fps > 0.0f) {
+		const float duration = animation->frameCount / animation->fps;
+		if (duration > 0.0f && !(animation->mode == "single" && playback.time >= duration)) {
+		    // Native stores the folded playhead; getFrame reads this value directly.
+		    playback.time += deltaTime * rate * (playback.reverse ? -1.0f : 1.0f);
+		    if (animation->mode == "single") {
+			if (playback.time >= duration) {
+			    playback.time = duration;
+			    playback.finished = true;
+			}
+		    } else if (animation->mode == "mirror") {
+			if (!playback.reverse && playback.time >= duration) {
+			    playback.time = duration - std::fmod (playback.time, duration);
+			    playback.reverse = true;
+			} else if (playback.reverse && playback.time <= 0.0f) {
+			    playback.time = -std::fmod (playback.time, duration);
+			    playback.reverse = false;
+			}
+		    } else {
+			if (playback.time < 0.0f) playback.time = std::fmod (playback.time + duration, duration);
+			if (playback.time >= duration) playback.time = std::fmod (playback.time, duration);
+		    }
+		}
 	    }
 
 	    if (playback.animation != animationId) {
 		playback.animation = animationId;
 		playback.time = 0.0f;
 		playback.stopped = false;
+		playback.reverse = playback.finished = false;
 	    }
 
 	    if (visible != playback.visible) {
@@ -827,7 +868,6 @@ void CImage::selectPuppetAnimations (const float sceneTime) {
 	}
 
 	const float weight = std::clamp (layer->blend->value->getFloat (), 0.0f, 1.0f) * playback.visibilityWeight;
-	const MdlAnimationClip* animation = findAnimation (animationId);
 	if (animation != nullptr) {
 	    this->m_puppetActiveLayers.push_back (
 		{
@@ -835,6 +875,7 @@ void CImage::selectPuppetAnimations (const float sceneTime) {
 		    .time = playback.stopped ? 0.0f : playback.time,
 		    .weight = weight,
 		    .additive = layer->additive->value->getBool (),
+		    .frame = (playback.stopped ? 0.0f : playback.time) * animation->fps,
 		}
 	    );
 	}
@@ -2237,12 +2278,36 @@ std::optional<size_t> CImage::findPuppetAnimationLayer (const std::string& name)
     return std::nullopt;
 }
 
+float CImage::getPuppetAnimationLayerFrame (const size_t index) const {
+    if (index >= this->m_image.animationLayers.size ()) return 0.0f;
+    const auto& layer = this->m_image.animationLayers[index];
+    const auto found = this->m_puppetLayerPlayback.find (layer->id);
+    if (found == this->m_puppetLayerPlayback.end ()) return 0.0f;
+    const auto* animation = this->findPuppetAnimationClip (found->second.animation);
+    return animation != nullptr ? found->second.time * animation->fps : 0.0f;
+}
+
+void CImage::setPuppetAnimationLayerFrame (const size_t index, const float frame) {
+    if (index >= this->m_image.animationLayers.size () || !std::isfinite (frame)) return;
+    const auto& layer = this->m_image.animationLayers[index];
+    if (!this->m_puppetLayerPlayback[layer->id].initialized) {
+	this->selectPuppetAnimations (this->getScene ().getTime ());
+    }
+    auto& playback = this->m_puppetLayerPlayback[layer->id];
+    const auto* animation = this->findPuppetAnimationClip (playback.animation);
+    if (animation == nullptr || animation->fps <= 0.0f) return;
+    playback.time = frame / animation->fps;
+    playback.stopped = false;
+}
+
 void CImage::playPuppetAnimationLayer (const std::optional<size_t> index) {
     const auto play = [this] (const size_t layerIndex) {
 	if (layerIndex >= this->m_image.animationLayers.size ()) {
 	    return;
 	}
 	auto& playback = this->m_puppetLayerPlayback[this->m_image.animationLayers[layerIndex]->id];
+	if (playback.finished) playback.time = 0.0f;
+	playback.finished = false;
 	playback.playing = true;
 	playback.stopped = false;
     };
@@ -2280,6 +2345,7 @@ void CImage::stopPuppetAnimationLayer (const std::optional<size_t> index) {
 	auto& playback = this->m_puppetLayerPlayback[this->m_image.animationLayers[layerIndex]->id];
 	playback.playing = false;
 	playback.stopped = true;
+	playback.reverse = playback.finished = false;
 	playback.time = 0.0f;
     };
 
@@ -2300,7 +2366,7 @@ bool CImage::isPuppetAnimationLayerPlaying (const std::optional<size_t> index) c
 	const int layerId = this->m_image.animationLayers[layerIndex]->id;
 	const auto playback = this->m_puppetLayerPlayback.find (layerId);
 	return playback == this->m_puppetLayerPlayback.end ()
-	    || (playback->second.playing && !playback->second.stopped);
+	    || (playback->second.playing && !playback->second.stopped && !playback->second.finished);
     };
 
     if (index.has_value ()) {

@@ -94,6 +94,8 @@ public:
     [[nodiscard]] size_t getPuppetAnimationLayerCount () const;
     [[nodiscard]] std::optional<size_t> findPuppetAnimationLayer (int index) const;
     [[nodiscard]] std::optional<size_t> findPuppetAnimationLayer (const std::string& name) const;
+    [[nodiscard]] float getPuppetAnimationLayerFrame (size_t index) const;
+    void setPuppetAnimationLayerFrame (size_t index, float frame);
     void playPuppetAnimationLayer (std::optional<size_t> index = std::nullopt);
     void pausePuppetAnimationLayer (std::optional<size_t> index = std::nullopt);
     void stopPuppetAnimationLayer (std::optional<size_t> index = std::nullopt);
@@ -135,6 +137,8 @@ private:
 	bool initialized = false;
 	bool playing = true;
 	bool stopped = false;
+	bool finished = false;
+	bool reverse = false;
 	bool visible = false;
 	uint32_t animation = 0;
 	float time = 0.0f;
@@ -146,6 +150,7 @@ private:
     void loadPuppetOverlay (const WallpaperEngine::Data::Model::MdlMesh& mesh, const glm::vec2& size);
     void setupPuppetAlbedoPasses ();
     void renderPuppetAlbedo ();
+    [[nodiscard]] const WallpaperEngine::Data::Model::MdlAnimationClip* findPuppetAnimationClip (uint32_t id) const;
     void selectPuppetAnimations (float sceneTime);
     void updatePuppetPositionBuffer (const glm::vec2& size);
     void updatePuppetClippingCommands (const PuppetClippingPlan& plan);

@@ -630,6 +630,17 @@ static JSValue scriptable_animation_command (
 	    return JS_UNDEFINED;
 	case AnimationCommand_IsPlaying:
 	    return JS_NewBool (ctx, image->isPuppetAnimationLayerPlaying (index));
+	case AnimationCommand_GetFrame:
+	    return index.has_value () ? JS_NewFloat64 (ctx, image->getPuppetAnimationLayerFrame (*index)) : JS_UNDEFINED;
+	case AnimationCommand_SetFrame:
+	    {
+		double frame = 0.0;
+		if (argc < 1 || JS_ToFloat64 (ctx, &frame, argv[0]) < 0 || !std::isfinite (frame)) {
+		    return JS_ThrowTypeError (ctx, "Animation frame expects a finite number");
+		}
+		if (index.has_value ()) image->setPuppetAnimationLayerFrame (*index, static_cast<float> (frame));
+		return JS_UNDEFINED;
+	    }
 	default:
 	    return JS_UNDEFINED;
     }
@@ -661,6 +672,12 @@ static JSValue scriptable_animation_controller (
 	ctx, result, "isPlaying",
 	JS_NewCFunctionData (ctx, scriptable_animation_command, 0, AnimationCommand_IsPlaying, 2, functionData)
     );
+    if (index.has_value ()) {
+	JS_SetPropertyStr (ctx, result, "getFrame",
+	    JS_NewCFunctionData (ctx, scriptable_animation_command, 0, AnimationCommand_GetFrame, 2, functionData));
+	JS_SetPropertyStr (ctx, result, "setFrame",
+	    JS_NewCFunctionData (ctx, scriptable_animation_command, 1, AnimationCommand_SetFrame, 2, functionData));
+    }
     JS_FreeValue (ctx, functionData[0]);
     JS_FreeValue (ctx, functionData[1]);
     return result;
