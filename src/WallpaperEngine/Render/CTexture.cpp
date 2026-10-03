@@ -27,6 +27,24 @@ CTexture::CTexture (
 	&& !this->m_header->isVideoMp4 && !(this->m_header->flags & TextureFlags_Video);
     // Native source resolution uniforms and normalized atlas coordinates remain authored.
     // Only the uploaded mip chain and local effect surfaces use the lower resolution.
+    if (this->m_header->isVolume ()) {
+	// Complete CPU decoding before allocating GL objects. The encoded canvas is a
+	// sequence of XY slices, not a tall 2D texture (native reader 14015c8d0).
+	Data::Parsers::TextureParser::decodeMipmaps (*this->m_header);
+	GLint maxSize = 0;
+	glGetIntegerv (GL_MAX_3D_TEXTURE_SIZE, &maxSize);
+	for (const auto& mipmaps : this->m_header->images | std::views::values) {
+	    for (const auto& mipmap : mipmaps) {
+		if (mipmap->width > static_cast<uint32_t> (maxSize)
+		    || mipmap->height > static_cast<uint32_t> (maxSize) || mipmap->depth > static_cast<uint32_t> (maxSize)) {
+		    sLog.exception ("Volume texture exceeds the graphics device's 3D texture limit");
+		}
+		if (this->m_header->freeImageFormat != FIF_UNKNOWN && !mipmap->decodedData) {
+		    sLog.exception ("Cannot decode volume texture slices");
+		}
+	    }
+	}
+    }
     // ensure the header is parsed
     this->setupResolution ();
     const GLint internalFormat = this->setupInternalFormat ();
@@ -38,8 +56,10 @@ CTexture::CTexture (
 	for (const auto& [index, mipmaps] : this->m_header->images) {
 	    const size_t skipped = mipmaps.size () - this->getMipMapCount (index);
 	    for (const auto& mipmap : mipmaps | std::views::drop (skipped)) {
-		const size_t width = mipmap->decodedWidth > 0 ? mipmap->decodedWidth : mipmap->width;
-		const size_t height = mipmap->decodedHeight > 0 ? mipmap->decodedHeight : mipmap->height;
+		const size_t width = this->m_header->isVolume () ? mipmap->width
+		    : mipmap->decodedWidth > 0 ? mipmap->decodedWidth : mipmap->width;
+		const size_t height = this->m_header->isVolume () ? size_t (mipmap->height) * mipmap->depth
+		    : mipmap->decodedHeight > 0 ? mipmap->decodedHeight : mipmap->height;
 
 		if (this->m_header->freeImageFormat != FIF_UNKNOWN) {
 		    this->m_approximateGpuBytes += width * height * 4;
@@ -141,13 +161,22 @@ CTexture::CTexture (
 		}
 	    }
 
+	    if (this->m_header->isVolume ()) {
+		width = mipmap->width;
+		height = mipmap->height;
+	    }
 	    switch (internalFormat) {
 		case GL_RGBA8:
 		case GL_RG8:
 		case GL_R8:
-		    glTexImage2D (
-			GL_TEXTURE_2D, level, internalFormat, width, height, 0, textureFormat, GL_UNSIGNED_BYTE, dataptr
-		    );
+		    if (this->m_header->isVolume ()) {
+			glTexImage3D (GL_TEXTURE_3D, level, internalFormat, width, height, mipmap->depth, 0,
+			    textureFormat, GL_UNSIGNED_BYTE, dataptr);
+		    } else {
+			glTexImage2D (
+			    GL_TEXTURE_2D, level, internalFormat, width, height, 0, textureFormat, GL_UNSIGNED_BYTE, dataptr
+			);
+		    }
 		    break;
 		case GL_COMPRESSED_RGBA_S3TC_DXT1_EXT:
 		case GL_COMPRESSED_RGBA_S3TC_DXT3_EXT:
@@ -272,33 +301,43 @@ GLint CTexture::setupInternalFormat () const {
 }
 
 void CTexture::setupOpenGLParameters (const uint32_t textureID) const {
+    const GLenum target = this->getTextureTarget ();
     // TODO: LABEL ELEMENTS TOO
     // bind the texture to assign information to it
-    glBindTexture (GL_TEXTURE_2D, this->m_textureID[textureID]);
+    glBindTexture (target, this->m_textureID[textureID]);
 
     // set mipmap levels
-    glTexParameteri (GL_TEXTURE_2D, GL_TEXTURE_BASE_LEVEL, 0);
-    glTexParameteri (GL_TEXTURE_2D, GL_TEXTURE_MAX_LEVEL, this->getMipMapCount (textureID) - 1);
+    glTexParameteri (target, GL_TEXTURE_BASE_LEVEL, 0);
+    glTexParameteri (target, GL_TEXTURE_MAX_LEVEL, this->getMipMapCount (textureID) - 1);
 
     // setup texture wrapping and filtering
     if (this->m_header->flags & TextureFlags_ClampUVs) {
-	glTexParameteri (GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-	glTexParameteri (GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+	glTexParameteri (target, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+	glTexParameteri (target, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
     } else {
-	glTexParameteri (GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);
-	glTexParameteri (GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT);
+	glTexParameteri (target, GL_TEXTURE_WRAP_S, GL_REPEAT);
+	glTexParameteri (target, GL_TEXTURE_WRAP_T, GL_REPEAT);
+    }
+
+    if (this->m_header->isVolume ()) {
+	glTexParameteri (target, GL_TEXTURE_WRAP_R,
+	    this->m_header->flags & TextureFlags_ClampUVs ? GL_CLAMP_TO_EDGE : GL_REPEAT);
     }
 
     if (this->m_header->flags & TextureFlags_NoInterpolation) {
-	glTexParameteri (GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
-	glTexParameteri (GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST_MIPMAP_NEAREST);
+	glTexParameteri (target, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+	glTexParameteri (target, GL_TEXTURE_MIN_FILTER, GL_NEAREST_MIPMAP_NEAREST);
     } else {
-	glTexParameteri (GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-	glTexParameteri (GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
+	glTexParameteri (target, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+	glTexParameteri (target, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
     }
 
-    glTexParameterf (GL_TEXTURE_2D, GL_TEXTURE_MAX_ANISOTROPY,
+    glTexParameterf (target, GL_TEXTURE_MAX_ANISOTROPY,
 	this->m_header->flags & TextureFlags_NoInterpolation ? 1.0f : this->m_header->anisotropy);
+}
+
+GLenum CTexture::getTextureTarget () const {
+    return this->m_header->isVolume () ? GL_TEXTURE_3D : GL_TEXTURE_2D;
 }
 
 GLuint CTexture::getTextureID (const uint32_t imageIndex) const {

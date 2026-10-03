@@ -39,6 +39,7 @@ public:
 	TextureFormat format, uint32_t width, uint32_t height, size_t byteCount
     );
 
+    [[nodiscard]] GLenum getTextureTarget () const override;
     [[nodiscard]] GLuint getTextureID (uint32_t imageIndex) const override;
     [[nodiscard]] uint32_t getTextureWidth (uint32_t imageIndex) const override;
     [[nodiscard]] uint32_t getTextureHeight (uint32_t imageIndex) const override;

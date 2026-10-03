@@ -788,3 +788,110 @@ TEST_CASE ("animated GIF backgrounds preserve native palette and disposal semant
 	}
     }
 }
+
+namespace {
+std::string volumeTexture (bool encoded, bool legacy = false) {
+    std::string pixels;
+    for (uint32_t z = 0; z < 4; ++z) {
+	for (uint32_t y = 0; y < 3; ++y) {
+	    for (uint32_t x = 0; x < 2; ++x) {
+		for (const uint8_t channel : { uint8_t (11 + x * 200), uint8_t (21 + y * 80),
+					       uint8_t (31 + z * 70), uint8_t (255) }) {
+		    pixels += static_cast<char> (channel);
+		}
+	    }
+	}
+    }
+    if (encoded) {
+	std::string png;
+	stbi_write_png_to_func ([] (void* context, void* data, int length) {
+	    static_cast<std::string*> (context)->append (static_cast<char*> (data), length);
+	}, &png, 2, 12, 4, pixels.data (), 8);
+	pixels = std::move (png);
+    }
+    std::string bytes (legacy ? "TEXV0004" : "TEXV0005", 9);
+    if (!legacy) bytes.append ("TEXI0001", 9);
+    // 0x40 adds depth after authored dimensions, before the existing versioned word.
+    for (uint32_t word : { 0u, 0x42u, 2u, 3u, 8u, 3u, 4u }) appendValue (bytes, word);
+    if (!legacy) {
+	appendValue (bytes, 0xff554433u);
+	bytes.append ("TEXB0004", 9);
+	for (uint32_t word : { 1u, encoded ? 13u : UINT32_MAX, 0u }) appendValue (bytes, word);
+    }
+    for (uint32_t word : { 1u, 2u, 3u, 4u }) appendValue (bytes, word);
+    if (!legacy) {
+	appendValue (bytes, 0u);
+	appendValue (bytes, 0u);
+    }
+    appendValue (bytes, static_cast<uint32_t> (pixels.size ()));
+    return bytes + pixels;
+}
+
+auto parseVolume (const std::string& bytes) {
+    return TextureParser::parse (BinaryReader (std::make_shared<std::istringstream> (bytes, std::ios::binary)));
+}
+} // namespace
+
+TEST_CASE ("native volume headers and stacked PNG pixels retain every coordinate", "[texture][volume]") {
+    for (bool encoded : { false, true }) {
+	for (bool legacy : { false, true }) {
+	    if (legacy && encoded) continue;
+	    CAPTURE (encoded, legacy);
+	    const auto bytes = volumeTexture (encoded, legacy);
+	    const auto texture = parseVolume (bytes);
+	    REQUIRE (texture->isVolume ());
+	    CHECK (texture->textureWidth == 2);
+	    CHECK (texture->textureHeight == 3);
+	    CHECK (texture->textureDepth == 4);
+	    CHECK (texture->width == 8);
+	    CHECK (texture->height == 3);
+	    const auto& mip = texture->images.at (0).front ();
+	    CHECK (mip->width == 2);
+	    CHECK (mip->height == 3);
+	    CHECK (mip->depth == 4);
+	    if (encoded) {
+		// Exercise the same batched CPU decode used by asynchronous texture preparation.
+		auto second = parseVolume (bytes);
+		TextureParser::decodeMipmaps (std::vector<Texture*> { texture.get (), second.get () });
+		REQUIRE (mip->decodedData);
+		CHECK (mip->decodedWidth == 2);
+		CHECK (mip->decodedHeight == 12);
+		REQUIRE (second->images.at (0).front ()->decodedData);
+		CHECK (std::memcmp (mip->decodedData.get (), second->images.at (0).front ()->decodedData.get (), 96) == 0);
+	    }
+	    const auto* pixels = encoded ? mip->decodedData.get ()
+		: reinterpret_cast<const unsigned char*> (mip->uncompressedData.get ());
+	    for (size_t z = 0; z < 4; ++z) for (size_t y = 0; y < 3; ++y) for (size_t x = 0; x < 2; ++x) {
+		const size_t index = ((z * 3 + y) * 2 + x) * 4;
+		CHECK (pixels[index] == 11 + x * 200);
+		CHECK (pixels[index + 1] == 21 + y * 80);
+		CHECK (pixels[index + 2] == 31 + z * 70);
+		CHECK (pixels[index + 3] == 255);
+	    }
+	}
+    }
+}
+
+TEST_CASE ("volume parsing rejects missing dimensions and mismatched slice payloads", "[texture][volume]") {
+    const auto bytes = volumeTexture (true);
+    for (const size_t offset : { 42u, 75u, 79u, 83u }) {
+	CAPTURE (offset);
+	auto invalid = bytes;
+	const uint32_t zero = 0;
+	std::memcpy (invalid.data () + offset, &zero, 4);
+	CHECK_THROWS (parseVolume (invalid));
+    }
+    for (const uint32_t depth : { 3u, 129u, UINT32_MAX }) {
+	auto invalid = bytes;
+	std::memcpy (invalid.data () + 83, &depth, 4);
+	CHECK_THROWS (parseVolume (invalid));
+    }
+    for (size_t end : std::array<size_t, 5> { 46, 50, 83, 87, bytes.size () - 1 }) {
+	CHECK_THROWS (parseVolume (bytes.substr (0, end)));
+    }
+    auto raw = volumeTexture (false);
+    const uint32_t wrongSize = 95;
+    std::memcpy (raw.data () + 95, &wrongSize, 4);
+    raw.pop_back ();
+    CHECK_THROWS (parseVolume (raw));
+}

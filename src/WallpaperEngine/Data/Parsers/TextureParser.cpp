@@ -391,6 +391,15 @@ MipmapSharedPtr TextureParser::parseMipmap (const BinaryReader& file, const Text
 
     result->width = file.nextUInt32 ();
     result->height = file.nextUInt32 ();
+    if (header.isVolume ()) {
+	result->depth = file.nextUInt32 ();
+	// Native reader 14015c8d0 bounds all three axes before decoding its slice canvas.
+	if (result->width == 0 || result->height == 0 || result->depth == 0
+	    || result->width > 8192 || result->height > 8192 || result->depth > 128
+	    || uint64_t (result->width) * result->height * result->depth * 4 > (1u << 30)) {
+	    throw std::runtime_error ("Invalid volume texture dimensions");
+	}
+    }
 
     if (header.containerVersion == ContainerVersion_TEXB0004 || header.containerVersion == ContainerVersion_TEXB0003
 	|| header.containerVersion == ContainerVersion_TEXB0002) {
@@ -449,6 +458,26 @@ MipmapSharedPtr TextureParser::parseMipmap (const BinaryReader& file, const Text
 	result->compressedData.reset ();
     } else {
 	file.next (result->uncompressedData.get (), result->uncompressedSize);
+    }
+
+    if (header.isVolume ()) {
+	if (header.freeImageFormat != FIF_UNKNOWN) {
+	    int width, height, channels;
+	    if (!stbi_info_from_memory (reinterpret_cast<const unsigned char*> (result->uncompressedData.get ()),
+		result->uncompressedSize, &width, &height, &channels)
+		|| width != static_cast<int> (result->width)
+		|| height != static_cast<int> (result->height * result->depth)) {
+		throw std::runtime_error ("Volume image must contain width by height*depth stacked slices");
+	    }
+	} else {
+	    const uint32_t channels = header.format == TextureFormat_ARGB8888 ? 4
+		: header.format == TextureFormat_RG88 ? 2 : header.format == TextureFormat_R8 ? 1 : 0;
+	    if (channels == 0) throw std::runtime_error ("Unsupported raw volume texture format");
+	    if (uint64_t (result->width) * result->height * result->depth * channels
+		!= static_cast<uint64_t> (result->uncompressedSize)) {
+		throw std::runtime_error ("Invalid volume texture payload size");
+	    }
+	}
     }
 
     return result;
@@ -563,6 +592,16 @@ void TextureParser::parseTextureHeader (Texture& header, const BinaryReader& fil
     header.textureHeight = file.nextUInt32 ();
     header.width = file.nextUInt32 ();
     header.height = file.nextUInt32 ();
+    if (header.isVolume ()) {
+	// Native TEXI reader 14015c760 places depth before the existing versioned word.
+	header.textureDepth = file.nextUInt32 ();
+	if (header.textureDepth == 0 || header.textureDepth > 128) {
+	    throw std::runtime_error ("Invalid volume texture depth");
+	}
+	if (header.flags & (TextureFlags_IsGif | TextureFlags_Video)) {
+	    throw std::runtime_error ("Animated and video volume textures are not supported");
+	}
+    }
 
     if (legacy) {
 	// TEXV0004 has no TEXI/TEXB sections or image count. One image's mip
@@ -575,6 +614,9 @@ void TextureParser::parseTextureHeader (Texture& header, const BinaryReader& fil
     // ignore some more bytes
     std::ignore = file.nextUInt32 ();
     parseContainer (header, file);
+    if (header.isVolume () && !header.variants.empty ()) {
+	throw std::runtime_error ("Conditional volume texture variants are not supported");
+    }
 }
 
 void TextureParser::parseContainer (Texture& header, const BinaryReader& file) {

@@ -19,6 +19,9 @@ class TextureProvider {
 public:
     virtual ~TextureProvider () = default;
 
+    /** OpenGL binding target; render targets and ordinary images are two-dimensional. */
+    [[nodiscard]] virtual GLenum getTextureTarget () const { return GL_TEXTURE_2D; }
+
     /**
      * @param imageIndex For animated textures, the frame to get the ID of
      * @return The OpenGL texture to use when rendering

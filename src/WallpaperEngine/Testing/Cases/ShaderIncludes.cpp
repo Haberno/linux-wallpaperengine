@@ -889,3 +889,17 @@ TEST_CASE ("cursor ripple input and decay use elapsed time with bounded float hi
     AssetLocator assets (std::move (container));
     CHECK (assets.fragmentShader ("effects/cursorripple_simulate_force") == custom);
 }
+
+TEST_CASE ("native volume samplers retain defaults and compile RGB and RGBA reads", "[shader][volume]") {
+    const auto sources = compileLinked (
+	"void main() { gl_Position = vec4(0.0); }",
+	"uniform sampler3D g_Texture1; // {\"default\":\"lut/neutral\"}\n"
+	"uniform sampler3D g_Texture2; // {\"hidden\":true}\n"
+	"void main() {\n"
+	"vec3 lutColor = texSample3D(g_Texture1, vec3(0.25,0.5,0.75));\n"
+	"gl_FragColor = vec4(lutColor,1) + texSample3D(g_Texture2, vec3(0.5));\n}\n", {}
+    );
+    const auto translated = GLSLContext::get ().toGlsl (sources.first, sources.second);
+    REQUIRE_FALSE (translated.second.empty ());
+    CHECK_THAT (translated.second, Catch::Matchers::ContainsSubstring ("sampler3D"));
+}

@@ -60,6 +60,7 @@
 	  "#define DECLARE_SAMPLER2D_PARAMETER(name) in sampler2D name\n"                                              \
 	  "#define MAKE_SAMPLER2D_ARGUMENT(name) name\n"                                                               \
 	  "#define texSample2D texture\n"                                                                              \
+	  "#define texSample3D texture\n"                                                                              \
 	  "#define texSample2DLod textureLod\n"                                                                        \
 	  "#define sampler2DBackBuffer sampler2D\n"                                                                    \
 	  "#define texSample2DBackBuffer(s, uv, size) texture((s), (uv))\n"                                             \
@@ -1126,7 +1127,7 @@ std::string ShaderUnit::applyLinkedVaryingCompatibility (std::string source) con
 	    static const std::set<std::string> types = {
 		"vec2", "vec3", "vec4", "float", "int", "uint", "bool",
 		"mat2", "mat3", "mat4", "mat4x3", "mat3x3",
-		"sampler2D", "uvec4", "ivec2", "ivec3", "ivec4",
+		"sampler2D", "sampler3D", "uvec4", "ivec2", "ivec3", "ivec4",
 		"varying", "uniform", "attribute", "in", "out",
 	    };
 	    return types.count (w) > 0;
@@ -1894,7 +1895,7 @@ void ShaderUnit::parseParameterConfiguration (
     }
 
     if (constant == this->m_constants.end () && !defvalue.has_value ()) {
-	if (type != "sampler2D" && type != "sampler2DBackBuffer" && type != "sampler2DComparison") {
+	if (type != "sampler2D" && type != "sampler3D" && type != "sampler2DBackBuffer" && type != "sampler2DComparison") {
 	    sLog.exception ("Cannot parse parameter data for ", name, " in shader ", this->m_file);
 	}
     }
@@ -1939,7 +1940,7 @@ void ShaderUnit::parseParameterConfiguration (
 	} else {
 	    parameter = new Variables::ShaderVariableInteger (defvalue->get<int> ());
 	}
-    } else if (type == "sampler2D" || type == "sampler2DComparison" || type == "sampler2DBackBuffer") {
+    } else if (type == "sampler2D" || type == "sampler3D" || type == "sampler2DComparison" || type == "sampler2DBackBuffer") {
 	// samplers can have special requirements, check what sampler we're working with and create definitions
 	// if needed
 	const auto textureName = data.find ("default");

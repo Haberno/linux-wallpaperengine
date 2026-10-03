@@ -93,6 +93,7 @@ enum TextureFlags {
     TextureFlags_IsGif = 4,
     TextureFlags_ClampUVsBorder = 8,
     TextureFlags_Video = 32,
+    TextureFlags_Volume = 64,
     TextureFlags_AlphaChannelPriority = 524288, // Indicates RG88/R8 format where alpha is in G/R channel
     // Wallpaper Engine records which channels of a packed component texture are
     // authored in bits 20..23. Shader sampler metadata maps these channels to
@@ -104,7 +105,7 @@ enum TextureFlags {
     TextureFlags_ComponentMask = TextureFlags_ComponentRed | TextureFlags_ComponentGreen
 	| TextureFlags_ComponentBlue | TextureFlags_ComponentAlpha,
     TextureFlags_All = TextureFlags_NoInterpolation | TextureFlags_ClampUVs | TextureFlags_IsGif
-	| TextureFlags_ClampUVsBorder | TextureFlags_Video | TextureFlags_AlphaChannelPriority
+	| TextureFlags_ClampUVsBorder | TextureFlags_Video | TextureFlags_Volume | TextureFlags_AlphaChannelPriority
 	| TextureFlags_ComponentMask,
 };
 
@@ -123,6 +124,8 @@ struct Mipmap {
     uint32_t width = 0;
     /** Height of the mipmap */
     uint32_t height = 0;
+    /** Depth of the mipmap; ordinary 2D textures have one slice. */
+    uint32_t depth = 1;
     /** If the mipmap data is compressed */
     uint32_t compression = 0;
     /** Uncompressed size of the mipmap */
@@ -182,6 +185,8 @@ struct Texture {
     uint32_t textureWidth = 0;
     /** Texture height in memory (power of 2) */
     uint32_t textureHeight = 0;
+    /** Texture depth in memory; present in TEXI only with the volume flag. */
+    uint32_t textureDepth = 1;
     /** Gif width */
     uint32_t gifWidth = 0;
     /** Gif height */
@@ -210,6 +215,8 @@ struct Texture {
     float spritesheetDuration = 0.0f;
 
     [[nodiscard]] bool isAnimated () const { return (flags & TextureFlags_IsGif) == TextureFlags_IsGif; }
+
+    [[nodiscard]] bool isVolume () const { return (flags & TextureFlags_Volume) != 0; }
 
     [[nodiscard]] bool hasSpritesheet () const { return spritesheetFrames > 0; }
 };

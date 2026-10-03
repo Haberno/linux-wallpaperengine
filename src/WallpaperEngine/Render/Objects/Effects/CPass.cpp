@@ -364,7 +364,7 @@ void CPass::bindTextureUnit (int index, const std::shared_ptr<const TextureProvi
     if (samplerActive) {
 	scene.markTextureUsed (*bound);
 	glActiveTexture (GL_TEXTURE0 + index);
-	glBindTexture (GL_TEXTURE_2D, bound->getTextureID (frame));
+	glBindTexture (bound->getTextureTarget (), bound->getTextureID (frame));
 	if (cookie) {
 	    if (std::ranges::find (m_cookieSamplerBindings, index, &std::pair<int, GLint>::first)
 		== m_cookieSamplerBindings.end ()) {
@@ -625,11 +625,13 @@ void CPass::cleanupRenderSetup () {
     // unbind all the used textures
     glActiveTexture (GL_TEXTURE0);
     glBindTexture (GL_TEXTURE_2D, 0);
+    glBindTexture (GL_TEXTURE_3D, 0);
 
     // continue on the map from the second texture
     for (const auto& index : this->m_textures | std::views::keys) {
 	glActiveTexture (GL_TEXTURE0 + index);
 	glBindTexture (GL_TEXTURE_2D, 0);
+	glBindTexture (GL_TEXTURE_3D, 0);
     }
 }
 
