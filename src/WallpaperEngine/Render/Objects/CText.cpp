@@ -1118,6 +1118,72 @@ void CText::drawBackground (const glm::mat4& mvp, const float alpha) {
     glUniform1i (m_uSolid, 0);
 }
 
+glm::vec2 CText::getSize () {
+    const auto& text = m_text.text->value->getString ();
+    if (m_ftFace == nullptr || text == m_lastSizedText) return m_scriptSize;
+
+    // Native size reads the unpadded font mesh immediately after a text write.
+    // Its HarfBuzz font uses unhinted advances; bounds still use hinted glyphs.
+    // Rendering owns texture/effect rebuilds independently of this CPU measurement.
+    const glm::vec2 spacing = currentSpacing ();
+    const float lineHeight = static_cast<float> (m_ftFace->size->metrics.height >> 6) + spacing.y;
+    const float ascender = static_cast<float> (m_ftFace->size->metrics.ascender >> 6);
+    const float descender = static_cast<float> (m_ftFace->size->metrics.descender >> 6);
+    const auto loadGlyph = [this] (uint32_t code, FT_Int32 flags, FT_Vector delta = { 0, 0 }) -> FT_GlyphSlot {
+	const auto face = fontForGlyph (code);
+	FT_Set_Transform (face, nullptr, &delta);
+	return FT_Load_Char (face, code, flags) == 0 ? face->glyph : nullptr;
+    };
+    const auto lines = layoutTextLines (text, currentLayoutLimits (), [&loadGlyph, &spacing] (uint32_t code) {
+	const auto slot = loadGlyph (code, FT_LOAD_NO_HINTING);
+	return slot != nullptr ? static_cast<float> (slot->advance.x >> 6) + spacing.x : 0.0f;
+    });
+    std::vector<float> widths;
+    float maxWidth = 0.0f;
+    for (const auto& line : lines) {
+	float width = 0.0f;
+	for (size_t offset = 0; offset < line.size ();) {
+	    if (const auto slot = loadGlyph (nextUtf8Codepoint (line, offset), FT_LOAD_NO_HINTING)) {
+		width += static_cast<float> (slot->advance.x >> 6) + spacing.x;
+	    }
+	}
+	widths.push_back (width);
+	maxWidth = std::max (maxWidth, width);
+    }
+    glm::vec4 bounds (0.0f);
+    for (size_t i = 0; i < lines.size (); ++i) {
+	float pen = m_text.alignment == "right" ? maxWidth - widths[i]
+	    : m_text.alignment == "left" ? 0.0f : (maxWidth - widths[i]) * 0.5f;
+	if (m_text.alignment != "left" && m_text.alignment != "right" && spacing.x == 0.0f) pen = std::round (pen);
+	const float baseline = static_cast<float> (i) * lineHeight;
+	for (size_t offset = 0; offset < lines[i].size ();) {
+	    const FT_Vector delta = {
+		static_cast<FT_Pos> (std::round ((pen - std::floor (pen)) * 64.0f)),
+		static_cast<FT_Pos> (std::round (-(baseline - std::floor (baseline)) * 64.0f)),
+	    };
+	    const auto code = nextUtf8Codepoint (lines[i], offset);
+	    const auto advanceSlot = loadGlyph (code, FT_LOAD_NO_HINTING);
+	    const float advance = advanceSlot != nullptr ? static_cast<float> (advanceSlot->advance.x >> 6) + spacing.x : 0.0f;
+	    const auto slot = loadGlyph (code, FT_LOAD_RENDER, delta);
+	    if (slot == nullptr) continue;
+	    if (slot->bitmap.width != 0 && slot->bitmap.rows != 0) {
+		const float left = std::floor (pen) + slot->bitmap_left;
+		const float top = std::floor (baseline) - slot->bitmap_top;
+		bounds.x = std::min (bounds.x, left);
+		bounds.y = std::min (bounds.y, -top - slot->bitmap.rows);
+		bounds.z = std::max (bounds.z, left + slot->bitmap.width);
+		bounds.w = std::max (bounds.w, -top);
+	    }
+	    pen += advance;
+	}
+    }
+    m_scriptSize = computeTextEffectLayout (
+	m_text.alignment, m_text.verticalalign, bounds, ascender, descender, lineHeight, lines.size (), { 0, 0 }
+    ).surfaceSize;
+    m_lastSizedText = text;
+    return m_scriptSize;
+}
+
 void CText::rebuildTextureFrom (const std::string& text) {
     // Wallpaper Engine lays out a glyph mesh, then aligns that mesh around the layer
     // origin from its actual bounds and the font's ascender/descender. The serialized
@@ -1317,6 +1383,7 @@ void CText::rebuildTextureFrom (const std::string& text) {
     m_effectSurface = glm::max (effectLayout.surfaceSize, glm::vec2 (1.0f));
     m_effectRasterOffset = effectLayout.rasterOffset;
     m_effectCompositeOffset = effectLayout.compositeOffset;
+    m_lastSizedText.reset ();
     m_lastRenderedText = text;
 
     uploadQuadVertices ();

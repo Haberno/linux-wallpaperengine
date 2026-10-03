@@ -4,6 +4,7 @@
 
 #include <functional>
 #include <memory>
+#include <optional>
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
@@ -104,6 +105,7 @@ public:
     void setup () override;
     void render () override;
     void prepareRenderEffects () { updateEffectVisibility (); }
+    [[nodiscard]] glm::vec2 getSize ();
 
 private:
     // Rebuilds the glyph texture (and matching quad VBO) from the given string.
@@ -133,6 +135,8 @@ private:
 
     const Text& m_text;
     std::string m_lastRenderedText;
+    std::optional<std::string> m_lastSizedText;
+    glm::vec2 m_scriptSize = { 0.0f, 0.0f };
     unsigned int m_lastFontSize = 0;
     TextLayoutLimits m_lastLayoutLimits;
     glm::vec2 m_lastSpacing = glm::vec2 (0.0f);

@@ -19,6 +19,7 @@
 #include "WallpaperEngine/Render/Objects/CModel.h"
 #include "WallpaperEngine/Render/Objects/CParticle.h"
 #include "WallpaperEngine/Render/Objects/CSound.h"
+#include "WallpaperEngine/Render/Objects/CText.h"
 #include "WallpaperEngine/Scripting/ScriptEngine.h"
 #include "WallpaperEngine/Scripting/ScriptableObject.h"
 
@@ -1139,6 +1140,16 @@ JSValue scriptableobject_property_get (JSContext* ctx, JSValueConst obj_val, JSA
 	    return JS_NewString (ctx, container->object.getObject ().as<Text> ()->font.c_str ());
 	}
 	if (std::strcmp (name, "pointsize") == 0) name = "pointSize";
+    }
+    if (std::strcmp (name, "size") == 0) {
+	if (const auto* image = dynamic_cast<WallpaperEngine::Render::Objects::CImage*> (&container->object)) {
+	    DynamicValue size (image->getSize ());
+	    return container->adapter.getEngine ().getAdapters ().vec2->instantiate (size, true);
+	}
+	if (auto* text = dynamic_cast<WallpaperEngine::Render::Objects::CText*> (&container->object)) {
+	    DynamicValue size (text->getSize ());
+	    return container->adapter.getEngine ().getAdapters ().vec2->instantiate (size, true);
+	}
     }
     if (std::strcmp (name, "instance") == 0
 	&& dynamic_cast<WallpaperEngine::Render::Objects::CParticle*> (&container->object) != nullptr) {
