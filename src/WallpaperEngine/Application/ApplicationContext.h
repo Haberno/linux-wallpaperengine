@@ -34,7 +34,11 @@ public:
 
     enum class PostProcessing { Disabled, Enabled, Ultra };
     /** Source mip selection and local image-effect resolution, independent of output render scale. */
-    enum class TextureResolution { Full = 1, Half = 2 };
+    enum class TextureResolution { Auto = 0, Full = 1, Half = 2 };
+    /** Native source policy at scene construction; output pixels are independent of render scale. */
+    [[nodiscard]] static uint32_t calculateTextureReduction (
+	TextureResolution quality, bool perspective, glm::ivec2 authoredSize, glm::ivec2 outputSize
+    );
     /** How a live switch shares frames with the outgoing wallpaper while it loads */
     enum class SwitchPacing { Adaptive, Fixed, Off };
 

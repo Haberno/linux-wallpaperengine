@@ -25,6 +25,21 @@ using namespace WallpaperEngine::Application;
 using WallpaperEngine::Data::JSON::JSON;
 using WallpaperEngine::Data::JSON::parseCompatible;
 
+uint32_t ApplicationContext::calculateTextureReduction (
+    TextureResolution quality, bool perspective, glm::ivec2 authoredSize, glm::ivec2 outputSize
+) {
+    if (quality == TextureResolution::Full) return 1;
+    if (quality == TextureResolution::Half) return 2;
+    const float outputArea = float (std::max (2, outputSize.x)) * float (std::max (2, outputSize.y));
+    // Native multiplies authored dimensions as signed 32-bit integers before conversion.
+    const int32_t authoredArea = static_cast<int32_t> (
+	static_cast<uint32_t> (authoredSize.x) * static_cast<uint32_t> (authoredSize.y)
+    );
+    const bool reduced = perspective ? outputArea < 1969920.0f
+	: outputArea * 3.9000000953674316f < static_cast<float> (authoredArea);
+    return reduced ? 2 : 1;
+}
+
 std::filesystem::path ApplicationContext::resolvePlaylistItemPath (const std::string& raw) const {
     if (raw.empty ()) {
 	return {};
@@ -565,13 +580,14 @@ void ApplicationContext::loadSettingsFromArgv () {
 	.store_into (this->settings.render.renderScale);
 
     performanceGroup.add_argument ("--texture-resolution")
-	.help ("Source texture and local image-effect resolution: full or half. Default: full. "
-	       "Half skips the largest authored mip when available; output resolution stays unchanged.")
-	.choices ("full", "half")
+	.help ("Source texture and local image-effect resolution: full, half or auto. Default: full. "
+	       "Half skips the largest authored mip when available; auto selects per scene at load time. Output resolution stays unchanged.")
+	.choices ("full", "half", "auto")
 	.default_value (std::string ("full"))
 	.nargs (1)
 	.action ([this] (const std::string& value) -> void {
-	    this->settings.render.textureResolution = value == "half" ? TextureResolution::Half : TextureResolution::Full;
+	    this->settings.render.textureResolution = value == "half" ? TextureResolution::Half
+		: value == "auto" ? TextureResolution::Auto : TextureResolution::Full;
 	});
 
     performanceGroup.add_argument ("--msaa")

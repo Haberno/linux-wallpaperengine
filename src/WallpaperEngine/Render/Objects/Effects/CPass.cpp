@@ -1299,7 +1299,7 @@ void CPass::setupTextureUniforms () {
     this->addUniform ("g_Texture9", 9);
     this->addUniform (
 	"g_TextureReductionScale", static_cast<float> (
-	    this->m_renderable.getScene ().getContext ().getApp ().getContext ().settings.render.textureResolution
+	    this->m_renderable.getScene ().getTextureReduction ()
 	)
     );
 

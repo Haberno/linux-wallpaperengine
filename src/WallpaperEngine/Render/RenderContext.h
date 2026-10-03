@@ -69,11 +69,22 @@ namespace Render {
 	 * first build breaks the effect-composite chain.
 	 */
 	[[nodiscard]] glm::ivec2 getStableOutputSize () const;
+	[[nodiscard]] glm::ivec2 getSceneOutputSize (const std::string& screenName) const;
+	struct SpanGeometry {
+	    glm::ivec4 bounds;
+	    float pixelScale;
+	};
+	[[nodiscard]] std::optional<SpanGeometry> getSpanGeometry (const std::vector<std::string>& screens) const;
+	[[nodiscard]] glm::ivec2 getTextureQualityOutputSize (const std::string& screenName) const;
+	[[nodiscard]] uint32_t getTextureReduction (
+	    const Data::Model::Wallpaper& wallpaper, glm::ivec2 outputSize
+	) const;
 	[[nodiscard]] std::shared_ptr<const TextureProvider> resolveTexture (const std::string& name) const;
 	[[nodiscard]] std::shared_ptr<const TextureProvider>
-	resolveTexture (const std::string& name, const Assets::AssetLocator& assetLocator) const;
+	resolveTexture (const std::string& name, const Assets::AssetLocator& assetLocator, uint32_t textureReduction) const;
 	[[nodiscard]] std::shared_ptr<const TextureProvider> resolveTexture (
-	    const std::string& name, const Assets::AssetLocator& assetLocator, const Data::Model::Properties& properties
+	    const std::string& name, const Assets::AssetLocator& assetLocator, const Data::Model::Properties& properties,
+	    uint32_t textureReduction
 	) const;
 	/**
 	 * Registers a ready texture under the given name so resolveTexture returns it instead
@@ -83,7 +94,7 @@ namespace Render {
 	void storeTexture (const std::string& name, std::shared_ptr<const TextureProvider> texture) const;
 	void storeTexture (
 	    const std::string& name, const Assets::AssetLocator& assetLocator,
-	    std::shared_ptr<const TextureProvider> texture
+	    std::shared_ptr<const TextureProvider> texture, uint32_t textureReduction
 	) const;
 	/**
 	 * Ticks every texture held by the cache, see TextureCache::updateAll

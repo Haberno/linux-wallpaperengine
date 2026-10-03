@@ -202,6 +202,9 @@ private:
 	/** Loader-thread phases in ms, for the load-time HUD */
 	double projectMs = 0.0, textureMs = 0.0, uploadMs = 0.0;
 	std::string comparisonToken {};
+	/** Render-thread snapshot; the worker never reads mutable output geometry. */
+	glm::ivec2 outputSize {};
+	uint32_t textureReduction = 1;
     };
 
     struct ComparisonScreen {

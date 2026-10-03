@@ -89,11 +89,13 @@ std::shared_ptr<const TextureProvider> TextureCache::resolve (const std::string&
 	return found->second.texture;
     }
 
+    const uint32_t textureReduction = this->getContext ().getApp ().getContext ().settings.render.textureResolution
+	== Application::ApplicationContext::TextureResolution::Half ? 2 : 1;
     // search for the texture in all the different containers just in case
     for (const auto& project : this->getContext ().getApp ().getBackgrounds () | std::views::values) {
 	try {
 	    auto parsedTexture = TextureParser::load (*project->assetLocator, filename);
-	    auto texture = std::make_shared<CTexture> (this->getContext (), std::move (parsedTexture));
+	    auto texture = std::make_shared<CTexture> (this->getContext (), std::move (parsedTexture), textureReduction);
 
 #if !NDEBUG
 	    glObjectLabel (GL_TEXTURE, texture->getTextureID (0), -1, filename.c_str ());
@@ -112,7 +114,7 @@ std::shared_ptr<const TextureProvider> TextureCache::resolve (const std::string&
 }
 
 std::shared_ptr<const TextureProvider>
-TextureCache::resolve (const std::string& filename, const AssetLocator& assetLocator) {
+TextureCache::resolve (const std::string& filename, const AssetLocator& assetLocator, uint32_t textureReduction) {
     // Runtime-provided textures (album art and other explicitly stored aliases)
     // remain global; authored assets are isolated by the locator's mount identity.
     if (filename.starts_with ('$')) {
@@ -122,7 +124,7 @@ TextureCache::resolve (const std::string& filename, const AssetLocator& assetLoc
 	}
     }
 
-    const std::string key = scopedKey (filename, assetLocator);
+    const std::string key = scopedKey (filename, assetLocator, textureReduction);
     if (const auto found = this->m_textureCache.find (key); found != this->m_textureCache.end ()) {
 	found->second.lastUsed = ++this->m_useCounter;
 	return found->second.texture;
@@ -133,7 +135,7 @@ TextureCache::resolve (const std::string& filename, const AssetLocator& assetLoc
     Debug::RenderHealth::record ("texture.sync_load", filename);
 
     auto parsedTexture = TextureParser::load (assetLocator, filename);
-    auto texture = std::make_shared<CTexture> (this->getContext (), std::move (parsedTexture));
+    auto texture = std::make_shared<CTexture> (this->getContext (), std::move (parsedTexture), textureReduction);
 
 #if !NDEBUG
     glObjectLabel (GL_TEXTURE, texture->getTextureID (0), -1, filename.c_str ());
@@ -163,13 +165,14 @@ void TextureCache::store (const std::string& name, std::shared_ptr<const Texture
 }
 
 void TextureCache::store (
-    const std::string& name, const AssetLocator& assetLocator, std::shared_ptr<const TextureProvider> texture
+    const std::string& name, const AssetLocator& assetLocator, std::shared_ptr<const TextureProvider> texture,
+    uint32_t textureReduction
 ) {
-    this->store (scopedKey (name, assetLocator), std::move (texture));
+    this->store (scopedKey (name, assetLocator, textureReduction), std::move (texture));
 }
 
-std::string TextureCache::scopedKey (const std::string& name, const AssetLocator& assetLocator) {
-    return assetLocator.identity () + '\x1f' + name;
+std::string TextureCache::scopedKey (const std::string& name, const AssetLocator& assetLocator, uint32_t textureReduction) {
+    return assetLocator.identity () + '\x1f' + name + '\x1f' + std::to_string (textureReduction);
 }
 
 void TextureCache::updateAll () {
@@ -253,9 +256,10 @@ void TextureCache::trim () {
 }
 
 std::shared_ptr<const TextureProvider> TextureCache::resolve (
-    const std::string& filename, const AssetLocator& assetLocator, const Data::Model::Properties& properties
+    const std::string& filename, const AssetLocator& assetLocator, const Data::Model::Properties& properties,
+    uint32_t textureReduction
 ) {
-    const std::string baseKey = scopedKey (filename, assetLocator);
+    const std::string baseKey = scopedKey (filename, assetLocator, textureReduction);
     auto cachedBase = this->m_textureCache.end ();
     if (filename.starts_with ('$')) {
 	cachedBase = this->m_textureCache.find (filename);
@@ -283,7 +287,7 @@ std::shared_ptr<const TextureProvider> TextureCache::resolve (
 	return found->second.texture;
     }
     // A bound variant retains its own source after the unbound base is evicted.
-    const auto base = this->resolve (filename, assetLocator);
+    const auto base = this->resolve (filename, assetLocator, textureReduction);
     const auto texture = std::dynamic_pointer_cast<const CTexture> (base);
     if (!texture || !texture->getHeader ().variantSource) {
 	return base;
@@ -292,7 +296,7 @@ std::shared_ptr<const TextureProvider> TextureCache::resolve (
 	return TextureParser::matchesCondition (condition, properties);
     };
     auto parsed = TextureParser::selectVariants (texture->getHeader (), {});
-    auto bound = std::make_shared<CTexture> (this->getContext (), std::move (parsed), selector);
+    auto bound = std::make_shared<CTexture> (this->getContext (), std::move (parsed), textureReduction, selector);
     this->store (key, bound);
     return bound;
 }

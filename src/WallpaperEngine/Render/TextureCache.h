@@ -42,9 +42,10 @@ public:
     std::shared_ptr<const TextureProvider> resolve (const std::string& filename);
     /** Resolve an asset only within one wallpaper's mounted files and cache namespace. */
     std::shared_ptr<const TextureProvider>
-    resolve (const std::string& filename, const Assets::AssetLocator& assetLocator);
+    resolve (const std::string& filename, const Assets::AssetLocator& assetLocator, uint32_t textureReduction);
     std::shared_ptr<const TextureProvider> resolve (
-	const std::string& filename, const Assets::AssetLocator& assetLocator, const Data::Model::Properties& properties
+	const std::string& filename, const Assets::AssetLocator& assetLocator, const Data::Model::Properties& properties,
+	uint32_t textureReduction
     );
 
     /**
@@ -57,7 +58,7 @@ public:
     /** Store a prepared wallpaper texture without colliding with another project. */
     void store (
 	const std::string& name, const Assets::AssetLocator& assetLocator,
-	std::shared_ptr<const TextureProvider> texture
+	std::shared_ptr<const TextureProvider> texture, uint32_t textureReduction
     );
 
     /**
@@ -87,7 +88,7 @@ private:
     void trim ();
 
     [[nodiscard]] static std::string
-    scopedKey (const std::string& name, const Assets::AssetLocator& assetLocator);
+    scopedKey (const std::string& name, const Assets::AssetLocator& assetLocator, uint32_t textureReduction);
 
     /** The previous album thumbnail texture */
     std::shared_ptr<const AlbumTexture> m_previousThumbnail = nullptr;

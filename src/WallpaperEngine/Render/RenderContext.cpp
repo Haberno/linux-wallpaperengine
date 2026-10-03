@@ -1,3 +1,4 @@
+#include <algorithm>
 #include <iostream>
 #include <random>
 
@@ -7,6 +8,7 @@
 #include "RenderContext.h"
 
 #include "WallpaperEngine/Data/Model/Project.h"
+#include "WallpaperEngine/Data/Model/Wallpaper.h"
 
 namespace WallpaperEngine::Render {
 RenderContext::RenderContext (
@@ -153,19 +155,81 @@ glm::ivec2 RenderContext::getStableOutputSize () const {
     return this->m_stableOutputSize.value ();
 }
 
+glm::ivec2 RenderContext::getSceneOutputSize (const std::string& screenName) const {
+    const auto& output = this->getOutput ();
+    if (const auto viewport = output.getViewports ().find (screenName); viewport != output.getViewports ().end ()) {
+	return { viewport->second->viewport.z, viewport->second->viewport.w };
+    }
+    return { output.getFullWidth (), output.getFullHeight () };
+}
+
+std::optional<RenderContext::SpanGeometry> RenderContext::getSpanGeometry (
+    const std::vector<std::string>& screens
+) const {
+    std::optional<SpanGeometry> result;
+    for (const auto& screen : screens) {
+	const auto found = this->getOutput ().getViewports ().find (screen);
+	if (found == this->getOutput ().getViewports ().end ()) continue;
+	const auto& viewport = *found->second;
+	const glm::ivec2 start = viewport.globalPosition;
+	const glm::ivec2 end = start + viewport.logicalSize;
+	if (!result) result = SpanGeometry { {start.x, start.y, end.x, end.y}, 1.0f };
+	else {
+	    result->bounds.x = std::min (result->bounds.x, start.x);
+	    result->bounds.y = std::min (result->bounds.y, start.y);
+	    result->bounds.z = std::max (result->bounds.z, end.x);
+	    result->bounds.w = std::max (result->bounds.w, end.y);
+	}
+	result->pixelScale = std::max ({ result->pixelScale,
+	    float (viewport.viewport.z) / std::max (viewport.logicalSize.x, 1),
+	    float (viewport.viewport.w) / std::max (viewport.logicalSize.y, 1) });
+    }
+    if (result) {
+	result->bounds.z -= result->bounds.x;
+	result->bounds.w -= result->bounds.y;
+    }
+    return result;
+}
+
+glm::ivec2 RenderContext::getTextureQualityOutputSize (const std::string& screenName) const {
+    for (const auto& group : this->getApp ().getContext ().settings.general.spanGroups) {
+	if (group.screens.empty () || screenName != "span:" + group.screens.front ()) continue;
+	if (const auto geometry = this->getSpanGeometry (group.screens)) {
+	    return glm::ivec2 (glm::round (glm::vec2 (geometry->bounds.z, geometry->bounds.w) * geometry->pixelScale));
+	}
+    }
+    return this->getSceneOutputSize (screenName);
+}
+
+uint32_t RenderContext::getTextureReduction (const Data::Model::Wallpaper& wallpaper, glm::ivec2 outputSize) const {
+    const auto quality = this->getApp ().getContext ().settings.render.textureResolution;
+    if (!wallpaper.is<Data::Model::Scene> ()) {
+	return quality == Application::ApplicationContext::TextureResolution::Half ? 2 : 1;
+    }
+    const auto& projection = wallpaper.as<Data::Model::Scene> ()->camera.projection;
+    const glm::ivec2 authoredSize = projection.isAuto ? glm::ivec2 (0)
+	: glm::ivec2 (projection.width, projection.height);
+    const bool perspective = projection.isPerspective
+	|| (!projection.isAuto && (authoredSize.x == 0 || authoredSize.y == 0));
+    return Application::ApplicationContext::calculateTextureReduction (
+	quality, perspective, authoredSize, outputSize
+    );
+}
+
 std::shared_ptr<const TextureProvider> RenderContext::resolveTexture (const std::string& name) const {
     return this->m_textureCache->resolve (name);
 }
 
 std::shared_ptr<const TextureProvider>
-RenderContext::resolveTexture (const std::string& name, const Assets::AssetLocator& assetLocator) const {
-    return this->m_textureCache->resolve (name, assetLocator);
+RenderContext::resolveTexture (const std::string& name, const Assets::AssetLocator& assetLocator, uint32_t textureReduction) const {
+    return this->m_textureCache->resolve (name, assetLocator, textureReduction);
 }
 
 std::shared_ptr<const TextureProvider> RenderContext::resolveTexture (
-    const std::string& name, const Assets::AssetLocator& assetLocator, const Data::Model::Properties& properties
+    const std::string& name, const Assets::AssetLocator& assetLocator, const Data::Model::Properties& properties,
+    uint32_t textureReduction
 ) const {
-    return this->m_textureCache->resolve (name, assetLocator, properties);
+    return this->m_textureCache->resolve (name, assetLocator, properties, textureReduction);
 }
 
 void RenderContext::storeTexture (const std::string& name, std::shared_ptr<const TextureProvider> texture) const {
@@ -174,9 +238,9 @@ void RenderContext::storeTexture (const std::string& name, std::shared_ptr<const
 
 void RenderContext::storeTexture (
     const std::string& name, const Assets::AssetLocator& assetLocator,
-    std::shared_ptr<const TextureProvider> texture
+    std::shared_ptr<const TextureProvider> texture, uint32_t textureReduction
 ) const {
-    this->m_textureCache->store (name, assetLocator, std::move (texture));
+    this->m_textureCache->store (name, assetLocator, std::move (texture), textureReduction);
 }
 
 void RenderContext::updateAllTextures () const { this->m_textureCache->updateAll (); }

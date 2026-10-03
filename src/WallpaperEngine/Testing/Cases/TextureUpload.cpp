@@ -1,3 +1,4 @@
+#include "WallpaperEngine/Application/ApplicationContext.h"
 #include "WallpaperEngine/Data/Assets/Texture.h"
 #include "WallpaperEngine/Render/CFBO.h"
 #include "WallpaperEngine/Render/CTexture.h"
@@ -780,4 +781,18 @@ TEST_CASE ("R8 effect targets retain one-channel storage through resize", "[.][g
 	CHECK (CFBO::getLiveCount () == liveCount);
     }
     glDeleteVertexArrays (1, &vao);
+}
+
+TEST_CASE ("Automatic texture quality uses native scene and output thresholds", "[texture][quality]") {
+    using Context = WallpaperEngine::Application::ApplicationContext;
+    using Quality = Context::TextureResolution;
+    CHECK (Context::calculateTextureReduction (Quality::Auto, true, {0, 0}, {1920, 1026}) == 1);
+    CHECK (Context::calculateTextureReduction (Quality::Auto, true, {0, 0}, {1920, 1025}) == 2);
+    CHECK (Context::calculateTextureReduction (Quality::Auto, false, {390, 100}, {100, 100}) == 1);
+    CHECK (Context::calculateTextureReduction (Quality::Auto, false, {391, 100}, {100, 100}) == 2);
+    CHECK (Context::calculateTextureReduction (Quality::Auto, false, {0, 0}, {100, 100}) == 1);
+    CHECK (Context::calculateTextureReduction (Quality::Auto, false, {15, 1}, {0, 0}) == 1);
+    CHECK (Context::calculateTextureReduction (Quality::Auto, false, {16, 1}, {0, 0}) == 2);
+    CHECK (Context::calculateTextureReduction (Quality::Full, true, {0, 0}, {1, 1}) == 1);
+    CHECK (Context::calculateTextureReduction (Quality::Half, false, {0, 0}, {3840, 2160}) == 2);
 }

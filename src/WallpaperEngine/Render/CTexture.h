@@ -26,7 +26,8 @@ using namespace WallpaperEngine::VideoPlayback::MPV;
 class CTexture final : public TextureProvider, public Helpers::ContextAware {
 public:
     explicit CTexture (
-	RenderContext& context, TextureUniquePtr header, Data::Parsers::TextureParser::VariantSelector selector = {}
+	RenderContext& context, TextureUniquePtr header, uint32_t textureReduction,
+	Data::Parsers::TextureParser::VariantSelector selector = {}
     );
     ~CTexture () override;
 
@@ -110,6 +111,8 @@ private:
     glm::vec4 m_resolution {};
     /** Half quality omits authored mip zero when a following mip exists. */
     bool m_reduceMipmaps = false;
+    /** Scene-selected quality also survives video-to-image variant changes. */
+    uint32_t m_textureReduction = 1;
     /** Sum of all uploaded images and mip levels, used by cache accounting. */
     size_t m_approximateGpuBytes = 0;
     /** The video player in use */

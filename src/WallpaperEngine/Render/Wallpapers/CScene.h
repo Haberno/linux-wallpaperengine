@@ -69,6 +69,7 @@ public:
 
     [[nodiscard]] const Scene& getScene () const;
     [[nodiscard]] bool isHdr () const { return m_hdrEnabled; }
+    [[nodiscard]] uint32_t getTextureReduction () const { return m_textureReduction; }
     [[nodiscard]] TextureFormat getColorFormat () const {
         return m_hdrEnabled ? TextureFormat_RGBA16161616f : TextureFormat_ARGB8888;
     }
@@ -327,6 +328,8 @@ private:
     std::shared_ptr<CFBO> m_mipMappedFramebuffer;
     void updateOutputSize (const glm::ivec4& viewport);
     bool m_hdrEnabled = false;
+    /** Selected once before object construction, independent of later output target resizes. */
+    uint32_t m_textureReduction = 1;
     std::unique_ptr<HdrBloom> m_hdrBloom;
     ObjectUniquePtr m_bloomObjectData;
     CObject* m_bloomObject = nullptr;

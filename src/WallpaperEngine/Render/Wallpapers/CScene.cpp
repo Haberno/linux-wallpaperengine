@@ -66,16 +66,8 @@ CScene::CScene (
 
     // Raster resolution belongs to the output. Orthographic canvas dimensions
     // remain authored units, while perspective cameras use the output aspect.
-    {
-	const auto& output = this->getContext ().getOutput ();
-	const auto viewport = output.getViewports ().find (screenName);
-	if (viewport != output.getViewports ().end ()) {
-	    this->m_outputSize = { viewport->second->viewport.z, viewport->second->viewport.w };
-	} else {
-	    // Shared span groups have no single named viewport.
-	    this->m_outputSize = { output.getFullWidth (), output.getFullHeight () };
-	}
-    }
+    this->m_outputSize = context.getSceneOutputSize (screenName);
+    this->m_textureReduction = context.getTextureReduction (wallpaper, context.getTextureQualityOutputSize (screenName));
     // Module-scope scene scripts can query the output during registration.
     this->registerFogScripts ();
     this->updateFogState ();
@@ -812,17 +804,13 @@ void CScene::updateOutputSize (const glm::ivec4& viewport) {
     if (this->getSpanInfo () != nullptr) {
 	// Span bounds and pointer positions are logical desktop units. Rasterize at
 	// the highest participating output density so no monitor enlarges its slice.
-	float pixelScale = 1.0f;
-	const auto& wallpapers = this->getContext ().getWallpapers ();
-	for (const auto& [name, output] : this->getContext ().getOutput ().getViewports ()) {
-	    const auto wallpaper = wallpapers.find (name);
-	    if (wallpaper != wallpapers.end () && wallpaper->second.get () == this) {
-		pixelScale = std::max ({ pixelScale,
-		    float (output->viewport.z) / std::max (output->logicalSize.x, 1),
-		    float (output->viewport.w) / std::max (output->logicalSize.y, 1) });
-	    }
+	std::vector<std::string> screens;
+	for (const auto& [name, wallpaper] : this->getContext ().getWallpapers ()) {
+	    if (wallpaper.get () == this) screens.push_back (name);
 	}
-	size = glm::round (size * pixelScale);
+	if (const auto geometry = this->getContext ().getSpanGeometry (screens)) {
+	    size = glm::round (size * geometry->pixelScale);
+	}
     }
     if (size != this->m_outputSize) {
 	this->m_outputSize = size;
@@ -2050,7 +2038,7 @@ void CScene::moveLayerToScriptableIndex (CObject* layer, int index) {
 }
 
 std::shared_ptr<const TextureProvider> CScene::resolveTexture (const std::string& name) const {
-    auto provider = this->getContext ().resolveTexture (name, this->getAssetLocator (), this->getScene ().project.properties);
+    auto provider = this->getContext ().resolveTexture (name, this->getAssetLocator (), this->getScene ().project.properties, this->m_textureReduction);
     if (auto texture = std::dynamic_pointer_cast<const CTexture> (provider); texture && texture->getVideoPlayer ()) {
 	auto [entry, inserted] = this->m_videoActivity.try_emplace (provider.get (), VideoActivity { texture });
 	if (inserted || entry->second.texture.expired ()) {
@@ -2103,7 +2091,7 @@ std::shared_ptr<const TextureProvider> CScene::resolveUserTexture (const std::st
 	{"clampuvs", (flags & TextureFlags_ClampUVs) != 0}
     });
     parsed->anisotropy = 1.0f;
-    auto texture = std::make_shared<CTexture> (getContext (), std::move (parsed));
+    auto texture = std::make_shared<CTexture> (getContext (), std::move (parsed), this->m_textureReduction);
     texture->startUserAnimation (getTime (), m_sceneFrame);
     m_userTextures.emplace (key, texture);
     return texture;

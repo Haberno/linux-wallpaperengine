@@ -68,7 +68,7 @@ void CLight::initializeCookie () {
 	    pixel[3] = static_cast<char> (255);
 	}
 	texture->images[0].push_back (std::move (mip));
-	m_cookie = std::make_shared<CTexture> (getScene ().getContext (), std::move (texture));
+	m_cookie = std::make_shared<CTexture> (getScene ().getContext (), std::move (texture), getScene ().getTextureReduction ());
     }
     if (!m_cookie) m_cookie = getScene ().resolveTexture ("cookie/flashlight1");
     m_cookie->incrementUsageCount ();

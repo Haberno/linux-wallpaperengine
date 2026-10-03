@@ -1030,6 +1030,7 @@ uint64_t WallpaperApplication::requestBackgroundSwitch (
 	job.transition = transition;
 	job.requested = std::chrono::steady_clock::now ();
 	job.comparisonToken = comparisonToken;
+	job.outputSize = this->m_renderContext->getTextureQualityOutputSize (screen);
 	this->m_latestSwitchIds[screen] = job.id;
 	this->m_switchRequests.emplace_back (std::move (job));
     }
@@ -1067,6 +1068,7 @@ void WallpaperApplication::switchWorkerMain () {
 
 	try {
 	    job.project = this->loadProject (job.path);
+	    job.textureReduction = this->m_renderContext->getTextureReduction (*job.project->wallpaper, job.outputSize);
 	    if (!job.comparisonToken.empty ()) {
 		if (!job.project->wallpaper->is<Scene> ())
 		    throw std::runtime_error ("Synchronized comparison currently requires a scene wallpaper");
@@ -1106,7 +1108,7 @@ void WallpaperApplication::switchWorkerMain () {
 		    try {
 			job.readyTextures.emplace_back (
 			    std::move (name),
-			    std::make_shared<Render::CTexture> (*this->m_renderContext, std::move (texture))
+			    std::make_shared<Render::CTexture> (*this->m_renderContext, std::move (texture), job.textureReduction)
 			);
 		    } catch (const std::exception& e) {
 			// resolveTexture will load this asset normally during the scene build.
@@ -1316,20 +1318,23 @@ bool WallpaperApplication::applyPreparedSwitch (PreparedSwitch& job) {
 	    // wallpaper referring to a Project that was moved out and destroyed while unwinding.
 	    auto& nextProject = *job.project;
 	    const auto& assetLocator = *nextProject.assetLocator;
+	    // Keep the upload snapshot in its own quality namespace. If the output changed,
+	    // CScene selects the current factor and resolves a different key during construction.
 	    // Shared-context uploads are already complete; cache insertion is only a pointer move.
 	    // These are deliberately not held past the store: the outgoing wallpaper's textures
 	    // are still referenced through the crossfade, so keeping both sets pinned over the
 	    // scene build exhausts memory on 4K wallpapers. trim() may evict some of these and
 	    // the build reloads them (texture.sync_load counts it) — that is the cheaper failure.
 	    for (auto& [name, texture] : job.readyTextures) {
-		this->m_renderContext->storeTexture (name, assetLocator, std::move (texture));
+		this->m_renderContext->storeTexture (name, assetLocator, std::move (texture), job.textureReduction);
 	    }
 
 	    // Media textures and non-Wayland fallbacks still need main-context construction.
 	    for (auto& [name, texture] : job.textures) {
 		this->m_renderContext->storeTexture (
 		    name, assetLocator,
-		    std::make_shared<Render::CTexture> (*this->m_renderContext, std::move (texture))
+		    std::make_shared<Render::CTexture> (*this->m_renderContext, std::move (texture), job.textureReduction),
+		    job.textureReduction
 		);
 		checkpoint (true);
 	    }
@@ -1775,13 +1780,17 @@ void WallpaperApplication::prepareOutputs () {
 	for (const auto& [background, info] : this->m_backgrounds) {
 	    const auto readStart = std::chrono::steady_clock::now ();
 	    auto textures = parseProjectTextures (*info);
+	    const uint32_t textureReduction = m_renderContext->getTextureReduction (
+		*info->wallpaper, m_renderContext->getTextureQualityOutputSize (background)
+	    );
 	    readMs += std::chrono::steady_clock::now () - readStart;
 
 	    for (auto& [name, texture] : textures) {
 		try {
 		    m_renderContext->storeTexture (
 			name, *info->assetLocator,
-			std::make_shared<Render::CTexture> (*m_renderContext, std::move (texture))
+			std::make_shared<Render::CTexture> (*m_renderContext, std::move (texture), textureReduction),
+			textureReduction
 		    );
 		    staged++;
 		} catch (const std::exception& e) {
@@ -1837,44 +1846,13 @@ void WallpaperApplication::prepareOutputs () {
 	    continue;
 	}
 
-	// Compute the bounding box of all viewports in this span group
-	const auto& viewports = m_renderContext->getOutput ().getViewports ();
-	int minX = INT_MAX, minY = INT_MAX, maxX = INT_MIN, maxY = INT_MIN;
-	bool anyFound = false;
-
-	for (const auto& screenName : spanGroup.screens) {
-	    const auto vpIt = viewports.find (screenName);
-	    if (vpIt == viewports.end ()) {
-		sLog.error ("Span group screen not found: ", screenName);
-		continue;
-	    }
-	    anyFound = true;
-	    const auto& vp = vpIt->second;
-	    const int x = vp->globalPosition.x;
-	    const int y = vp->globalPosition.y;
-	    const int w = vp->logicalSize.x;
-	    const int h = vp->logicalSize.y;
-	    sLog.debug (
-		"SPAN DEBUG prepareOutputs: screen '", screenName, "' globalPos=(", x, ",", y, ") logicalSize=", w, "x",
-		h
-	    );
-	    minX = std::min (minX, x);
-	    minY = std::min (minY, y);
-	    maxX = std::max (maxX, x + w);
-	    maxY = std::max (maxY, y + h);
-	}
-
-	if (!anyFound) {
+	const auto geometry = m_renderContext->getSpanGeometry (spanGroup.screens);
+	if (!geometry) {
 	    sLog.error ("No viewports found for span group, skipping");
 	    continue;
 	}
-
-	sLog.debug (
-	    "SPAN DEBUG prepareOutputs: bounding box=(", minX, ",", minY, ",", maxX - minX, ",", maxY - minY, ")"
-	);
-
 	WallpaperEngine::Render::CWallpaper::SpanInfo spanInfo;
-	spanInfo.totalBounds = { minX, minY, maxX - minX, maxY - minY };
+	spanInfo.totalBounds = geometry->bounds;
 
 	// Create one shared wallpaper with the span group's scaling mode
 	auto sharedWallpaper = WallpaperEngine::Render::CWallpaper::fromWallpaper (

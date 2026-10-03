@@ -15,15 +15,16 @@
 using namespace WallpaperEngine::Render;
 
 CTexture::CTexture (
-    RenderContext& context, TextureUniquePtr header, Data::Parsers::TextureParser::VariantSelector selector
-) : Helpers::ContextAware (context), m_header (std::move (header)), m_variantSelector (std::move (selector)) {
+    RenderContext& context, TextureUniquePtr header, uint32_t textureReduction,
+    Data::Parsers::TextureParser::VariantSelector selector
+) : Helpers::ContextAware (context), m_header (std::move (header)), m_textureReduction (textureReduction),
+    m_variantSelector (std::move (selector)) {
     if (this->m_variantSelector && this->m_header->variantSource) {
 	this->m_variantSelection
 	    = Data::Parsers::TextureParser::selectedVariants (*this->m_header, this->m_variantSelector);
 	this->m_header = Data::Parsers::TextureParser::selectVariants (*this->m_header, this->m_variantSelector);
     }
-    this->m_reduceMipmaps = context.getApp ().getContext ().settings.render.textureResolution
-	== Application::ApplicationContext::TextureResolution::Half
+    this->m_reduceMipmaps = this->m_textureReduction == 2
 	&& !this->m_header->isVideoMp4 && !(this->m_header->flags & TextureFlags_Video);
     // Native source resolution uniforms and normalized atlas coordinates remain authored.
     // Only the uploaded mip chain and local effect surfaces use the lower resolution.
@@ -491,7 +492,7 @@ void CTexture::refreshVariant () {
     this->m_variantSelection = selection;
     try {
 	auto parsed = Data::Parsers::TextureParser::selectVariants (*this->m_header, this->m_variantSelector);
-	CTexture replacement (this->getContext (), std::move (parsed));
+	CTexture replacement (this->getContext (), std::move (parsed), this->m_textureReduction);
 	std::swap (this->m_header, replacement.m_header);
 	std::swap (this->m_textureID, replacement.m_textureID);
 	std::swap (this->m_resolution, replacement.m_resolution);
