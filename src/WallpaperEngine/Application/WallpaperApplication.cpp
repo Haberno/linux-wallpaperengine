@@ -10,6 +10,7 @@
 #include "WallpaperEngine/Render/Drivers/VideoFactories.h"
 #include "WallpaperEngine/Render/RenderContext.h"
 #include "WallpaperEngine/Render/Wallpapers/CScene.h"
+#include "WallpaperEngine/Render/Wallpapers/CVideo.h"
 
 #include "WallpaperEngine/Data/Dumpers/StringPrinter.h"
 #include "WallpaperEngine/Data/Parsers/ProjectParser.h"
@@ -687,8 +688,8 @@ void WallpaperApplication::processControlSocket () {
 	    reply = "ok " + this->m_context.getLanguage () + "\n";
 	}
 
-	// prop <screen> <key> <value> - live user-property change: updates the property value and
-	// fires the scripts' applyUserProperties handler. Properties that gate scene structure
+	// prop <screen> <key> <value> updates scene values or built-in video color controls.
+	// Scene values fire applyUserProperties. Properties that gate scene structure
 	// (visibility conditions, effect toggles) need a rebuild, which this does NOT do yet.
 	if (command.rfind ("prop ", 0) == 0) {
 	    const auto body = command.substr (5);
@@ -709,6 +710,8 @@ void WallpaperApplication::processControlSocket () {
 
 		if (wpIt == wallpapers.end ()) {
 		    reply = "err unknown screen " + screen + "\n";
+		} else if (auto* video = dynamic_cast<Render::Wallpapers::CVideo*> (wpIt->second.get ())) {
+		    reply = video->setColorProperty (key, value) ? "ok\n" : "err unknown property " + key + "\n";
 		} else if (auto* scene = dynamic_cast<Render::Wallpapers::CScene*> (wpIt->second.get ());
 			   scene == nullptr) {
 		    reply = "err not a scene wallpaper on " + screen + "\n";

@@ -92,15 +92,28 @@ WallpaperState::TextureUVs CVideo::getPresentationUVs () const {
     return uvs;
 }
 
+bool CVideo::setColorProperty (const std::string& key, const std::string& value) {
+    if (key != "wec_e" && key != "wec_brs" && key != "wec_con" && key != "wec_sa" && key != "wec_hue")
+	return false;
+    this->m_liveColorProperties.insert_or_assign (key, value);
+    return true;
+}
+
 glm::vec4 CVideo::getColorCorrection () const {
     const auto& properties = this->getVideo ().project.properties;
     const auto& overrides = this->getContext ().getApp ().getContext ().settings.general.properties;
+    const auto readOverride = [&] (const std::string& key) -> const std::string* {
+	if (const auto live = this->m_liveColorProperties.find (key); live != this->m_liveColorProperties.end ())
+	    return &live->second;
+	const auto override = overrides.find (key);
+	return override != overrides.end () ? &override->second : nullptr;
+    };
     const auto property = properties.find ("wec_e");
     bool enabled = property != properties.end ()
 	&& property->second->getType () == Data::Model::DynamicValue::Boolean
 	&& property->second->getBool ();
-    if (const auto override = overrides.find ("wec_e"); override != overrides.end ()) {
-	enabled = override->second == "true" || override->second == "1";
+    if (const auto* override = readOverride ("wec_e")) {
+	enabled = *override == "true" || *override == "1";
     }
     if (!enabled) return { 1.0f, 1.0f, 1.0f, 0.0f };
 
@@ -111,8 +124,8 @@ glm::vec4 CVideo::getColorCorrection () const {
 	    if (type == Data::Model::DynamicValue::Float || type == Data::Model::DynamicValue::Int)
 		value = setting->second->getFloat ();
 	}
-	if (const auto override = overrides.find (name); override != overrides.end ()) {
-	    const auto& text = override->second;
+	if (const auto* override = readOverride (name)) {
+	    const auto& text = *override;
 	    float parsed;
 	    const auto result = std::from_chars (text.data (), text.data () + text.size (), parsed);
 	    if (result.ec == std::errc {} && result.ptr == text.data () + text.size () && std::isfinite (parsed))

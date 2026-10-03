@@ -4,6 +4,8 @@
 #include "WallpaperEngine/Render/CWallpaper.h"
 #include "WallpaperEngine/VideoPlayback/MPV/GLPlayer.h"
 
+#include <map>
+
 namespace WallpaperEngine::Render::Wallpapers {
 using namespace WallpaperEngine::VideoPlayback::MPV;
 
@@ -24,6 +26,7 @@ public:
     [[nodiscard]] WallpaperState::TextureUVs getPresentationUVs () const override;
 
     void setPause (bool newState) override;
+    bool setColorProperty (const std::string& key, const std::string& value);
 
 protected:
     void renderFrame (const glm::ivec4& viewport) override;
@@ -35,5 +38,6 @@ private:
     GLPlayerUniquePtr m_player;
 
     bool m_muted = false;
+    std::map<std::string, std::string> m_liveColorProperties;
 };
 } // namespace WallpaperEngine::Render::Wallpapers
