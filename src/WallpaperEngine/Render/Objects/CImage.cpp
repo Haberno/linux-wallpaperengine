@@ -2826,17 +2826,21 @@ std::optional<glm::mat4> CImage::getBoneTransform (const size_t index) const {
 glm::mat3 CImage::calculateOrthographicAttachmentTextureMatrix (
     const glm::mat4& attachmentWorld, const glm::mat4& receiverWorld,
     const glm::mat4& sourceViewProjection, const glm::mat4& receiverViewProjection,
-    const float cameraZ, const glm::vec2& size
+    const float cameraZ, const glm::vec2& size, const std::optional<glm::vec3> receiverEye
 ) {
     const glm::mat4 sourceClip = sourceViewProjection * attachmentWorld;
     const glm::mat4 unproject = glm::inverse (receiverViewProjection);
     const glm::mat4 receiverInverse = glm::inverse (receiverWorld);
-    const glm::vec3 direction = glm::vec3 (receiverInverse * glm::vec4 (0, 0, 1, 0));
     const auto project = [&] (const float x) {
         const glm::vec4 clip = sourceClip * glm::vec4 (x, 0, 0, 1);
-        const glm::vec4 screen = unproject * glm::vec4 (glm::vec2 (clip) / clip.w, 0, 1);
-        const glm::vec3 origin = glm::vec3 (receiverInverse * glm::vec4 (
-            screen.x / screen.w, screen.y / screen.w, cameraZ - 2000.0f, 1));
+        const glm::vec4 screen = unproject * glm::vec4 (glm::vec2 (clip) / clip.w, receiverEye ? 1 : 0, 1);
+        const glm::vec3 screenWorld = glm::vec3 (screen) / screen.w;
+        // Native virtual receivers cast from their inverse-view eye through
+        // unprojected depth1; ordinary receivers retain the parallel +Z ray.
+        const glm::vec3 rayOrigin = receiverEye.value_or (glm::vec3 (screenWorld.x, screenWorld.y, cameraZ - 2000.0f));
+        const glm::vec3 rayDirection = receiverEye ? glm::normalize (screenWorld - *receiverEye) : glm::vec3 (0, 0, 1);
+        const glm::vec3 origin = glm::vec3 (receiverInverse * glm::vec4 (rayOrigin, 1));
+        const glm::vec3 direction = glm::vec3 (receiverInverse * glm::vec4 (rayDirection, 0));
         // Native ignores the unit-triangle hit flag: extrapolate outside the
         // image and behind the ray. Parallel rays retain zero barycentrics.
         const glm::vec2 hit = std::abs (direction.z) <= std::numeric_limits<float>::epsilon ()
@@ -2855,16 +2859,16 @@ std::optional<glm::mat3> CImage::transformAttachmentToTexture (
 ) const {
     const auto& camera = this->getScene ().getCamera ();
     const Object& object = source.getObject ();
-    // Virtual image receivers and perspective scenes require separate ray
-    // contracts; an orthographic scene may still project a virtual model source.
-    if (!camera.isOrthogonal () || this->m_image.perspective->value->getBool ()
-        || this->m_image.model->fullscreen) return std::nullopt;
-    bool virtualModelSource = false;
+    // Perspective scenes and fullscreen composition retain separate contracts.
+    if (!camera.isOrthogonal () || this->m_image.model->fullscreen) return std::nullopt;
+    const bool virtualReceiver = this->m_image.perspective->value->getBool ();
+    bool virtualSource = false;
     if (object.is<Image> ()) {
         const Image& image = *object.as<Image> ();
-        if (image.perspective->value->getBool () || image.model->fullscreen) return std::nullopt;
+        if (image.model->fullscreen) return std::nullopt;
+        virtualSource = image.perspective->value->getBool ();
     } else if (object.is<Model3D> ()) {
-        virtualModelSource = object.as<Model3D> ()->perspective->value->getBool ();
+        virtualSource = object.as<Model3D> ()->perspective->value->getBool ();
     } else {
         return std::nullopt;
     }
@@ -2872,26 +2876,31 @@ std::optional<glm::mat3> CImage::transformAttachmentToTexture (
         glm::vec3 (-camera.getWidth () * .5f, camera.getHeight () * .5f, 0))
         * glm::scale (glm::mat4 (1), glm::vec3 (1, -1, 1));
     const glm::mat4 viewProjection = camera.getProjection () * camera.getLookAt () * sceneToRender;
-    glm::mat4 sourceViewProjection = viewProjection;
-    if (virtualModelSource) {
-        // Match CModel's virtual render camera. The receiver still unprojects
-        // through its ordinary camera, as in native transformAttachmentToTexture.
+    glm::mat4 virtualView (1), virtualViewProjection (1);
+    if (virtualSource || virtualReceiver) {
+        // Image and model virtual layers use the same render camera.
         const float fov = glm::radians (glm::clamp (camera.getFov (), 0.1f, 179.9f));
         const float distance = 1.0f / (std::tan (fov * 0.5f) * camera.getProjection ()[1][1]);
         glm::mat4 view = camera.getLookAt ();
         view[3][2] = -distance;
         const auto& output = this->getScene ().getOutputSize ();
-        sourceViewProjection = glm::perspective (fov, output.x / output.y, 5.0f,
-            glm::max (15000.0f, distance + 1000.0f)) * view * sceneToRender;
+        virtualView = view * sceneToRender;
+        virtualViewProjection = glm::perspective (fov, output.x / output.y, 5.0f,
+            glm::max (15000.0f, distance + 1000.0f)) * virtualView;
     }
     // Render offsets inherit the root layer. Convert their Y-flipped space
     // back to authored coordinates before composing the camera transforms.
     const glm::vec2 sourceOffset = source.resolveParallaxOffset () * glm::vec2 (1, -1);
     const glm::vec2 receiverOffset = this->resolveParallaxOffset () * glm::vec2 (1, -1);
+    std::optional<glm::vec3> receiverEye;
+    if (virtualReceiver) {
+        receiverEye = glm::vec3 (glm::inverse (glm::translate (virtualView, glm::vec3 (receiverOffset, 0)))[3]);
+    }
     return calculateOrthographicAttachmentTextureMatrix (
         attachmentWorld, this->resolveWorldMatrix (),
-        glm::translate (sourceViewProjection, glm::vec3 (sourceOffset, 0)),
-        glm::translate (viewProjection, glm::vec3 (receiverOffset, 0)), camera.getEye ().z, this->getSize ());
+        glm::translate (virtualSource ? virtualViewProjection : viewProjection, glm::vec3 (sourceOffset, 0)),
+        glm::translate (virtualReceiver ? virtualViewProjection : viewProjection, glm::vec3 (receiverOffset, 0)),
+        camera.getEye ().z, this->getSize (), receiverEye);
 }
 
 static glm::mat4 cursorPlaneTransform (const glm::mat4& world) {

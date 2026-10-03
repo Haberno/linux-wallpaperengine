@@ -80,7 +80,7 @@ public:
     [[nodiscard]] static glm::mat3 calculateOrthographicAttachmentTextureMatrix (
         const glm::mat4& attachmentWorld, const glm::mat4& receiverWorld,
         const glm::mat4& sourceViewProjection, const glm::mat4& receiverViewProjection,
-        float cameraZ, const glm::vec2& size
+        float cameraZ, const glm::vec2& size, std::optional<glm::vec3> receiverEye = std::nullopt
     );
 
     /** Split a perspective image transform into the matrices consumed by genericimage3/4.
