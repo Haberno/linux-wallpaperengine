@@ -531,6 +531,11 @@ JSValue JS_NewArray (JSContext* c) {
     auto v = JSObjectMakeArray (c->jsc, 0, nullptr, &ex);
     return finish (c, v, ex);
 }
+bool JS_IsArray (JSValue obj) {
+    if (!JS_IsObject (obj)) return false;
+    const auto* value = holder (obj);
+    return JSValueIsArray (value->ctx->jsc, value->value);
+}
 JSClassID JS_NewClassID (JSRuntime* rt, JSClassID* id) { return *id = rt->nextClass++; }
 int JS_NewClass (JSRuntime* rt, JSClassID id, const JSClassDef* def) {
     auto cls = std::make_unique<Class> ();
