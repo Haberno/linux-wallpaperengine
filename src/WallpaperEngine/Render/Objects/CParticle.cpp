@@ -2258,13 +2258,12 @@ OperatorFunc CParticle::createAngularMovementOperator (const AngularMovementOper
         const float speed = (m_particle.flags & 16) != 0 ? 1.0f : getInstanceOverride ().speed->value->getFloat ();
         const glm::vec3 force = op.force->value->getVec3 () * speed;
         const float drag = op.drag->value->getFloat ();
+        const float forceDt = dt * std::pow (std::min (0.025f / getScene ().getDeltaTime (), 1.0f), 0.7f);
         for (uint32_t i = 0; i < count; ++i) {
             auto& particle = particles[i];
             if (!particle.alive) continue;
-            // The fork currently supplies one delta; native force-clock mapping
-            // and the half-step scheduler remain separate parity work.
             applyParticleAngularMovement (
-                particle, force, drag, dt, dt, particleOperatorBlend (particle.getLifetimePos (), op.blendTimes)
+                particle, force, drag, dt, forceDt, particleOperatorBlend (particle.getLifetimePos (), op.blendTimes)
             );
         }
     };
@@ -2432,6 +2431,7 @@ OperatorFunc CParticle::createTurbulenceOperator (const TurbulenceOperator& op) 
 	speedMin *= audio;
 	speedSpan *= audio;
 	const float phaseSpan = phaseMaxValue->getFloat () - phaseMinValue->getFloat ();
+	const float forceDt = dt * std::pow (std::min (0.025f / getScene ().getDeltaTime (), 1.0f), 0.7f);
 
 	for (size_t i = 0; i < count; ++i) {
 	    ParticleInstance& p = particles[i];
@@ -2459,7 +2459,7 @@ OperatorFunc CParticle::createTurbulenceOperator (const TurbulenceOperator& op) 
 	    // Native keeps the scalar field's magnitude and signed speed; it neither
 	    // takes a curl nor normalizes the three cyclic samples.
 	    force *= mask * turbSpeed;
-	    p.velocity += force * dt * particleOperatorBlend (p.getLifetimePos (), blendTimes);
+	    p.velocity += force * forceDt * particleOperatorBlend (p.getLifetimePos (), blendTimes);
 	}
     };
 }
@@ -2526,14 +2526,13 @@ OperatorFunc CParticle::createVortexV2Operator (const VortexOperator& op) {
         if ((m_particle.flags & 1) != 0) axis = glm::mat3 (m_controlPointTransform) * axis;
         const glm::vec3 center = controlPoints[op.controlPoint].position;
         const float centerForce = op.centerForce->value->getFloat ();
+        const float forceDt = dt * std::pow (std::min (0.025f / getScene ().getDeltaTime (), 1.0f), 0.7f);
         for (uint32_t i = 0; i < count; ++i) {
             auto& particle = particles[i];
             if (!particle.alive) continue;
-            // Native has a separately adjusted force clock. The fork currently
-            // supplies one simulation delta; clock/scheduler parity is separate.
             particle.velocity += calculateParticleVortexV2 (
                 particle.position - center, particle.velocity, axis, op.flags, distances, speeds,
-                centerForce, ring, dt, dt, particleOperatorBlend (particle.getLifetimePos (), op.blendTimes)
+                centerForce, ring, dt, forceDt, particleOperatorBlend (particle.getLifetimePos (), op.blendTimes)
             );
         }
     };
