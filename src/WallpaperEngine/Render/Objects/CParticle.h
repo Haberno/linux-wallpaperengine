@@ -136,7 +136,7 @@ void applyParticleAngularMovement (
 
 void initializeParticleBetweenControlPoints (
     ParticleInstance& particle, const MapSequenceBetweenControlPointsInitializer& initializer,
-    const glm::vec3& start, const glm::vec3& end, float& phase, float& direction
+    const glm::vec3& start, const glm::vec3& end, float& phase, float& direction, float countMultiplier = 1.0f
 );
 
 /**

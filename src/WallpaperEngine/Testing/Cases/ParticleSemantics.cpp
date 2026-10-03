@@ -828,6 +828,35 @@ TEST_CASE ("between-control-point sequences include endpoints and reflect in spa
     }
 }
 
+TEST_CASE ("between-control-point count scales spacing before subtracting the endpoint", "[particle][sequence-count]") {
+    using WallpaperEngine::Data::Builders::UserSettingBuilder;
+    using WallpaperEngine::Render::Objects::initializeParticleBetweenControlPoints;
+    MapSequenceBetweenControlPointsInitializer initializer (
+	UserSettingBuilder::fromValue (3.0f), UserSettingBuilder::fromValue (glm::vec2 (0.0f, 1.0f)),
+	"repeat", 0, 1, 16, 0.3f, glm::vec3 (0.0f, 1.0f, 0.0f), 0.9f
+    );
+    for (const auto [multiplier, secondX] : { std::pair { 1.0f, 66.0f }, { 2.0f, 33.0f }, { 4.0f, 21.0f } }) {
+	float phase = 0.0f, direction = 1.0f;
+	ParticleInstance first, second;
+	initializeParticleBetweenControlPoints (first, initializer, { 11, 0, 0 }, { 121, 0, 0 }, phase, direction, multiplier);
+	initializeParticleBetweenControlPoints (second, initializer, { 11, 0, 0 }, { 121, 0, 0 }, phase, direction, multiplier);
+	CHECK (first.position.x == 11.0f);
+	CHECK (second.position.x == Catch::Approx (secondX));
+    }
+    // Fractional authored counts remain fractional; the native floor applies
+    // after multiplication and endpoint subtraction.
+    initializer.count->value->update (1.5f, DynamicValue::UpdateSource::Initialization);
+    float phase = 0.0f, direction = 1.0f;
+    ParticleInstance particle;
+    initializeParticleBetweenControlPoints (particle, initializer, {}, { 1, 0, 0 }, phase, direction, 2.0f);
+    CHECK (phase == 0.5f);
+    initializer.limitBehavior = "mirror";
+    phase = 0.0f;
+    initializeParticleBetweenControlPoints (particle, initializer, {}, { 1, 0, 0 }, phase, direction, 0.0f);
+    CHECK (phase == Catch::Approx (-9998.0f));
+    CHECK (direction == -1.0f);
+}
+
 TEST_CASE ("between-control-point flags taper spread velocity size and authored arc", "[particle]") {
     using WallpaperEngine::Data::Builders::UserSettingBuilder;
     using WallpaperEngine::Render::Objects::initializeParticleBetweenControlPoints;

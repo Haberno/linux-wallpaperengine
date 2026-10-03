@@ -58,7 +58,7 @@ float WallpaperEngine::Render::Objects::calculateParticleAudioResponse (
 
 void WallpaperEngine::Render::Objects::initializeParticleBetweenControlPoints (
     ParticleInstance& particle, const MapSequenceBetweenControlPointsInitializer& initializer,
-    const glm::vec3& start, const glm::vec3& end, float& phase, float& direction
+    const glm::vec3& start, const glm::vec3& end, float& phase, float& direction, const float countMultiplier
 ) {
     // Native initializer opcode 14 (14023ca93) preserves only the emitter's
     // displacement perpendicular to the control-point segment.
@@ -83,7 +83,7 @@ void WallpaperEngine::Render::Objects::initializeParticleBetweenControlPoints (
 
     // Both endpoints are samples: unlike the circular initializer, the step
     // is 1/(count-1). Native repeat resets to zero; mirror reflects overshoot.
-    phase += direction / std::max (0.0001f, initializer.count->value->getFloat () - 1.0f);
+    phase += direction / std::max (0.0001f, initializer.count->value->getFloat () * countMultiplier - 1.0f);
     if (phase > 1.0f) {
 	if (initializer.limitBehavior == "mirror") {
 	    phase = 2.0f - phase;
@@ -1825,14 +1825,18 @@ InitializerFunc
 CParticle::createMapSequenceBetweenControlPointsInitializer (const MapSequenceBetweenControlPointsInitializer& init) {
     includeControlPoint (init.controlPointStart);
     includeControlPoint (init.controlPointEnd);
-    return [this, &init, phase = 0.0f, direction = 1.0f] (ParticleInstance& particle) mutable {
+    // Native 1401ca62c/1401ca637 gates the root count by this definition's flags.
+    DynamicValue* countOverride = (m_particle.flags & 32) == 0 && (init.flags & 16) != 0
+	? getInstanceOverride ().count->value.get () : nullptr;
+    return [this, &init, countOverride, phase = 0.0f, direction = 1.0f] (ParticleInstance& particle) mutable {
 	const auto point = [this] (const int index) {
 	    const int clamped = std::clamp (index, 0, PARTICLE_CONTROL_POINT_COUNT - 1);
 	    return clamped < static_cast<int> (m_controlPoints.size ())
 		? m_controlPoints[clamped].position : glm::vec3 (0.0f);
 	};
 	initializeParticleBetweenControlPoints (
-	    particle, init, point (init.controlPointStart), point (init.controlPointEnd), phase, direction
+	    particle, init, point (init.controlPointStart), point (init.controlPointEnd), phase, direction,
+	    countOverride ? countOverride->getFloat () : 1.0f
 	);
     };
 }
@@ -1847,12 +1851,15 @@ CParticle::createMapSequenceAroundControlPointInitializer (const MapSequenceArou
     DynamicValue* axisValue = init.axis->value.get ();
     DynamicValue* controlPointValue = init.controlPoint->value.get ();
     DynamicValue* speedOverride = getInstanceOverride ().speed->value.get ();
+    // Native 1401ca17d/1401ca184 uses initializer bit1 for circular spacing.
+    DynamicValue* countOverride = (m_particle.flags & 32) == 0 && (init.flags & 1) != 0
+	? getInstanceOverride ().count->value.get () : nullptr;
     const bool mirror = init.limitBehavior == "mirror";
 
     // The official initializer stores a normalized [0, 1] phase and a signed
     // 1/count step. Both are shared by every particle emitted by this initializer.
     return [this, countValue, boundsValue, speedMinValue, speedMaxValue, axisValue, controlPointValue,
-	       speedOverride, mirror, phase = 0.0f, direction = 1.0f] (ParticleInstance& p) mutable {
+	       speedOverride, countOverride, mirror, phase = 0.0f, direction = 1.0f] (ParticleInstance& p) mutable {
 	constexpr float normalizationEpsilon = 1.1920929e-7f;
 
 	const int controlPoint = std::clamp (static_cast<int> (controlPointValue->getFloat ()), 0,
@@ -1909,7 +1916,7 @@ CParticle::createMapSequenceAroundControlPointInitializer (const MapSequenceArou
 
 	// The compiler clamps count to 0.0001, not to an integer. Fractional
 	// counts (including shipped values such as 3.02) are intentional.
-	const float count = std::max (0.0001f, countValue->getFloat ());
+	const float count = std::max (0.0001f, countValue->getFloat () * (countOverride ? countOverride->getFloat () : 1.0f));
 	const float step = direction / count;
 	phase += step;
 	if (phase > 1.0f) {

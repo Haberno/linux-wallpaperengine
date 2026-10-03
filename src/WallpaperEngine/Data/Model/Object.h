@@ -399,7 +399,7 @@ public:
     UserSettingUniquePtr axis;
     std::string limitBehavior;
     UserSettingUniquePtr controlPoint;
-    /** Retained from the official schema; its CPU initializer does not inspect these bits. */
+    /** Bit1 opts sequence spacing into the instance count multiplier. */
     uint32_t flags;
 };
 
