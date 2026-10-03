@@ -569,3 +569,26 @@ TEST_CASE ("Scene force settings retain native defaults, scripts and live proper
         }
     }
 }
+
+TEST_CASE ("Animation layers are enabled unless explicitly hidden", "[animation-layer-visibility][parser]") {
+    using namespace WallpaperEngine::Data::Model;
+    Project project {};
+    auto filesystem = std::make_unique<WallpaperEngine::FileSystem::Container> ();
+    filesystem->getVFS ().add ("models/probe.json", R"({"material":"materials/probe.json"})");
+    filesystem->getVFS ().add ("materials/probe.json", R"({"passes":[]})");
+    project.assetLocator = std::make_unique<WallpaperEngine::Assets::AssetLocator> (std::move (filesystem));
+    for (const int visible : { -1, 0, 1 }) {
+        INFO ("visible=" << visible);
+        JSON layer = {{ "id", 10 }, { "name", "Idle" }, { "animation", 1 }};
+        if (visible >= 0) layer["visible"] = visible != 0;
+        const auto object = WallpaperEngine::Data::Parsers::ObjectParser::parse (JSON {
+            { "id", 1 }, { "name", "probe" }, { "image", "models/probe.json" },
+            { "animationlayers", JSON::array ({ layer }) },
+        }, project);
+        const auto* image = object->as<Image> ();
+        REQUIRE (image != nullptr);
+        REQUIRE (image->animationLayers.size () == 1);
+        // Both native image and model layers construct the enabled bit in 14026c680.
+        CHECK (image->animationLayers[0]->visible->value->getBool () == (visible != 0));
+    }
+}
