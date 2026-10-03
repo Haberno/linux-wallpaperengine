@@ -1,5 +1,6 @@
 #include "MdlParser.h"
 
+#include <algorithm>
 #include <cmath>
 #include <cstring>
 
@@ -97,8 +98,11 @@ VertexLayout getVertexLayout (uint32_t tag, uint32_t version) {
     return layout;
 }
 
-template <typename T> T readValue (const std::vector<char>& data, size_t& offset, const std::string& filename) {
-    if (offset + sizeof (T) > data.size ()) {
+template <typename T> T readValue (
+    const std::vector<char>& data, size_t& offset, const std::string& filename, size_t end = SIZE_MAX
+) {
+    end = std::min (end, data.size ());
+    if (offset > end || sizeof (T) > end - offset) {
 	sLog.exception ("Unexpected end of MDLV file ", filename);
     }
 
@@ -108,14 +112,18 @@ template <typename T> T readValue (const std::vector<char>& data, size_t& offset
     return value;
 }
 
-std::string readString (const std::vector<char>& data, size_t& offset, const std::string& filename) {
+std::string readString (
+    const std::vector<char>& data, size_t& offset, const std::string& filename, size_t endOffset = SIZE_MAX
+) {
     constexpr size_t maximumAssetPathLength = 4096;
-    const size_t available = data.size () - offset;
+    endOffset = std::min (endOffset, data.size ());
+    if (offset > endOffset) sLog.exception ("Unexpected end of MDLV string in ", filename);
+    const size_t available = endOffset - offset;
     const size_t searchLength = std::min (available, maximumAssetPathLength + 1);
     const auto* end = static_cast<const char*> (std::memchr (data.data () + offset, '\0', searchLength));
 
     if (end == nullptr) {
-	sLog.exception ("Malformed MDLV clipping asset path in ", filename);
+	sLog.exception ("Malformed MDLV string in ", filename);
     }
 
     const size_t length = static_cast<size_t> (end - (data.data () + offset));
@@ -144,6 +152,72 @@ std::vector<uint32_t> readRangeReferences (
     }
 
     return result;
+}
+/** Decode MDMP payloads while stepping over other sections by their absolute end. */
+void readMorphTargets (const std::vector<char>& data, size_t offset, const std::string& filename, MdlMesh& mesh) {
+    constexpr size_t markerSize = 9;
+    uint32_t boneCount = 0;
+    while (offset + markerSize + sizeof (uint32_t) <= data.size ()) {
+	const std::string_view marker (data.data () + offset, markerSize - 1);
+	if (data[offset + markerSize - 1] != '\0'
+	    || !std::all_of (marker.begin () + 4, marker.end (), [] (char c) { return c >= '0' && c <= '9'; })) return;
+	offset += markerSize;
+	const size_t end = readValue<uint32_t> (data, offset, filename);
+	const bool morph = marker == "MDMP0001";
+	if (end < offset || end > data.size ()) {
+	    if (morph) sLog.exception ("Invalid MDMP section boundary in ", filename);
+	    return;
+	}
+	if (marker.substr (0, 4) == "MDLS" && end - offset >= sizeof (uint32_t)) {
+	    boneCount = readValue<uint32_t> (data, offset, filename, end);
+	}
+	if (morph) {
+	    const auto stream = [&] (const size_t components) {
+		const auto bytes = readValue<uint32_t> (data, offset, filename, end);
+		if (bytes != components * sizeof (int16_t) || bytes > end - offset)
+		    sLog.exception ("Invalid MDMP packed stream length in ", filename);
+		std::vector<int16_t> values (components);
+		if (bytes != 0) std::memcpy (values.data (), data.data () + offset, bytes);
+		offset += bytes;
+		return values;
+	    };
+	    for (auto& submesh : mesh.submeshes) {
+		const auto count = readValue<uint16_t> (data, offset, filename, end);
+		if (count == 0) continue;
+		submesh.morphScale = readValue<float> (data, offset, filename, end);
+		submesh.morphVertexCount = readValue<uint32_t> (data, offset, filename, end);
+		if (count > (end - offset) / (sizeof (uint64_t) + 1 + sizeof (uint32_t)))
+		    sLog.exception ("Invalid MDMP target count in ", filename);
+		submesh.morphTargets.reserve (count);
+		for (uint16_t index = 0; index < count; ++index) {
+		    WallpaperEngine::Data::Model::MdlMorphTarget target;
+		    target.id = readValue<uint64_t> (data, offset, filename, end);
+		    target.name = readString (data, offset, filename, end);
+		    // Native 1402657a0 clamps the declared count to each XYZ stream's size.
+		    const auto positionBytes = readValue<uint32_t> (data, offset, filename, end);
+		    offset -= sizeof (uint32_t);
+		    submesh.morphVertexCount = std::min (submesh.morphVertexCount, positionBytes / 6);
+		    const size_t components = static_cast<size_t> (submesh.morphVertexCount) * 3;
+		    target.positionDeltas = stream (components);
+		    if ((submesh.flags & 0x400) != 0) target.normalDeltas = stream (components);
+		    if ((submesh.flags & 0x800) != 0) target.tangentDeltas = stream (components);
+		    if ((submesh.flags & 0x1000) != 0) target.alphaValues = stream (submesh.morphVertexCount);
+		    if ((submesh.flags & 0x2000) != 0) {
+			WallpaperEngine::Data::Model::MdlMorphModifier modifier;
+			modifier.boneIndex = readValue<uint32_t> (data, offset, filename, end);
+			modifier.rule = readValue<uint32_t> (data, offset, filename, end);
+			modifier.range.x = readValue<float> (data, offset, filename, end);
+			modifier.range.y = readValue<float> (data, offset, filename, end);
+			if (modifier.boneIndex >= boneCount)
+			    sLog.exception ("MDMP modifier bone index exceeds skeleton in ", filename);
+			target.modifier = modifier;
+		    }
+		    submesh.morphTargets.push_back (std::move (target));
+		}
+	    }
+	}
+	offset = end;
+    }
 }
 } // namespace
 
@@ -395,5 +469,6 @@ MdlMesh MdlParser::parse (const std::vector<char>& data, const std::string& file
 	}
     }
 
+    readMorphTargets (data, offset, filename, mesh);
     return mesh;
 }

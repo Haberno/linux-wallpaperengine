@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <optional>
 #include <glm/glm.hpp>
 #include <string>
 #include <vector>
@@ -20,6 +21,24 @@ namespace WallpaperEngine::Data::Model {
  */
 /** Offset value marking an attribute the vertex tag did not include */
 inline constexpr uint32_t MdlAttributeAbsent = UINT32_MAX;
+
+/** Optional MDMP modifier fields; rule interpretation belongs to the renderer. */
+struct MdlMorphModifier {
+    uint32_t boneIndex = 0;
+    uint32_t rule = 0;
+    glm::vec2 range = glm::vec2 (0.0f);
+};
+
+/** MDMP0001 target streams retain their signed 16-bit components without normalization. */
+struct MdlMorphTarget {
+    uint64_t id = 0;
+    std::string name;
+    std::vector<int16_t> positionDeltas;
+    std::vector<int16_t> normalDeltas;
+    std::vector<int16_t> tangentDeltas;
+    std::vector<int16_t> alphaValues;
+    std::optional<MdlMorphModifier> modifier;
+};
 
 struct MdlSubmesh {
     uint32_t flags = 0;
@@ -41,6 +60,10 @@ struct MdlSubmesh {
     uint32_t blendWeightsOffset = MdlAttributeAbsent;
     uint32_t uvOffset = MdlAttributeAbsent;
     uint32_t texCoordVec4Offset = MdlAttributeAbsent;
+    /** MDMP positions use this authored scale; packed stream normalization is separate. */
+    float morphScale = 0.0f;
+    uint32_t morphVertexCount = 0;
+    std::vector<MdlMorphTarget> morphTargets;
 };
 
 /**

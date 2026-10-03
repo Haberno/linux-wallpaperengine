@@ -1,4 +1,7 @@
+#include <algorithm>
 #include <array>
+#include <cstdlib>
+#include <fstream>
 #include <cstdint>
 #include <cstring>
 #include <string>
@@ -451,4 +454,196 @@ TEST_CASE ("MDLV puppet ranges retain signed depth offsets") {
     REQUIRE (mesh.drawRanges.size () == 1);
     CHECK (mesh.drawRanges.front ().submeshIndex == 0);
     CHECK (mesh.drawRanges.front ().depthOffset == -500);
+}
+
+TEST_CASE ("MDMP rejects misaligned packed position streams", "[mdl][morph-targets]") {
+    auto data = makeModel (0);
+    const char marker[] = "MDMP0001";
+    data.insert (data.end (), marker, marker + sizeof (marker));
+    const auto endField = data.size ();
+    appendValue<uint32_t> (data, 0);
+    appendValue<uint16_t> (data, 1);
+    appendValue<float> (data, 2);
+    appendValue<uint32_t> (data, 3);
+    appendValue<uint64_t> (data, 0x123456789abcdef0);
+    data.push_back ('\0');
+    appendValue<uint32_t> (data, 16); // Three signed XYZ triplets require 18 bytes.
+    data.resize (data.size () + 16, '\0');
+    const auto end = static_cast<uint32_t> (data.size ());
+    std::memcpy (data.data () + endField, &end, sizeof (end));
+    REQUIRE_THROWS (MdlParser::parse (data, "misaligned-morph.mdl"));
+}
+
+namespace {
+size_t beginMdlSection (std::vector<char>& data, const char (&marker)[9]) {
+    data.insert (data.end (), marker, marker + sizeof (marker));
+    const auto endField = data.size ();
+    appendValue<uint32_t> (data, 0);
+    return endField;
+}
+
+void finishMdlSection (std::vector<char>& data, size_t endField) {
+    const auto end = static_cast<uint32_t> (data.size ());
+    std::memcpy (data.data () + endField, &end, sizeof (end));
+}
+
+void appendMorphSkeleton (std::vector<char>& data) {
+    const auto endField = beginMdlSection (data, "MDLS0002");
+    appendValue<uint32_t> (data, 2);
+    for (uint32_t bone = 0; bone < 2; ++bone) {
+	data.push_back (static_cast<char> ('a' + bone));
+	data.push_back ('\0');
+	appendValue<uint32_t> (data, 0);
+	appendValue<uint32_t> (data, bone == 0 ? UINT32_MAX : 0);
+	appendValue<uint32_t> (data, 16 * sizeof (float));
+	for (int component = 0; component < 16; ++component)
+	    appendValue<float> (data, component % 5 == 0 ? 1 : 0);
+	data.push_back ('\0');
+    }
+    finishMdlSection (data, endField);
+}
+
+void appendMorphTarget (std::vector<char>& data, uint32_t flags, uint64_t id, const std::string& name) {
+    appendValue (data, id);
+    data.insert (data.end (), name.begin (), name.end ());
+    data.push_back ('\0');
+    appendValue<uint32_t> (data, 9 * sizeof (int16_t));
+    for (const int16_t value : { -32768, -123, 0, 123, 32767, 4, 5, 6, 7 }) appendValue (data, value);
+    for (const auto flag : { 0x400u, 0x800u }) {
+	if ((flags & flag) == 0) continue;
+	appendValue<uint32_t> (data, 9 * sizeof (int16_t));
+	for (int component = 0; component < 9; ++component)
+	    appendValue<int16_t> (data, flag == 0x400 ? 17 : -8);
+    }
+    if ((flags & 0x1000) != 0) {
+	appendValue<uint32_t> (data, 3 * sizeof (int16_t));
+	for (const int16_t value : { 0, 1234, 32767 }) appendValue (data, value);
+    }
+    if ((flags & 0x2000) != 0) {
+	appendValue<uint32_t> (data, 1);
+	appendValue<uint32_t> (data, 7); // Retain the rule code without interpreting it.
+	appendValue<float> (data, -0.25f);
+	appendValue<float> (data, 2);
+    }
+}
+} // namespace
+
+TEST_CASE ("MDMP retains target identifiers and all packed streams", "[mdl][morph-targets]") {
+    for (const uint32_t flags : { 0u, 0x400u, 0x800u, 0x1000u, 0x3c00u }) {
+	CAPTURE (flags);
+	auto data = makeModel (flags);
+	appendMorphSkeleton (data);
+	const auto endField = beginMdlSection (data, "MDMP0001");
+	appendValue<uint16_t> (data, 2);
+	appendValue<float> (data, 12.5f);
+	appendValue<uint32_t> (data, 5); // Native clamps this to the three-vertex XYZ stream.
+	appendMorphTarget (data, flags, 0x123456789abcdef0, "Smile");
+	appendMorphTarget (data, flags, 19, "瞳小");
+	finishMdlSection (data, endField);
+
+	const auto mesh = MdlParser::parse (data, "morph-streams.mdl");
+	REQUIRE (mesh.submeshes.size () == 1);
+	const auto& submesh = mesh.submeshes.front ();
+	CHECK (submesh.morphScale == 12.5f);
+	CHECK (submesh.morphVertexCount == 3);
+	REQUIRE (submesh.morphTargets.size () == 2);
+	CHECK (submesh.morphTargets[0].id == 0x123456789abcdef0);
+	CHECK (submesh.morphTargets[0].name == "Smile");
+	CHECK (submesh.morphTargets[1].id == 19);
+	CHECK (submesh.morphTargets[1].name == "瞳小");
+	for (const auto& target : submesh.morphTargets) {
+	    CHECK (target.positionDeltas == std::vector<int16_t> { -32768, -123, 0, 123, 32767, 4, 5, 6, 7 });
+	    CHECK (target.normalDeltas == std::vector<int16_t> ((flags & 0x400) != 0 ? 9 : 0, 17));
+	    CHECK (target.tangentDeltas == std::vector<int16_t> ((flags & 0x800) != 0 ? 9 : 0, -8));
+	    if ((flags & 0x1000) != 0) CHECK (target.alphaValues == std::vector<int16_t> { 0, 1234, 32767 });
+	    else CHECK (target.alphaValues.empty ());
+	    REQUIRE (target.modifier.has_value () == ((flags & 0x2000) != 0));
+	    if (target.modifier) {
+		CHECK (target.modifier->boneIndex == 1);
+		CHECK (target.modifier->rule == 7);
+		CHECK (target.modifier->range == glm::vec2 (-0.25f, 2));
+	    }
+	}
+    }
+}
+
+TEST_CASE ("MDMP follows section boundaries and counts targets per submesh", "[mdl][morph-targets]") {
+    auto data = makeTwoLayoutModel ();
+    const auto unknownEnd = beginMdlSection (data, "MDZZ0001");
+    const auto embeddedEnd = beginMdlSection (data, "MDMP0001"); // Not an actual section.
+    finishMdlSection (data, embeddedEnd);
+    finishMdlSection (data, unknownEnd);
+    const auto endField = beginMdlSection (data, "MDMP0001");
+    appendValue<uint16_t> (data, 0); // The first submesh has no targets.
+    appendValue<uint16_t> (data, 1);
+    appendValue<float> (data, 3);
+    appendValue<uint32_t> (data, 3);
+    appendMorphTarget (data, 0, 28, "second");
+    appendValue<uint32_t> (data, 0xaabbccdd); // Native resumes at the declared end, skipping padding.
+    finishMdlSection (data, endField);
+    const auto mesh = MdlParser::parse (data, "two-morph-submeshes.mdl");
+    REQUIRE (mesh.submeshes.size () == 2);
+    CHECK (mesh.submeshes[0].morphTargets.empty ());
+    REQUIRE (mesh.submeshes[1].morphTargets.size () == 1);
+    CHECK (mesh.submeshes[1].morphTargets.front ().name == "second");
+    CHECK (mesh.submeshes[1].morphScale == 3);
+    CHECK (mesh.submeshes[1].morphVertexCount == 3);
+}
+
+TEST_CASE ("MDMP cannot read packed data beyond its section or declared count", "[mdl][morph-targets]") {
+    auto data = makeModel (0);
+    const auto endField = beginMdlSection (data, "MDMP0001");
+    appendValue<uint16_t> (data, 1);
+    appendValue<float> (data, 1);
+    const auto countField = data.size ();
+    appendValue<uint32_t> (data, 3);
+    appendMorphTarget (data, 0, 0, "bounded");
+    finishMdlSection (data, endField);
+    auto shortSection = data;
+    const auto shortEnd = static_cast<uint32_t> (data.size () - 2);
+    std::memcpy (shortSection.data () + endField, &shortEnd, sizeof (shortEnd));
+    REQUIRE_THROWS (MdlParser::parse (shortSection, "short-morph-section.mdl"));
+    const uint32_t shortCount = 2;
+    std::memcpy (data.data () + countField, &shortCount, sizeof (shortCount));
+    REQUIRE_THROWS (MdlParser::parse (data, "short-morph-count.mdl"));
+
+    auto modifier = makeModel (0x2000);
+    const auto modifierEnd = beginMdlSection (modifier, "MDMP0001");
+    appendValue<uint16_t> (modifier, 1);
+    appendValue<float> (modifier, 1);
+    appendValue<uint32_t> (modifier, 3);
+    appendMorphTarget (modifier, 0x2000, 0, "missing-skeleton");
+    finishMdlSection (modifier, modifierEnd);
+    REQUIRE_THROWS (MdlParser::parse (modifier, "missing-morph-skeleton.mdl"));
+}
+
+TEST_CASE ("Rayman MDMP preserves its dormant authored targets", "[.][mdl][morph-installed]") {
+    const auto* path = std::getenv ("WPE_TEST_MORPH_MDL");
+    if (!path) SKIP ("Set WPE_TEST_MORPH_MDL to the extracted Rayman rayman.mdl");
+    std::ifstream input (path, std::ios::binary);
+    REQUIRE (input.good ());
+    const std::vector<char> data { std::istreambuf_iterator<char> (input), std::istreambuf_iterator<char> () };
+    const auto mesh = MdlParser::parse (data, path);
+    REQUIRE (mesh.submeshes.size () == 18);
+    for (size_t index = 0; index < mesh.submeshes.size (); ++index)
+	if (index != 8 && index != 9) CHECK (mesh.submeshes[index].morphTargets.empty ());
+    for (const auto index : { 8u, 9u }) {
+	const auto& submesh = mesh.submeshes[index];
+	CHECK (submesh.morphVertexCount == (index == 8 ? 198 : 224));
+	CHECK (submesh.morphScale == (index == 8 ? 19.9653377533f : 25.8520183563f));
+	REQUIRE (submesh.morphTargets.size () == 3);
+	CHECK (submesh.morphTargets[0].name == "瞳小");
+	CHECK (submesh.morphTargets[1].name == "Helicopter");
+	CHECK (submesh.morphTargets[2].name == "Puff Cheeks");
+	for (size_t targetIndex = 0; targetIndex < 3; ++targetIndex) {
+	    const auto& target = submesh.morphTargets[targetIndex];
+	    CHECK (target.id == 0);
+	    CHECK (target.positionDeltas.size () == submesh.morphVertexCount * 3);
+	    CHECK (target.normalDeltas.size () == submesh.morphVertexCount * 3);
+	    CHECK (std::any_of (target.positionDeltas.begin (), target.positionDeltas.end (),
+		[] (int16_t value) { return value != 0; }) == (targetIndex == 1));
+	    CHECK (std::all_of (target.normalDeltas.begin (), target.normalDeltas.end (),
+		[] (int16_t value) { return value == 0; }));
+	}
+    }
 }
