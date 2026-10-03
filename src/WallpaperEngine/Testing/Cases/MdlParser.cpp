@@ -351,6 +351,65 @@ TEST_CASE ("MDLV channelmap overlay vertices carry a vec4 texcoord") {
     CHECK (mesh.submeshes[0].indices == std::vector<uint32_t> { 0, 1, 2 });
 }
 
+TEST_CASE ("MDLV morph positions precede the normal and tangent", "[mdl][morph-layout]") {
+    // Native attribute tables 140484a20/1404849b0 put vec4 position before normal/tangent.
+    // The installed Reze puppet uses this 84-byte layout.
+    const auto mesh = MdlParser::parse (makeModel (0, 0x0181000e, 84), "morph-layout.mdl");
+    REQUIRE (mesh.submeshes.size () == 1);
+    const auto& submesh = mesh.submeshes.front ();
+    CHECK (mesh.strideBytes == 84);
+    CHECK (mesh.positionOffset == 0);
+    CHECK (mesh.normalOffset == 16);
+    CHECK (mesh.tangentOffset == 28);
+    CHECK (mesh.blendIndicesOffset == 44);
+    CHECK (mesh.blendWeightsOffset == 60);
+    CHECK (mesh.uvOffset == 76);
+    CHECK (submesh.blendIndicesOffset == mesh.blendIndicesOffset);
+    CHECK (submesh.blendWeightsOffset == mesh.blendWeightsOffset);
+    CHECK (submesh.uvOffset == mesh.uvOffset);
+
+    const auto sparse = MdlParser::parse (makeModel (0, 0x01810008, 56), "morph-sparse.mdl");
+    CHECK (sparse.strideBytes == 56);
+    CHECK (sparse.normalOffset == MdlMesh::AttributeAbsent);
+    CHECK (sparse.tangentOffset == MdlMesh::AttributeAbsent);
+    CHECK (sparse.blendIndicesOffset == 16);
+    CHECK (sparse.blendWeightsOffset == 32);
+    CHECK (sparse.uvOffset == 48);
+}
+
+TEST_CASE ("MDLV positions and texture coordinates use independent native format bits", "[mdl][morph-layout]") {
+    const auto mesh = MdlParser::parse (makeModel (0, 0x01810009, 68), "two-positions.mdl");
+    CHECK (mesh.strideBytes == 68);
+    CHECK (mesh.blendIndicesOffset == 28);
+    CHECK (mesh.blendWeightsOffset == 44);
+    CHECK (mesh.uvOffset == 60);
+
+    const auto uv = MdlParser::parse (makeModel (0, 0x29, 36), "two-texcoords.mdl");
+    CHECK (uv.uvOffset == 12);
+    REQUIRE (uv.submeshes.size () == 1);
+    CHECK (uv.submeshes.front ().texCoordVec4Offset == 20);
+    REQUIRE_THROWS (MdlParser::parse (makeModel (0, 8, 20), "missing-position.mdl"));
+}
+
+TEST_CASE ("Reze puppet keeps attributes aligned after its vec4 position", "[.][mdl][morph-layout-installed]") {
+    const auto* path = std::getenv ("WPE_TEST_MORPH_LAYOUT_MDL");
+    if (!path) SKIP ("Set WPE_TEST_MORPH_LAYOUT_MDL to the extracted Reze sl_puppet.mdl");
+    std::ifstream input (path, std::ios::binary);
+    REQUIRE (input.good ());
+    const std::vector<char> data { std::istreambuf_iterator<char> (input), std::istreambuf_iterator<char> () };
+    const auto mesh = MdlParser::parse (data, path);
+    REQUIRE (mesh.submeshes.size () == 1);
+    CHECK (mesh.vertexTag == 0x0181000e);
+    CHECK (mesh.strideBytes == 84);
+    CHECK (mesh.normalOffset == 16);
+    CHECK (mesh.tangentOffset == 28);
+    CHECK (mesh.blendIndicesOffset == 44);
+    CHECK (mesh.blendWeightsOffset == 60);
+    CHECK (mesh.uvOffset == 76);
+    CHECK (mesh.submeshes.front ().vertices.size () == 3741 * 84 / sizeof (float));
+    CHECK (mesh.submeshes.front ().indices.size () == 20088);
+}
+
 TEST_CASE ("MDLV submeshes may disagree on the vertex layout") {
     const auto mesh = MdlParser::parse (makeTwoLayoutModel (), "test-two-layouts.mdl");
 

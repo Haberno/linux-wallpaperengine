@@ -34,25 +34,25 @@ struct VertexLayout {
 };
 
 /**
- * Optional vertex attributes in the order they are laid out after the position vec3,
- * with the byte size each contributes to the stride. The 0x00010000 attribute has no
- * identified use; only its size matters, so nothing points at it.
+ * Native attribute order and byte sizes (tables 140484a20/1404849b0). Morph meshes
+ * use a vec4 position whose fourth component indexes the morph texture.
  */
 constexpr struct {
     uint32_t bit;
     uint32_t bytes;
     uint32_t VertexLayout::* offset;
 } VERTEX_ATTRIBUTES[] = {
+    {0x00000001, 12, &VertexLayout::positionOffset},
+    {0x00010000, 16, nullptr},
     {0x00000002, 12, &VertexLayout::normalOffset},
     {0x00000004, 16, &VertexLayout::tangentOffset},
-    {0x00010000, 4, nullptr},
     {0x00800000, 16, &VertexLayout::blendIndicesOffset},
     {0x01000000, 16, &VertexLayout::blendWeightsOffset},
-    {0x00000020, 16, &VertexLayout::texCoordVec4Offset},
     {0x00000008, 8, &VertexLayout::uvOffset},
+    {0x00000020, 16, &VertexLayout::texCoordVec4Offset},
 };
 
-/** Every bit the layout above accounts for, plus 0x1 which carries no payload of its own. */
+/** Every bit the layout above accounts for. */
 constexpr uint32_t KNOWN_VERTEX_BITS = 0x0181002f;
 
 /**
@@ -74,12 +74,11 @@ VertexLayout getVertexLayout (uint32_t tag, uint32_t version) {
 	};
     }
 
-    if ((tag & ~KNOWN_VERTEX_BITS) != 0) {
+    if ((tag & ~KNOWN_VERTEX_BITS) != 0 || (tag & 0x00010001) == 0) {
 	return {};
     }
 
-    // a position vec3 always leads the vertex, whether or not 0x1 is set
-    VertexLayout layout {.tag = tag, .strideBytes = 12, .positionOffset = 0};
+    VertexLayout layout {.tag = tag};
 
     layout.skinned = (tag & SKIN_VERTEX_BITS) != 0;
 
