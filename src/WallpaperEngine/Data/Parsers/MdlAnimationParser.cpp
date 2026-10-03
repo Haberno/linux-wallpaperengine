@@ -579,19 +579,25 @@ void readAnimationEvents (
 	    if (findSection (data, "MDLV", 0) != 0) return;
 	    size_t headerOffset = SECTION_HEADER_SIZE + 2 * sizeof (uint32_t);
 	    const auto submeshCount = readValue<uint32_t> (data, headerOffset, data.size ());
+	    std::vector<std::vector<MdlMorphTrack>> morphTracks;
 	    for (uint32_t submesh = 0; submesh < submeshCount; ++submesh) {
+		morphTracks.emplace_back ();
 		const auto flags = readValue<uint32_t> (data, offset, recordEnd);
 		if ((flags & 1) == 0) continue;
 		readValue<float> (data, offset, recordEnd);
 		const auto targets = readValue<uint16_t> (data, offset, recordEnd);
 		for (uint16_t target = 0; target < targets; ++target) {
-		    readValue<uint16_t> (data, offset, recordEnd);
+		    MdlMorphTrack track;
+		    track.target = readValue<uint16_t> (data, offset, recordEnd);
 		    const auto bytes = readValue<uint32_t> (data, offset, recordEnd);
 		    if (bytes != (static_cast<size_t> (animation.frameCount) + 1) * sizeof (float)
 			|| bytes > recordEnd - offset) return;
-		    offset += bytes;
+		    track.frames.resize (static_cast<size_t> (animation.frameCount) + 1);
+		    for (auto& value : track.frames) value = readValue<float> (data, offset, recordEnd);
+		    morphTracks.back ().push_back (std::move (track));
 		}
 	    }
+	    animation.morphTracks = std::move (morphTracks);
 	}
 	if (version >= 5) {
 	    for (int component = 0; component < 6; ++component) readValue<float> (data, offset, recordEnd);
@@ -624,6 +630,15 @@ void readAnimationEvents (
 		animation.controlFlags = source.controlFlags;
 		animation.blendTracks = crop (source.blendTracks);
 		animation.depthTracks = crop (source.depthTracks);
+		animation.morphTracks = source.morphTracks;
+		for (auto& submesh : animation.morphTracks) {
+		    for (auto& track : submesh) {
+			if (track.frames.empty ()) continue;
+			track.frames.resize (std::min (track.frames.size (), static_cast<size_t> (lastFrame) + 1));
+			track.frames.erase (track.frames.begin (), track.frames.begin ()
+			    + std::min (static_cast<size_t> (firstFrame), track.frames.size () - 1));
+		    }
+		}
 	    }
 	}
 	const auto count = readValue<uint32_t> (data, offset, recordEnd);

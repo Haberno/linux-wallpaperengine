@@ -96,6 +96,11 @@ struct MdlIkGroup {
     std::vector<MdlIkNode> nodes;
 };
 
+struct MdlMorphTrack {
+    uint16_t target = 0;
+    std::vector<float> frames;
+};
+
 struct MdlAnimationClip {
     uint32_t id = 0;
     std::string name = {};
@@ -117,6 +122,8 @@ struct MdlAnimationClip {
      * overlay in and out; authored blinks live here, not in the bone tracks.
      */
     std::vector<std::vector<float>> blendTracks = {};
+    /** MDLA0004+ sparse target weights, grouped by MDLV submesh in file order. */
+    std::vector<std::vector<MdlMorphTrack>> morphTracks;
     /** MDLA0006 late per-bone depth stream, sampled without frame interpolation. */
     std::vector<std::vector<float>> depthTracks;
 };
@@ -143,6 +150,8 @@ struct MdlActiveAnimation {
     bool additive = false;
     /** An explicit playhead from a script-controlled timeline, already wrapped/clamped. */
     std::optional<float> frame;
+    /** Disabled layers differ from enabled layers whose authored weight is zero. */
+    bool enabled = true;
 };
 
 struct MdlPose {
@@ -150,6 +159,9 @@ struct MdlPose {
     std::vector<glm::mat4> skinBones = {};
     /** Interpolated blend track values of the active clips, indexed by track row. */
     std::vector<float> blendWeights = {};
+    /** Native puppet runtime evaluates the first submesh, with a 64-target mask. */
+    std::vector<float> puppetMorphWeights;
+    uint64_t puppetMorphMask = 0;
     /** Empty when no active depth track changed the native ordering state. */
     std::vector<float> depths;
 };

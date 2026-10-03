@@ -321,8 +321,7 @@ glm::mat4 stepSpring (
 }
 
 /** Same playhead and interpolation as the bones, on a scalar track instead of a pose. */
-float sampleBlendTrack (const MdlActiveAnimation& layer, const size_t row) {
-    const auto& track = layer.animation->blendTracks[row];
+float sampleScalarTrack (const MdlActiveAnimation& layer, const std::vector<float>& track) {
     const float frame = sampleFrame (layer);
     const auto firstFrame = static_cast<size_t> (frame);
     const float blend = frame - static_cast<float> (firstFrame);
@@ -433,7 +432,7 @@ MdlPose MdlAnimationEvaluator::evaluate (
 	    const auto& baseLayer = activeAnimations.front ();
 	    if (hasRow (baseLayer)) {
 		value = glm::mix (
-		    baseLayer.animation->blendTracks[row].front (), sampleBlendTrack (baseLayer, row),
+		    baseLayer.animation->blendTracks[row].front (), sampleScalarTrack (baseLayer, baseLayer.animation->blendTracks[row]),
 		    std::clamp (baseLayer.weight, 0.0f, 1.0f)
 		);
 	    }
@@ -446,7 +445,7 @@ MdlPose MdlAnimationEvaluator::evaluate (
 		continue;
 	    }
 
-	    const float sampled = sampleBlendTrack (layer, row);
+	    const float sampled = sampleScalarTrack (layer, layer.animation->blendTracks[row]);
 	    if (layer.additive) {
 		value += (sampled - layer.animation->blendTracks[row].front ()) * layer.weight;
 	    } else {
@@ -476,6 +475,38 @@ MdlPose MdlAnimationEvaluator::evaluate (
 		value = std::clamp (value + (sample - animationData.defaultDepths[bone]) * weight,
 		    std::min (value, sample), std::max (value, sample));
 	    } else {
+		value = glm::mix (value, sample, weight);
+	    }
+	}
+    }
+
+    // 1401fdf90 keeps activation separate from the stored weight. A full zero
+    // sample clears its bit without overwriting the value read by later layers.
+    for (const auto& layer : activeAnimations) {
+	if (!layer.enabled || !layer.animation || layer.animation->morphTracks.empty ()) continue;
+	for (const auto& track : layer.animation->morphTracks.front ()) {
+	    if (track.target >= 64 || track.frames.empty ()) continue;
+	    if (pose.puppetMorphWeights.size () <= track.target)
+		pose.puppetMorphWeights.resize (static_cast<size_t> (track.target) + 1, 0.0f);
+	    const auto bit = uint64_t { 1 } << track.target;
+	    const float sample = sampleScalarTrack (layer, track.frames);
+	    const bool active = std::abs (sample) >= std::numeric_limits<float>::epsilon ();
+	    const float weight = std::clamp (layer.weight, 0.0f, 1.0f);
+	    float& value = pose.puppetMorphWeights[track.target];
+	    if (layer.additive) {
+		if (!active) continue;
+		pose.puppetMorphMask |= bit;
+		const float contribution = sample * weight;
+		value = std::clamp (value + contribution, std::min (value, contribution), std::max (value, contribution));
+	    } else if (weight == 1.0f) {
+		if (active) {
+		    pose.puppetMorphMask |= bit;
+		    value = sample;
+		} else {
+		    pose.puppetMorphMask &= ~bit;
+		}
+	    } else {
+		if (active) pose.puppetMorphMask |= bit;
 		value = glm::mix (value, sample, weight);
 	    }
 	}

@@ -407,6 +407,14 @@ TEST_CASE ("MDLA events follow versioned tracks and cropped clip metadata", "[md
     REQUIRE (parsed.animations.size () == 1);
     const auto& clip = parsed.animations.front ();
     CHECK (clip.flags == 0x401);
+    REQUIRE (clip.morphTracks.size () == submeshCount);
+    for (uint32_t submesh = 0; submesh < submeshCount; ++submesh) {
+	if (submesh == 2) { CHECK (clip.morphTracks[submesh].empty ()); continue; }
+	REQUIRE (clip.morphTracks[submesh].size () == 1);
+	CHECK (clip.morphTracks[submesh][0].target == 0);
+	REQUIRE (clip.morphTracks[submesh][0].frames.size () == 61);
+	CHECK (clip.morphTracks[submesh][0].frames.back () == Catch::Approx (1));
+    }
     REQUIRE (clip.depthTracks.size () == 2);
     REQUIRE (clip.depthTracks[0].size () == 61);
     REQUIRE (clip.depthTracks[1].size () == 61);
@@ -426,10 +434,10 @@ TEST_CASE ("MDLA events follow versioned tracks and cropped clip metadata", "[md
     CHECK (truncated.animations.front ().boneFrames.size () == 2);
 }
 
-TEST_CASE ("MDLA unbaked clip ranges sample their source animation", "[mdl][animation]") {
+TEST_CASE ("MDLA unbaked clip ranges sample their source animation", "[mdl][animation][morph-weights]") {
     for (const bool baked : { false, true }) {
 	CAPTURE (baked);
-	auto data = makeAnimatedModelSections ();
+	auto data = makeAnimatedModelSections (1);
 	const std::string marker = "MDLA0006";
 	data.resize (std::distance (data.begin (), std::search (data.begin (), data.end (), marker.begin (), marker.end ())));
 	appendMarker (data, "MDLA0006");
@@ -457,7 +465,16 @@ TEST_CASE ("MDLA unbaked clip ranges sample their source animation", "[mdl][anim
 	    }
 	    appendValue<uint32_t> (data, 0); // Blend tracks.
 	    appendValue<uint8_t> (data, 0); // Bone scalar tracks.
-	    appendValue<uint8_t> (data, 0); // Constraints.
+	    appendValue<uint8_t> (data, 1); // Per-submesh morph tracks.
+	    appendValue<uint32_t> (data, hasTracks ? 1 : 0);
+	    if (hasTracks) {
+		appendValue<float> (data, 0);
+		appendValue<uint16_t> (data, 1);
+		appendValue<uint16_t> (data, 2); // Sparse target index.
+		appendValue<uint32_t> (data, (frames + 1) * sizeof (float));
+		for (uint32_t frame = 0; frame <= frames; ++frame)
+		    appendValue<float> (data, clip == 0 ? frame * 0.1f : 0.9f);
+	    }
 	    for (int i = 0; i < 6; ++i) appendValue<float> (data, 0);
 	    appendValue<uint8_t> (data, 0); // Version 6 scalar tracks.
 	    if (clip != 0) {
@@ -475,6 +492,12 @@ TEST_CASE ("MDLA unbaked clip ranges sample their source animation", "[mdl][anim
 	const auto end = MdlAnimationEvaluator::evaluate (parsed, {{ .animation = &idle, .frame = 2.0f }});
 	CHECK (end.worldBones[0][3].x == Catch::Approx (baked ? 99 : 30));
 	CHECK (middle.worldBones[1][3].x == middle.worldBones[0][3].x);
+	REQUIRE (idle.morphTracks.size () == 1);
+	REQUIRE (idle.morphTracks[0].size () == 1);
+	CHECK (idle.morphTracks[0][0].target == 2);
+	REQUIRE (middle.puppetMorphWeights.size () == 3);
+	CHECK (middle.puppetMorphWeights[2] == Catch::Approx (baked ? 0.9f : 0.15f));
+	CHECK (end.puppetMorphWeights[2] == Catch::Approx (baked ? 0.9f : 0.3f));
     }
 }
 
@@ -1001,4 +1024,51 @@ TEST_CASE ("Installed Reze depth tracks reorder the clipped eye ranges", "[.][pu
 	CHECK (indices == 20088);
     }
     CHECK (changed);
+}
+
+TEST_CASE ("Puppet morph layers preserve sparse targets and native activation", "[mdl][morph-weights]") {
+    MdlAnimationData data;
+    MdlAnimationClip first, second, zero;
+    for (auto* clip : { &first, &second, &zero }) {
+	clip->fps = 1; clip->frameCount = 1; clip->mode = "single";
+    }
+    first.morphTracks = { { { 0, { 0.7f, 0.7f } }, { 3, { 0.2f, 0.8f } } } };
+    second.morphTracks = { { { 0, { 0.6f, -0.2f } } } };
+    zero.morphTracks = { { { 0, { 0.0f, 0.0f } } } };
+    MdlActiveAnimation base { &first, 0, 1, false };
+    MdlActiveAnimation partial { &second, 0, 0.5f, false };
+    MdlActiveAnimation additive { &second, 0, 0.5f, true };
+    MdlActiveAnimation clear { &zero, 0, 1, false };
+    auto pose = MdlAnimationEvaluator::evaluate (data, { base, partial });
+    REQUIRE (pose.puppetMorphWeights.size () == 4);
+    CHECK (pose.puppetMorphWeights[0] == Catch::Approx (0.65f));
+    CHECK (pose.puppetMorphWeights[3] == Catch::Approx (0.2f));
+    CHECK (pose.puppetMorphMask == 9);
+    pose = MdlAnimationEvaluator::evaluate (data, { base, additive });
+    CHECK (pose.puppetMorphWeights[0] == Catch::Approx (0.7f));
+    additive.frame = 1;
+    pose = MdlAnimationEvaluator::evaluate (data, { base, additive });
+    CHECK (pose.puppetMorphWeights[0] == Catch::Approx (0.6f));
+    pose = MdlAnimationEvaluator::evaluate (data, { base, clear });
+    CHECK (pose.puppetMorphWeights[0] == Catch::Approx (0.7f));
+    CHECK (pose.puppetMorphMask == 8);
+    pose = MdlAnimationEvaluator::evaluate (data, { base, clear, partial });
+    CHECK (pose.puppetMorphWeights[0] == Catch::Approx (0.65f));
+    CHECK (pose.puppetMorphMask == 9);
+    clear.weight = 0.5f;
+    pose = MdlAnimationEvaluator::evaluate (data, { base, clear });
+    CHECK (pose.puppetMorphWeights[0] == Catch::Approx (0.35f));
+    CHECK (pose.puppetMorphMask == 9);
+    base.frame = 0.5f;
+    pose = MdlAnimationEvaluator::evaluate (data, { base });
+    CHECK (pose.puppetMorphWeights[3] == Catch::Approx (0.5f));
+    CHECK (MdlAnimationEvaluator::evaluate (data, {}).puppetMorphWeights.empty ());
+    // A visible zero-weight layer can reactivate a retained value after a clear.
+    clear.weight = 1; partial.weight = 0;
+    pose = MdlAnimationEvaluator::evaluate (data, { base, clear, partial });
+    CHECK (pose.puppetMorphWeights[0] == Catch::Approx (0.7f));
+    CHECK (pose.puppetMorphMask == 9);
+    partial.enabled = false;
+    pose = MdlAnimationEvaluator::evaluate (data, { base, clear, partial });
+    CHECK (pose.puppetMorphMask == 8);
 }
