@@ -568,16 +568,19 @@ JSValue scene_destroy_model_data (JSContext* ctx, JSValueConst self, int argc, J
     return JS_UNDEFINED;
 }
 
-static JSValue model_apply_data (JSContext* ctx, JSValueConst self, int argc, JSValueConst* argv, int classId) {
+static JSValue model_change_data (JSContext* ctx, JSValueConst self, int argc, JSValueConst* argv, int classId, bool replace) {
     auto* handle = static_cast<ModelDataHandle*> (JS_GetOpaque (self, static_cast<JSClassID> (classId)));
     if (handle == nullptr) {
 	return JS_ThrowTypeError (ctx, "Invalid IModelData receiver");
+    }
+    if (replace && handle->scene->getEngine ().isInUpdate ()) {
+	return JS_ThrowSyntaxError (ctx, "IModelData.replace cannot be called in update.");
     }
     if (argc < 1) {
 	return JS_UNDEFINED;
     }
     std::vector<std::pair<size_t, size_t>> capacities;
-    if (auto resource = handle->scene->getScene ().findModelData (handle->token)) {
+    if (auto resource = handle->scene->getScene ().findModelData (handle->token); resource && !replace) {
 	for (const auto& shape : resource->shapes) {
 	    capacities.emplace_back (shape.input.vertices.size () * sizeof (float), shape.input.indices.size ());
 	}
@@ -598,7 +601,7 @@ static JSValue model_apply_data (JSContext* ctx, JSValueConst self, int argc, JS
 	for (uint32_t index = 0; index < count; ++index) {
 	    ModelDataInput::Value input (ctx, JS_GetPropertyUint32 (ctx, shapeArray.value, index));
 	    ModelDataShape update;
-	    if (JS_IsException (input.value) || !ModelDataInput::readShape (ctx, input.value, update, false,
+	    if (JS_IsException (input.value) || !ModelDataInput::readShape (ctx, input.value, update, replace,
 		    index < capacities.size () ? capacities[index].first : 0,
 		    index < capacities.size () ? capacities[index].second : 0)) {
 		return JS_EXCEPTION;
@@ -607,7 +610,7 @@ static JSValue model_apply_data (JSContext* ctx, JSValueConst self, int argc, JS
 	}
     } else {
 	ModelDataShape update;
-	if (!ModelDataInput::readShape (ctx, argv[0], update, false,
+	if (!ModelDataInput::readShape (ctx, argv[0], update, replace,
 		capacities.empty () ? 0 : capacities[0].first, capacities.empty () ? 0 : capacities[0].second)) {
 	    return JS_EXCEPTION;
 	}
@@ -620,10 +623,18 @@ static JSValue model_apply_data (JSContext* ctx, JSValueConst self, int argc, JS
     if (!resource) {
 	return JS_ThrowSyntaxError (ctx, "Invalid model data token");
     }
-    if (const char* error = resource->applyData (updates)) {
+    if (const char* error = replace ? resource->replaceData (std::move (updates)) : resource->applyData (updates)) {
 	return JS_ThrowSyntaxError (ctx, "%s", error);
     }
     return JS_UNDEFINED;
+}
+
+static JSValue model_apply_data (JSContext* ctx, JSValueConst self, int argc, JSValueConst* argv, int classId) {
+    return model_change_data (ctx, self, argc, argv, classId, false);
+}
+
+static JSValue model_replace_data (JSContext* ctx, JSValueConst self, int argc, JSValueConst* argv, int classId) {
+    return model_change_data (ctx, self, argc, argv, classId, true);
 }
 
 JSValue SceneObject::makeModelDataHandle (uint32_t token) {
@@ -803,6 +814,10 @@ SceneObject::SceneObject (ScriptEngine& engine, Render::Wallpapers::CScene& scen
     JSValue modelPrototype = JS_GetPropertyStr (ctx, constructor, "prototype");
     JS_SetPropertyStr (
 	ctx, modelPrototype, "applyData", JS_NewCFunctionMagic (ctx, model_apply_data, "applyData", 1,
+	    JS_CFUNC_generic_magic, static_cast<int> (m_modelDataClassId))
+    );
+    JS_SetPropertyStr (
+	ctx, modelPrototype, "replaceData", JS_NewCFunctionMagic (ctx, model_replace_data, "replaceData", 1,
 	    JS_CFUNC_generic_magic, static_cast<int> (m_modelDataClassId))
     );
     JS_SetClassProto (ctx, m_modelDataClassId, modelPrototype);

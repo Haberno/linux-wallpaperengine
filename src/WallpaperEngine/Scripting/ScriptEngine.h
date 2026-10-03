@@ -79,6 +79,7 @@ public:
     JSRuntime* getRuntime () const { return m_runtime; }
     JSContext* getContext () const { return m_context; }
     JSValue getGlobalThis () const { return m_globalThis; }
+    bool isInUpdate () const { return m_inUpdate; }
     LoadedModule* getRunningModule () const { return m_runningModule; }
     std::map<std::string, bool>* getRegisteringAssets () const { return m_registeringAssets; }
     // Workshop id exported by the currently-running script module (`export let __workshopId = '...'`),
@@ -222,6 +223,7 @@ private:
     // even when a callback creates another layer and appends its scripts.
     std::list<std::pair<const std::string*, LoadedModule*>> m_scriptModuleOrder;
 
+    bool m_inUpdate = false;
     LoadedModule* m_runningModule = nullptr;
     // Non-null only while an authored module's global body is evaluating.
     std::map<std::string, bool>* m_registeringAssets = nullptr;

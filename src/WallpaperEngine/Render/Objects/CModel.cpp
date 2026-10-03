@@ -161,6 +161,46 @@ const char* ModelData::applyData (const std::vector<Scripting::ModelDataShape>& 
     return nullptr;
 }
 
+const char* ModelData::replaceData (std::vector<Scripting::ModelDataShape> replacements) {
+    // Native also supports changing materials/layouts and adding/removing shapes.
+    // Those changes require rebuilding every retained layer's material passes.
+    if (replacements.size () != shapes.size ()) {
+	return "IModelData.replaceData currently requires the existing shape count";
+    }
+    for (size_t index = 0; index < replacements.size (); ++index) {
+	const auto& replacement = replacements[index];
+	const auto& original = shapes[index].input;
+	if (original.vertexDynamic || !replacement.hasVertices || replacement.vertices.empty ()
+	    || replacement.deleteShape || replacement.deleteIndices
+	    || replacement.vertexFormat != original.vertexFormat || replacement.strideBytes != original.strideBytes
+	    || replacement.material != original.material || replacement.indexWidth != original.indexWidth
+	    || (original.indexWidth != 0 && replacement.indices.empty ())) {
+	    return "IModelData.replaceData currently requires complete static shapes with unchanged material and layout";
+	}
+    }
+    GLint previous = 0;
+    glGetIntegerv (GL_ARRAY_BUFFER_BINDING, &previous);
+    for (size_t index = 0; index < replacements.size (); ++index) {
+	auto& shape = shapes[index];
+	shape.input = std::move (replacements[index]);
+	// Keep the names referenced by every live color/shadow VAO while replacing
+	// their storage. Static native replacement recreates both complete buffers.
+	glBindBuffer (GL_ARRAY_BUFFER, shape.vertexBuffer);
+	glBufferData (GL_ARRAY_BUFFER, shape.input.vertices.size () * sizeof (float), shape.input.vertices.data (),
+	    shape.input.vertexDynamic ? GL_DYNAMIC_DRAW : GL_STATIC_DRAW);
+	if (shape.indexBuffer != GL_NONE) {
+	    glBindBuffer (GL_ARRAY_BUFFER, shape.indexBuffer);
+	    glBufferData (GL_ARRAY_BUFFER, shape.input.indices.size (), shape.input.indices.data (),
+		shape.input.indexDynamic ? GL_DYNAMIC_DRAW : GL_STATIC_DRAW);
+	}
+	shape.drawCount = static_cast<GLsizei> (shape.input.indexWidth == 0
+	    ? shape.input.vertices.size () * sizeof (float) / shape.input.strideBytes
+	    : shape.input.indices.size () / shape.input.indexWidth);
+    }
+    glBindBuffer (GL_ARRAY_BUFFER, static_cast<GLuint> (previous));
+    return nullptr;
+}
+
 ModelData::~ModelData () {
     for (const auto& shape : shapes) {
 	glDeleteBuffers (1, &shape.vertexBuffer);
@@ -816,7 +856,8 @@ void CModel::renderShadow (const glm::mat4& lightViewProjection) {
 	auto& buffers = this->m_submeshes[submeshIndex];
 	const auto& layout = m_modelData ? m_modelData->shapes[submeshIndex].layout : m_model.mesh;
 	const auto stride = static_cast<GLsizei> (layout.strideBytes);
-	if (!buffers.castsShadow || (buffers.indexCount == 0 && buffers.vertexCount == 0)
+	if (!buffers.castsShadow || (m_modelData ? m_modelData->shapes[submeshIndex].drawCount == 0
+	    : buffers.indexCount == 0 && buffers.vertexCount == 0)
 	    || layout.positionOffset == MdlMesh::AttributeAbsent) {
 	    continue;
 	}

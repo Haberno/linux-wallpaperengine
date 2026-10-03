@@ -25,6 +25,7 @@ public:
     ModelData& operator= (const ModelData&) = delete;
     void upload ();
     const char* applyData (const std::vector<Scripting::ModelDataShape>& updates);
+    const char* replaceData (std::vector<Scripting::ModelDataShape> replacements);
     std::vector<Shape> shapes;
     Data::Model::MdlMesh mesh;
 };

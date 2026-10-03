@@ -692,6 +692,9 @@ void ScriptEngine::tickLayer (ScriptLayerHandle handle, double time, double delt
     }
 
     auto callHook = [&] (const char* prop, const char* tag) {
+	const bool previousUpdate = m_inUpdate;
+	ScopeGuard restoreUpdate ([&] { m_inUpdate = previousUpdate; });
+	m_inUpdate = previousUpdate || std::string_view (prop) == "_tick";
 	auto* previousAssets = this->m_registeringAssets;
 	ScopeGuard restoreAssets ([&] { this->m_registeringAssets = previousAssets; });
 	this->m_registeringAssets = nullptr;
@@ -786,6 +789,9 @@ void ScriptEngine::destroyLayer (ScriptLayerHandle handle) {
 }
 
 JSValue ScriptEngine::call (JSValue module, int argc, JSValue argv[], const char* name) {
+    const bool previousUpdate = m_inUpdate;
+    ScopeGuard restoreUpdate ([&] { m_inUpdate = previousUpdate; });
+    m_inUpdate = previousUpdate || std::string_view (name) == "update";
     auto* previousAssets = this->m_registeringAssets;
     ScopeGuard restoreAssets ([&] { this->m_registeringAssets = previousAssets; });
     this->m_registeringAssets = nullptr;
