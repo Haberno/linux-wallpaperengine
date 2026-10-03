@@ -210,6 +210,7 @@ TextUniquePtr ObjectParser::parseText (const JSON& it, const Project& project, O
 	    .alpha = it.user ("alpha", project.properties, 1.0f),
 	    .parallaxDepth = it.user ("parallaxDepth", project.properties, glm::vec2 (0.0f)),
 	    .visible = it.user ("visible", project.properties, true),
+	    .perspective = it.user ("perspective", project.properties, false),
 	    .depthTest = std::move (depthTest),
 	    .alignment = it.optional ("horizontalalign", it.optional ("alignment", std::string ("center"))),
 	    .verticalalign = it.optional ("verticalalign", std::string ("center")),

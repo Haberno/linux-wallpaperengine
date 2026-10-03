@@ -349,6 +349,7 @@ CText::CText (Wallpapers::CScene& scene, const Text& text) :
     this->registerProperty ("origin", *text.origin);
     this->registerProperty ("scale", *text.scale);
     this->registerProperty ("visible", *text.visible);
+    this->registerProperty ("perspective", *text.perspective);
     this->registerProperty ("depthtest", *text.depthTest);
     this->registerProperty ("pointSize", *text.pointSize);
     this->registerProperty ("text", *text.text);
@@ -1565,7 +1566,19 @@ void CText::render () {
 	* glm::translate (glm::mat4 (1.0f), glm::vec3 (-scene_w * 0.5f, -scene_h * 0.5f, 0.0f))
 	* this->resolveWorldMatrix () * glm::scale (glm::mat4 (1.0f), glm::vec3 (1.0f, -1.0f, 1.0f));
 
-    const glm::mat4 mvp = getScene ().getCamera ().getProjection () * getScene ().getCamera ().getLookAt () * model;
+    const auto& camera = getScene ().getCamera ();
+    glm::mat4 viewProjection = camera.getProjection () * camera.getLookAt ();
+    if (m_text.perspective->value->getBool ()) {
+	// Native text shares the image draw path and its virtual perspective camera.
+	const float fov = glm::radians (glm::clamp (camera.getFov (), 0.1f, 179.9f));
+	const float distance = 1.0f / (std::tan (fov * 0.5f) * camera.getProjection ()[1][1]);
+	glm::mat4 view = camera.getLookAt ();
+	view[3][2] = -distance;
+	const auto& output = getScene ().getOutputSize ();
+	viewProjection = glm::perspective (fov, output.x / output.y, 5.0f,
+	    glm::max (15000.0f, distance + 1000.0f)) * view;
+    }
+    const glm::mat4 mvp = viewProjection * model;
 
     if (m_effectsEnabled) {
 	renderEffectChain (mvp, brightness, alpha, compositeEffects && drawToScene);

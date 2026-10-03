@@ -804,6 +804,8 @@ struct TextData {
     UserSettingUniquePtr parallaxDepth;
     /** Whether the text is visible */
     UserSettingUniquePtr visible;
+    /** Use the scene virtual perspective camera for this text. */
+    UserSettingUniquePtr perspective;
     /** Native string enum: enabled by default, ignored in orthographic scenes. */
     UserSettingUniquePtr depthTest;
     /** Horizontal alignment: "left", "center", "right" */
