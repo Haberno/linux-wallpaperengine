@@ -170,6 +170,11 @@ const char* ModelData::replaceData (std::vector<Scripting::ModelDataShape> repla
     const bool dynamic = std::all_of (shapes.begin (), shapes.end (), [] (const Shape& shape) {
 	return shape.input.vertexDynamic && (shape.input.indexWidth == 0 || shape.input.indexDynamic);
     });
+    const bool growing = dynamic && std::equal (shapes.begin (), shapes.end (), replacements.begin (),
+	[] (const Shape& shape, const Scripting::ModelDataShape& replacement) {
+	    return replacement.vertices.size () > shape.input.vertices.size ()
+		|| replacement.indices.size () > shape.input.indices.size ();
+	});
     for (size_t index = 0; index < replacements.size (); ++index) {
 	const auto& replacement = replacements[index];
 	const auto& original = shapes[index].input;
@@ -178,12 +183,12 @@ const char* ModelData::replaceData (std::vector<Scripting::ModelDataShape> repla
 	    || replacement.vertexFormat != original.vertexFormat || replacement.strideBytes != original.strideBytes
 	    || replacement.material != original.material || replacement.indexWidth != original.indexWidth
 	    || (original.indexWidth != 0 && replacement.indices.empty ())
-	    || (dynamic && (replacement.vertices.size () != original.vertices.size ()
+	    || (dynamic && !growing && (replacement.vertices.size () != original.vertices.size ()
 		|| replacement.indices.size () != original.indices.size ()))) {
-	    return "IModelData.replaceData currently requires unchanged material/layout and complete static or full-capacity dynamic shapes";
+	    return "IModelData.replaceData currently requires unchanged material/layout and complete static, full-capacity dynamic, or uniformly growing dynamic shapes";
 	}
     }
-    if (dynamic) {
+    if (dynamic && !growing) {
 	// With no native recreation trigger, replacement uses the same map/copy
 	// path and draw counts as applyData, retaining the original dynamic flags.
 	return applyData (replacements);
@@ -194,7 +199,7 @@ const char* ModelData::replaceData (std::vector<Scripting::ModelDataShape> repla
 	auto& shape = shapes[index];
 	shape.input = std::move (replacements[index]);
 	// Keep the names referenced by every live color/shadow VAO while replacing
-	// their storage. Static native replacement recreates both complete buffers.
+	// their storage. Static buffers or capacity growth recreate both complete buffers.
 	glBindBuffer (GL_ARRAY_BUFFER, shape.vertexBuffer);
 	glBufferData (GL_ARRAY_BUFFER, shape.input.vertices.size () * sizeof (float), shape.input.vertices.data (),
 	    shape.input.vertexDynamic ? GL_DYNAMIC_DRAW : GL_STATIC_DRAW);
