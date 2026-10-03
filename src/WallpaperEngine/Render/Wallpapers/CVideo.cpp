@@ -1,8 +1,11 @@
 #include "CVideo.h"
 
 #include "WallpaperEngine/Data/Model/Project.h"
+#include "WallpaperEngine/Data/Model/Property.h"
 #include "WallpaperEngine/Data/Model/Wallpaper.h"
 #include "WallpaperEngine/VideoPlayback/MPV/GLPlayer.h"
+
+#include <algorithm>
 
 using namespace WallpaperEngine;
 using namespace WallpaperEngine::Render;
@@ -67,3 +70,22 @@ void CVideo::setPause (bool newState) {
 int CVideo::getWidth () const { return this->m_player ? this->m_player->getWidth () : 16; }
 
 int CVideo::getHeight () const { return this->m_player ? this->m_player->getHeight () : 16; }
+
+WallpaperState::TextureUVs CVideo::getPresentationUVs () const {
+    auto uvs = CWallpaper::getPresentationUVs ();
+    const auto& properties = this->getVideo ().project.properties;
+    const auto property = properties.find ("alignmentfliph");
+    bool flip = property != properties.end ()
+	&& property->second->getType () == Data::Model::DynamicValue::Boolean
+	&& property->second->getBool ();
+
+    // Native adds this built-in setting even when project.json omits it.
+    const auto& overrides = this->getContext ().getApp ().getContext ().settings.general.properties;
+    if (const auto override = overrides.find ("alignmentfliph"); override != overrides.end ()) {
+	flip = override->second == "true" || override->second == "1";
+    }
+    if (flip) {
+	std::swap (uvs.ustart, uvs.uend);
+    }
+    return uvs;
+}

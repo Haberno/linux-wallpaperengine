@@ -21,6 +21,8 @@ public:
     [[nodiscard]] int getWidth () const override;
     [[nodiscard]] int getHeight () const override;
 
+    [[nodiscard]] WallpaperState::TextureUVs getPresentationUVs () const override;
+
     void setPause (bool newState) override;
 
 protected:
