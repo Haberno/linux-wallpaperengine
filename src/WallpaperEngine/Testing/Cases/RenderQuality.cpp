@@ -73,3 +73,35 @@ TEST_CASE ("FPS measurements include rendering stalls in elapsed time", "[fps]")
     for (int i = 1; i <= 30; ++i) counter.frame (1.0 + i / 30.0);
     CHECK (counter.fps () == Catch::Approx (30.0));
 }
+
+TEST_CASE ("authored effect extents precede fit and target scale independently of output quality", "[render-quality][fbo][size]") {
+    WallpaperEngine::Data::Model::FBO target {
+	.name = "_rt_GlitterTiles", .format = "r8", .scale = 1.0f, .unique = false,
+	.width = 256, .height = 256,
+    };
+    CHECK (FBOProvider::calculateEffectTargetSize (target, { 320, 180 }, 1) == glm::uvec2 (256, 256));
+    CHECK (FBOProvider::calculateEffectTargetSize (target, { 640, 360 }, 2) == glm::uvec2 (256, 256));
+    target.height = 0xffff;
+    CHECK (FBOProvider::calculateEffectTargetSize (target, { 320, 180 }, 2) == glm::uvec2 (256, 360));
+    target.fit = 4097;
+    CHECK (FBOProvider::calculateEffectTargetSize (target, { 320, 5000 }, 1) == glm::uvec2 (256, 5000));
+    target.width = 192;
+    target.height = 48;
+    target.fit = 64;
+    target.scale = 2;
+    CHECK (FBOProvider::calculateEffectTargetExtent (target, { 320, 180 }, 1) == glm::uvec2 (64, 16));
+    CHECK (FBOProvider::calculateEffectTargetSize (target, { 320, 180 }, 1) == glm::uvec2 (32, 8));
+    target.width = 4097;
+    target.height = 0xffff;
+    CHECK (FBOProvider::calculateEffectTargetSize (target, { 320, 180 }, 1) == glm::uvec2 (32, 18));
+    target.width = 0xffff;
+    CHECK (FBOProvider::calculateEffectTargetSize (target, { 320, 180 }, 1) == glm::uvec2 (32, 18));
+    target.fit = 0;
+    CHECK (FBOProvider::calculateEffectTargetSize (target, { 320, 180 }, 1) == glm::uvec2 (160, 90));
+    CHECK (FBOProvider::calculateEffectTargetSize (target, { 1, 1 }, 1) == glm::uvec2 (2, 2));
+    target.width = 0;
+    target.height = 1;
+    target.fit = 0;
+    CHECK (FBOProvider::calculateEffectTargetExtent (target, { 320, 180 }, 1) == glm::uvec2 (0, 1));
+    CHECK (FBOProvider::calculateEffectTargetSize (target, { 320, 180 }, 1) == glm::uvec2 (2, 2));
+}

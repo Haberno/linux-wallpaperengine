@@ -2,6 +2,7 @@
 #include <algorithm>
 #include <cmath>
 #include <gmpxx.h>
+#include <sstream>
 #include <utility>
 
 using namespace WallpaperEngine::Render;
@@ -35,6 +36,23 @@ glm::uvec2 FBOProvider::calculateTargetSize (
     return result;
 }
 
+glm::uvec2 FBOProvider::calculateEffectTargetExtent (const FBO& base, const glm::vec2 size, const float renderScale) {
+    auto result = calculateTargetSize (size, renderScale, !isFixedSizeTarget (base.name));
+    if (base.width <= 4096) result.x = base.width;
+    if (base.height <= 4096) result.y = base.height;
+    const auto longest = std::max (result.x, result.y);
+    if (base.fit > 0 && base.fit <= 4096 && static_cast<uint32_t> (base.fit) < longest) {
+	result = glm::uvec2 (glm::vec2 (result) * (static_cast<float> (base.fit) / longest));
+    }
+    return result;
+}
+
+glm::uvec2 FBOProvider::calculateEffectTargetSize (const FBO& base, const glm::vec2 size, const float renderScale) {
+    // Native overrides each source extent before fit, then divides by target scale.
+    const auto extent = calculateEffectTargetExtent (base, size, renderScale);
+    return glm::max (glm::uvec2 (glm::vec2 (extent) / base.scale), glm::uvec2 (2));
+}
+
 void FBOProvider::setRenderScale (const float scale) { this->m_renderScale = std::clamp (scale, 0.5f, 2.0f); }
 
 float FBOProvider::getRenderScale () const { return this->m_renderScale; }
@@ -54,18 +72,39 @@ TextureFormat FBOProvider::resolveTargetFormat (const std::string_view format, c
 	? TextureFormat_RGBA16161616f : TextureFormat_ARGB8888;
 }
 
-std::shared_ptr<CFBO> FBOProvider::create (const FBO& base, const glm::vec2 size) {
-    const auto targetSize = calculateTargetSize (
-	size / base.scale, this->m_renderScale, !isFixedSizeTarget (base.name), base.fit
-    );
+std::shared_ptr<CFBO> FBOProvider::create (const FBO& base, const glm::vec2 size, const bool fullscreen) {
+    const auto targetSize = calculateEffectTargetSize (base, size, this->m_renderScale);
     // Native declared targets have their own linear sampler, independent of the
     // image reference's interpolation and wrapping flags.
     const auto flags = base.repeat ? TextureFlags_NoFlags : TextureFlags_ClampUVs;
-    auto target = this->m_fbos[base.name] = std::make_shared<CFBO> (
-	       base.name,
-	       resolveTargetFormat (base.format, this->getBackbufferFormat ()), flags, base.scale,
-	       targetSize.x, targetSize.y, targetSize.x, targetSize.y
-	   );
+    const auto format = resolveTargetFormat (base.format, this->getBackbufferFormat ());
+    std::shared_ptr<CFBO> target;
+    const auto* scene = this;
+    while (scene->m_parent != nullptr) scene = scene->m_parent;
+    std::string key;
+    if (!base.unique) {
+	// Native ordinary targets share by name, unscaled extent and scale. Fullscreen
+	// targets use their plain name and keep the same storage when resized.
+	key = base.name;
+	if (!fullscreen) {
+	    const auto extent = calculateEffectTargetExtent (base, size, this->m_renderScale);
+	    std::ostringstream suffix;
+	    suffix << '_' << extent.x << '_' << extent.y << '_' << base.scale;
+	    key += suffix.str ();
+	}
+	std::erase_if (scene->m_sharedTargets, [] (const auto& entry) { return entry.second.expired (); });
+	if (const auto found = scene->m_sharedTargets.find (key); found != scene->m_sharedTargets.end ()) {
+	    target = found->second.lock ();
+	}
+    }
+    if (target == nullptr) {
+	target = std::make_shared<CFBO> (
+	    base.name, format, flags, base.scale, targetSize.x, targetSize.y, targetSize.x, targetSize.y
+	);
+	if (!base.unique) scene->m_sharedTargets[key] = target;
+    }
+    this->m_fbos[base.name] = target;
+    // Clearing is an effect declaration action, including when storage is shared.
     if (base.clearOnCreate) target->clear (base.clear);
     return target;
 }

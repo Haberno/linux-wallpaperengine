@@ -1585,7 +1585,7 @@ void CImage::setup () {
 
 	    // create all the fbos for this effect
 	    for (const auto& fbo : cur->effect->fbos) {
-		auto target = fboProvider->create (*fbo, m_effectSize);
+		auto target = fboProvider->create (*fbo, m_effectSize, this->m_image.model->fullscreen);
 		if (this->m_image.model->fullscreen || this->m_compositionFBO != nullptr) {
 		    this->m_sceneEffectTargets.push_back ({ std::move (target), fbo.get () });
 		}
@@ -2089,9 +2089,12 @@ void CImage::updateSceneTargets () const {
 	this->m_mainFBO->resize (targetSize.x, targetSize.y);
 	this->m_subFBO->resize (targetSize.x, targetSize.y);
 	for (const auto& [target, definition] : this->m_sceneEffectTargets) {
-	    const auto effectSize = FBOProvider::calculateTargetSize (
-		outputSize / definition->scale, this->getRenderScale (),
-		!FBOProvider::isFixedSizeTarget (definition->name), definition->fit
+	    const auto effectExtent = FBOProvider::calculateEffectTargetExtent (
+		*definition, outputSize, this->getRenderScale ()
+	    );
+	    // Shared fullscreen storage retains the first allocation's target scale.
+	    const auto effectSize = glm::max (
+		glm::uvec2 (glm::vec2 (effectExtent) / target->getScale ()), glm::uvec2 (2)
 	    );
 	    target->resize (effectSize.x, effectSize.y);
 	}

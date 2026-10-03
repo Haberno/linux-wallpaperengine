@@ -156,3 +156,19 @@ TEST_CASE ("only normalized cursor ripple targets receive float feedback", "[eff
         }
     }
 }
+
+TEST_CASE ("effect targets retain authored extents and native omitted sentinels", "[effect][fbo][size]") {
+    const auto instance = loadEffect (JSON::parse (R"({"passes":[],"fbos":[
+	{"name":"glitter","format":"r8","width":256,"height":256},
+	{"name":"width","format":"rgba8888","width":128},
+	{"name":"fallback","format":"rgba8888","width":4097,"height":null}
+    ]})"), JSON::object ());
+    const auto& targets = instance->effect->fbos;
+    REQUIRE (targets.size () == 3);
+    CHECK (targets[0]->width == 256);
+    CHECK (targets[0]->height == 256);
+    CHECK (targets[1]->width == 128);
+    CHECK (targets[1]->height == 0xffff);
+    CHECK (targets[2]->width == 4097);
+    CHECK (targets[2]->height == 0xffff);
+}

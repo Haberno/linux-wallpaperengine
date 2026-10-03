@@ -208,6 +208,8 @@ std::vector<FBOUniquePtr> EffectParser::parseFBOs (const JSON& it, const JSON& c
 		.unique = cur.optional ("unique", false),
 		.repeat = uvs.has_value () && uvs->is_string () && uvs->get<std::string> () == "repeat",
 		.fit = cur.optional ("fit", 0),
+		.width = cur.optional ("width", uint16_t (0xffff)),
+		.height = cur.optional ("height", uint16_t (0xffff)),
 	    })
 	);
 	parseClearColor (*result.back (), cur);

@@ -14,7 +14,7 @@ class FBOProvider {
 public:
     explicit FBOProvider (const FBOProvider* parent);
 
-    std::shared_ptr<CFBO> create (const FBO& base, glm::vec2 size);
+    std::shared_ptr<CFBO> create (const FBO& base, glm::vec2 size, bool fullscreen = false);
     std::shared_ptr<CFBO> create (
 	const std::string& name, TextureFormat format, uint32_t flags, float scale, glm::vec2 realSize,
 	glm::vec2 textureSize, bool withDepthBuffer = false, bool depthTexture = false, uint32_t samples = 1
@@ -39,11 +39,19 @@ public:
     [[nodiscard]] static glm::uvec2 calculateTargetSize (
 	glm::vec2 size, float renderScale, bool scalable = true, int fit = 0
     );
+    [[nodiscard]] static glm::uvec2 calculateEffectTargetExtent (
+	const FBO& base, glm::vec2 size, float renderScale
+    );
+    [[nodiscard]] static glm::uvec2 calculateEffectTargetSize (
+	const FBO& base, glm::vec2 size, float renderScale
+    );
 
 private:
     const FBOProvider* m_parent;
     float m_renderScale = 1.0f;
     TextureFormat m_backbufferFormat = TextureFormat_ARGB8888;
     std::map<std::string, std::shared_ptr<CFBO>> m_fbos = {};
+    /** Scene-local declared targets; physical storage belongs to its effect references. */
+    mutable std::map<std::string, std::weak_ptr<CFBO>> m_sharedTargets = {};
 };
 }

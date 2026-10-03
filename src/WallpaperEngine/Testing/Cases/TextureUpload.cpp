@@ -99,7 +99,7 @@ TEST_CASE ("declared effect target samplers survive HDR allocation and resize", 
 	CAPTURE (repeat);
 	const WallpaperEngine::Data::Model::FBO definition {
 	    .name = "effect-target", .format = "rgba_backbuffer", .scale = 1.0f,
-	    .unique = false, .repeat = repeat,
+	    .unique = true, .repeat = repeat,
 	};
 	const auto target = provider.create (definition, glm::vec2 (9, 9));
 	const auto texture = target->getTextureID (0);
@@ -795,4 +795,61 @@ TEST_CASE ("Automatic texture quality uses native scene and output thresholds", 
     CHECK (Context::calculateTextureReduction (Quality::Auto, false, {16, 1}, {0, 0}) == 2);
     CHECK (Context::calculateTextureReduction (Quality::Full, true, {0, 0}, {1, 1}) == 1);
     CHECK (Context::calculateTextureReduction (Quality::Half, false, {0, 0}, {3840, 2160}) == 2);
+}
+
+
+TEST_CASE ("declared effect storage shares per scene and releases with its last effect", "[.][gl][texture][fbo][sharing]") {
+    TextureGLContext context;
+    using WallpaperEngine::Render::FBOProvider;
+    using WallpaperEngine::Data::Model::FBO;
+    const size_t bytes = CFBO::getLiveGpuBytes ();
+    const size_t count = CFBO::getLiveCount ();
+    FBOProvider scene (nullptr);
+    {
+        FBOProvider image1 (&scene), image2 (&scene), first (&image1), second (&image2);
+        FBO definition { .name = "shared", .format = "rgba8888", .scale = 1.0f, .unique = false };
+        const auto a = first.create (definition, { 9, 5 });
+        const auto b = second.create (definition, { 9, 5 });
+        REQUIRE (a == b);
+        CHECK (CFBO::getLiveCount () == count + 1);
+        CHECK (CFBO::getLiveGpuBytes () == bytes + 9 * 5 * 4);
+        CHECK (a->getTextureID (0) == b->getTextureID (0));
+        a->clear ({ 0.25f, 0.5f, 0.75f, 1.0f });
+        const auto pixel = [] (const std::shared_ptr<CFBO>& target) {
+            glBindFramebuffer (GL_FRAMEBUFFER, target->getFramebuffer ());
+            std::array<unsigned char, 4> result {};
+            glReadPixels (0, 0, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, result.data ());
+            return result;
+        };
+        CHECK (std::abs (static_cast<int> (pixel (b)[0]) - 64) <= 1);
+        definition.clear = { 1, 0, 0, 1 };
+        definition.clearOnCreate = true;
+        REQUIRE (second.create (definition, { 9, 5 }) == a);
+        CHECK (pixel (a) == std::array<unsigned char, 4> { 255, 0, 0, 255 });
+        definition.clearOnCreate = false;
+        definition.unique = true;
+        const auto privateA = first.create (definition, { 9, 5 });
+        const auto privateB = second.create (definition, { 9, 5 });
+        CHECK (privateA != privateB);
+        privateA->clear ({ 0, 1, 0, 1 });
+        privateB->clear ({ 0, 0, 1, 1 });
+        CHECK (pixel (privateA) == std::array<unsigned char, 4> { 0, 255, 0, 255 });
+        CHECK (pixel (privateB) == std::array<unsigned char, 4> { 0, 0, 255, 255 });
+        CHECK (pixel (a) == std::array<unsigned char, 4> { 255, 0, 0, 255 });
+        definition.unique = false;
+        const auto fullA = first.create (definition, { 9, 5 }, true);
+        const auto fullB = second.create (definition, { 9, 5 }, true);
+        REQUIRE (fullA == fullB);
+        REQUIRE (fullA != a);
+        const auto texture = fullA->getTextureID (0);
+        fullA->resize (13, 7);
+        CHECK (fullB->getTextureID (0) == texture);
+        CHECK (fullB->getTextureWidth (0) == 13);
+        CHECK (fullB->getTextureHeight (0) == 7);
+        CHECK (first.create (definition, { 13, 7 }, true) == fullB);
+        CHECK (glGetError () == GL_NO_ERROR);
+    }
+    // The root registry holds weak references, so even a live scene pins no storage.
+    CHECK (CFBO::getLiveCount () == count);
+    CHECK (CFBO::getLiveGpuBytes () == bytes);
 }

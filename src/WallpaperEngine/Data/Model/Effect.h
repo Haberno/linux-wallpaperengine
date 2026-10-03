@@ -1,6 +1,7 @@
 #pragma once
 
 #include <glm/vec4.hpp>
+#include <cstdint>
 #include <optional>
 #include <string>
 
@@ -18,6 +19,9 @@ struct FBO {
     bool repeat = false;
     /** Optional maximum edge length for aspect-preserving simulation targets. */
     int fit = 0;
+    /** Native explicit extents; values above 4096 inherit the source dimension. */
+    uint16_t width = 0xffff;
+    uint16_t height = 0xffff;
     /** Color used by this target's clear action. */
     glm::vec4 clear = glm::vec4 (0.0f);
     /** Native initial clearing requires a complete or empty clear-color string. */
