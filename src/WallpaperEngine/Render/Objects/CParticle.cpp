@@ -3083,23 +3083,16 @@ void CParticle::updateParticleViewProjection () {
 	m_viewProjectionMatrix = camera.getProjection () * camera.getLookAt ();
 	m_eyePosition = camera.getEye ();
     } else if ((m_particle.flags & 4) != 0) {
-	// Perspective particles use a dedicated perspective projection
-	float width = getScene ().getCamera ().getWidth ();
-	float height = getScene ().getCamera ().getHeight ();
-	float aspect = width / height;
-	float fov = glm::radians (getScene ().getCamera ().getFov ());
-	float nearz = getScene ().getCamera ().getNearZ ();
-	float farz = getScene ().getCamera ().getFarZ ();
-
-	glm::mat4 perspectiveProj = glm::perspective (fov, aspect, nearz, farz);
-	const glm::vec2 framing = getScene ().getCamera ().getViewportScale ();
-	perspectiveProj[0][0] *= framing.x;
-	perspectiveProj[1][1] *= framing.y;
-	glm::mat4 perspectiveView
-	    = glm::lookAt (glm::vec3 (0.0f, 0.0f, 1000.0f), glm::vec3 (0.0f, 0.0f, 0.0f), glm::vec3 (0.0f, 1.0f, 0.0f));
-
-	m_viewProjectionMatrix = perspectiveProj * perspectiveView;
-	m_eyePosition = glm::vec3 (0.0f, 0.0f, 1000.0f);
+	// Native flag-4 draws use the same virtual camera as mixed image/model layers.
+	const auto& camera = getScene ().getCamera ();
+	const float fov = glm::radians (glm::clamp (camera.getFov (), 0.1f, 179.9f));
+	const float distance = 1.0f / (std::tan (fov * 0.5f) * camera.getProjection ()[1][1]);
+	glm::mat4 view = camera.getLookAt ();
+	view[3][2] = -distance;
+	const auto& output = getScene ().getOutputSize ();
+	m_viewProjectionMatrix = glm::perspective (fov, output.x / output.y, 5.0f,
+	    glm::max (15000.0f, distance + 1000.0f)) * view;
+	m_eyePosition = glm::vec3 (glm::inverse (view)[3]);
     } else {
 	// Orthographic projection from scene camera
 	m_viewProjectionMatrix = getScene ().getCamera ().getProjection () * getScene ().getCamera ().getLookAt ();
