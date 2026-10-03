@@ -564,6 +564,16 @@ void ApplicationContext::loadSettingsFromArgv () {
 	.default_value (1.0f)
 	.store_into (this->settings.render.renderScale);
 
+    performanceGroup.add_argument ("--texture-resolution")
+	.help ("Source texture and local image-effect resolution: full or half. Default: full. "
+	       "Half skips the largest authored mip when available; output resolution stays unchanged.")
+	.choices ("full", "half")
+	.default_value (std::string ("full"))
+	.nargs (1)
+	.action ([this] (const std::string& value) -> void {
+	    this->settings.render.textureResolution = value == "half" ? TextureResolution::Half : TextureResolution::Full;
+	});
+
     performanceGroup.add_argument ("--msaa")
 	.help (
 	    "Scene geometry multisampling before post-processing: off, 2, 4, or 8 samples. Default: 2. "

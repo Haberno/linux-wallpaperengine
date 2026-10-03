@@ -1295,7 +1295,11 @@ void CPass::setupTextureUniforms () {
     this->addUniform ("g_Texture7", 7);
     this->addUniform ("g_Texture8", 8);
     this->addUniform ("g_Texture9", 9);
-    this->addUniform ("g_TextureReductionScale", 1.0f);
+    this->addUniform (
+	"g_TextureReductionScale", static_cast<float> (
+	    this->m_renderable.getScene ().getContext ().getApp ().getContext ().settings.render.textureResolution
+	)
+    );
 
     // Wallpaper Engine initializes resolution uniforms even when the matching texture
     // slot is not bound. Workshop shaders sometimes use one of those spare uniforms

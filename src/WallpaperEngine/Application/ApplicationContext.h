@@ -33,6 +33,8 @@ public:
     void loadSettingsFromArgv ();
 
     enum class PostProcessing { Disabled, Enabled, Ultra };
+    /** Source mip selection and local image-effect resolution, independent of output render scale. */
+    enum class TextureResolution { Full = 1, Half = 2 };
     /** How a live switch shares frames with the outgoing wallpaper while it loads */
     enum class SwitchPacing { Adaptive, Fixed, Off };
 
@@ -124,6 +126,7 @@ public:
 	    bool showLoadDetails;
 	    /** Scene render-target scale (1.0 = native, >1.0 = supersampling) */
 	    float renderScale;
+	    TextureResolution textureResolution;
 	    /** Scene geometry multisample count (1 = off) */
 	    uint32_t msaaSamples;
 	    PostProcessing postProcessing;
@@ -226,6 +229,7 @@ public:
             .showFps = false,
 	    .showLoadDetails = false,
 	    .renderScale = 1.0f,
+	    .textureResolution = TextureResolution::Full,
 	    .msaaSamples = 2,
 	    .postProcessing = PostProcessing::Enabled,
 	    .switchPacing = SwitchPacing::Adaptive,

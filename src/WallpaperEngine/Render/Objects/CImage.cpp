@@ -292,6 +292,10 @@ CImage::CImage (Wallpapers::CScene& scene, const Image& image) :
     }
     if (image.model->fullscreen || this->m_compositionFBO != nullptr) {
 	m_effectSize = scene.getOutputSize ();
+    } else {
+	// Native Half quality reduces local image effects even for single-mip sources.
+	// Geometry, authored source UVs and scene-sized render targets stay unchanged.
+	m_effectSize /= static_cast<float> (scene.getContext ().getApp ().getContext ().settings.render.textureResolution);
     }
 
     glm::vec2 scaledSize = size * glm::vec2 (scale);

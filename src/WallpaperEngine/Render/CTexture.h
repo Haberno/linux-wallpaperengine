@@ -107,6 +107,8 @@ private:
     GLuint* m_textureID = nullptr;
     /** Resolution vector of the texture */
     glm::vec4 m_resolution {};
+    /** Half quality omits authored mip zero when a following mip exists. */
+    bool m_reduceMipmaps = false;
     /** Sum of all uploaded images and mip levels, used by cache accounting. */
     size_t m_approximateGpuBytes = 0;
     /** The video player in use */

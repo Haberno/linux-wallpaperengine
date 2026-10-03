@@ -22,6 +22,11 @@ CTexture::CTexture (
 	    = Data::Parsers::TextureParser::selectedVariants (*this->m_header, this->m_variantSelector);
 	this->m_header = Data::Parsers::TextureParser::selectVariants (*this->m_header, this->m_variantSelector);
     }
+    this->m_reduceMipmaps = context.getApp ().getContext ().settings.render.textureResolution
+	== Application::ApplicationContext::TextureResolution::Half
+	&& !this->m_header->isVideoMp4 && !(this->m_header->flags & TextureFlags_Video);
+    // Native source resolution uniforms and normalized atlas coordinates remain authored.
+    // Only the uploaded mip chain and local effect surfaces use the lower resolution.
     // ensure the header is parsed
     this->setupResolution ();
     const GLint internalFormat = this->setupInternalFormat ();
@@ -30,8 +35,9 @@ CTexture::CTexture (
 	this->m_approximateGpuBytes
 	    = static_cast<size_t> (this->m_header->textureWidth) * this->m_header->textureHeight * 4;
     } else {
-	for (const auto& mipmaps : this->m_header->images | std::views::values) {
-	    for (const auto& mipmap : mipmaps) {
+	for (const auto& [index, mipmaps] : this->m_header->images) {
+	    const size_t skipped = mipmaps.size () - this->getMipMapCount (index);
+	    for (const auto& mipmap : mipmaps | std::views::drop (skipped)) {
 		const size_t width = mipmap->decodedWidth > 0 ? mipmap->decodedWidth : mipmap->width;
 		const size_t height = mipmap->decodedHeight > 0 ? mipmap->decodedHeight : mipmap->height;
 
@@ -86,8 +92,16 @@ CTexture::CTexture (
 	this->setupOpenGLParameters (index);
 
 	int level = 0;
+	const size_t skipped = mipmaps.size () - this->getMipMapCount (index);
+	if (skipped != 0) {
+	    // Retain its dimensions for authored UVs, but discard the unused pixel buffers.
+	    const auto& mipmap = mipmaps.front ();
+	    mipmap->decodedData.reset ();
+	    mipmap->uncompressedData.reset ();
+	    mipmap->uncompressedSize = 0;
+	}
 
-	for (const auto& mipmap : mipmaps) {
+	for (const auto& mipmap : mipmaps | std::views::drop (skipped)) {
 	    stbi_uc* handle = nullptr;
 	    const void* dataptr = mipmap->uncompressedData.get ();
 	    int width = mipmap->width;
@@ -264,7 +278,7 @@ void CTexture::setupOpenGLParameters (const uint32_t textureID) const {
 
     // set mipmap levels
     glTexParameteri (GL_TEXTURE_2D, GL_TEXTURE_BASE_LEVEL, 0);
-    glTexParameteri (GL_TEXTURE_2D, GL_TEXTURE_MAX_LEVEL, this->m_header->images[textureID].size () - 1);
+    glTexParameteri (GL_TEXTURE_2D, GL_TEXTURE_MAX_LEVEL, this->getMipMapCount (textureID) - 1);
 
     // setup texture wrapping and filtering
     if (this->m_header->flags & TextureFlags_ClampUVs) {
@@ -359,7 +373,8 @@ uint32_t CTexture::getMipMapCount (const uint32_t imageIndex) const {
     }
     // Match getTextureID's fallback for a static texture bound alongside animation.
     const uint32_t index = imageIndex < this->m_header->imageCount ? imageIndex : 0;
-    return this->m_header->images.at (index).size ();
+    const uint32_t count = this->m_header->images.at (index).size ();
+    return count - (this->m_reduceMipmaps && count > 1 ? 1 : 0);
 }
 
 uint32_t CTexture::getRealWidth () const {
@@ -441,6 +456,7 @@ void CTexture::refreshVariant () {
 	std::swap (this->m_header, replacement.m_header);
 	std::swap (this->m_textureID, replacement.m_textureID);
 	std::swap (this->m_resolution, replacement.m_resolution);
+	std::swap (this->m_reduceMipmaps, replacement.m_reduceMipmaps);
 	std::swap (this->m_approximateGpuBytes, replacement.m_approximateGpuBytes);
 	Debug::RenderHealth::record ("texture.variant_update", std::to_string (selection.size ()));
     } catch (const std::exception& error) {
