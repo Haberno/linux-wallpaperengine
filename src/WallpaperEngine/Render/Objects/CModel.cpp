@@ -167,16 +167,26 @@ const char* ModelData::replaceData (std::vector<Scripting::ModelDataShape> repla
     if (replacements.size () != shapes.size ()) {
 	return "IModelData.replaceData currently requires the existing shape count";
     }
+    const bool dynamic = std::all_of (shapes.begin (), shapes.end (), [] (const Shape& shape) {
+	return shape.input.vertexDynamic && (shape.input.indexWidth == 0 || shape.input.indexDynamic);
+    });
     for (size_t index = 0; index < replacements.size (); ++index) {
 	const auto& replacement = replacements[index];
 	const auto& original = shapes[index].input;
-	if (original.vertexDynamic || !replacement.hasVertices || replacement.vertices.empty ()
+	if ((original.vertexDynamic && !dynamic) || !replacement.hasVertices || replacement.vertices.empty ()
 	    || replacement.deleteShape || replacement.deleteIndices
 	    || replacement.vertexFormat != original.vertexFormat || replacement.strideBytes != original.strideBytes
 	    || replacement.material != original.material || replacement.indexWidth != original.indexWidth
-	    || (original.indexWidth != 0 && replacement.indices.empty ())) {
-	    return "IModelData.replaceData currently requires complete static shapes with unchanged material and layout";
+	    || (original.indexWidth != 0 && replacement.indices.empty ())
+	    || (dynamic && (replacement.vertices.size () != original.vertices.size ()
+		|| replacement.indices.size () != original.indices.size ()))) {
+	    return "IModelData.replaceData currently requires unchanged material/layout and complete static or full-capacity dynamic shapes";
 	}
+    }
+    if (dynamic) {
+	// With no native recreation trigger, replacement uses the same map/copy
+	// path and draw counts as applyData, retaining the original dynamic flags.
+	return applyData (replacements);
     }
     GLint previous = 0;
     glGetIntegerv (GL_ARRAY_BUFFER_BINDING, &previous);
