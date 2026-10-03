@@ -2773,11 +2773,20 @@ std::optional<glm::vec3> CImage::cursorLocalPosition (const glm::vec3& worldPosi
     }
 
     const auto& camera = getScene ().getCamera ();
+    const auto& parallax = getScene ().getScene ().camera.parallax;
     glm::vec3 hitPosition = worldPosition;
-    if (camera.isOrthogonal () && !this->getImage ().model->fullscreen) {
-	const glm::vec2 offset = this->resolveParallaxOffset ();
-	// Undo the rendered scene-space translation in authored coordinates before
-	// applying the parent/local inverse; rotation and scale must not affect it.
+    if (camera.isOrthogonal () && !this->getImage ().model->fullscreen
+	&& parallax.enabled->value->getBool ()
+	&& !getContext ().getApp ().getContext ().settings.mouse.disableparallax) {
+	// Native input uses the queried image's own origin and depth, even when
+	// its rendered position inherits a different root-layer parallax offset.
+	const glm::vec2 depth = getImage ().parallaxDepth->value->getVec2 ();
+	const glm::vec2 offset = calculateParallaxOffset (
+	    glm::vec2 (getObject ().origin->evaluateVec3 (getScene ().getTime ())), depth,
+	    { getScene ().getWidth (), getScene ().getHeight () }, *getScene ().getParallaxDisplacement (),
+	    parallax.amount->value->getFloat ()
+	);
+	// Undo the scene-space translation before applying the parent/local inverse.
 	hitPosition -= glm::vec3 (offset.x, -offset.y, 0.0f);
     }
     const auto position = camera.isOrthogonal ()

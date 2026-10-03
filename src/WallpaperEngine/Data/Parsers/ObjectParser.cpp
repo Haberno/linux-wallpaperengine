@@ -364,7 +364,7 @@ ObjectParser::parseImage (const JSON& it, const Project& project, ObjectData bas
 	    .alignment = it.optional ("horizontalalign", it.optional ("alignment", std::string ("center"))),
 	    .size = it.user ("size", properties, glm::vec2 (0.0f))->value->getVec2 (),
 	    .sizeSpecified = it.optional ("size").has_value (),
-	    .parallaxDepth = it.user ("parallaxDepth", properties, glm::vec2 (0.0f)),
+	    .parallaxDepth = it.user ("parallaxDepth", properties, glm::vec2 (1.0f)),
 	    .colorBlendMode = it.user ("colorBlendMode", properties, 0),
 	    .brightness = it.user ("brightness", properties, 1.0f),
 	    .copyBackground = it.optional ("copybackground", true),

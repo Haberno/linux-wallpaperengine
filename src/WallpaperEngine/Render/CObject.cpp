@@ -131,11 +131,14 @@ glm::vec2 CObject::resolveParallaxOffset () const {
     }
 
     glm::vec2 depth (1.0f);
-    if (current->authoredParallaxDepth.has_value ()) {
+
+    // Images initialize the live property to the native default, so later
+    // script assignments also apply when the field was absent from the scene.
+    if (current->is<Image> ()) {
+	depth = current->as<Image> ()->parallaxDepth->value->getVec2 ();
+    } else if (current->authoredParallaxDepth.has_value ()) {
 	// Read the live typed property so user settings and SceneScript changes keep working.
-	if (current->is<Image> ()) {
-	    depth = current->as<Image> ()->parallaxDepth->value->getVec2 ();
-	} else if (current->is<Particle> ()) {
+	if (current->is<Particle> ()) {
 	    depth = current->as<Particle> ()->parallaxDepth->value->getVec2 ();
 	} else if (current->is<Text> ()) {
 	    depth = current->as<Text> ()->parallaxDepth->value->getVec2 ();
