@@ -73,6 +73,16 @@ public:
 	const glm::vec2& normalizedPosition, bool projectionYFlipped
     );
 
+    /** Ordinary orthographic image receiver; unsupported projection modes return nullopt. */
+    [[nodiscard]] std::optional<glm::mat3> transformAttachmentToTexture (
+        const CObject& source, const glm::mat4& attachmentWorld
+    ) const;
+    [[nodiscard]] static glm::mat3 calculateOrthographicAttachmentTextureMatrix (
+        const glm::mat4& attachmentWorld, const glm::mat4& receiverWorld,
+        const glm::mat4& sourceViewProjection, const glm::mat4& receiverViewProjection,
+        float cameraZ, const glm::vec2& size
+    );
+
     /** Split a perspective image transform into the matrices consumed by genericimage3/4.
      *  Their LIGHTING path uses model and view-projection separately instead of the MVP. */
     [[nodiscard]] static PerspectiveSceneMatrices

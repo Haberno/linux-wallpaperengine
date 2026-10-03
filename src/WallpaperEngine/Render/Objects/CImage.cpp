@@ -2800,6 +2800,77 @@ std::optional<glm::mat4> CImage::getBoneTransform (const size_t index) const {
     return this->m_puppetWorldBones[index];
 }
 
+glm::mat3 CImage::calculateOrthographicAttachmentTextureMatrix (
+    const glm::mat4& attachmentWorld, const glm::mat4& receiverWorld,
+    const glm::mat4& sourceViewProjection, const glm::mat4& receiverViewProjection,
+    const float cameraZ, const glm::vec2& size
+) {
+    const glm::mat4 sourceClip = sourceViewProjection * attachmentWorld;
+    const glm::mat4 unproject = glm::inverse (receiverViewProjection);
+    const glm::mat4 receiverInverse = glm::inverse (receiverWorld);
+    const glm::vec3 direction = glm::vec3 (receiverInverse * glm::vec4 (0, 0, 1, 0));
+    const auto project = [&] (const float x) {
+        const glm::vec4 clip = sourceClip * glm::vec4 (x, 0, 0, 1);
+        const glm::vec4 screen = unproject * glm::vec4 (glm::vec2 (clip) / clip.w, 0, 1);
+        const glm::vec3 origin = glm::vec3 (receiverInverse * glm::vec4 (
+            screen.x / screen.w, screen.y / screen.w, cameraZ - 2000.0f, 1));
+        // Native ignores the unit-triangle hit flag: extrapolate outside the
+        // image and behind the ray. Parallel rays retain zero barycentrics.
+        const glm::vec2 hit = std::abs (direction.z) <= std::numeric_limits<float>::epsilon ()
+            ? glm::vec2 (0) : glm::vec2 (origin - direction * (origin.z / direction.z));
+        return glm::vec2 (.5f) + (hit - .5f) / size * glm::vec2 (1, -1);
+    };
+    const glm::vec2 origin = project (0);
+    glm::vec2 axis = project (100) - origin;
+    const float length = glm::length (axis);
+    axis = length <= std::numeric_limits<float>::epsilon () ? glm::vec2 (0) : axis / length;
+    return glm::mat3 (glm::vec3 (axis, 0), glm::vec3 (axis.y, -axis.x, 0), glm::vec3 (origin, 1));
+}
+
+std::optional<glm::mat3> CImage::transformAttachmentToTexture (
+    const CObject& source, const glm::mat4& attachmentWorld
+) const {
+    const auto& camera = this->getScene ().getCamera ();
+    const Object& object = source.getObject ();
+    // Virtual image receivers and perspective scenes require separate ray
+    // contracts; an orthographic scene may still project a virtual model source.
+    if (!camera.isOrthogonal () || this->m_image.perspective->value->getBool ()
+        || this->m_image.model->fullscreen) return std::nullopt;
+    bool virtualModelSource = false;
+    if (object.is<Image> ()) {
+        const Image& image = *object.as<Image> ();
+        if (image.perspective->value->getBool () || image.model->fullscreen) return std::nullopt;
+    } else if (object.is<Model3D> ()) {
+        virtualModelSource = object.as<Model3D> ()->perspective->value->getBool ();
+    } else {
+        return std::nullopt;
+    }
+    const glm::mat4 sceneToRender = glm::translate (glm::mat4 (1),
+        glm::vec3 (-camera.getWidth () * .5f, camera.getHeight () * .5f, 0))
+        * glm::scale (glm::mat4 (1), glm::vec3 (1, -1, 1));
+    const glm::mat4 viewProjection = camera.getProjection () * camera.getLookAt () * sceneToRender;
+    glm::mat4 sourceViewProjection = viewProjection;
+    if (virtualModelSource) {
+        // Match CModel's virtual render camera. The receiver still unprojects
+        // through its ordinary camera, as in native transformAttachmentToTexture.
+        const float fov = glm::radians (glm::clamp (camera.getFov (), 0.1f, 179.9f));
+        const float distance = 1.0f / (std::tan (fov * 0.5f) * camera.getProjection ()[1][1]);
+        glm::mat4 view = camera.getLookAt ();
+        view[3][2] = -distance;
+        const auto& output = this->getScene ().getOutputSize ();
+        sourceViewProjection = glm::perspective (fov, output.x / output.y, 5.0f,
+            glm::max (15000.0f, distance + 1000.0f)) * view * sceneToRender;
+    }
+    // Render offsets inherit the root layer. Convert their Y-flipped space
+    // back to authored coordinates before composing the camera transforms.
+    const glm::vec2 sourceOffset = source.resolveParallaxOffset () * glm::vec2 (1, -1);
+    const glm::vec2 receiverOffset = this->resolveParallaxOffset () * glm::vec2 (1, -1);
+    return calculateOrthographicAttachmentTextureMatrix (
+        attachmentWorld, this->resolveWorldMatrix (),
+        glm::translate (sourceViewProjection, glm::vec3 (sourceOffset, 0)),
+        glm::translate (viewProjection, glm::vec3 (receiverOffset, 0)), camera.getEye ().z, this->getSize ());
+}
+
 static glm::mat4 cursorPlaneTransform (const glm::mat4& world) {
     // A 2D image can have zero Z scale while retaining a valid XY hit plane.
     // Complete its basis from the two in-plane axes before taking an inverse.

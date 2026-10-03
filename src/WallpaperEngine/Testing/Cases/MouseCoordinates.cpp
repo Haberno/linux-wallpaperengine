@@ -410,3 +410,96 @@ TEST_CASE ("Shader parallax position is independent of camera translation amount
     CHECK (CScene::calculateShaderParallaxPosition ({ -1.0f, 1.0f }) == glm::vec2 (0.0f, 1.0f));
     CHECK (CScene::calculateShaderParallaxPosition ({ -0.15f, 0.15f }) == glm::vec2 (0.425f, 0.575f));
 }
+
+TEST_CASE ("attachment texture projection retains native pixel bias and reflected basis", "[attachment][projection]") {
+    const glm::mat4 attachment = glm::translate (glm::mat4 (1), {185, 110, 12})
+        * glm::rotate (glm::mat4 (1), glm::radians (30.0f), {0, 0, 1})
+        * glm::scale (glm::mat4 (1), {1.5f, .75f, 1});
+    const glm::mat4 receiver = glm::translate (glm::mat4 (1), {160, 90, 0});
+    const glm::mat4 projection = glm::ortho (0.0f, 320.0f, 0.0f, 180.0f, -1000.0f, 1000.0f);
+    const glm::mat3 matrix = CImage::calculateOrthographicAttachmentTextureMatrix (
+        attachment, receiver, projection, projection, 100, {100, 60});
+    CHECK (matrix[2].x == Catch::Approx (.745f).margin (.00001f));
+    CHECK (matrix[2].y == Catch::Approx (.175f).margin (.00001f));
+    CHECK (matrix[0].x == Catch::Approx (.72057669f).margin (.00001f));
+    CHECK (matrix[0].y == Catch::Approx (-.69337525f).margin (.00001f));
+    CHECK (matrix[1].x == matrix[0].y);
+    CHECK (matrix[1].y == -matrix[0].x);
+    CHECK (glm::determinant (matrix) == Catch::Approx (-1));
+
+    // Native 24-bit pixel readback confirmed this oblique receiver too.
+    const glm::mat4 tiltedReceiver = glm::translate (glm::mat4 (1), {130, 75, 10})
+        * glm::rotate (glm::mat4 (1), .3f, {0, 0, 1})
+        * glm::rotate (glm::mat4 (1), .2f, {0, 1, 0})
+        * glm::rotate (glm::mat4 (1), .1f, {1, 0, 0})
+        * glm::scale (glm::mat4 (1), {1.2f, .8f, 1});
+    const glm::mat3 tilted = CImage::calculateOrthographicAttachmentTextureMatrix (
+        attachment, tiltedReceiver, projection, projection, 100, {100, 60});
+    CHECK (tilted[2].x == Catch::Approx (1.026802263f).margin (.00003f));
+    CHECK (tilted[2].y == Catch::Approx (.148553312f).margin (.00003f));
+    CHECK (tilted[0].x == Catch::Approx (.871568771f).margin (.00003f));
+    CHECK (tilted[0].y == Catch::Approx (-.490273268f).margin (.00003f));
+    CHECK (glm::determinant (tilted) == Catch::Approx (-1));
+}
+
+TEST_CASE ("attachment projection extrapolates tilted receiver planes and discards depth", "[attachment][projection]") {
+    const glm::mat4 projection = glm::ortho (-100.0f, 100.0f, -100.0f, 100.0f, -10.0f, 10.0f);
+    // The receiving plane is beyond the view's far clip, with a source well
+    // outside its texture rectangle. Native still projects the infinite plane.
+    const glm::mat4 receiver = glm::translate (glm::mat4 (1), {0, 0, 50})
+        * glm::rotate (glm::mat4 (1), glm::radians (60.0f), {0, 1, 0});
+    const auto calculate = [&] (float sourceZ) {
+        return CImage::calculateOrthographicAttachmentTextureMatrix (
+            glm::translate (glm::mat4 (1), {20, 10, sourceZ}), receiver,
+            projection, projection, 100, {10, 10});
+    };
+    const glm::mat3 first = calculate (-500), second = calculate (900);
+    CHECK (first[2].x == Catch::Approx (4.45f).margin (.0001f));
+    CHECK (first[2].y == Catch::Approx (-.45f).margin (.0001f));
+    CHECK (second[2].x == Catch::Approx (first[2].x));
+    CHECK (second[2].y == Catch::Approx (first[2].y));
+    CHECK (first[0].x == Catch::Approx (1));
+    CHECK (first[0].y == Catch::Approx (0).margin (.00001f));
+
+    glm::mat4 edgeOn (1);
+    edgeOn[0] = {0, 0, 1, 0};
+    edgeOn[2] = {1, 0, 0, 0};
+    const glm::mat3 parallel = CImage::calculateOrthographicAttachmentTextureMatrix (
+        glm::mat4 (1), edgeOn, projection, projection, 100, {100, 50});
+    CHECK (parallel[0] == glm::vec3 (0));
+    CHECK (parallel[1] == glm::vec3 (0));
+    CHECK (parallel[2].x == Catch::Approx (.495f));
+    CHECK (parallel[2].y == Catch::Approx (.51f));
+}
+
+TEST_CASE ("attachment projection uses distinct source and receiver render offsets", "[attachment][projection]") {
+    const glm::mat4 projection = glm::ortho (-100.0f, 100.0f, -100.0f, 100.0f, -10.0f, 10.0f);
+    const glm::mat3 matrix = CImage::calculateOrthographicAttachmentTextureMatrix (
+        glm::mat4 (1), glm::mat4 (1),
+        glm::translate (projection, {10, -20, 0}),
+        glm::translate (projection, {-5, 4, 0}), 100, {100, 50});
+    CHECK (matrix[2].x == Catch::Approx (.645f));
+    CHECK (matrix[2].y == Catch::Approx (.99f));
+}
+
+TEST_CASE ("virtual model attachment projects through its source camera", "[attachment][projection]") {
+    const glm::mat4 attachment = glm::translate (glm::mat4 (1), {185, 110, 12})
+        * glm::rotate (glm::mat4 (1), glm::radians (30.0f), {0, 0, 1})
+        * glm::scale (glm::mat4 (1), {1.5f, .75f, 1});
+    const glm::mat4 sceneToRender = glm::translate (glm::mat4 (1), {-160, 90, 0})
+        * glm::scale (glm::mat4 (1), {1, -1, 1});
+    const glm::mat4 orthographic = glm::ortho (-160.0f, 160.0f, -90.0f, 90.0f, -1000.0f, 1000.0f);
+    const float fov = glm::radians (95.0f);
+    const float distance = 1.0f / (std::tan (fov * .5f) * orthographic[1][1]);
+    const glm::mat4 sourceProjection = glm::perspective (fov, 320.0f / 180.0f, 5.0f, 15000.0f)
+        * glm::translate (glm::mat4 (1), {0, 0, -distance}) * sceneToRender;
+    const glm::mat4 receiver = glm::translate (glm::mat4 (1), {160, 90, 0});
+    const glm::mat3 matrix = CImage::calculateOrthographicAttachmentTextureMatrix (
+        attachment, receiver, sourceProjection, orthographic * sceneToRender, 100, {100, 60});
+    // Native05 source2 -> ordinary receiver11, measured to +/- 1/131072.
+    CHECK (matrix[2].x == Catch::Approx (.787571424f).margin (.00003f));
+    CHECK (matrix[2].y == Catch::Approx (.118238101f).margin (.00003f));
+    CHECK (matrix[0].x == Catch::Approx (.720576692f).margin (.00003f));
+    CHECK (matrix[0].y == Catch::Approx (-.693375245f).margin (.00003f));
+    CHECK (glm::determinant (matrix) == Catch::Approx (-1));
+}

@@ -230,6 +230,23 @@ static JSValue make_script_mat4 (JSContext* ctx, const glm::mat4& matrix) {
     return result;
 }
 
+static JSValue make_script_mat3 (JSContext* ctx, const glm::mat3& matrix) {
+    JSValue values = JS_NewArray (ctx);
+    uint32_t index = 0;
+    for (int column = 0; column < 3; column++) {
+        for (int row = 0; row < 3; row++) {
+            JS_SetPropertyUint32 (ctx, values, index++, JS_NewFloat64 (ctx, matrix[column][row]));
+        }
+    }
+    JSValue global = JS_GetGlobalObject (ctx);
+    JSValue constructor = JS_GetPropertyStr (ctx, global, "Mat3");
+    JSValue result = JS_CallConstructor (ctx, constructor, 1, &values);
+    JS_FreeValue (ctx, constructor);
+    JS_FreeValue (ctx, global);
+    JS_FreeValue (ctx, values);
+    return result;
+}
+
 static bool read_script_vec3 (JSContext* ctx, JSValueConst value, glm::vec3& result) {
     if (!JS_IsObject (value)) {
 	return false;
@@ -444,6 +461,19 @@ resolve_scriptable_parent (JSContext* ctx, OpaqueScriptableObjectAdapter& contai
     }
     JS_FreeCString (ctx, requestedName);
     return result;
+}
+
+static JSValue scriptable_transform_attachment_to_texture (
+    JSContext* ctx, JSValueConst thisVal, int argc, JSValueConst* argv
+) {
+    auto* container = scriptable_container (thisVal);
+    auto* receiver = scriptable_image (thisVal);
+    if (container == nullptr || receiver == nullptr || argc < 2) return JS_UNDEFINED;
+    const auto* source = resolve_scriptable_parent (ctx, *container, argv[0]);
+    if (source == nullptr) return JS_UNDEFINED;
+    const auto matrix = receiver->transformAttachmentToTexture (
+        *source, attachment_world_matrix (ctx, *source, 1, argv + 1));
+    return matrix.has_value () ? make_script_mat3 (ctx, *matrix) : JS_UNDEFINED;
 }
 
 static bool would_create_parent_cycle (
@@ -1200,6 +1230,9 @@ JSValue scriptableobject_property_get (JSContext* ctx, JSValueConst obj_val, JSA
     }
     if (std::strcmp (name, "getChildren") == 0) {
 	return JS_NewCFunction (ctx, scriptable_get_children, name, 0);
+    }
+    if (std::strcmp (name, "transformAttachmentToTexture") == 0 && scriptable_image (obj_val) != nullptr) {
+        return JS_NewCFunction (ctx, scriptable_transform_attachment_to_texture, name, 2);
     }
     if (std::strcmp (name, "getAttachmentIndex") == 0) {
 	return JS_NewCFunction (ctx, scriptable_get_attachment_index, name, 1);
