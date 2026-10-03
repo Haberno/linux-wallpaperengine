@@ -37,6 +37,11 @@ const ImageEffectPassOverride DEFAULT_OVERRIDE = {};
 const glm::mat4 CPass::s_defaultMatrix = glm::mat4 (1.0f);
 
 namespace {
+bool usesPuppetMorphAlpha (const CRenderable& renderable, const MaterialPass& pass) {
+    return renderable.is<CImage> () && static_cast<const CImage&> (renderable).hasPuppetMorphAlpha ()
+	&& (pass.shader == "genericimage3" || pass.shader == "genericimage4");
+}
+
 TextureMap mergedTextures (const TextureMap& material, const TextureMap& overrides) {
     TextureMap result = material;
     for (const auto& [index, texture] : overrides) result.insert_or_assign (index, texture);
@@ -580,6 +585,15 @@ void CPass::setupRenderUniforms () {
 }
 
 void CPass::setupRenderAttributes () const {
+    // Offscreen image passes keep neutral coverage; the final puppet callback
+    // replaces this constant with the per-vertex native morph alpha product.
+    if (usesPuppetMorphAlpha (this->m_renderable, this->m_pass)) {
+	const GLint color = glGetAttribLocation (this->m_programID, "a_Color");
+	if (color >= 0) {
+	    glDisableVertexAttribArray (color);
+	    glVertexAttrib4f (color, 1, 1, 1, 1);
+	}
+    }
     if (this->m_setupAttribsCallback) {
 	this->m_setupAttribsCallback ();
 	return;
@@ -813,6 +827,9 @@ void CPass::setupShaders () {
     for (const auto& [name, value] : this->m_runtimeCombos) {
 	this->m_combos.insert_or_assign (name, value);
     }
+
+    if (usesPuppetMorphAlpha (this->m_renderable, this->m_pass))
+	this->m_combos.insert_or_assign ("VERTEXCOLOR", 1);
 
     this->m_combos.insert_or_assign ("HDR", this->m_renderable.getScene ().isHdr () ? 1 : 0);
 

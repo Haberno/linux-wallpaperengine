@@ -88,6 +88,7 @@ public:
     [[nodiscard]] static PerspectiveSceneMatrices
     calculatePerspectiveSceneMatrices (const glm::mat4& world, const glm::mat4& viewProjection);
 
+    [[nodiscard]] bool hasPuppetMorphAlpha () const { return m_puppetVertexColor != GL_NONE; }
     [[nodiscard]] GLuint getSceneSpacePosition () const;
     [[nodiscard]] GLuint getCopySpacePosition () const;
     [[nodiscard]] GLuint getPassSpacePosition () const;
@@ -201,6 +202,9 @@ private:
     GLuint m_texcoordPass;
     GLuint m_puppetSpacePosition = GL_NONE;
     size_t m_puppetPositionBufferBytes = 0;
+    GLuint m_puppetVertexColor = GL_NONE;
+    size_t m_puppetColorBufferBytes = 0;
+    std::vector<glm::vec4> m_puppetColors;
     GLuint m_puppetTexCoord = GL_NONE;
     GLuint m_puppetTexCoordFirstPass = GL_NONE;
     GLuint m_puppetIndices = GL_NONE;

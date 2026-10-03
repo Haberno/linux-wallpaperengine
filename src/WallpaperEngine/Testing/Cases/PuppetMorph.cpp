@@ -148,3 +148,35 @@ TEST_CASE ("Reze layered puppet retains its authored morph deformation", "[.][md
     CHECK (changed == 19);
     CHECK (maximum == Catch::Approx (7.95975f).margin (0.0001f));
 }
+
+TEST_CASE ("Puppet morph alpha multiplies signed target factors before interpolation", "[mdl][morph-alpha]") {
+    MdlSubmesh body { .flags = 0x1000, .vertexTag = 0x0181000e, .morphScale = 40, .morphVertexCount = 3 };
+    body.morphTargets = {
+        MdlMorphTarget { .positionDeltas = { 32767, 0, 0, 0, 0, 0, 0, 0, 0 },
+            .alphaValues = { 0, 32767, -32768 } },
+        MdlMorphTarget { .positionDeltas = std::vector<int16_t> (9), .alphaValues = { 0, 0, 0 } },
+    };
+    std::vector<float> weights { .5f, .25f };
+    auto targets = preparePuppetMorphTargets (body, weights, 3, {});
+    auto value = evaluatePuppetMorph (body, targets, 1, glm::vec3 (0));
+    CHECK (value.x == Catch::Approx (20));
+    CHECK (value.w == Catch::Approx (.375f)); // .5 * .75, not a sum or mean.
+    CHECK (evaluatePuppetMorph (body, targets, 2, glm::vec3 (0)).w == Catch::Approx (.75f));
+    CHECK (evaluatePuppetMorph (body, targets, 3, glm::vec3 (0)).w == 0);
+    for (float index : { 0.0f, -1.0f, 4.0f })
+        CHECK (evaluatePuppetMorph (body, targets, index, glm::vec3 (0)).w == 1);
+    CHECK (evaluatePuppetMorph (body, {}, 1, glm::vec3 (0)).w == 1);
+    weights = { .75f, 0 };
+    targets = preparePuppetMorphTargets (body, weights, 3, {});
+    CHECK (evaluatePuppetMorph (body, targets, 3, glm::vec3 (0)).w == Catch::Approx (-.5f));
+    // Native leaves the product unclamped until the fragment/blending stage.
+    body.flags |= 0x2000;
+    for (auto& target : body.morphTargets)
+        target.modifier = MdlMorphModifier { .boneIndex = 0, .rule = 2, .range = { 0, 10 } };
+    const std::vector<glm::mat4> world { glm::translate (glm::mat4 (1), glm::vec3 (5, 0, 0)) };
+    weights = { 1, .5f };
+    targets = preparePuppetMorphTargets (body, weights, 3, world);
+    CHECK (evaluatePuppetMorph (body, targets, 1, { 5, 0, 0 }).w == 1);
+    CHECK (evaluatePuppetMorph (body, targets, 1, { 10, 0, 0 }).w == Catch::Approx (.375f));
+    CHECK (evaluatePuppetMorph (body, targets, 1, { 15, 0, 0 }).w == 0);
+}

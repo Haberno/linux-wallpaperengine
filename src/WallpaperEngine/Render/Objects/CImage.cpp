@@ -492,6 +492,9 @@ CImage::~CImage () {
     glDeleteBuffers (1, &this->m_passSpacePosition);
     glDeleteBuffers (1, &this->m_texcoordCopy);
     glDeleteBuffers (1, &this->m_texcoordPass);
+    if (this->m_puppetVertexColor != GL_NONE) {
+	glDeleteBuffers (1, &this->m_puppetVertexColor);
+    }
     if (this->m_puppetSpacePosition != GL_NONE) {
 	glDeleteBuffers (1, &this->m_puppetSpacePosition);
     }
@@ -940,6 +943,10 @@ void CImage::updatePuppetPositionBuffer (const glm::vec2& size) {
 	body, pose.puppetMorphWeights, pose.puppetMorphMask, this->m_puppetWorldBones
     );
 
+    const bool morphColor = !body.morphTargets.empty () && (body.flags & 0x1000) != 0
+	&& (body.vertexTag & 0x10001) == 0x10000;
+    this->m_puppetColors.clear ();
+    if (morphColor) this->m_puppetColors.reserve (this->m_puppetRawPositions.size () / 3);
     this->m_puppetPositions.clear ();
     this->m_puppetPositions.reserve (this->m_puppetRawPositions.size ());
     for (size_t index = 0; index + 2 < this->m_puppetRawPositions.size (); index += 3) {
@@ -948,6 +955,7 @@ void CImage::updatePuppetPositionBuffer (const glm::vec2& size) {
 	    this->m_puppetRawPositions[index + 2]
 	);
 
+	float vertexAlpha = 1.0f;
 	if (!morphTargets.empty ()) {
 	    glm::vec3 unmorphedSkinned (0.0f);
 	    const size_t vertex = index / 3;
@@ -961,9 +969,12 @@ void CImage::updatePuppetPositionBuffer (const glm::vec2& size) {
 		}
 	    }
 	    const float morphIndex = body.vertices[vertex * body.strideBytes / sizeof (float) + 3];
-	    position += evaluatePuppetMorphOffset (body, morphTargets, morphIndex, unmorphedSkinned);
+	    const auto morph = evaluatePuppetMorph (body, morphTargets, morphIndex, unmorphedSkinned);
+	    position += glm::vec3 (morph);
+	    vertexAlpha = morph.w;
 	}
 
+	if (morphColor) this->m_puppetColors.emplace_back (1, 1, 1, vertexAlpha);
 	if (!this->m_puppetSkinBones.empty ()) {
 	    const size_t vertex = index / 3;
 	    const glm::vec4 rest (position, 1.0f);
@@ -998,6 +1009,18 @@ void CImage::updatePuppetPositionBuffer (const glm::vec2& size) {
 	// gojo); the projection would clip it away, and draw order already comes from the
 	// index buffer, so flatten to the quad's plane
 	this->m_puppetPositions.push_back (0.0f);
+    }
+
+    if (morphColor) {
+	if (this->m_puppetVertexColor == GL_NONE) glGenBuffers (1, &this->m_puppetVertexColor);
+	glBindBuffer (GL_ARRAY_BUFFER, this->m_puppetVertexColor);
+	const size_t bytes = this->m_puppetColors.size () * sizeof (glm::vec4);
+	if (bytes != this->m_puppetColorBufferBytes) {
+	    glBufferData (GL_ARRAY_BUFFER, bytes, this->m_puppetColors.data (), GL_DYNAMIC_DRAW);
+	    this->m_puppetColorBufferBytes = bytes;
+	} else if (bytes > 0) {
+	    glBufferSubData (GL_ARRAY_BUFFER, 0, bytes, this->m_puppetColors.data ());
+	}
     }
 
     if (this->m_puppetSpacePosition == GL_NONE) {
@@ -1227,6 +1250,21 @@ void CImage::setupPuppetRangeGeometryCallback (
 		glVertexAttribPointer (position, 3, GL_FLOAT, GL_FALSE, 0, nullptr);
 	    }
 
+	    const auto& combos = pass->getShader ()->getCombos ();
+	    const auto prelighting = combos.find ("PRELIGHTING");
+	    const auto& overrides = pass->getOverride ().combos;
+	    const auto prelightingOverride = overrides.find ("PRELIGHTING");
+	    const bool isPrelighting = prelightingOverride != overrides.end () ? prelightingOverride->second != 0
+		: prelighting != combos.end () && prelighting->second != 0;
+	    const auto& shader = pass->getPass ().shader;
+	    const GLint color = glGetAttribLocation (pass->getProgramID (), "a_Color");
+	    if (this->hasPuppetMorphAlpha () && color >= 0 && !isPrelighting
+		&& (shader == "genericimage3" || shader == "genericimage4")) {
+		glEnableVertexAttribArray (color);
+		glBindBuffer (GL_ARRAY_BUFFER, this->m_puppetVertexColor);
+		glVertexAttribPointer (color, 4, GL_FLOAT, GL_FALSE, 0, nullptr);
+	    }
+
 	    if (texCoord >= 0) {
 		glEnableVertexAttribArray (texCoord);
 		glBindBuffer (GL_ARRAY_BUFFER, texCoordBuffer);
@@ -1254,6 +1292,8 @@ void CImage::setupPuppetRangeGeometryCallback (
 	    }
 	},
 	[pass] () {
+	    const GLint color = glGetAttribLocation (pass->getProgramID (), "a_Color");
+	    if (color >= 0) glDisableVertexAttribArray (color);
 	    const GLint position = glGetAttribLocation (pass->getProgramID (), "a_Position");
 	    const GLint texCoord = glGetAttribLocation (pass->getProgramID (), "a_TexCoord");
 

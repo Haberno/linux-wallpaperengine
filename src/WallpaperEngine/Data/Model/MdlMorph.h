@@ -32,7 +32,7 @@ inline std::vector<MdlPuppetMorphTarget> preparePuppetMorphTargets (
     std::span<const glm::mat4> worldBones
 ) {
     std::vector<MdlPuppetMorphTarget> targets;
-    // This CPU path evaluates XYZ from native's packed position/alpha format.
+    // This CPU path evaluates native's packed position/alpha format.
     if ((body.vertexTag & 0x10001) != 0x10000 || (body.flags & 0x1000) == 0) return targets;
     for (size_t index = 0; index < body.morphTargets.size () && index < weights.size ()
 	 && index < 64 && targets.size () < 11; ++index) {
@@ -48,15 +48,15 @@ inline std::vector<MdlPuppetMorphTarget> preparePuppetMorphTargets (
     return targets;
 }
 
-/** Genericimage4 accumulates XYZ in the original model space, before final skinning. */
-inline glm::vec3 evaluatePuppetMorphOffset (
+/** Returns the model-space XYZ offset and native multiplicative vertex alpha. */
+inline glm::vec4 evaluatePuppetMorph (
     const MdlSubmesh& body, std::span<const MdlPuppetMorphTarget> targets, float morphIndex,
     const glm::vec3& unmorphedSkinnedPosition
 ) {
     if (!std::isfinite (morphIndex) || morphIndex < 1.0f || morphIndex >= body.morphVertexCount + 1.0f)
-	return glm::vec3 (0.0f);
+	return glm::vec4 (0, 0, 0, 1);
     const size_t component = (static_cast<size_t> (morphIndex) - 1) * 3;
-    glm::vec3 delta (0.0f);
+    glm::vec4 delta (0, 0, 0, 1);
     for (const auto& selected : targets) {
 	const auto& target = *selected.target;
 	if (component + 2 >= target.positionDeltas.size ()) continue;
@@ -67,7 +67,18 @@ inline glm::vec3 evaluatePuppetMorphOffset (
 	    );
 	for (int axis = 0; axis < 3; ++axis)
 	    delta[axis] += std::max (target.positionDeltas[component + axis] / 32767.0f, -1.0f) * weight;
+	const size_t vertex = component / 3;
+	if (vertex < target.alphaValues.size ()) {
+	    const float alpha = std::max (target.alphaValues[vertex] / 32767.0f, -1.0f);
+	    delta.w *= alpha * weight + 1.0f - weight;
+	}
     }
-    return delta * body.morphScale;
+    return delta * glm::vec4 (glm::vec3 (body.morphScale), 1.0f);
+}
+inline glm::vec3 evaluatePuppetMorphOffset (
+    const MdlSubmesh& body, std::span<const MdlPuppetMorphTarget> targets, float morphIndex,
+    const glm::vec3& unmorphedSkinnedPosition
+) {
+    return glm::vec3 (evaluatePuppetMorph (body, targets, morphIndex, unmorphedSkinnedPosition));
 }
 } // namespace WallpaperEngine::Data::Model
