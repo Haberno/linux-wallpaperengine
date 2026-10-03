@@ -771,8 +771,8 @@ glm::mat4 CParticle::particleWorldMatrix () {
 }
 
 void ControlPointData::sampleVelocity (const glm::vec3& simulationPosition, const float frameTime) {
-    velocity = hasPreviousPosition && frameTime > 0.0f
-	? (simulationPosition - previousPosition) / frameTime : glm::vec3 (0.0f);
+    displacement = hasPreviousPosition ? simulationPosition - previousPosition : glm::vec3 (0.0f);
+    velocity = frameTime > 0.0f ? displacement / frameTime : glm::vec3 (0.0f);
     previousPosition = simulationPosition;
     hasPreviousPosition = true;
 }
@@ -1974,6 +1974,20 @@ glm::vec3 WallpaperEngine::Render::Objects::calculateParticleMovementReduction (
     return velocity * (1.0f - damping * particleOperatorBlend (lifetimePosition, blendTimes));
 }
 
+void WallpaperEngine::Render::Objects::applyParticleDistanceConstraint (
+    ParticleInstance& particle, const ControlPointData& point, const glm::mat3& inverseBasis,
+    const float distance, const float variableStrength, const float deltaTime, const glm::vec4 blendTimes
+) {
+    // Native opcodes 11/33 carry the point's translation without weighting it.
+    // Only the radial correction receives strength and the lifetime envelope.
+    particle.position += point.displacement;
+    const glm::vec3 relative = particle.position - point.position;
+    const float localDistance = glm::length (inverseBasis * relative);
+    const float strength = variableStrength == 0.0f ? 1.0f : std::clamp (variableStrength * deltaTime, 0.0f, 1.0f);
+    particle.position += relative * ((distance / localDistance - 1.0f) * strength
+        * particleOperatorBlend (particle.getLifetimePos (), blendTimes));
+}
+
 void CParticle::setupOperators () {
     for (const auto& op : m_particle.operators) {
 	if (!op) {
@@ -1990,6 +2004,8 @@ void CParticle::setupOperators () {
 	    func = createCapVelocityOperator (*op->as<CapVelocityOperator> ());
 	} else if (op->is<ReduceMovementNearControlPointOperator> ()) {
 	    func = createReduceMovementNearControlPointOperator (*op->as<ReduceMovementNearControlPointOperator> ());
+	} else if (op->is<MaintainDistanceToControlPointOperator> ()) {
+	    func = createMaintainDistanceToControlPointOperator (*op->as<MaintainDistanceToControlPointOperator> ());
 	} else if (op->is<AngularMovementOperator> ()) {
 	    func = createAngularMovementOperator (*op->as<AngularMovementOperator> ());
 	} else if (op->is<AlphaFadeOperator> ()) {
@@ -2095,6 +2111,27 @@ OperatorFunc CParticle::createReduceMovementNearControlPointOperator (const Redu
                 particle.velocity, glm::length (particle.position - center), distances, reductions,
                 dt, particle.getLifetimePos (), op.blendTimes
             );
+        }
+    };
+}
+
+OperatorFunc CParticle::createMaintainDistanceToControlPointOperator (const MaintainDistanceToControlPointOperator& op) {
+    includeControlPoint (op.controlPoint);
+    const float defaultDistance = getScene ().getScene ().camera.projection.isPerspective ? 1.0f : 200.0f;
+    return [this, &op, defaultDistance] (
+        std::vector<ParticleInstance>& particles, uint32_t count,
+        const std::vector<ControlPointData>& controlPoints, float, float dt
+    ) {
+        const auto& point = controlPoints[op.controlPoint];
+        const glm::mat3 basis = (m_particle.flags & 1) != 0
+            ? glm::mat3 (m_controlPointTransform) * point.orientation : point.orientation;
+        const glm::mat3 inverseBasis = glm::inverse (basis);
+        const float distance = op.distance ? op.distance->value->getFloat () : defaultDistance;
+        const float strength = op.variableStrength->value->getFloat ();
+        for (uint32_t i = 0; i < count; ++i) {
+            auto& particle = particles[i];
+            if (!particle.alive) continue;
+            applyParticleDistanceConstraint (particle, point, inverseBasis, distance, strength, dt, op.blendTimes);
         }
     };
 }

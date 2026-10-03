@@ -453,6 +453,20 @@ public:
     glm::vec4 blendTimes;
 };
 
+class MaintainDistanceToControlPointOperator : public ParticleOperatorBase {
+public:
+    MaintainDistanceToControlPointOperator (
+        uint32_t controlPoint, UserSettingUniquePtr distance, UserSettingUniquePtr variableStrength,
+        glm::vec4 blendTimes
+    ) : controlPoint (controlPoint), distance (std::move (distance)),
+        variableStrength (std::move (variableStrength)), blendTimes (blendTimes) { }
+    uint32_t controlPoint;
+    /** Omitted distance uses the scene's native 2D/3D default. */
+    UserSettingUniquePtr distance;
+    UserSettingUniquePtr variableStrength;
+    glm::vec4 blendTimes;
+};
+
 class AngularMovementOperator : public ParticleOperatorBase {
 public:
     AngularMovementOperator (UserSettingUniquePtr drag, UserSettingUniquePtr force, glm::vec4 blendTimes) :

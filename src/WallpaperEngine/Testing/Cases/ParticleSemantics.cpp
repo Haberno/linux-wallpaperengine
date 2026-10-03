@@ -1302,3 +1302,75 @@ TEST_CASE ("rain FBM remaps clamp speed multiplication without changing directio
         CHECK (particle.velocity == glm::vec3 (0));
     }
 }
+
+TEST_CASE ("vortex orb retains its distance constraint and native point defaults", "[particle][maintain-distance]") {
+    WallpaperEngine::Data::Model::Project project {};
+    const auto object = WallpaperEngine::Data::Parsers::ObjectParser::parse (
+        WallpaperEngine::Data::JSON::JSON::parse (R"({"id":17,"particle":{"operator":[
+            {"id":12,"name":"maintaindistancetocontrolpoint","variablestrength":5},
+            {"name":"maintaindistancetocontrolpoint","controlpoint":-1,"distance":20,
+             "blendinstart":-1,"blendinend":1},
+            {"name":"maintaindistancetocontrolpoint","distance":null}
+        ]}})"), project);
+    const auto* particle = object->as<Particle> ();
+    REQUIRE (particle != nullptr);
+    REQUIRE (particle->operators.size () == 3);
+    const auto* stock = particle->operators[0]->as<MaintainDistanceToControlPointOperator> ();
+    REQUIRE (stock != nullptr);
+    CHECK (stock->controlPoint == 0);
+    CHECK (stock->distance == nullptr);
+    CHECK (stock->variableStrength->value->getFloat () == 5);
+    CHECK (stock->blendTimes == glm::vec4 (0, 0, 1, 1));
+    const auto* clamped = particle->operators[1]->as<MaintainDistanceToControlPointOperator> ();
+    REQUIRE (clamped != nullptr);
+    CHECK (clamped->controlPoint == 7);
+    CHECK (clamped->distance->value->getFloat () == 20);
+    CHECK (clamped->variableStrength->value->getFloat () == 0);
+    CHECK (clamped->blendTimes == glm::vec4 (-1, 1, 1, 1));
+    const auto* explicitZero = particle->operators[2]->as<MaintainDistanceToControlPointOperator> ();
+    REQUIRE (explicitZero != nullptr);
+    REQUIRE (explicitZero->distance != nullptr);
+    CHECK (explicitZero->distance->value->getFloat () == 0);
+}
+
+TEST_CASE ("distance constraints blend radial correction but retain point movement", "[particle][maintain-distance]") {
+    using WallpaperEngine::Render::Objects::applyParticleDistanceConstraint;
+    using WallpaperEngine::Render::Objects::ControlPointData;
+    // Native 40e2ce02...993b0: one .05 second step from x10, point x50,
+    // distance20 yields x30/full, x20/half, x10/inactive, x15/strength5.
+    const struct { float strength; glm::vec4 blend; float expected; } cases[] = {
+        { 0, { 0, 0, 1, 1 }, 30 }, { 0, { -1, 1, 1, 1 }, 20 },
+        { 0, { .2f, .5f, 1, 1 }, 10 }, { 5, { 0, 0, 1, 1 }, 15 },
+        { -5, { 0, 0, 1, 1 }, 10 }, { 50, { 0, 0, 1, 1 }, 30 }
+    };
+    ControlPointData point;
+    point.position = { 50, 0, 0 };
+    point.sampleVelocity ({ 50, 0, 0 }, .05f);
+    CHECK (point.displacement == glm::vec3 (0));
+    for (const auto& sample : cases) {
+        ParticleInstance particle;
+        particle.position = { 10, 0, 0 };
+        particle.velocity = { 4, 5, 6 };
+        applyParticleDistanceConstraint (particle, point, glm::mat3 (1), 20, sample.strength, .05f, sample.blend);
+        CHECK (particle.position.x == Catch::Approx (sample.expected));
+        CHECK (particle.position.y == 0);
+        CHECK (particle.position.z == 0);
+        CHECK (particle.velocity == glm::vec3 (4, 5, 6));
+    }
+    point.position = { 60, 0, 0 };
+    point.sampleVelocity ({ 60, 0, 0 }, .02f);
+    CHECK (point.displacement == glm::vec3 (10, 0, 0));
+    ParticleInstance moved;
+    moved.position = { 10, 0, 0 };
+    applyParticleDistanceConstraint (moved, point, glm::mat3 (1), 20, 0, .05f, { .2f, .5f, 1, 1 });
+    CHECK (moved.position == glm::vec3 (20, 0, 0));
+    point.sampleVelocity ({ 60, 0, 0 }, .02f);
+    CHECK (point.displacement == glm::vec3 (0));
+    // The native inverse current basis keeps authored distance in point space.
+    ParticleInstance scaled;
+    scaled.position = { 20, 0, 0 };
+    glm::mat3 inverseBasis (1);
+    inverseBasis[0][0] = .5f;
+    applyParticleDistanceConstraint (scaled, point, inverseBasis, 10, 0, .05f, { 0, 0, 1, 1 });
+    CHECK (scaled.position == glm::vec3 (40, 0, 0));
+}

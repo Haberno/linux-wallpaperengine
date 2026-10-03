@@ -150,11 +150,17 @@ struct ControlPointData {
     uint32_t flags { 0 };
     int parentControlPoint { 0 };
     glm::vec3 velocity { 0.0f };
+    glm::vec3 displacement { 0.0f };
     glm::vec3 previousPosition { 0.0f };
     bool hasPreviousPosition { false };
 
     void sampleVelocity (const glm::vec3& simulationPosition, float frameTime);
 };
+
+void applyParticleDistanceConstraint (
+    ParticleInstance& particle, const ControlPointData& point, const glm::mat3& inverseBasis,
+    float distance, float variableStrength, float deltaTime, glm::vec4 blendTimes
+);
 
 void applyParticleControlPointRemap (
     ParticleInstance& particle, const ControlPointRemap& remap,
@@ -238,6 +244,7 @@ protected:
     OperatorFunc createControlPointRemapOperator (const ControlPointRemapOperator& op);
     OperatorFunc createMovementOperator (const MovementOperator& op);
     OperatorFunc createReduceMovementNearControlPointOperator (const ReduceMovementNearControlPointOperator& op);
+    OperatorFunc createMaintainDistanceToControlPointOperator (const MaintainDistanceToControlPointOperator& op);
     OperatorFunc createCapVelocityOperator (const CapVelocityOperator& op);
     OperatorFunc createAngularMovementOperator (const AngularMovementOperator& op);
     OperatorFunc createAlphaFadeOperator (const AlphaFadeOperator& op);
