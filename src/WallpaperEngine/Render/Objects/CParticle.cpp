@@ -1724,7 +1724,8 @@ InitializerFunc CParticle::createInheritControlPointVelocityInitializer (
 	// Native scripted bursts run between simulation ticks, after current
 	// control-point matrices have been copied to previous: their delta is zero.
 	if (!m_initializingManualEmission && point >= 0 && point < static_cast<int> (m_controlPoints.size ())) {
-	    particle.velocity += m_controlPoints[point].velocity * weight * speedOverride->getFloat ();
+	    const float speedMultiplier = (m_particle.flags & 16) != 0 ? 1.0f : speedOverride->getFloat ();
+	    particle.velocity += m_controlPoints[point].velocity * weight * speedMultiplier;
 	}
     };
 }
@@ -1915,8 +1916,9 @@ CParticle::createMapSequenceAroundControlPointInitializer (const MapSequenceArou
 	// Authored X/Y/Z speed components are tangent/radial/axial respectively.
 	const glm::vec3 speed
 	    = WallpaperEngine::Maths::randomVec3 (m_rng, speedMinValue->getVec3 (), speedMaxValue->getVec3 ());
+	const float speedMultiplier = (m_particle.flags & 16) != 0 ? 1.0f : speedOverride->getFloat ();
 	p.velocity += (tangentDirection * speed.x + radialDirection * speed.y + axis * speed.z)
-	    * speedOverride->getFloat ();
+	    * speedMultiplier;
 
 	// The compiler clamps count to 0.0001, not to an integer. Fractional
 	// counts (including shipped values such as 3.02) are intentional.
