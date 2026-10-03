@@ -2505,3 +2505,42 @@ TEST_CASE ("two-control-point projection multiplies speed after clamps and envel
         }
     }
 }
+
+TEST_CASE ("upright sprite basis matches the native locked-axis draw helper", "[particle][upright-sprite]") {
+    using WallpaperEngine::Render::Objects::calculateUprightParticleOrientation;
+    // Unchanged native 1402298b0 outputs: identity and rotated/nonuniform model,
+    // authored Y/Z/oblique axes, each with renderer flags 0 and 1.
+    const glm::mat3 expected[] {
+        { { 1.0f, 0.0f, 0.0f }, { 0.0f, 1.0f, 0.0f }, { 0.0f, 0.0f, 1.0f } },
+        { { 1.0f, 0.0f, 0.0f }, { 0.0f, 1.0f, 0.0f }, { 0.0f, 0.0f, 1.0f } },
+        { { -1.0f, 0.0f, 0.0f }, { 0.0f, 0.0f, 1.0f }, { 0.0f, 1.0f, 0.0f } },
+        { { 1.0f, 0.0f, 0.0f }, { 0.0f, 1.0f, 0.0f }, { 0.0f, 0.0f, 1.0f } },
+        { { -0.7682212f, -0.384110659f, 0.512147546f }, { 0.267261237f, 0.534522474f, 0.801783741f }, { -0.581728041f, 0.752824545f, -0.307973653f } },
+        { { 1.0f, 0.0f, 0.0f }, { 0.0f, 1.0f, 0.0f }, { 0.0f, 0.0f, 1.0f } },
+        { { 0.976080835f, 1.68658012e-08f, -0.217408106f }, { -2.31795863e-08f, 0.99999994f, -2.64909552e-08f }, { 0.217408106f, 0.0f, 0.976080835f } },
+        { { 0.929739237f, -0.316470265f, 0.188232526f }, { 0.339905024f, 0.934210956f, -0.108233318f }, { -0.137427241f, 0.176026806f, 0.974745274f } },
+        { { -0.984472096f, 0.175541148f, 2.61576694e-09f }, { 0.0f, -1.49011612e-08f, 1.0f }, { 0.175541148f, 0.984472096f, 1.17032917e-08f } },
+        { { 0.929739237f, -0.316470265f, 0.188232526f }, { 0.339905024f, 0.934210956f, -0.108233318f }, { -0.137427241f, 0.176026806f, 0.974745274f } },
+        { { -0.987255275f, 0.157439604f, 0.0232314114f }, { 0.0777909756f, 0.35005942f, 0.933491826f }, { 0.115320608f, 0.808328927f, -0.577326179f } },
+        { { 0.929739237f, -0.316470265f, 0.188232526f }, { 0.339905024f, 0.934210956f, -0.108233318f }, { -0.137427241f, 0.176026806f, 0.974745274f } }
+    };
+    const glm::vec3 axes[] { { 0, 1, 0 }, { 0, 0, 1 }, { 1, 2, 3 } };
+    for (int sample = 0; sample < 12; ++sample) {
+        INFO ("sample=" << sample);
+        glm::mat4 model (1.0f);
+        if (sample >= 6) {
+            model = glm::rotate (model, .6f, glm::normalize (glm::vec3 (1, 2, 3)))
+                * glm::scale (glm::mat4 (1.0f), glm::vec3 (2, 3, 4));
+        }
+        const auto actual = calculateUprightParticleOrientation (
+            axes[(sample % 6) / 2], glm::mat3 (model), { 0, .8f, .6f }, (sample & 1) != 0
+        );
+        for (int column = 0; column < 3; ++column) {
+            for (int row = 0; row < 3; ++row) {
+                CHECK (actual[column][row] == Catch::Approx (expected[sample][column][row]).margin (.000002f));
+            }
+        }
+    }
+    CHECK (calculateUprightParticleOrientation ({ 0, 0, 0 }, glm::mat3 (1), { 0, .8f, .6f }, false) == expected[0]);
+    CHECK (calculateUprightParticleOrientation ({ 0, 7, 0 }, glm::mat3 (1), { 0, .8f, .6f }, false) == expected[0]);
+}

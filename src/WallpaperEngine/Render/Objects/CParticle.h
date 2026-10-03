@@ -65,6 +65,9 @@ constexpr uint32_t DEFAULT_MAX_PARTICLES = 1000;
 [[nodiscard]] glm::mat3 calculateFixedParticleOrientation (
     const glm::vec3& axis, const glm::mat3& model, bool worldSpace
 );
+[[nodiscard]] glm::mat3 calculateUprightParticleOrientation (
+    const glm::vec3& axis, const glm::mat3& model, const glm::vec3& cameraForward, bool worldSpace
+);
 [[nodiscard]] glm::vec3 calculateUprightRopeForward (
     const glm::vec3& axis, const glm::mat3& model, const glm::vec3& cameraForward, bool worldSpace
 );
