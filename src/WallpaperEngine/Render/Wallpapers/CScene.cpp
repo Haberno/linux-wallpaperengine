@@ -492,7 +492,7 @@ void CScene::loadingCheckpoint (bool canCancel) const {
     this->m_loadingCheckpoint (canCancel);
 }
 
-float CScene::getRenderTime () const {
+double CScene::getRenderTime () const {
     return this->isLoading () ? this->m_loadingRenderTime : this->getContext ().getDriver ().getRenderTime ();
 }
 
@@ -521,7 +521,7 @@ void CScene::holdLoading () {
 }
 
 void CScene::finishLoading () {
-    const float renderOffset = this->getContext ().getDriver ().getRenderTime () - this->m_loadingRenderTime;
+    const double renderOffset = this->getContext ().getDriver ().getRenderTime () - this->m_loadingRenderTime;
     const auto timerOffset = std::chrono::steady_clock::now () - this->m_loadingTimerTime;
     for (const auto& [id, object] : this->m_objects) {
 	if (auto* renderable = dynamic_cast<Objects::CRenderable*> (object))

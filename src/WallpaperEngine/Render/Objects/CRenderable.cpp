@@ -70,9 +70,9 @@ double CRenderable::getTextureAnimationDuration () const { return this->m_animat
 
 float CRenderable::getTextureAnimationRate () const { return this->m_textureAnimationPlayback.rate; }
 
-float CRenderable::getTextureAnimationRenderTime () const { return this->getScene ().getRenderTime (); }
+double CRenderable::getTextureAnimationRenderTime () const { return this->getScene ().getRenderTime (); }
 
-void CRenderable::rebaseRenderTime (float offset) {
+void CRenderable::rebaseRenderTime (double offset) {
     this->m_textureAnimationPlayback.anchorRenderTime += offset;
 }
 

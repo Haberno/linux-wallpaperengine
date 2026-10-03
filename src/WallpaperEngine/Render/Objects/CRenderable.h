@@ -43,7 +43,7 @@ public:
     [[nodiscard]] double getTextureAnimationTime (const std::shared_ptr<const TextureProvider>& texture) const;
 
     void setup () override;
-    virtual void rebaseRenderTime (float offset);
+    virtual void rebaseRenderTime (double offset);
 
     [[nodiscard]] virtual const float& getBrightness () const = 0;
     [[nodiscard]] virtual const float& getUserAlpha () const = 0;
@@ -62,10 +62,10 @@ protected:
 	bool playing = true;
 	float rate = 1.0f;
 	double anchorTime = 0.0;
-	float anchorRenderTime = 0.0f;
+	double anchorRenderTime = 0.0;
     };
 
-    [[nodiscard]] float getTextureAnimationRenderTime () const;
+    [[nodiscard]] double getTextureAnimationRenderTime () const;
     [[nodiscard]] double getControlledTextureAnimationTime () const;
     void detachTextureAnimationClock ();
 

@@ -61,7 +61,7 @@ public:
      * construction boundaries may allow cancellation to unwind the scene. */
     void loadingCheckpoint (bool canCancel = false) const;
     [[nodiscard]] bool isLoading () const { return static_cast<bool> (m_loadingCheckpoint); }
-    [[nodiscard]] float getRenderTime () const;
+    [[nodiscard]] double getRenderTime () const;
     /** The captured driver timestamp shared by every object in the current scene frame. */
     [[nodiscard]] double getFrameRenderTime () const {
         return this->m_previousSceneTime.value_or (this->m_loadingRenderTime);

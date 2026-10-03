@@ -570,7 +570,7 @@ glm::vec3 CParticle::adjustInstanceColor (const glm::vec3& color) const {
     return WallpaperEngine::Maths::particleHsvToRgb (hsv);
 }
 
-void CParticle::rebaseRenderTime (float offset) {
+void CParticle::rebaseRenderTime (double offset) {
     CRenderable::rebaseRenderTime (offset);
     if (this->m_time != 0.0) this->m_time += offset;
     for (auto& child : this->m_children) child.renderer->rebaseRenderTime (offset);

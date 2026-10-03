@@ -218,7 +218,7 @@ public:
 
     void setup () override;
     void render () override;
-    void rebaseRenderTime (float offset) override;
+    void rebaseRenderTime (double offset) override;
     void update (float dt);
     void play ();
     void pause ();
