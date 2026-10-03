@@ -2789,10 +2789,29 @@ std::optional<glm::vec3> CImage::cursorLocalPosition (const glm::vec3& worldPosi
 	// Undo the scene-space translation before applying the parent/local inverse.
 	hitPosition -= glm::vec3 (offset.x, -offset.y, 0.0f);
     }
-    const auto position = camera.isOrthogonal ()
-	? std::optional<glm::vec3> (glm::vec3 (glm::inverse (world) * glm::vec4 (hitPosition, 1.0f)))
-	: intersectCursorPlane (world, camera.getProjection () * camera.getLookAt (),
-	    *getScene ().getMousePositionNormalized (), camera.isYFlipped ());
+    std::optional<glm::vec3> position;
+    if (camera.isOrthogonal () && getImage ().perspective->value->getBool () && !getImage ().model->fullscreen) {
+	// The native perspective image flag selects the virtual camera ray even
+	// in an orthographic scene. Keep its input offset in authored coordinates.
+	const float fov = glm::radians (glm::clamp (camera.getFov (), 0.1f, 179.9f));
+	const float distance = 1.0f / (std::tan (fov * 0.5f) * camera.getProjection ()[1][1]);
+	glm::mat4 view = camera.getLookAt ();
+	view[3][2] = -distance;
+	const auto& output = getScene ().getOutputSize ();
+	const glm::mat4 projection = glm::perspective (fov, output.x / output.y, 5.0f,
+	    glm::max (15000.0f, distance + 1000.0f));
+	const glm::mat4 sceneToRender = glm::translate (glm::mat4 (1.0f),
+	    glm::vec3 (-camera.getWidth () * 0.5f, camera.getHeight () * 0.5f, 0.0f))
+	    * glm::scale (glm::mat4 (1.0f), glm::vec3 (1.0f, -1.0f, 1.0f));
+	const glm::mat4 hitWorld = glm::translate (sceneToRender, worldPosition - hitPosition) * world;
+	position = intersectCursorPlane (hitWorld, projection * view,
+	    *getScene ().getMousePositionNormalized (), true);
+    } else {
+	position = camera.isOrthogonal ()
+	    ? std::optional<glm::vec3> (glm::vec3 (glm::inverse (world) * glm::vec4 (hitPosition, 1.0f)))
+	    : intersectCursorPlane (world, camera.getProjection () * camera.getLookAt (),
+		*getScene ().getMousePositionNormalized (), camera.isYFlipped ());
+    }
     if (!position) return std::nullopt;
     const glm::vec3 local = *position;
     const glm::vec2 size = this->getSize ();
