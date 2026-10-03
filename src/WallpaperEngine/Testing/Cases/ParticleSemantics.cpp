@@ -456,6 +456,73 @@ TEST_CASE ("attraction parses lifetime blending and native point selection", "[p
     CHECK (authored->blendTimes == glm::vec4 (.2f, .4f, .6f, .8f));
 }
 
+TEST_CASE ("attraction deletion uses swept distance and marks age without removing the slot", "[particle][attraction][deletion]") {
+    using WallpaperEngine::Render::Objects::applyParticleAttractionDeletion;
+    const struct { glm::vec3 previous, position, center; float radius; bool deleted; } cases[] = {
+        {{-10,0,0}, {10,0,0}, {}, 1, true},
+        {{-10,2,0}, {10,2,0}, {}, 1, false},
+        {{-10,0,2}, {10,0,2}, {}, 1, false},
+        {{}, {}, {}, 0, true},
+        {{}, {}, {}, -1, true},
+        {{1,0,0}, {1,0,0}, {}, 1, true},
+        {{1.01f,0,0}, {1.01f,0,0}, {}, 1, false},
+        {{-10,0,0}, {10,0,0}, {}, -1, true},
+        {{-10,0,0}, {-5,0,0}, {}, 1, false},
+        {{5,0,0}, {10,0,0}, {}, 1, false},
+        {{-10,-20,-30}, {10,20,30}, {}, 1, true},
+        {{}, {20,0,0}, {10,2,0}, 1.9f, false},
+        {{}, {20,0,0}, {10,2,0}, 2.1f, true},
+        {{12,3,4}, {12,3,4}, {10,3,4}, 2, true}
+    };
+    for (const auto& value : cases) {
+        ParticleInstance particle;
+        particle.previousPosition = value.previous;
+        particle.position = value.position;
+        particle.age = .25f;
+        particle.lifetime = 2.0f;
+        particle.alive = true;
+        applyParticleAttractionDeletion (particle, value.center, value.radius);
+        CHECK (particle.age == (value.deleted ? 2.0f : .25f));
+        CHECK (particle.alive); // Later authored operators still see the slot.
+    }
+}
+
+TEST_CASE ("attraction deletion preserves omitted defaults and explicit zero or null", "[particle][attraction][deletion]") {
+    WallpaperEngine::Data::Model::Project project {};
+    const auto object = WallpaperEngine::Data::Parsers::ObjectParser::parse (
+        WallpaperEngine::Data::JSON::JSON::parse (R"({"id":20,"particle":{"operator":[
+            {"name":"controlpointattract","flags":1},
+            {"name":"controlpointattract","flags":3,"deletethreshold":-2},
+            {"name":"controlpointattract","scale":null,"threshold":null,"deletethreshold":null},
+            {"name":"controlpointattract","deletethreshold":0}
+        ]}})"), project
+    );
+    const auto* particle = object->as<WallpaperEngine::Data::Model::Particle> ();
+    REQUIRE (particle != nullptr);
+    REQUIRE (particle->operators.size () == 4);
+    const auto* omitted = particle->operators[0]->as<ControlPointAttractOperator> ();
+    const auto* authored = particle->operators[1]->as<ControlPointAttractOperator> ();
+    const auto* nulls = particle->operators[2]->as<ControlPointAttractOperator> ();
+    const auto* zero = particle->operators[3]->as<ControlPointAttractOperator> ();
+    REQUIRE (omitted != nullptr);
+    REQUIRE (authored != nullptr);
+    REQUIRE (nulls != nullptr);
+    REQUIRE (zero != nullptr);
+    CHECK (omitted->deleteThreshold == nullptr);
+    CHECK (omitted->scale == nullptr);
+    CHECK (omitted->threshold == nullptr);
+    CHECK (omitted->flags == 1);
+    CHECK (authored->flags == 3);
+    CHECK (authored->deleteThreshold->value->getFloat () == -2.0f);
+    REQUIRE (nulls->scale != nullptr);
+    REQUIRE (nulls->threshold != nullptr);
+    REQUIRE (nulls->deleteThreshold != nullptr);
+    CHECK (nulls->scale->value->getFloat () == 0.0f);
+    CHECK (nulls->threshold->value->getFloat () == 0.0f);
+    CHECK (nulls->deleteThreshold->value->getFloat () == 0.0f);
+    CHECK (zero->deleteThreshold->value->getFloat () == 0.0f);
+}
+
 TEST_CASE ("attraction caps the signed step before lifetime weight", "[particle][attraction]") {
     CHECK (calculateControlPointAttraction ({40, 0, 0}, 5000, 100, .05f, true, .5f).x
            == Catch::Approx (20.0f));

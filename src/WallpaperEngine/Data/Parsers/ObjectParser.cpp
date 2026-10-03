@@ -1274,8 +1274,9 @@ ParticleOperatorUniquePtr ObjectParser::parseParticleOperator (const JSON& it, c
     } else if (name == "controlpointattract") {
 	return std::make_unique<ControlPointAttractOperator> (
 	    std::min (static_cast<uint32_t> (it.optional ("controlpoint", 0)), 7u), it.optional ("flags", 2),
-	    it.optional ("scale") ? it.user ("scale", properties) : nullptr,
-	    it.optional ("threshold") ? it.user ("threshold", properties) : nullptr,
+	    it.contains ("scale") ? it.user ("scale", properties, 0.0f) : nullptr,
+	    it.contains ("threshold") ? it.user ("threshold", properties, 0.0f) : nullptr,
+	    it.contains ("deletethreshold") ? it.user ("deletethreshold", properties, 0.0f) : nullptr,
 	    glm::vec4 (it.optional ("blendinstart", 0.0f), it.optional ("blendinend", 0.0f),
 		       it.optional ("blendoutstart", 1.0f), it.optional ("blendoutend", 1.0f))
 	);

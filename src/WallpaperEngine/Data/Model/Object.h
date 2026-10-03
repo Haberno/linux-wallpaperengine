@@ -652,15 +652,17 @@ public:
 class ControlPointAttractOperator : public ParticleOperatorBase {
 public:
     ControlPointAttractOperator (
-	int controlPoint, int flags, UserSettingUniquePtr scale, UserSettingUniquePtr threshold, glm::vec4 blendTimes
+	int controlPoint, int flags, UserSettingUniquePtr scale, UserSettingUniquePtr threshold,
+        UserSettingUniquePtr deleteThreshold, glm::vec4 blendTimes
     ) :
 	controlPoint (controlPoint), flags (flags), scale (std::move (scale)),
-	threshold (std::move (threshold)), blendTimes (blendTimes) { }
+	threshold (std::move (threshold)), deleteThreshold (std::move (deleteThreshold)), blendTimes (blendTimes) { }
     int controlPoint;
     int flags;
     // Missing values are resolved against the scene projection when instantiated.
     UserSettingUniquePtr scale;
     UserSettingUniquePtr threshold;
+    UserSettingUniquePtr deleteThreshold;
     glm::vec4 blendTimes;
 };
 

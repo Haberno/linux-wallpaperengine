@@ -944,6 +944,7 @@ void CParticle::update (float dt) {
 	    auto& particle = m_particles[i];
 	    const auto& birthTransform = i < firstManualParticle ? localToWorld : m_pendingBirthTransform;
 	    particle.position = glm::vec3 (birthTransform * glm::vec4 (particle.position, 1.0f));
+	    particle.previousPosition = glm::vec3 (birthTransform * glm::vec4 (particle.previousPosition, 1.0f));
 	    particle.velocity = glm::mat3 (birthTransform) * particle.velocity;
 	}
 	// Emitters and child inheritance still need layer-local points. Operators
@@ -1240,6 +1241,7 @@ EmitterFunc CParticle::createBoxEmitter (const ParticleEmitter& emitter) {
 		}
 
 		p.position = spawnOrigin + randomPos;
+		p.previousPosition = p.position;
 
 		p.velocity = glm::vec3 (0.0f);
 		if (emitter.speedMin != 0.0f || emitter.speedMax != 0.0f) {
@@ -1455,6 +1457,7 @@ EmitterFunc CParticle::createSphereEmitter (const ParticleEmitter& emitter) {
 		randomPos = m_controlPoints[controlPointIndex].orientation * randomPos;
 	    }
 	    p.position = spawnOrigin + randomPos;
+	    p.previousPosition = p.position;
 
 	    // Set velocity only if emitter specifies speed (otherwise use initializers)
 	    if (emitter.speedMax > 0.0f || emitter.speedMin != 0.0f) {
@@ -2145,6 +2148,8 @@ OperatorFunc CParticle::createMovementOperator (const MovementOperator& op) {
 		continue;
 	    }
 
+	    // Native snapshots each movement operator's start for swept attraction deletion.
+	    p.previousPosition = p.position;
 	    // Native movement applies gravity before advancing position, then drag.
 	    // Otherwise a large drag*dt discards every frame's force without motion.
 	    p.velocity += gravity * dt * speed;
@@ -2637,6 +2642,19 @@ OperatorFunc CParticle::createVortexOperator (const VortexOperator& op) {
     };
 }
 
+void WallpaperEngine::Render::Objects::applyParticleAttractionDeletion (
+    ParticleInstance& particle, const glm::vec3& center, const float radius
+) {
+    const glm::vec3 segment = particle.position - particle.previousPosition;
+    const float lengthSquared = glm::dot (segment, segment);
+    const float fraction = lengthSquared == 0.0f ? 0.0f
+        : std::clamp (glm::dot (center - particle.previousPosition, segment) / lengthSquared, 0.0f, 1.0f);
+    const glm::vec3 closest = particle.previousPosition + segment * fraction - center;
+    // Native 14022a150 marks age, including the radius boundary. Subsequent
+    // operators still run; normal aging reclaims the slot on the next update.
+    if (glm::dot (closest, closest) <= radius * radius) particle.age = particle.lifetime;
+}
+
 OperatorFunc CParticle::createControlPointAttractOperator (const ControlPointAttractOperator& op) {
     includeControlPoint (op.controlPoint);
     // The authored defaults use pixels in an orthographic scene and world units
@@ -2645,14 +2663,16 @@ OperatorFunc CParticle::createControlPointAttractOperator (const ControlPointAtt
     const bool isPerspective = getScene ().getScene ().camera.projection.isPerspective;
     const float defaultScale = isPerspective ? 20.0f : 512.0f;
     const float defaultThreshold = isPerspective ? 5.0f : 512.0f;
+    const float defaultDeleteThreshold = isPerspective ? 0.5f : 15.0f;
 
-    return [this, &op, defaultScale, defaultThreshold] (
+    return [this, &op, defaultScale, defaultThreshold, defaultDeleteThreshold] (
 	       std::vector<ParticleInstance>& particles, uint32_t count,
 	       const std::vector<ControlPointData>& controlPoints, float, float dt
 	   ) {
 	const float speed = (m_particle.flags & 16) != 0 ? 1.0f : getInstanceOverride ().speed->value->getFloat ();
 	const float scale = (op.scale ? op.scale->value->getFloat () : defaultScale) * speed;
 	const float threshold = op.threshold ? op.threshold->value->getFloat () : defaultThreshold;
+	const float deleteThreshold = op.deleteThreshold ? op.deleteThreshold->value->getFloat () : defaultDeleteThreshold;
 	// Native attraction receives force time, attenuated by the scene frame
 	// interval before instance rate (140237720, opcodes 10/32).
 	const float forceDt = dt * std::pow (std::min (0.025f / getScene ().getDeltaTime (), 1.0f), 0.7f);
@@ -2676,6 +2696,7 @@ OperatorFunc CParticle::createControlPointAttractOperator (const ControlPointAtt
 		center - p.position, scale, threshold, forceDt, (op.flags & 2) != 0,
 		particleOperatorBlend (p.getLifetimePos (), op.blendTimes)
 	    );
+	    if ((op.flags & 1) != 0) applyParticleAttractionDeletion (p, center, deleteThreshold);
 	}
     };
 }

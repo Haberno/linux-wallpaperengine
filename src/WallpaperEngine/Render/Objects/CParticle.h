@@ -83,6 +83,7 @@ struct ParticleInstance {
 
     // Position and movement
     glm::vec3 position { 0.0f };
+    glm::vec3 previousPosition { 0.0f }; // Birth position, refreshed before each movement operator.
     glm::vec3 velocity { 0.0f };
     glm::vec3 acceleration { 0.0f };
 
@@ -124,6 +125,10 @@ struct ParticleInstance {
 
     bool isAlive () const { return alive && age < lifetime; }
 };
+
+void applyParticleAttractionDeletion (
+    ParticleInstance& particle, const glm::vec3& center, float radius
+);
 
 void applyParticleAngularMovement (
     ParticleInstance& particle, const glm::vec3& force, float drag,
