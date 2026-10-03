@@ -746,11 +746,20 @@ void CModel::render () { this->renderPasses (std::nullopt); }
 void CModel::render (const RenderSortClass renderClass) { this->renderPasses (renderClass); }
 
 void CModel::prepareRender () {
+    // Publish script-controlled poses after callbacks, including hidden attachment sources.
+    this->updateAnimationPose ();
+    // Material sorting may prepare an attached model before its parent.
+    const Object* current = &this->m_model;
+    for (int depth = 0; current->parent.has_value () && depth <= 32; ++depth) {
+        const auto* parent = this->getScene ().getObject (*current->parent);
+        if (parent == nullptr) break;
+        if (const auto* model = dynamic_cast<const CModel*> (parent)) model->updateAnimationPose ();
+        current = &parent->getObject ();
+    }
     // A hidden container hides its whole subtree.
     this->m_frameVisible = this->m_initialized && this->m_model.groupVisible->value->getBool ()
 	&& this->isVisibleThroughParents ();
     if (!this->m_frameVisible) return;
-    this->updateAnimationPose ();
     this->updateMatrices ();
     this->m_posedShadowBounds = this->m_shadowBounds.evaluate (this->m_gpuSkinBones);
     if (m_modelData && m_modelData->mesh.hasBoundingBox) {
@@ -857,7 +866,9 @@ void CModel::renderShadow (const glm::mat4& lightViewProjection) {
 const Model3D& CModel::getModel () const { return this->m_model; }
 
 std::optional<glm::mat4> CModel::getAttachmentTransform (const std::string& name) const {
-    this->updateAnimationPose ();
+    // Native attachment queries retain the evaluated pose until the next scene update.
+    // Keep lazy initialization for models queried before setup has evaluated their bones.
+    if (this->m_worldBones.empty ()) this->updateAnimationPose ();
     return MdlAnimationEvaluator::attachmentTransform (this->m_model.animationData, this->m_worldBones, name);
 }
 
@@ -891,7 +902,7 @@ std::optional<size_t> CModel::getBoneIndex (const std::string& name) const {
 }
 
 std::optional<glm::mat4> CModel::getBoneTransform (const size_t index) const {
-    this->updateAnimationPose ();
+    if (this->m_worldBones.empty ()) this->updateAnimationPose ();
     if (index >= this->m_worldBones.size ()) return std::nullopt;
     return this->m_worldBones[index];
 }
