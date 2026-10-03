@@ -296,6 +296,10 @@ CImage::CImage (Wallpapers::CScene& scene, const Image& image) :
 	// Native Half quality reduces local image effects even for single-mip sources.
 	// Geometry, authored source UVs and scene-sized render targets stay unchanged.
 	m_effectSize /= static_cast<float> (scene.getTextureReduction ());
+	if (scene.getTextureReduction () > 1) {
+	    // Native divides integer source extents before target/render-scale rounding.
+	    m_effectSize = glm::floor (m_effectSize);
+	}
     }
 
     glm::vec2 scaledSize = size * glm::vec2 (scale);
