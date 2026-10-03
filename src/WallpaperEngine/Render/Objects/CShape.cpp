@@ -106,6 +106,10 @@ void CShape::setup () {
 	    }
 	}
     }
+    if (!m_passes.empty ()) {
+	// Native shapes override the final material pass, even when its effect says "normal".
+	m_passes.back ().draw->setBlendingMode (BlendingMode_Additive);
+    }
 }
 
 bool CShape::corner (const Effects::CPass& pass, const std::string& name, glm::vec2& value) const {
