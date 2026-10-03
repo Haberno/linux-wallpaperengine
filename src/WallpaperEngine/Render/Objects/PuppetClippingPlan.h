@@ -37,6 +37,13 @@ struct PuppetClippingPlan {
  * mask are deduplicated, and adjacent spans with identical state are coalesced.
  */
 PuppetClippingPlan buildPuppetClippingPlan (
-    const WallpaperEngine::Data::Model::MdlMesh& mesh, uint32_t submeshIndex
+    const WallpaperEngine::Data::Model::MdlMesh& mesh, uint32_t submeshIndex,
+    const std::vector<uint32_t>* rangeOrder = nullptr
+);
+
+/** Stable signed depth sorting; an empty depth update preserves the previous order. */
+bool updatePuppetDrawOrder (
+    const WallpaperEngine::Data::Model::MdlMesh& mesh, const std::vector<int32_t>& defaults,
+    const std::vector<float>& depths, std::vector<uint32_t>& order
 );
 } // namespace WallpaperEngine::Render::Objects

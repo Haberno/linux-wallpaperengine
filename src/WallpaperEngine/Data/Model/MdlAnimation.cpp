@@ -457,6 +457,30 @@ MdlPose MdlAnimationEvaluator::evaluate (
 	pose.blendWeights[row] = value;
     }
 
+    // Native 1401fdf90 resets to the MDLS defaults and floor-samples the late
+    // MDLA depth stream. An untouched result keeps the previous draw order.
+    for (const auto& layer : activeAnimations) {
+	if (!layer.animation || layer.weight <= 0.0f) continue;
+	const auto& clip = *layer.animation;
+	const auto frame = static_cast<size_t> (sampleFrame (layer));
+	for (size_t bone = 0; bone < animationData.defaultDepths.size () && bone < clip.depthTracks.size (); ++bone) {
+	    if (clip.depthTracks[bone].empty ()
+		|| (bone < clip.boneFlags.size () && (clip.boneFlags[bone] & 3) == 1)) continue;
+	    if (pose.depths.empty ())
+		pose.depths.assign (animationData.defaultDepths.begin (), animationData.defaultDepths.end ());
+	    const auto& samples = clip.depthTracks[bone];
+	    const float sample = samples[std::min (frame, samples.size () - 1)];
+	    float& value = pose.depths[bone];
+	    const float weight = std::clamp (layer.weight, 0.0f, 1.0f);
+	    if (layer.additive) {
+		value = std::clamp (value + (sample - animationData.defaultDepths[bone]) * weight,
+		    std::min (value, sample), std::max (value, sample));
+	    } else {
+		value = glm::mix (value, sample, weight);
+	    }
+	}
+    }
+
     return pose;
 }
 

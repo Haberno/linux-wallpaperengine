@@ -435,3 +435,20 @@ TEST_CASE ("Model objects in one object list share one MDL parse") {
     // nothing outlives the scope
     CHECK (parse (3) == 2.0f);
 }
+
+TEST_CASE ("MDLV puppet ranges retain signed depth offsets") {
+    auto data = makeModel (8, 15, 48, {}, 23, 1, false);
+    appendValue<uint8_t> (data, 0);
+    appendValue<uint8_t> (data, 1);
+    appendValue<uint32_t> (data, 16);
+    appendValue<uint32_t> (data, 7);
+    appendValue<int32_t> (data, -500);
+    appendValue<uint32_t> (data, 0);
+    appendValue<uint32_t> (data, 3);
+    appendValue<uint32_t> (data, 0);
+    const auto mesh = MdlParser::parse (data, "signed-depth.mdl");
+    CHECK (mesh.submeshes.front ().flags == 8);
+    REQUIRE (mesh.drawRanges.size () == 1);
+    CHECK (mesh.drawRanges.front ().submeshIndex == 0);
+    CHECK (mesh.drawRanges.front ().depthOffset == -500);
+}

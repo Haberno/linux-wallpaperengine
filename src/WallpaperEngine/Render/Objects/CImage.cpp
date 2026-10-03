@@ -601,6 +601,7 @@ bool CImage::loadPuppetMesh (const glm::vec2& size) {
 	    this->m_puppetWorldBones.clear ();
 	}
 
+	this->m_puppetDrawRanges = { MdlDrawRange { .indexCount = static_cast<uint32_t> (indices.size ()) } };
 	this->loadPuppetOverlay (mesh, size);
 	this->updatePuppetPositionBuffer (size);
 
@@ -866,6 +867,16 @@ void CImage::updatePuppetPositionBuffer (const glm::vec2& size) {
     this->m_puppetWorldBones = std::move (pose.worldBones);
     this->m_puppetSkinBones = std::move (pose.skinBones);
 
+    const auto& mesh = *this->getImage ().model->puppetMesh;
+    if (updatePuppetDrawOrder (mesh, this->m_puppetAnimation.defaultDepths, pose.depths, this->m_puppetRangeOrder)) {
+	const auto plan = buildPuppetClippingPlan (mesh, 0, &this->m_puppetRangeOrder);
+	this->m_puppetDrawRanges.clear ();
+	for (const auto& draw : plan.draws) {
+	    this->m_puppetDrawRanges.push_back (MdlDrawRange { .firstIndex = draw.firstIndex, .indexCount = draw.indexCount });
+	}
+	if (this->m_hasPuppetClipping) this->updatePuppetClippingCommands (plan);
+    }
+
     // ponytail: only g_BlendMap row zero, which covers BLENDROWCOUNT 1 (every channelmap
     // material in the corpus). More rows would need a vec4 array uniform instead.
     this->m_puppetBlendMap = glm::vec4 (0.0f);
@@ -1121,17 +1132,13 @@ std::optional<CImage::ResolvedTransform> CImage::puppetAttachmentTransform (cons
 
 void CImage::setupPuppetGeometryCallback (Effects::CPass* pass, bool samplesSourceTexture) const {
     this->setupPuppetRangeGeometryCallback (
-	pass, samplesSourceTexture,
-	{ MdlDrawRange {
-	    .submeshIndex = 0,
-	    .firstIndex = 0,
-	    .indexCount = static_cast<uint32_t> (this->m_puppetIndexCount),
-	} }
+	pass, samplesSourceTexture, {}, &this->m_puppetDrawRanges
     );
 }
 
 void CImage::setupPuppetRangeGeometryCallback (
-    Effects::CPass* pass, const bool samplesSourceTexture, const std::vector<MdlDrawRange>& ranges
+    Effects::CPass* pass, const bool samplesSourceTexture, const std::vector<MdlDrawRange>& ranges,
+    const std::vector<MdlDrawRange>* dynamicRanges
 ) const {
     // when the final pass samples the source texture directly (no effects) the UVs need the
     // same padding compensation the copy texcoords get; FBO content always spans the full range
@@ -1154,13 +1161,13 @@ void CImage::setupPuppetRangeGeometryCallback (
 		glVertexAttribPointer (texCoord, 2, GL_FLOAT, GL_FALSE, 0, nullptr);
 	    }
 	},
-	[this, ranges] () {
+	[this, ranges, dynamicRanges] () {
 	    // the Y-flip into scene space inverts triangle winding, so materials with
 	    // cullmode "normal" would cull the whole mesh (e.g. the eye layer in 3558034522)
 	    const GLboolean cullFaceEnabled = glIsEnabled (GL_CULL_FACE);
 	    glDisable (GL_CULL_FACE);
 	    glBindBuffer (GL_ELEMENT_ARRAY_BUFFER, this->m_puppetIndices);
-	    for (const auto& range : ranges) {
+	    for (const auto& range : dynamicRanges ? *dynamicRanges : ranges) {
 		if (range.submeshIndex != 0 || range.indexCount == 0) {
 		    continue;
 		}
@@ -1201,7 +1208,7 @@ bool CImage::setupPuppetClippingPasses (
 
     try {
 	const auto& mesh = *model.puppetMesh;
-	const auto plan = buildPuppetClippingPlan (mesh, 0);
+	const auto plan = buildPuppetClippingPlan (mesh, 0, &this->m_puppetRangeOrder);
 	if (plan.requiresComposition) {
 	    sLog.error (
 		"Puppet clipping for ", *model.puppet,
@@ -1256,8 +1263,7 @@ bool CImage::setupPuppetClippingPasses (
 	);
 	const auto& maskMaterial = *this->m_materials.compatibilityMaterials.back ();
 	const auto provider = std::make_shared<FBOProvider> (this);
-	std::vector<Effects::CPass*> maskPasses;
-	maskPasses.reserve (plan.masks.size ());
+	this->m_puppetMaskPasses.reserve (plan.masks.size ());
 
 	const auto configurePass = [this, &input, &destination, projection, inverseProjection] (Effects::CPass& pass) {
 	    pass.setDestination (destination);
@@ -1290,7 +1296,7 @@ bool CImage::setupPuppetClippingPasses (
 		*this, provider, **maskMaterial.passes.begin (), stableOverride, std::nullopt, std::nullopt
 	    );
 	    this->m_puppetClippingPasses.push_back (pass);
-	    maskPasses.push_back (pass);
+	    this->m_puppetMaskPasses.push_back (pass);
 	    pass->setDestination (this->m_puppetClippingFBO);
 	    pass->setInput (input);
 	    pass->setModelViewProjectionMatrix (projection);
@@ -1312,17 +1318,7 @@ bool CImage::setupPuppetClippingPasses (
 	    this->setupPuppetRangeGeometryCallback (pass, samplesSourceTexture, sourceRanges);
 	}
 
-	size_t activeMask = std::numeric_limits<size_t>::max ();
-	for (const auto& draw : plan.draws) {
-	    const bool clipped = !draw.masks.empty ();
-	    if (clipped && activeMask != draw.masks.front ()) {
-		activeMask = draw.masks.front ();
-		this->m_puppetClippingCommands.push_back (PuppetClippingRenderCommand {
-		    .buildsMask = true,
-		    .pass = maskPasses[activeMask],
-		});
-	    }
-
+	for (const bool clipped : { false, true }) {
 	    std::optional<std::reference_wrapper<const TextureMap>> binds = finalPass.getBinds ();
 	    ComboMap runtimeCombos;
 	    if (clipped) {
@@ -1345,18 +1341,12 @@ bool CImage::setupPuppetClippingPasses (
 	    pass->setDepthtestMode (finalPass.getDepthtestMode ());
 	    pass->setDepthwriteMode (finalPass.getDepthwriteMode ());
 	    this->setupPuppetRangeGeometryCallback (
-		pass, samplesSourceTexture,
-		{ MdlDrawRange {
-		    .submeshIndex = draw.submeshIndex,
-		    .firstIndex = draw.firstIndex,
-		    .indexCount = draw.indexCount,
-		} }
+		pass, samplesSourceTexture, {}, &this->m_puppetClippingDrawRange
 	    );
-	    this->m_puppetClippingCommands.push_back (PuppetClippingRenderCommand {
-		.buildsMask = false,
-		.pass = pass,
-	    });
+	    if (clipped) this->m_puppetClippedPass = pass;
+	    else this->m_puppetPlainPass = pass;
 	}
+	this->updatePuppetClippingCommands (plan);
 
 	sLog.out (
 	    "Loaded puppet clipping ", *model.puppet, " masks=", plan.masks.size (), " draws=", plan.draws.size ()
@@ -1366,6 +1356,24 @@ bool CImage::setupPuppetClippingPasses (
 	sLog.error ("Could not set up puppet clipping for ", *model.puppet, ": ", ex.what ());
 	this->m_puppetClippingCommands.clear ();
 	return false;
+    }
+}
+
+void CImage::updatePuppetClippingCommands (const PuppetClippingPlan& plan) {
+    this->m_puppetClippingCommands.clear ();
+    size_t activeMask = std::numeric_limits<size_t>::max ();
+    for (const auto& draw : plan.draws) {
+	const bool clipped = !draw.masks.empty ();
+	if (clipped && activeMask != draw.masks.front ()) {
+	    activeMask = draw.masks.front ();
+	    this->m_puppetClippingCommands.push_back (PuppetClippingRenderCommand {
+		.buildsMask = true, .pass = this->m_puppetMaskPasses[activeMask],
+	    });
+	}
+	this->m_puppetClippingCommands.push_back (PuppetClippingRenderCommand {
+	    .pass = clipped ? this->m_puppetClippedPass : this->m_puppetPlainPass,
+	    .range = { .firstIndex = draw.firstIndex, .indexCount = draw.indexCount },
+	});
     }
 }
 
@@ -1388,6 +1396,7 @@ void CImage::renderPuppetClipping () {
 		glEnable (GL_SCISSOR_TEST);
 	    }
 	} else {
+	    this->m_puppetClippingDrawRange.front () = command.range;
 	    // Scene alpha is owned by the wallpaper compositor, but an isolated
 	    // composition surface needs child alpha so its parent can blend the group.
 	    glColorMask (

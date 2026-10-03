@@ -22,6 +22,7 @@ namespace WallpaperEngine::Data::Model {
 inline constexpr uint32_t MdlAttributeAbsent = UINT32_MAX;
 
 struct MdlSubmesh {
+    uint32_t flags = 0;
     /** Material json path embedded in the submesh header */
     std::string materialPath;
     /** Interleaved vertex data */
@@ -47,9 +48,11 @@ struct MdlSubmesh {
  * refer to these records by their position in MdlMesh::drawRanges.
  */
 struct MdlDrawRange {
-    /** Authored part/bone grouping identifier; its editor-facing meaning is not yet known. */
+    /** Bone whose animated depth orders this range. */
     uint32_t partId = 0;
+    /** MDLV's range table belongs to the first body submesh. */
     uint32_t submeshIndex = 0;
+    int32_t depthOffset = 0;
     uint32_t firstIndex = 0;
     uint32_t indexCount = 0;
 };

@@ -2,6 +2,8 @@
 #include <cmath>
 #include <cstdint>
 #include <cstring>
+#include <cstdlib>
+#include <fstream>
 #include <limits>
 #include <string>
 #include <vector>
@@ -12,6 +14,8 @@
 
 #include "WallpaperEngine/Data/Model/MdlAnimation.h"
 #include "WallpaperEngine/Data/Parsers/MdlAnimationParser.h"
+#include "WallpaperEngine/Data/Parsers/MdlParser.h"
+#include "WallpaperEngine/Render/Objects/PuppetClippingPlan.h"
 
 using namespace WallpaperEngine::Data::Model;
 using WallpaperEngine::Data::Parsers::MdlAnimationParser;
@@ -909,4 +913,66 @@ TEST_CASE ("Spring bones recover after a zero scale frame", "[mdl][animation][ph
     checkFinitePose (step (110));
     CHECK (state.bones[0].angles.z < -0.01f);
     CHECK (state.bones[0].offset.y < 0.0f);
+}
+
+TEST_CASE ("Puppet depth uses floor samples, layer weights and bounded additive deltas") {
+    MdlAnimationData data;
+    data.bones.resize (2);
+    data.defaultDepths = { 300, 700 };
+    MdlAnimationClip clip;
+    clip.frameCount = 2;
+    clip.mode = "single";
+    clip.boneFlags = { 0, 0 };
+    clip.depthTracks = { { 0, 1000, 0 }, { 0, 0, 0 } };
+    MdlActiveAnimation layer { .animation = &clip, .frame = 0.5f };
+    CHECK (MdlAnimationEvaluator::evaluate (data, { layer }).depths == std::vector<float> { 0, 0 });
+    layer.frame = 1;
+    layer.weight = 0.5f;
+    CHECK (MdlAnimationEvaluator::evaluate (data, { layer }).depths == std::vector<float> { 650, 350 });
+    layer.additive = true;
+    CHECK (MdlAnimationEvaluator::evaluate (data, { layer, layer, layer }).depths == std::vector<float> { 1000, 0 });
+    clip.boneFlags = { 1, 1 };
+    CHECK (MdlAnimationEvaluator::evaluate (data, { layer }).depths.empty ());
+    clip.boneFlags = { 3, 1 };
+    CHECK (MdlAnimationEvaluator::evaluate (data, { layer }).depths == std::vector<float> { 650, 700 });
+    CHECK (MdlAnimationEvaluator::evaluate (data, {}).depths.empty ());
+}
+
+TEST_CASE ("Installed Reze depth tracks reorder the clipped eye ranges", "[.][puppet-depth-installed]") {
+    const char* filename = std::getenv ("LWE_TEST_PUPPET_DEPTH_MODEL");
+    REQUIRE (filename != nullptr);
+    std::ifstream stream (filename, std::ios::binary);
+    REQUIRE (stream.good ());
+    const std::vector<char> bytes { std::istreambuf_iterator<char> (stream), std::istreambuf_iterator<char> () };
+    const auto data = MdlAnimationParser::parse (bytes, filename);
+    const auto mesh = WallpaperEngine::Data::Parsers::MdlParser::parse (bytes, filename);
+    REQUIRE (data.bones.size () == 86);
+    REQUIRE (data.defaultDepths.size () == 86);
+    CHECK (*std::min_element (data.defaultDepths.begin (), data.defaultDepths.end ()) == -1700);
+    CHECK (*std::max_element (data.defaultDepths.begin (), data.defaultDepths.end ()) == 8600);
+    const auto clip = std::find_if (data.animations.begin (), data.animations.end (),
+	[] (const auto& value) { return value.id == 258; });
+    REQUIRE (clip != data.animations.end ());
+    REQUIRE (clip->depthTracks.size () == 86);
+    CHECK (clip->frameCount == 300);
+    CHECK (mesh.submeshes.front ().flags == 0x100c);
+    REQUIRE (mesh.clippingDescriptors.size () == 1);
+    CHECK (mesh.clippingDescriptors.front ().targets == std::vector<uint32_t> { 74, 75 });
+    std::vector<uint32_t> order;
+    std::vector<uint32_t> firstOrder;
+    bool changed = false;
+    for (uint32_t frame = 0; frame <= clip->frameCount; ++frame) {
+	const auto pose = MdlAnimationEvaluator::evaluate (data, {
+	    { .animation = &*clip, .additive = true, .frame = static_cast<float> (frame) }
+	});
+	WallpaperEngine::Render::Objects::updatePuppetDrawOrder (mesh, data.defaultDepths, pose.depths, order);
+	if (frame == 0) firstOrder = order;
+	changed |= order != firstOrder;
+	const auto plan = WallpaperEngine::Render::Objects::buildPuppetClippingPlan (mesh, 0, &order);
+	CHECK_FALSE (plan.requiresComposition);
+	uint32_t indices = 0;
+	for (const auto& draw : plan.draws) indices += draw.indexCount;
+	CHECK (indices == 20088);
+    }
+    CHECK (changed);
 }

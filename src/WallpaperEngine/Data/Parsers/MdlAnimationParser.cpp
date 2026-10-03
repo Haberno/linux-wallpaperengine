@@ -432,6 +432,10 @@ void parseSkeleton (
 	    for (uint32_t bone = 0; bone < boneCount; ++bone)
 		result.hitBoxOrder.push_back (std::min (readValue<uint32_t> (data, offset, sectionEnd), boneCount - 1));
 	}
+	if (version == "MDLS0004" && offset < sectionEnd && readValue<uint8_t> (data, offset, sectionEnd)) {
+	    for (uint32_t bone = 0; bone < boneCount; ++bone)
+		result.defaultDepths.push_back (readValue<int32_t> (data, offset, sectionEnd));
+	}
     }
 }
 
@@ -519,14 +523,12 @@ bool readBlendTracks (
 }
 
 /**
- * MDLA0002 and newer append one optional per-bone float stream after the blend
- * tracks. Wallpaper Engine consumes it before the version-specific event and
- * constraint metadata. The values are not rendered yet, but stepping over the
- * stream is required to locate the next clip without scanning through its
- * sample payload.
+ * The early per-bone scalar block stores opacity; MDLA0006 repeats this layout
+ * after its constraints and bounds for depth. Only the latter is retained.
  */
-bool skipBoneScalarTracks (
-    const std::vector<char>& data, size_t& offset, const size_t sectionEnd, const MdlAnimationClip& animation
+bool readBoneScalarTracks (
+    const std::vector<char>& data, size_t& offset, const size_t sectionEnd, const MdlAnimationClip& animation,
+    std::vector<std::vector<float>>* output = nullptr
 ) {
     const size_t start = offset;
     try {
@@ -536,6 +538,7 @@ bool skipBoneScalarTracks (
 	}
 
 	const size_t expectedBytes = (static_cast<size_t> (animation.frameCount) + 1) * sizeof (float);
+	std::vector<std::vector<float>> tracks;
 	for (size_t bone = 0; bone < animation.boneFrames.size (); bone++) {
 	    readValue<uint32_t> (data, offset, sectionEnd);
 	    const uint32_t byteCount = readValue<uint32_t> (data, offset, sectionEnd);
@@ -543,13 +546,18 @@ bool skipBoneScalarTracks (
 		offset = start;
 		return false;
 	    }
+	    std::vector<float> values;
 	    for (size_t sample = 0; sample < byteCount / sizeof (float); sample++) {
-		if (!std::isfinite (readValue<float> (data, offset, sectionEnd))) {
+		const float value = readValue<float> (data, offset, sectionEnd);
+		if (!std::isfinite (value)) {
 		    offset = start;
 		    return false;
 		}
+		if (output) values.push_back (value);
 	    }
+	    if (output) tracks.push_back (std::move (values));
 	}
+	if (output) *output = std::move (tracks);
 	return true;
     } catch (const std::runtime_error&) {
 	offset = start;
@@ -583,7 +591,7 @@ void readAnimationEvents (
 	if (version >= 5) {
 	    for (int component = 0; component < 6; ++component) readValue<float> (data, offset, recordEnd);
 	}
-	if (version >= 6 && !skipBoneScalarTracks (data, offset, recordEnd, animation)) return;
+	if (version >= 6 && !readBoneScalarTracks (data, offset, recordEnd, animation, &animation.depthTracks)) return;
 	if ((animation.flags & 1) != 0) {
 	    const auto sourceIndex = readValue<uint16_t> (data, offset, recordEnd);
 	    const auto firstFrame = readValue<uint32_t> (data, offset, recordEnd);
@@ -610,6 +618,7 @@ void readAnimationEvents (
 		animation.controlFrames = crop (source.controlFrames);
 		animation.controlFlags = source.controlFlags;
 		animation.blendTracks = crop (source.blendTracks);
+		animation.depthTracks = crop (source.depthTracks);
 	    }
 	}
 	const auto count = readValue<uint32_t> (data, offset, recordEnd);
@@ -720,7 +729,7 @@ void parseAnimations (
 	}
 	readBlendTracks (data, offset, sectionEnd, animation);
 	if (version != "MDLA0001") {
-	    skipBoneScalarTracks (data, offset, sectionEnd, animation);
+	    readBoneScalarTracks (data, offset, sectionEnd, animation);
 	}
 
 	size_t recordEnd = sectionEnd;

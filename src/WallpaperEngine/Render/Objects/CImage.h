@@ -148,11 +148,13 @@ private:
     void renderPuppetAlbedo ();
     void selectPuppetAnimations (float sceneTime);
     void updatePuppetPositionBuffer (const glm::vec2& size);
+    void updatePuppetClippingCommands (const PuppetClippingPlan& plan);
     [[nodiscard]] std::optional<ResolvedTransform> puppetAttachmentTransform (const std::string& name) const;
     void setupPuppetGeometryCallback (Effects::CPass* pass, bool samplesSourceTexture) const;
     void setupPuppetRangeGeometryCallback (
 	Effects::CPass* pass, bool samplesSourceTexture,
-	const std::vector<WallpaperEngine::Data::Model::MdlDrawRange>& ranges
+	const std::vector<WallpaperEngine::Data::Model::MdlDrawRange>& ranges,
+	const std::vector<WallpaperEngine::Data::Model::MdlDrawRange>* dynamicRanges = nullptr
     ) const;
     bool setupPuppetClippingPasses (
 	Effects::CPass& finalPass, const std::shared_ptr<const TextureProvider>& input,
@@ -188,6 +190,8 @@ private:
     GLuint m_puppetTexCoordFirstPass = GL_NONE;
     GLuint m_puppetIndices = GL_NONE;
     GLsizei m_puppetIndexCount = 0;
+    std::vector<uint32_t> m_puppetRangeOrder;
+    std::vector<WallpaperEngine::Data::Model::MdlDrawRange> m_puppetDrawRanges;
     bool m_hasPuppetMesh = false;
     std::vector<GLfloat> m_puppetRawPositions = {};
     std::vector<uint32_t> m_puppetBlendIndices = {};
@@ -222,9 +226,14 @@ private:
     struct PuppetClippingRenderCommand {
 	bool buildsMask = false;
 	Effects::CPass* pass = nullptr;
+	WallpaperEngine::Data::Model::MdlDrawRange range;
     };
     std::vector<Effects::CPass*> m_puppetClippingPasses = {};
     std::vector<PuppetClippingRenderCommand> m_puppetClippingCommands = {};
+    std::vector<Effects::CPass*> m_puppetMaskPasses;
+    Effects::CPass* m_puppetPlainPass = nullptr;
+    Effects::CPass* m_puppetClippedPass = nullptr;
+    std::vector<WallpaperEngine::Data::Model::MdlDrawRange> m_puppetClippingDrawRange { WallpaperEngine::Data::Model::MdlDrawRange {} };
     std::vector<std::unique_ptr<TextureMap>> m_puppetClippingBinds = {};
     std::vector<std::unique_ptr<glm::vec4>> m_puppetClippingRenderVars = {};
     std::shared_ptr<CFBO> m_puppetClippingFBO = nullptr;

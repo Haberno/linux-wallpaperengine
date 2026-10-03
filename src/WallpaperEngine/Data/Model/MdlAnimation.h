@@ -117,6 +117,8 @@ struct MdlAnimationClip {
      * overlay in and out; authored blinks live here, not in the bone tracks.
      */
     std::vector<std::vector<float>> blendTracks = {};
+    /** MDLA0006 late per-bone depth stream, sampled without frame interpolation. */
+    std::vector<std::vector<float>> depthTracks;
 };
 
 struct MdlAnimationData {
@@ -124,6 +126,8 @@ struct MdlAnimationData {
     std::vector<MdlHitBox> hitBoxes;
     /** Native tests the serialized bone indices from back to front. */
     std::vector<uint32_t> hitBoxOrder;
+    /** Signed MDLS0004 depth defaults, separate from bone transforms. */
+    std::vector<int32_t> defaultDepths;
     std::vector<MdlBoneControl> controls;
     std::vector<float> boneLengths;
     std::vector<std::map<uint32_t, glm::vec3>> boneDirections;
@@ -146,6 +150,8 @@ struct MdlPose {
     std::vector<glm::mat4> skinBones = {};
     /** Interpolated blend track values of the active clips, indexed by track row. */
     std::vector<float> blendWeights = {};
+    /** Empty when no active depth track changed the native ordering state. */
+    std::vector<float> depths;
 };
 
 /** Spring state one model instance carries between frames. */

@@ -215,6 +215,7 @@ MdlMesh MdlParser::parse (const std::vector<char>& data, const std::string& file
 	// Bit zero marks 32-bit indices. The remaining bits only describe the submesh and do
 	// not change the payload, so they are read through; BoostModel assets set 0x400.
 	const auto submeshFlags = readValue<uint32_t> (data, offset, filename);
+	submesh.flags = submeshFlags;
 	const bool wideIndices = (submeshFlags & INDEX_32_BIT_FLAG) != 0;
 
 	// bit one prefixes the bounds with one more uint; skipping it desynchronizes the
@@ -355,15 +356,12 @@ MdlMesh MdlParser::parse (const std::vector<char>& data, const std::string& file
 	    while (offset < end) {
 		MdlDrawRange range {
 		    .partId = readValue<uint32_t> (data, offset, filename),
-		    .submeshIndex = readValue<uint32_t> (data, offset, filename),
+		    .depthOffset = readValue<int32_t> (data, offset, filename),
 		    .firstIndex = readValue<uint32_t> (data, offset, filename),
 		    .indexCount = readValue<uint32_t> (data, offset, filename),
 		};
 
-		if (range.submeshIndex >= mesh.submeshes.size ()) {
-		    sLog.exception ("MDLV draw range references an invalid submesh in ", filename);
-		}
-		const size_t submeshIndexCount = mesh.submeshes[range.submeshIndex].indices.size ();
+		const size_t submeshIndexCount = mesh.submeshes.front ().indices.size ();
 		if (range.firstIndex > submeshIndexCount || range.indexCount > submeshIndexCount - range.firstIndex) {
 		    sLog.exception ("MDLV draw range exceeds its submesh index buffer in ", filename);
 		}

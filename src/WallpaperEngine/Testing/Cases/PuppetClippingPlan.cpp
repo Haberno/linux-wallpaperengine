@@ -115,3 +115,38 @@ TEST_CASE ("Puppet clipping plan rejects missing descriptor ranges") {
     mesh.clippingDescriptors.push_back (descriptor (1, { 0 }, { 1 }));
     CHECK_THROWS_AS (buildPuppetClippingPlan (mesh, 0), std::invalid_argument);
 }
+
+TEST_CASE ("Puppet animated depth preserves signed ordering, ties and clipping membership") {
+    MdlMesh mesh;
+    mesh.submeshes.resize (1);
+    mesh.submeshes.front ().flags = 8;
+    mesh.submeshes.front ().indices.resize (6);
+    mesh.drawRanges = {
+	{ .partId = 0, .firstIndex = 0, .indexCount = 3 },
+	{ .partId = 1, .depthOffset = -30, .firstIndex = 3, .indexCount = 3 },
+    };
+    mesh.clippingDescriptors.push_back (descriptor (1, { 1 }, { 0 }));
+    std::vector<uint32_t> order;
+    CHECK (updatePuppetDrawOrder (mesh, { 10, 20 }, { 0, 0 }, order));
+    CHECK (order == std::vector<uint32_t> { 1, 0 });
+    // Both keys truncate to 10: stable ties retain the previous frame's order.
+    CHECK_FALSE (updatePuppetDrawOrder (mesh, { 10, 20 }, { 0.2f, 20.8f }, order));
+    CHECK_FALSE (updatePuppetDrawOrder (mesh, { 10, 20 }, {}, order));
+    const auto plan = buildPuppetClippingPlan (mesh, 0, &order);
+    REQUIRE (plan.draws.size () == 2);
+    CHECK (plan.draws[0].firstIndex == 3);
+    CHECK (plan.draws[0].masks == std::vector<size_t> { 0 });
+    CHECK (plan.draws[1].firstIndex == 0);
+    CHECK (plan.draws[1].masks.empty ());
+    CHECK (plan.masks.front ().sourceRanges == std::vector<uint32_t> { 0 });
+    mesh.submeshes.front ().indices.resize (9);
+    const auto gaps = buildPuppetClippingPlan (mesh, 0, &order);
+    REQUIRE (gaps.draws.size () == 3);
+    CHECK (gaps.draws[0].firstIndex == 0);
+    CHECK (gaps.draws[2].firstIndex == 6);
+    CHECK (gaps.draws[2].indexCount == 3);
+    mesh.drawRanges[0].depthOffset = 1;
+    mesh.drawRanges[1].depthOffset = 0;
+    CHECK (updatePuppetDrawOrder (mesh, { INT32_MAX, 0 }, { 0, 0 }, order));
+    CHECK (order == std::vector<uint32_t> { 0, 1 });
+}

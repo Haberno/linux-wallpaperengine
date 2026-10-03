@@ -1,6 +1,8 @@
 #include "PuppetClippingPlan.h"
 
 #include <algorithm>
+#include <bit>
+#include <numeric>
 #include <stdexcept>
 
 using namespace WallpaperEngine::Data::Model;
@@ -41,7 +43,7 @@ void appendDraw (
 }
 
 PuppetClippingPlan WallpaperEngine::Render::Objects::buildPuppetClippingPlan (
-    const MdlMesh& mesh, const uint32_t submeshIndex
+    const MdlMesh& mesh, const uint32_t submeshIndex, const std::vector<uint32_t>* rangeOrder
 ) {
     if (submeshIndex >= mesh.submeshes.size ()) {
 	throw std::invalid_argument ("puppet clipping plan references a missing submesh");
@@ -122,5 +124,48 @@ PuppetClippingPlan WallpaperEngine::Render::Objects::buildPuppetClippingPlan (
 	);
     }
 
+    // Native rewrites a complete authored partition. For incomplete tables,
+    // preserve the existing gap-filling route rather than discard geometry.
+    size_t covered = 0;
+    for (const auto index : ranges) covered += mesh.drawRanges[index].indexCount;
+    if (rangeOrder && !rangeOrder->empty () && covered == submeshIndexCount) {
+	plan.draws.clear ();
+	for (const uint32_t rangeIndex : *rangeOrder) {
+	    const auto& range = mesh.drawRanges.at (rangeIndex);
+	    if (range.submeshIndex == submeshIndex)
+		appendDraw (plan, submeshIndex, range.firstIndex, range.indexCount, rangeMasks[rangeIndex]);
+	}
+    }
     return plan;
+}
+
+bool WallpaperEngine::Render::Objects::updatePuppetDrawOrder (
+    const MdlMesh& mesh, const std::vector<int32_t>& defaults, const std::vector<float>& depths,
+    std::vector<uint32_t>& order
+) {
+    if (depths.empty () || mesh.drawRanges.empty () || mesh.submeshes.empty ()
+	|| (mesh.submeshes.front ().flags & 8) == 0) return false;
+    if (std::any_of (mesh.drawRanges.begin (), mesh.drawRanges.end (), [&] (const auto& range) {
+	return range.partId >= depths.size () || range.partId >= defaults.size ();
+    })) return false;
+    const bool initialized = order.empty ();
+    if (order.empty ()) {
+	order.resize (mesh.drawRanges.size ());
+	std::iota (order.begin (), order.end (), 0u);
+    }
+    // Native 14020ae00 sets base = MDLS depth + signed range offset;
+    // 1401fdf90 truncates base + sampled depth to an integer before stable sorting.
+    const auto key = [&] (const uint32_t index) {
+	const auto& range = mesh.drawRanges[index];
+	const auto base = std::bit_cast<int32_t> (
+	    static_cast<uint32_t> (defaults[range.partId]) + static_cast<uint32_t> (range.depthOffset)
+	);
+	const float value = static_cast<float> (base) + depths[range.partId];
+	// Match the native x86 float-to-signed conversion for out-of-range values.
+	return value >= -2147483648.0f && value < 2147483648.0f ? static_cast<int32_t> (value) : INT32_MIN;
+    };
+    const auto less = [&] (const uint32_t left, const uint32_t right) { return key (left) < key (right); };
+    if (std::is_sorted (order.begin (), order.end (), less)) return initialized;
+    std::stable_sort (order.begin (), order.end (), less);
+    return true;
 }
