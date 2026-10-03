@@ -1238,8 +1238,22 @@ EmitterFunc CParticle::createBoxEmitter (const ParticleEmitter& emitter) {
 
 		p.position = spawnOrigin + randomPos;
 
-		// Emitter does not set velocity - initializers handle that
 		p.velocity = glm::vec3 (0.0f);
+		if (emitter.speedMin != 0.0f || emitter.speedMax != 0.0f) {
+		    glm::vec3 direction = randomPos;
+		    if (glm::length (direction) < 0.0001f) {
+			direction = WallpaperEngine::Maths::randomVec3 (m_rng, glm::vec3 (-1.0f), glm::vec3 (1.0f))
+				* flippedDirections;
+			if (controlPointIndex >= 0 && controlPointIndex < static_cast<int> (m_controlPoints.size ())
+				&& ((m_particle.flags & 1) != 0 || controlPointIndex != 0)) {
+			    direction = m_controlPoints[controlPointIndex].orientation * direction;
+			}
+		    }
+		    if (glm::dot (direction, direction) > 0.0f) direction = glm::normalize (direction);
+		    const float speed = WallpaperEngine::Maths::randomFloat (m_rng, emitter.speedMin, emitter.speedMax);
+		    const float speedMultiplier = (m_particle.flags & 16) != 0 ? 1.0f : getInstanceOverride ().speed->value->getFloat ();
+		    p.velocity = direction * speed * speedMultiplier;
+		}
 		p.acceleration = glm::vec3 (0.0f);
 		p.rotation = glm::vec3 (0.0f);
 		p.angularVelocity = glm::vec3 (0.0f);
