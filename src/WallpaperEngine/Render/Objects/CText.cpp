@@ -1192,16 +1192,17 @@ std::optional<glm::mat3> CText::transformAttachmentToTexture (
 ) {
     const auto& camera = getScene ().getCamera ();
     const Object& object = source.getObject ();
-    // This component covers direct ordinary text. Effect/background surfaces
-    // have a separate native padding gate; virtual projection is independent.
-    if (!camera.isOrthogonal () || m_text.perspective->value->getBool ()
-        || m_effectsEnabled || !m_text.effects.empty () || m_text.opaqueBackground->value->getBool ())
-        return std::nullopt;
+    // Effect/background surfaces retain a separate native padding contract.
+    if (!camera.isOrthogonal () || m_effectsEnabled || !m_text.effects.empty ()
+        || m_text.opaqueBackground->value->getBool ()) return std::nullopt;
+    const bool virtualReceiver = m_text.perspective->value->getBool ();
+    bool virtualSource = false;
     if (object.is<Image> ()) {
         const Image& image = *object.as<Image> ();
-        if (image.perspective->value->getBool () || image.model->fullscreen) return std::nullopt;
+        if (image.model->fullscreen) return std::nullopt;
+        virtualSource = image.perspective->value->getBool ();
     } else if (object.is<Model3D> ()) {
-        if (object.as<Model3D> ()->perspective->value->getBool ()) return std::nullopt;
+        virtualSource = object.as<Model3D> ()->perspective->value->getBool ();
     } else {
         return std::nullopt;
     }
@@ -1213,12 +1214,28 @@ std::optional<glm::mat3> CText::transformAttachmentToTexture (
         glm::vec3 (-camera.getWidth () * .5f, camera.getHeight () * .5f, 0))
         * glm::scale (glm::mat4 (1), glm::vec3 (1, -1, 1));
     const glm::mat4 viewProjection = camera.getProjection () * camera.getLookAt () * sceneToRender;
+    glm::mat4 virtualView (1), virtualViewProjection (1);
+    if (virtualSource || virtualReceiver) {
+        const float fov = glm::radians (glm::clamp (camera.getFov (), 0.1f, 179.9f));
+        const float distance = 1.0f / (std::tan (fov * 0.5f) * camera.getProjection ()[1][1]);
+        glm::mat4 view = camera.getLookAt ();
+        view[3][2] = -distance;
+        virtualView = view * sceneToRender;
+        const auto& output = getScene ().getOutputSize ();
+        virtualViewProjection = glm::perspective (fov, output.x / output.y, 5.0f,
+            glm::max (15000.0f, distance + 1000.0f)) * virtualView;
+    }
     const glm::vec2 sourceOffset = source.resolveParallaxOffset () * glm::vec2 (1, -1);
     const glm::vec2 receiverOffset = resolveParallaxOffset () * glm::vec2 (1, -1);
+    std::optional<glm::vec3> receiverEye;
+    if (virtualReceiver) {
+        receiverEye = glm::vec3 (glm::inverse (glm::translate (virtualView, glm::vec3 (receiverOffset, 0)))[3]);
+    }
     return CImage::calculateOrthographicAttachmentTextureMatrix (
         attachmentWorld, receiverWorld,
-        glm::translate (viewProjection, glm::vec3 (sourceOffset, 0)),
-        glm::translate (viewProjection, glm::vec3 (receiverOffset, 0)), camera.getEye ().z, size);
+        glm::translate (virtualSource ? virtualViewProjection : viewProjection, glm::vec3 (sourceOffset, 0)),
+        glm::translate (virtualReceiver ? virtualViewProjection : viewProjection, glm::vec3 (receiverOffset, 0)),
+        camera.getEye ().z, size, receiverEye);
 }
 
 void CText::rebuildTextureFrom (const std::string& text) {
