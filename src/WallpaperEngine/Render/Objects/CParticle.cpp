@@ -1562,7 +1562,9 @@ void WallpaperEngine::Render::Objects::applyParticleControlPointRemap (
     // particle unchanged instead of inventing a shared native degeneracy rule.
     if (lengthSquared <= (initializer ? epsilon * epsilon : 0.0f)) return;
     const float fraction = glm::dot (particle.position - start, delta) / lengthSquared;
-    const float input = remap.mode == ControlPointRemap::Mode::PositionToVelocity ? fraction
+    const float input = remap.mode == ControlPointRemap::Mode::PositionToVelocity
+                      || remap.mode == ControlPointRemap::Mode::PositionToPosition
+                      || remap.mode == ControlPointRemap::Mode::PositionToSize ? fraction
                       : remap.mode == ControlPointRemap::Mode::LifetimeFractionToPosition ? particle.getLifetimePos ()
                       : particle.lifetime;
     const glm::vec3 minimum = remap.inputRangeMin->value->getVec3 ();
@@ -1580,17 +1582,23 @@ void WallpaperEngine::Render::Objects::applyParticleControlPointRemap (
         const glm::vec3 target = mapped * glm::vec3 (1.0f, -1.0f, 1.0f);
         particle.velocity = weight == 1.0f ? target : particle.velocity + (target - particle.velocity) * weight;
     } else {
-        // Native arithmetic acts on the current longitudinal fraction, not XYZ.
-        // Keep perpendicular offset and do not clamp the operated fraction.
+        // Native scalar arithmetic acts on current size or longitudinal fraction.
+        // Do not clamp the operated result.
+        const float current = remap.mode == ControlPointRemap::Mode::PositionToSize ? particle.size : fraction;
         float result = mapped.x;
         switch (remap.operation) {
             case ControlPointRemap::Operation::Remap: break;
-            case ControlPointRemap::Operation::Multiply: result = fraction * mapped.x; break;
-            case ControlPointRemap::Operation::Add: result = fraction + mapped.x; break;
-            case ControlPointRemap::Operation::Subtract: result = fraction - mapped.x; break;
+            case ControlPointRemap::Operation::Multiply: result = current * mapped.x; break;
+            case ControlPointRemap::Operation::Add: result = current + mapped.x; break;
+            case ControlPointRemap::Operation::Subtract: result = current - mapped.x; break;
         }
-        // Native blends the operated fraction against the current fraction.
-        particle.position += delta * ((result - fraction) * weight);
+        if (remap.mode == ControlPointRemap::Mode::PositionToSize) {
+            particle.size = weight == 1.0f ? result : current + (result - current) * weight;
+            if (initializer) particle.initial.size = particle.size;
+        } else {
+            // Keep the position offset perpendicular to the segment.
+            particle.position += delta * ((result - fraction) * weight);
+        }
     }
 }
 
