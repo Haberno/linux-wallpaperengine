@@ -157,6 +157,10 @@ struct ControlPointData {
     void sampleVelocity (const glm::vec3& simulationPosition, float frameTime);
 };
 
+void applyParticleEventColor (
+    ParticleInstance& particle, const ParticleInstance* parent, glm::vec4 blendTimes
+);
+
 void applyParticleDistanceConstraint (
     ParticleInstance& particle, const ControlPointData& point, const glm::mat3& inverseBasis,
     float distance, float variableStrength, float deltaTime, glm::vec4 blendTimes
@@ -243,6 +247,7 @@ protected:
     // Operator creators
     OperatorFunc createControlPointRemapOperator (const ControlPointRemapOperator& op);
     OperatorFunc createMovementOperator (const MovementOperator& op);
+    OperatorFunc createInheritEventColorOperator (const InheritEventColorOperator& op);
     OperatorFunc createReduceMovementNearControlPointOperator (const ReduceMovementNearControlPointOperator& op);
     OperatorFunc createMaintainDistanceToControlPointOperator (const MaintainDistanceToControlPointOperator& op);
     OperatorFunc createCapVelocityOperator (const CapVelocityOperator& op);
@@ -311,6 +316,7 @@ private:
     };
     std::vector<FollowChildSystem> m_followChildren;
     std::optional<glm::vec3> m_followPosition;
+    uint64_t m_eventParentSerial = 0;
     // Event-follow child of a world-space system: it lives in world units, not the parent layer's frame.
     bool m_followsWorldParticle = false;
     uint64_t m_nextParticleSerial = 0;

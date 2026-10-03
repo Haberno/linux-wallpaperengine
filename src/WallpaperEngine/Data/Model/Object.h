@@ -438,6 +438,13 @@ public:
     ControlPointRemap remap;
 };
 
+// Bounded native input mode: setcoloropacity. Other event fields remain unsupported.
+class InheritEventColorOperator : public ParticleOperatorBase {
+public:
+    explicit InheritEventColorOperator (glm::vec4 blendTimes) : blendTimes (blendTimes) { }
+    glm::vec4 blendTimes;
+};
+
 class MovementOperator : public ParticleOperatorBase {
 public:
     MovementOperator (UserSettingUniquePtr drag, UserSettingUniquePtr gravity) :

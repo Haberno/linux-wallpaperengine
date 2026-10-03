@@ -1548,3 +1548,62 @@ TEST_CASE ("distance constraints blend radial correction but retain point moveme
     applyParticleDistanceConstraint (scaled, point, inverseBasis, 10, 0, .05f, { 0, 0, 1, 1 });
     CHECK (scaled.position == glm::vec3 (40, 0, 0));
 }
+
+TEST_CASE ("event color defaults select per-step color and opacity inheritance", "[particle][event-color]") {
+    WallpaperEngine::Data::Model::Project project {};
+    const auto object = WallpaperEngine::Data::Parsers::ObjectParser::parse (
+        WallpaperEngine::Data::JSON::JSON::parse (R"({"id":17,"particle":{"operator":[
+            {"name":"inheritvaluefromevent"},
+            {"name":"inheritvaluefromevent","input":"setcoloropacity","blendinstart":-1,"blendinend":1},
+            {"name":"inheritvaluefromevent","input":"multiplyvelocity"}
+        ]}})"), project);
+    const auto* particle = object->as<Particle> ();
+    REQUIRE (particle != nullptr);
+    REQUIRE (particle->operators.size () == 2);
+    const auto* full = particle->operators[0]->as<InheritEventColorOperator> ();
+    const auto* half = particle->operators[1]->as<InheritEventColorOperator> ();
+    REQUIRE (full != nullptr);
+    REQUIRE (half != nullptr);
+    CHECK (full->blendTimes == glm::vec4 (0, 0, 1, 1));
+    CHECK (half->blendTimes == glm::vec4 (-1, 1, 1, 1));
+}
+
+TEST_CASE ("event color blends current parent RGBA only while the parent lives", "[particle][event-color]") {
+    using WallpaperEngine::Render::Objects::applyParticleEventColor;
+    ParticleInstance parent;
+    parent.alive = true;
+    parent.color = { .1f, .2f, .3f };
+    parent.alpha = .25f;
+    parent.initial.color = { .9f, .8f, .7f };
+    parent.initial.alpha = 1;
+    for (const auto& blend : { glm::vec4 (0, 0, 1, 1), glm::vec4 (-1, 1, 1, 1), glm::vec4 (.2f, .5f, 1, 1) }) {
+        ParticleInstance child;
+        child.alive = true;
+        child.color = { .8f, .6f, .4f };
+        child.alpha = .75f;
+        const float weight = blend.x == -1 ? .5f : blend.x == 0 ? 1.0f : 0.0f;
+        applyParticleEventColor (child, &parent, blend);
+        const glm::vec3 expected = glm::mix (glm::vec3 (.8f, .6f, .4f), parent.color, weight);
+        CHECK (child.color.x == Catch::Approx (expected.x));
+        CHECK (child.color.y == Catch::Approx (expected.y));
+        CHECK (child.color.z == Catch::Approx (expected.z));
+        CHECK (child.alpha == Catch::Approx (.75f - .5f * weight));
+        CHECK (child.initial.color == glm::vec3 (1));
+        CHECK (child.initial.alpha == 1);
+        CHECK (child.velocity == glm::vec3 (0));
+    }
+    ParticleInstance untouched;
+    untouched.alive = true;
+    applyParticleEventColor (untouched, nullptr, { 0, 0, 1, 1 });
+    CHECK (untouched.color == glm::vec3 (1));
+    CHECK (untouched.alpha == 1);
+    parent.age = parent.lifetime;
+    applyParticleEventColor (untouched, &parent, { 0, 0, 1, 1 });
+    CHECK (untouched.color == glm::vec3 (1));
+    CHECK (untouched.alpha == 1);
+    parent.age = 0;
+    parent.alive = false;
+    applyParticleEventColor (untouched, &parent, { 0, 0, 1, 1 });
+    CHECK (untouched.color == glm::vec3 (1));
+    CHECK (untouched.alpha == 1);
+}

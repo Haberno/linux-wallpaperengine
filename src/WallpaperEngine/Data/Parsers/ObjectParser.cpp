@@ -1159,6 +1159,12 @@ ParticleOperatorUniquePtr ObjectParser::parseParticleOperator (const JSON& it, c
         auto remap = parseControlPointRemap (it, properties, false);
         if (remap) return std::make_unique<ControlPointRemapOperator> (std::move (*remap));
         return nullptr;
+    } else if (name == "inheritvaluefromevent") {
+        if (it.optional<std::string> ("input", "setcoloropacity") != "setcoloropacity") return nullptr;
+        return std::make_unique<InheritEventColorOperator> (
+            glm::vec4 (it.optional ("blendinstart", 0.0f), it.optional ("blendinend", 0.0f),
+                       it.optional ("blendoutstart", 1.0f), it.optional ("blendoutend", 1.0f))
+        );
     } else if (name == "movement") {
 	return std::make_unique<MovementOperator> (
 	    it.user ("drag", properties, 0.0f), it.user ("gravity", properties, glm::vec3 (0.0f))

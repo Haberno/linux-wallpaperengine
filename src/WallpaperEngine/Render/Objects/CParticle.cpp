@@ -657,6 +657,7 @@ void CParticle::emitParticles (const uint32_t count) {
 }
 
 void CParticle::stop () {
+    m_eventParentSerial = 0;
     m_pendingEmission = 0;
     m_pendingControlPoints.clear ();
     m_emitting = false;
@@ -714,6 +715,7 @@ void CParticle::spawnEventChild (FollowChildSystem& child, const ParticleInstanc
     slot->parentSerial = particle.serial;
     auto& renderer = *slot->renderer;
     renderer.stop ();
+    renderer.m_eventParentSerial = particle.serial;
     renderer.m_simulationTime = 0.0f;
     renderer.m_propagateColorOverride = m_propagateColorOverride;
     // Native samples raw overrides on first activation. Recycling retains
@@ -2005,6 +2007,16 @@ glm::vec3 WallpaperEngine::Render::Objects::calculateParticleMovementReduction (
     return velocity * (1.0f - damping * particleOperatorBlend (lifetimePosition, blendTimes));
 }
 
+void WallpaperEngine::Render::Objects::applyParticleEventColor (
+    ParticleInstance& particle, const ParticleInstance* parent, const glm::vec4 blendTimes
+) {
+    // Native opcodes 20/40 read the live parent's working RGBA, never a birth/death snapshot.
+    if (!parent || !parent->isAlive ()) return;
+    const float weight = particleOperatorBlend (particle.getLifetimePos (), blendTimes);
+    particle.color += (parent->color - particle.color) * weight;
+    particle.alpha += (parent->alpha - particle.alpha) * weight;
+}
+
 void WallpaperEngine::Render::Objects::applyParticleDistanceConstraint (
     ParticleInstance& particle, const ControlPointData& point, const glm::mat3& inverseBasis,
     const float distance, const float variableStrength, const float deltaTime, const glm::vec4 blendTimes
@@ -2029,6 +2041,8 @@ void CParticle::setupOperators () {
 
 	if (op->is<ControlPointRemapOperator> ()) {
 	    func = createControlPointRemapOperator (*op->as<ControlPointRemapOperator> ());
+	} else if (op->is<InheritEventColorOperator> ()) {
+	    func = createInheritEventColorOperator (*op->as<InheritEventColorOperator> ());
 	} else if (op->is<MovementOperator> ()) {
 	    func = createMovementOperator (*op->as<MovementOperator> ());
 	} else if (op->is<CapVelocityOperator> ()) {
@@ -2142,6 +2156,25 @@ OperatorFunc CParticle::createReduceMovementNearControlPointOperator (const Redu
                 particle.velocity, glm::length (particle.position - center), distances, reductions,
                 dt, particle.getLifetimePos (), op.blendTimes
             );
+        }
+    };
+}
+
+OperatorFunc CParticle::createInheritEventColorOperator (const InheritEventColorOperator& op) {
+    m_hasColorOperators = true;
+    m_hasAlphaOperators = true;
+    return [this, &op] (
+        std::vector<ParticleInstance>& particles, uint32_t count,
+        const std::vector<ControlPointData>&, float, float
+    ) {
+        if (!m_particleParent || m_eventParentSerial == 0) return;
+        const auto end = m_particleParent->m_particles.begin () + m_particleParent->m_particleCount;
+        const auto parent = std::find_if (m_particleParent->m_particles.begin (), end, [this] (const auto& particle) {
+            return particle.serial == m_eventParentSerial && particle.isAlive ();
+        });
+        if (parent == end) return;
+        for (uint32_t i = 0; i < count; ++i) {
+            if (particles[i].alive) applyParticleEventColor (particles[i], &*parent, op.blendTimes);
         }
     };
 }
