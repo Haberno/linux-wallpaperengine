@@ -44,6 +44,7 @@ public:
     [[nodiscard]] GLuint getTextureID (uint32_t imageIndex) const override;
     [[nodiscard]] uint32_t getTextureWidth (uint32_t imageIndex) const override;
     [[nodiscard]] uint32_t getTextureHeight (uint32_t imageIndex) const override;
+    [[nodiscard]] glm::vec2 getAnimationUVSize (uint32_t imageIndex) const override;
     [[nodiscard]] uint32_t getMipMapCount (uint32_t imageIndex) const override;
     [[nodiscard]] uint32_t getRealWidth () const override;
     [[nodiscard]] uint32_t getRealHeight () const override;

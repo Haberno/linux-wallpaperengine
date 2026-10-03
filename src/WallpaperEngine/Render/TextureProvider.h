@@ -4,6 +4,7 @@
 #include <vector>
 
 #include <GL/glew.h>
+#include <glm/vec2.hpp>
 #include <glm/vec4.hpp>
 
 #include "WallpaperEngine/Data/Assets/Texture.h"
@@ -37,6 +38,10 @@ public:
      * @return The texture's height
      */
     [[nodiscard]] virtual uint32_t getTextureHeight (uint32_t imageIndex) const = 0;
+    /** Coordinate denominator for authored animation-frame pixel axes and offsets. */
+    [[nodiscard]] virtual glm::vec2 getAnimationUVSize (uint32_t imageIndex) const {
+	return { getTextureWidth (imageIndex), getTextureHeight (imageIndex) };
+    }
     /** Allocated mip-level count for the bound image, not the highest LOD index. */
     [[nodiscard]] virtual uint32_t getMipMapCount (uint32_t imageIndex) const { return 1; }
     /**

@@ -333,13 +333,14 @@ CPass::resolveTextureAnimationState (const std::shared_ptr<const TextureProvider
 	}
 
 	state.currentTexture = frameCur->frameNumber;
-	state.translation.x = frameCur->x / texture->getTextureWidth (state.currentTexture);
-	state.translation.y = frameCur->y / texture->getTextureHeight (state.currentTexture);
+	const glm::vec2 frameSize = texture->getAnimationUVSize (state.currentTexture);
+	state.translation.x = frameCur->x / frameSize.x;
+	state.translation.y = frameCur->y / frameSize.y;
 
-	state.rotation.x = frameCur->width1 / static_cast<float> (texture->getTextureWidth (state.currentTexture));
-	state.rotation.y = frameCur->width2 / static_cast<float> (texture->getTextureHeight (state.currentTexture));
-	state.rotation.z = frameCur->height2 / static_cast<float> (texture->getTextureWidth (state.currentTexture));
-	state.rotation.w = frameCur->height1 / static_cast<float> (texture->getTextureHeight (state.currentTexture));
+	state.rotation.x = frameCur->width1 / frameSize.x;
+	state.rotation.y = frameCur->width2 / frameSize.y;
+	state.rotation.z = frameCur->height2 / frameSize.x;
+	state.rotation.w = frameCur->height1 / frameSize.y;
 	break;
     }
 

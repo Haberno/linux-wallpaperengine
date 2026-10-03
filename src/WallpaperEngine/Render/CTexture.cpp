@@ -26,8 +26,8 @@ CTexture::CTexture (
     }
     this->m_reduceMipmaps = this->m_textureReduction == 2
 	&& !this->m_header->isVideoMp4 && !(this->m_header->flags & TextureFlags_Video);
-    // Native source resolution uniforms and normalized atlas coordinates remain authored.
-    // Only the uploaded mip chain and local effect surfaces use the lower resolution.
+    // Native source resolution uniforms remain authored. Animation UV normalization
+    // separately accounts for rounded dimensions in the retained mip.
     if (this->m_header->isVolume ()) {
 	// Complete CPU decoding before allocating GL objects. The encoded canvas is a
 	// sequence of XY slices, not a tall 2D texture (native reader 14015c8d0).
@@ -405,6 +405,18 @@ uint32_t CTexture::getTextureHeight (const uint32_t imageIndex) const {
     }
 
     return (*this->m_header->images[imageIndex].begin ())->height;
+}
+
+glm::vec2 CTexture::getAnimationUVSize (const uint32_t imageIndex) const {
+    if (this->m_reduceMipmaps && imageIndex < this->m_header->imageCount) {
+	const auto& mipmaps = this->m_header->images.at (imageIndex);
+	if (mipmaps.size () > 1) {
+	    // Native halves frame coordinates before dividing by the retained mip.
+	    // An odd original extent is not exactly twice its next mip's extent.
+	    return 2.0f * glm::vec2 (mipmaps[1]->width, mipmaps[1]->height);
+	}
+    }
+    return TextureProvider::getAnimationUVSize (imageIndex);
 }
 
 uint32_t CTexture::getMipMapCount (const uint32_t imageIndex) const {
