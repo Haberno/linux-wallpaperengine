@@ -2616,6 +2616,9 @@ OperatorFunc CParticle::createControlPointAttractOperator (const ControlPointAtt
 	const float speed = (m_particle.flags & 16) != 0 ? 1.0f : getInstanceOverride ().speed->value->getFloat ();
 	const float scale = (op.scale ? op.scale->value->getFloat () : defaultScale) * speed;
 	const float threshold = op.threshold ? op.threshold->value->getFloat () : defaultThreshold;
+	// Native attraction receives force time, attenuated by the scene frame
+	// interval before instance rate (140237720, opcodes 10/32).
+	const float forceDt = dt * std::pow (std::min (0.025f / getScene ().getDeltaTime (), 1.0f), 0.7f);
 
 	// Get control point position
 	if (op.controlPoint < 0 || op.controlPoint >= static_cast<int> (controlPoints.size ())) {
@@ -2633,7 +2636,7 @@ OperatorFunc CParticle::createControlPointAttractOperator (const ControlPointAtt
 	    }
 
 	    p.velocity += calculateControlPointAttraction (
-		center - p.position, scale, threshold, dt, (op.flags & 2) != 0,
+		center - p.position, scale, threshold, forceDt, (op.flags & 2) != 0,
 		particleOperatorBlend (p.getLifetimePos (), op.blendTimes)
 	    );
 	}
