@@ -80,6 +80,8 @@ CScene::CScene (
 		} catch (const std::exception& error) {
 		    sLog.error ("Cannot precache texture ", name, ": ", error.what ());
 		}
+		// Service outgoing frames between dependencies, including cache misses.
+		this->loadingCheckpoint (true);
 	    }
 	}
     }
