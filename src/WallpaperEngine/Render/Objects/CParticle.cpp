@@ -2053,7 +2053,7 @@ OperatorFunc CParticle::createMovementOperator (const MovementOperator& op) {
 	       std::vector<ParticleInstance>& particles, uint32_t count, const std::vector<ControlPointData>&, float,
 	       float dt
 	   ) {
-	float speed = speedOverride->getFloat ();
+	float speed = (m_particle.flags & 16) != 0 ? 1.0f : speedOverride->getFloat ();
 	float drag = dragValue->getFloat ();
 	// Native 140237720 uses the scene frame interval before instance rate.
 	// Position/gravity keep raw dt; only drag receives the adjusted force dt.
@@ -2472,7 +2472,7 @@ OperatorFunc CParticle::createVortexOperator (const VortexOperator& op) {
     bool maintainDistance = (flags & 2) != 0;
     bool ringShape = (flags & 4) != 0;
 
-    return [controlPoint, axisValue, offsetValue, distanceInnerValue, distanceOuterValue, speedInnerValue,
+    return [this, controlPoint, axisValue, offsetValue, distanceInnerValue, distanceOuterValue, speedInnerValue,
 	    speedOuterValue, centerForceValue, ringRadiusValue, ringWidthValue, ringPullDistanceValue,
 	    ringPullForceValue, audioMode, infiniteAxis, maintainDistance, ringShape, speedOverride] (
 	       std::vector<ParticleInstance>& particles, uint32_t count,
@@ -2592,7 +2592,7 @@ OperatorFunc CParticle::createVortexOperator (const VortexOperator& op) {
 	    }
 
 	    // Apply tangential velocity (spinning)
-	    p.velocity += tangent * speed * dt * speedOverride->getFloat ();
+	    p.velocity += tangent * speed * dt * ((m_particle.flags & 16) != 0 ? 1.0f : speedOverride->getFloat ());
 
 	    // Apply radial force (ring pull)
 	    p.velocity += radialForce * dt * speedOverride->getFloat ();
