@@ -110,11 +110,11 @@ uint32_t GLFWOpenGLDriver::getFrameCounter () const { return this->m_frameCounte
 std::chrono::steady_clock::duration GLFWOpenGLDriver::getLastFrameWait () const { return this->m_lastFrameWait; }
 
 void GLFWOpenGLDriver::dispatchEventQueue () {
-    static float previousFrameEnd = 0.0f;
-    const float minimumTime = 1.0f / this->m_context.settings.render.maximumFPS;
+    static double previousFrameEnd = 0.0;
+    const double minimumTime = 1.0 / this->m_context.settings.render.maximumFPS;
     // Cooperative loading does useful work between dispatches. Include that work
     // in the frame budget instead of sleeping for a whole extra frame after it.
-    const float startTime = previousFrameEnd > 0.0f ? previousFrameEnd : this->getRenderTime ();
+    const double startTime = previousFrameEnd > 0.0 ? previousFrameEnd : this->getRenderTime ();
     // clear the screen
     glClear (GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
@@ -156,15 +156,15 @@ void GLFWOpenGLDriver::dispatchEventQueue () {
     // increase frame counter
     this->m_frameCounter++;
     // get the end time of the frame
-    const float endTime = this->getRenderTime ();
+    const double endTime = this->getRenderTime ();
 
     // ensure the frame time is correct to not overrun FPS
     m_lastFrameWait = {};
     if ((endTime - startTime) < minimumTime) {
-	const float wait = minimumTime - (endTime - startTime);
+	const double wait = minimumTime - (endTime - startTime);
 	usleep (wait * CLOCKS_PER_SEC);
 	m_lastFrameWait = std::chrono::duration_cast<std::chrono::steady_clock::duration> (
-	    std::chrono::duration<float> (wait)
+	    std::chrono::duration<double> (wait)
 	);
     }
     previousFrameEnd = this->getRenderTime ();
