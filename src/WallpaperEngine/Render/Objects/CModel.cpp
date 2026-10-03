@@ -41,6 +41,9 @@ ModelData::ModelData (std::vector<Scripting::ModelDataShape> input) {
     for (auto& source : input) {
 	Shape shape;
 	shape.input = std::move (source);
+	shape.drawCount = static_cast<GLsizei> (shape.input.indexWidth == 0
+	    ? shape.input.vertices.size () * sizeof (float) / shape.input.strideBytes
+	    : shape.input.indices.size () / shape.input.indexWidth);
 	auto& layout = shape.layout;
 	layout.vertexTag = shape.input.vertexFormat;
 	layout.strideBytes = shape.input.strideBytes;
@@ -104,6 +107,58 @@ void ModelData::upload () {
 	}
     }
     glBindBuffer (GL_ARRAY_BUFFER, static_cast<GLuint> (arrayBuffer));
+}
+
+const char* ModelData::applyData (const std::vector<Scripting::ModelDataShape>& updates) {
+    if (updates.size () > shapes.size ()) {
+	return "Cannot add shapes in IModelData.update";
+    }
+    for (size_t index = 0; index < updates.size (); ++index) {
+	const auto& update = updates[index];
+	auto& shape = shapes[index];
+	const auto& original = shape.input;
+	if (update.deleteShape || update.deleteIndices) {
+	    return "Cannot delete shape or buffers in IModelData.update";
+	}
+	if (!update.material.empty () && update.material != original.material) {
+	    return "Material cannot be changed in IModelData.update";
+	}
+	if (update.vertexFormat != 0 && update.vertexFormat != original.vertexFormat) {
+	    return "Vertex format cannot be changed in IModelData.update";
+	}
+	const size_t indexCount = update.indexCount;
+	const size_t originalIndexCount = original.indexWidth == 0 ? 0 : original.indices.size () / original.indexWidth;
+	if ((update.hasVertices && (!original.vertexDynamic || update.vertexFloatCount > original.vertices.size ()))
+	    || (update.indexWidth != 0 && (!original.indexDynamic || indexCount > originalIndexCount))) {
+	    return "Model data not created as dynamic";
+	}
+	auto uploadBytes = [] (GLuint buffer, size_t bytes, const void* data) {
+	    GLint previous = 0;
+	    glGetIntegerv (GL_ARRAY_BUFFER_BINDING, &previous);
+	    glBindBuffer (GL_ARRAY_BUFFER, buffer);
+	    glBufferSubData (GL_ARRAY_BUFFER, 0, bytes, data);
+	    glBindBuffer (GL_ARRAY_BUFFER, static_cast<GLuint> (previous));
+	};
+	if (update.hasVertices) {
+	    // Native maps the full allocation and copies that size, including a short
+	    // view's backing tail. Parsing already copied and bounds-checked those bytes.
+	    uploadBytes (shape.vertexBuffer, original.vertices.size () * sizeof (float), update.vertices.data ());
+	    std::copy_n (update.vertices.begin (), original.vertices.size (), shape.input.vertices.begin ());
+	    const size_t count = original.indexWidth == 0 ? update.vertexFloatCount / original.strideBytes : indexCount;
+	    if (count > 0) {
+		shape.drawCount = static_cast<GLsizei> (count);
+	    }
+	}
+	if (update.indexWidth != 0) {
+	    if (update.indexWidth != original.indexWidth) {
+		return "Incorrect index buffer type";
+	    }
+	    uploadBytes (shape.indexBuffer, original.indices.size (), update.indices.data ());
+	    std::copy_n (update.indices.begin (), original.indices.size (), shape.input.indices.begin ());
+	    shape.drawCount = static_cast<GLsizei> (indexCount);
+	}
+    }
+    return nullptr;
 }
 
 ModelData::~ModelData () {
@@ -468,9 +523,10 @@ void CModel::setupGeometryCallback (Effects::CPass* pass, size_t submeshIndex) {
 	    glBindBuffer (GL_ELEMENT_ARRAY_BUFFER, this->m_submeshes[submeshIndex].indexBuffer);
 	    const auto& buffers = m_submeshes[submeshIndex];
 	    if (m_modelData && buffers.indexBuffer == GL_NONE) {
-		glDrawArrays (GL_TRIANGLES, 0, buffers.vertexCount);
+		glDrawArrays (GL_TRIANGLES, 0, m_modelData->shapes[submeshIndex].drawCount);
 	    } else {
-		glDrawElements (GL_TRIANGLES, buffers.indexCount, buffers.indexType, nullptr);
+		glDrawElements (GL_TRIANGLES, m_modelData ? m_modelData->shapes[submeshIndex].drawCount : buffers.indexCount,
+		    buffers.indexType, nullptr);
 	    }
 	    glFrontFace (GL_CCW);
 	},
@@ -788,9 +844,10 @@ void CModel::renderShadow (const glm::mat4& lightViewProjection) {
 	}
 	glBindVertexArray (buffers.shadowVao);
 	if (m_modelData && buffers.indexBuffer == GL_NONE) {
-	    glDrawArrays (GL_TRIANGLES, 0, buffers.vertexCount);
+	    glDrawArrays (GL_TRIANGLES, 0, m_modelData->shapes[submeshIndex].drawCount);
 	} else {
-	    glDrawElements (GL_TRIANGLES, buffers.indexCount, buffers.indexType, nullptr);
+	    glDrawElements (GL_TRIANGLES, m_modelData ? m_modelData->shapes[submeshIndex].drawCount : buffers.indexCount,
+		    buffers.indexType, nullptr);
 	}
     }
 

@@ -568,6 +568,64 @@ JSValue scene_destroy_model_data (JSContext* ctx, JSValueConst self, int argc, J
     return JS_UNDEFINED;
 }
 
+static JSValue model_apply_data (JSContext* ctx, JSValueConst self, int argc, JSValueConst* argv, int classId) {
+    auto* handle = static_cast<ModelDataHandle*> (JS_GetOpaque (self, static_cast<JSClassID> (classId)));
+    if (handle == nullptr) {
+	return JS_ThrowTypeError (ctx, "Invalid IModelData receiver");
+    }
+    if (argc < 1) {
+	return JS_UNDEFINED;
+    }
+    std::vector<std::pair<size_t, size_t>> capacities;
+    if (auto resource = handle->scene->getScene ().findModelData (handle->token)) {
+	for (const auto& shape : resource->shapes) {
+	    capacities.emplace_back (shape.input.vertices.size () * sizeof (float), shape.input.indices.size ());
+	}
+    }
+    // Do not keep a resource lease across property getters invoked by parsing.
+    // A getter may release the script's last reference before the native lookup.
+    std::vector<ModelDataShape> updates;
+    ModelDataInput::Value shapeArray (ctx, JS_GetPropertyStr (ctx, argv[0], "shapes"));
+    if (JS_IsException (shapeArray.value)) {
+	return JS_EXCEPTION;
+    }
+    if (JS_IsArray (shapeArray.value)) {
+	ModelDataInput::Value length (ctx, JS_GetPropertyStr (ctx, shapeArray.value, "length"));
+	uint32_t count = 0;
+	if (JS_IsException (length.value) || JS_ToUint32 (ctx, &count, length.value) < 0) {
+	    return JS_EXCEPTION;
+	}
+	for (uint32_t index = 0; index < count; ++index) {
+	    ModelDataInput::Value input (ctx, JS_GetPropertyUint32 (ctx, shapeArray.value, index));
+	    ModelDataShape update;
+	    if (JS_IsException (input.value) || !ModelDataInput::readShape (ctx, input.value, update, false,
+		    index < capacities.size () ? capacities[index].first : 0,
+		    index < capacities.size () ? capacities[index].second : 0)) {
+		return JS_EXCEPTION;
+	    }
+	    updates.push_back (std::move (update));
+	}
+    } else {
+	ModelDataShape update;
+	if (!ModelDataInput::readShape (ctx, argv[0], update, false,
+		capacities.empty () ? 0 : capacities[0].first, capacities.empty () ? 0 : capacities[0].second)) {
+	    return JS_EXCEPTION;
+	}
+	updates.push_back (std::move (update));
+    }
+    if (updates.empty ()) {
+	return JS_ThrowSyntaxError (ctx, "Shapes missing.");
+    }
+    auto resource = handle->scene->getScene ().findModelData (handle->token);
+    if (!resource) {
+	return JS_ThrowSyntaxError (ctx, "Invalid model data token");
+    }
+    if (const char* error = resource->applyData (updates)) {
+	return JS_ThrowSyntaxError (ctx, "%s", error);
+    }
+    return JS_UNDEFINED;
+}
+
 JSValue SceneObject::makeModelDataHandle (uint32_t token) {
     auto* ctx = m_engine.getContext ();
     JSValue result = JS_NewObjectClass (ctx, m_modelDataClassId);
@@ -742,7 +800,12 @@ SceneObject::SceneObject (ScriptEngine& engine, Render::Wallpapers::CScene& scen
     }))JS";
     JSValue constructor
 	= JS_Eval (ctx, modelDataClass, sizeof (modelDataClass) - 1, "<IModelData>", JS_EVAL_TYPE_GLOBAL);
-    JS_SetClassProto (ctx, m_modelDataClassId, JS_GetPropertyStr (ctx, constructor, "prototype"));
+    JSValue modelPrototype = JS_GetPropertyStr (ctx, constructor, "prototype");
+    JS_SetPropertyStr (
+	ctx, modelPrototype, "applyData", JS_NewCFunctionMagic (ctx, model_apply_data, "applyData", 1,
+	    JS_CFUNC_generic_magic, static_cast<int> (m_modelDataClassId))
+    );
+    JS_SetClassProto (ctx, m_modelDataClassId, modelPrototype);
     JSValue global = JS_GetGlobalObject (ctx);
     JS_SetPropertyStr (ctx, global, "IModelData", constructor);
     JS_FreeValue (ctx, global);

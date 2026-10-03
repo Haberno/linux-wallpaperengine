@@ -17,12 +17,14 @@ public:
 	uint32_t colorOffset = Data::Model::MdlMesh::AttributeAbsent;
 	GLuint vertexBuffer = GL_NONE;
 	GLuint indexBuffer = GL_NONE;
+	GLsizei drawCount = 0;
     };
     explicit ModelData (std::vector<Scripting::ModelDataShape> input);
     ~ModelData ();
     ModelData (const ModelData&) = delete;
     ModelData& operator= (const ModelData&) = delete;
     void upload ();
+    const char* applyData (const std::vector<Scripting::ModelDataShape>& updates);
     std::vector<Shape> shapes;
     Data::Model::MdlMesh mesh;
 };
