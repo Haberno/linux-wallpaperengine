@@ -1,4 +1,5 @@
 #include "CTexture.h"
+#include "WallpaperEngine/Data/Utils/ScopeGuard.h"
 #include "WallpaperEngine/Debug/RenderHealth.h"
 #include "WallpaperEngine/Logging/Log.h"
 
@@ -108,6 +109,10 @@ CTexture::CTexture (
     this->m_textureID = new GLuint[this->m_header->imageCount];
     // ask opengl for the correct amount of textures and framebuffers
     glGenTextures (this->m_header->imageCount, this->m_textureID);
+    Data::Utils::ScopeGuard textureCleanup ([this] {
+	glDeleteTextures (this->m_header->imageCount, this->m_textureID);
+	delete[] this->m_textureID;
+    });
 
     for (const auto& [index, mipmaps] : this->m_header->images) {
 	this->setupOpenGLParameters (index);
@@ -144,6 +149,9 @@ CTexture::CTexture (
 			reinterpret_cast<unsigned char*> (mipmap->uncompressedData.get ()), mipmap->uncompressedSize,
 			&width, &height, &fileChannels, 4
 		    );
+		}
+		if (dataptr == nullptr) {
+		    sLog.exception ("Cannot decode texture image");
 		}
 	    } else {
 		// Texture payloads are tightly packed, with no per-row padding. GL defaults
@@ -208,6 +216,7 @@ CTexture::CTexture (
 	    level++;
 	}
     }
+    textureCleanup.cancel ();
 }
 
 CTexture::~CTexture () {
