@@ -1096,9 +1096,9 @@ TEST_CASE ("two-control-point remaps retain only the measured linear subset", "[
             ],"operator":[
                 {"name":"remapvalue","input":"positionbetweentwocontrolpoints","output":"velocity","operation":"remap"},
                 {"name":"remapvalue","input":"maxlifetime","output":"positionbetweentwocontrolpoints","operation":"remap"},
-                {"name":"remapvalue","output":"positionbetweentwocontrolpoints","operation":"remap"},
+                {"name":"remapvalue","input":"speed","output":"positionbetweentwocontrolpoints","operation":"remap"},
                 {"name":"remapvalue","input":"positionbetweentwocontrolpoints","output":"velocity","operation":"remap","flags":4},
-                {"name":"remapvalue","input":"positionbetweentwocontrolpoints","output":"velocity","operation":"remap","blendinend":0.5},
+                {"name":"remapvalue","input":"lifetimefraction","output":"velocity","operation":"remap","transformfunction":"simplexnoise","blendinend":0.5},
                 {"name":"remapvalue","input":"positionbetweentwocontrolpoints","output":"velocity","operation":"remap","outputcomponent":"x"},
                 {"name":"remapvalue","input":"positionbetweentwocontrolpoints","operation":"remap"},
                 {"name":"remapvalue","input":"positionbetweentwocontrolpoints","output":"velocity","operation":"remap","transformfunction":"unknown"}
@@ -1274,10 +1274,10 @@ TEST_CASE ("two-control-point position arithmetic rejects unmeasured settings", 
             {"name":"remapvalue","input":"maxlifetime","output":"positionbetweentwocontrolpoints","operation":"divide"},
             {"name":"remapvalue","input":"maxlifetime","output":"positionbetweentwocontrolpoints","operation":"add","flags":4},
             {"name":"remapvalue","input":"maxlifetime","output":"positionbetweentwocontrolpoints","operation":"add","transformfunction":"simplexnoise"},
-            {"name":"remapvalue","input":"maxlifetime","output":"positionbetweentwocontrolpoints","operation":"add","blendinend":0.5},
+            {"name":"remapvalue","input":"lifetimefraction","output":"speed","operation":"multiply","transformfunction":"fbmnoise","flags":3,"blendinend":0.5},
             {"name":"remapvalue","input":"maxlifetime","output":"positionbetweentwocontrolpoints","operation":"add","outputcomponent":"x"},
             {"name":"remapvalue","input":"positionbetweentwocontrolpoints","output":"velocity","operation":"add"},
-            {"name":"remapvalue","output":"positionbetweentwocontrolpoints","operation":"add"}
+            {"name":"remapvalue","input":"speed","output":"positionbetweentwocontrolpoints","operation":"add"}
         ]}})"), project);
     const auto* definition = object->as<Particle> ();
     REQUIRE (definition != nullptr);
@@ -1383,6 +1383,131 @@ TEST_CASE ("two-control-point output clamp precedes position arithmetic", "[part
         CHECK (particle.position == glm::vec3 (150, -45, 40));
         applyParticleControlPointRemap (particle, *remap, points, initializer);
         CHECK (particle.position == glm::vec3 (270, -45, 40));
+    }
+}
+
+TEST_CASE ("two-control-point position remaps accept operator lifetime fraction", "[particle][remap][remap-lifetime]") {
+    using WallpaperEngine::Render::Objects::applyParticleControlPointRemap;
+    using WallpaperEngine::Render::Objects::ControlPointData;
+    const struct { const char* operation; float first, second; } cases[] = {
+        { "remap", .25f, .5f }, { "multiply", .125f, .0625f },
+        { "add", .75f, 1.25f }, { "subtract", .25f, -.25f },
+        { nullptr, .125f, .0625f }
+    };
+    std::vector<ControlPointData> points (2);
+    points[0].position = { -60, 0, 0 };
+    points[1].position = { 60, 0, 0 };
+    for (const bool explicitInput : { true, false }) {
+        for (const float lifetime : { 2.0f, 8.0f }) {
+            for (const auto& entry : cases) {
+                INFO ("explicitInput=" << explicitInput << ", lifetime=" << lifetime
+                      << ", operation=" << (entry.operation ? entry.operation : "default"));
+                WallpaperEngine::Data::Model::Project project {};
+                auto data = WallpaperEngine::Data::JSON::JSON::parse (R"({"id":389,"particle":{}})");
+                auto node = WallpaperEngine::Data::JSON::JSON::parse (R"({
+                    "name":"remapvalue","output":"positionbetweentwocontrolpoints"
+                })");
+                if (explicitInput) node["input"] = "lifetimefraction";
+                if (entry.operation) node["operation"] = entry.operation;
+                data["particle"]["operator"] = { node };
+                const auto object = WallpaperEngine::Data::Parsers::ObjectParser::parse (data, project);
+                const auto* definition = object->as<Particle> ();
+                REQUIRE (definition != nullptr);
+                REQUIRE (definition->operators.size () == 1);
+                const auto* parsed = definition->operators.front ()->as<ControlPointRemapOperator> ();
+                REQUIRE (parsed != nullptr);
+                ParticleInstance particle;
+                particle.position = { 0, -45, 40 };
+                particle.velocity = { 7, -11, 13 };
+                particle.lifetime = lifetime;
+                particle.age = lifetime * .25f;
+                applyParticleControlPointRemap (particle, parsed->remap, points, false);
+                CHECK (particle.position == glm::vec3 (-60 + 120 * entry.first, -45, 40));
+                particle.age = lifetime * .5f;
+                applyParticleControlPointRemap (particle, parsed->remap, points, false);
+                CHECK (particle.position == glm::vec3 (-60 + 120 * entry.second, -45, 40));
+                CHECK (particle.velocity == glm::vec3 (7, -11, 13));
+            }
+        }
+    }
+}
+
+TEST_CASE ("two-control-point position envelopes blend after arithmetic", "[particle][remap][remap-envelope]") {
+    using WallpaperEngine::Render::Objects::applyParticleControlPointRemap;
+    using WallpaperEngine::Render::Objects::ControlPointData;
+    const struct { const char* operation; float operated; } operations[] = {
+        { "remap", .5f }, { "multiply", .125f }, { "add", .75f }, { "subtract", -.25f }
+    };
+    const struct { float age, weight; } samples[] = {
+        { 0, 0 }, { 25, .5f }, { 50, 1 }, { 75, .5f }, { 100, 0 }
+    };
+    std::vector<ControlPointData> points (2);
+    points[0].position = { -60, 0, 0 };
+    points[1].position = { 60, 0, 0 };
+    for (const auto& operation : operations) {
+        WallpaperEngine::Data::Model::Project project {};
+        auto data = WallpaperEngine::Data::JSON::JSON::parse (R"({"id":390,"particle":{"operator":[{
+            "name":"remapvalue","input":"maxlifetime","output":"positionbetweentwocontrolpoints",
+            "inputrangemax":200,"blendinend":0.5,"blendoutstart":0.5
+        }]}})");
+        data["particle"]["operator"][0]["operation"] = operation.operation;
+        const auto object = WallpaperEngine::Data::Parsers::ObjectParser::parse (data, project);
+        const auto* definition = object->as<Particle> ();
+        REQUIRE (definition != nullptr);
+        REQUIRE (definition->operators.size () == 1);
+        const auto* parsed = definition->operators.front ()->as<ControlPointRemapOperator> ();
+        REQUIRE (parsed != nullptr);
+        for (const auto& sample : samples) {
+            INFO ("operation=" << operation.operation << ", age=" << sample.age);
+            ParticleInstance particle;
+            particle.position = { -30, -45, 40 };
+            particle.velocity = { 7, -11, 13 };
+            particle.lifetime = 100;
+            particle.age = sample.age;
+            applyParticleControlPointRemap (particle, parsed->remap, points, false);
+            CHECK (particle.position == glm::vec3 (-30 + 120 * sample.weight * (operation.operated - .25f), -45, 40));
+            CHECK (particle.velocity == glm::vec3 (7, -11, 13));
+        }
+    }
+}
+
+TEST_CASE ("two-control-point velocity envelopes blend current velocity", "[particle][remap][remap-envelope]") {
+    using WallpaperEngine::Render::Objects::applyParticleControlPointRemap;
+    using WallpaperEngine::Render::Objects::ControlPointData;
+    WallpaperEngine::Data::Model::Project project {};
+    const auto object = WallpaperEngine::Data::Parsers::ObjectParser::parse (
+        WallpaperEngine::Data::JSON::JSON::parse (R"({"id":391,"particle":{
+            "operator":[{"name":"remapvalue","input":"positionbetweentwocontrolpoints","output":"velocity",
+                "operation":"remap","outputrangemax":"80 160 240","blendinend":0.5,"blendoutstart":0.5}],
+            "initializer":[{"name":"remapinitialvalue","input":"positionbetweentwocontrolpoints","output":"velocity",
+                "operation":"remap","outputrangemax":"80 160 240","blendinend":0.5,"blendoutstart":0.5}]
+        }})"), project);
+    const auto* definition = object->as<Particle> ();
+    REQUIRE (definition != nullptr);
+    REQUIRE (definition->operators.size () == 1);
+    REQUIRE (definition->initializers.size () == 1);
+    const auto* op = definition->operators.front ()->as<ControlPointRemapOperator> ();
+    const auto* init = definition->initializers.front ()->as<ControlPointRemapInitializer> ();
+    REQUIRE (op != nullptr);
+    REQUIRE (init != nullptr);
+    std::vector<ControlPointData> points (2);
+    points[0].position = { -60, 0, 0 };
+    points[1].position = { 60, 0, 0 };
+    const struct { float age; glm::vec3 expected; } samples[] = {
+        { 0, { 8, -12, 16 } }, { 25, { 14, -26, 38 } }, { 50, { 20, -40, 60 } },
+        { 75, { 14, -26, 38 } }, { 100, { 8, -12, 16 } }
+    };
+    for (const auto& sample : samples) {
+        ParticleInstance particle;
+        particle.position = { -30, -45, 40 };
+        particle.velocity = { 8, -12, 16 };
+        particle.lifetime = 100;
+        particle.age = sample.age;
+        applyParticleControlPointRemap (particle, op->remap, points, false);
+        CHECK (particle.velocity == sample.expected);
+        CHECK (particle.position == glm::vec3 (-30, -45, 40));
+        applyParticleControlPointRemap (particle, init->remap, points, true);
+        CHECK (particle.velocity == glm::vec3 (20, -40, 60));
     }
 }
 

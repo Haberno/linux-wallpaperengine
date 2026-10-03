@@ -1509,6 +1509,8 @@ EmitterFunc CParticle::createSphereEmitter (const ParticleEmitter& emitter) {
     };
 }
 
+static float particleOperatorBlend (float lifetimePosition, glm::vec4 blendTimes);
+
 void WallpaperEngine::Render::Objects::applyParticleControlPointRemap (
     ParticleInstance& particle, const ControlPointRemap& remap,
     const std::vector<ControlPointData>& controlPoints, const bool initializer
@@ -1543,6 +1545,7 @@ void WallpaperEngine::Render::Objects::applyParticleControlPointRemap (
         particle.velocity = mapped * glm::vec3 (1.0f, -1.0f, 1.0f);
         return;
     }
+    const float weight = initializer ? 1.0f : particleOperatorBlend (particle.getLifetimePos (), remap.blendTimes);
     // Native allocates the input pair too, but this scalar input branch reads
     // the OUTPUT pair (14023d074 / 140244c5e; paired native readback).
     const glm::vec3 start = controlPoints[remap.outputControlPoint0].position;
@@ -1553,7 +1556,9 @@ void WallpaperEngine::Render::Objects::applyParticleControlPointRemap (
     // particle unchanged instead of inventing a shared native degeneracy rule.
     if (lengthSquared <= (initializer ? epsilon * epsilon : 0.0f)) return;
     const float fraction = glm::dot (particle.position - start, delta) / lengthSquared;
-    const float input = remap.mode == ControlPointRemap::Mode::PositionToVelocity ? fraction : particle.lifetime;
+    const float input = remap.mode == ControlPointRemap::Mode::PositionToVelocity ? fraction
+                      : remap.mode == ControlPointRemap::Mode::LifetimeFractionToPosition ? particle.getLifetimePos ()
+                      : particle.lifetime;
     const glm::vec3 minimum = remap.inputRangeMin->value->getVec3 ();
     glm::vec3 span = remap.inputRangeMax->value->getVec3 () - minimum;
     // Both native parsers replace exactly equal range endpoints with FLT_EPSILON.
@@ -1566,7 +1571,8 @@ void WallpaperEngine::Render::Objects::applyParticleControlPointRemap (
     if (remap.flags & 2u) mapped = glm::clamp (mapped, glm::vec3 (0), glm::vec3 (1));
     if (remap.mode == ControlPointRemap::Mode::PositionToVelocity) {
         // Authored velocity uses the same Y-up coordinates as velocityrandom.
-        particle.velocity = mapped * glm::vec3 (1.0f, -1.0f, 1.0f);
+        const glm::vec3 target = mapped * glm::vec3 (1.0f, -1.0f, 1.0f);
+        particle.velocity = weight == 1.0f ? target : particle.velocity + (target - particle.velocity) * weight;
     } else {
         // Native arithmetic acts on the current longitudinal fraction, not XYZ.
         // Keep perpendicular offset and do not clamp the operated fraction.
@@ -1577,7 +1583,8 @@ void WallpaperEngine::Render::Objects::applyParticleControlPointRemap (
             case ControlPointRemap::Operation::Add: result = fraction + mapped.x; break;
             case ControlPointRemap::Operation::Subtract: result = fraction - mapped.x; break;
         }
-        particle.position += delta * (result - fraction);
+        // Native blends the operated fraction against the current fraction.
+        particle.position += delta * ((result - fraction) * weight);
     }
 }
 

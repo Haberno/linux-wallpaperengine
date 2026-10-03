@@ -1014,7 +1014,9 @@ static std::optional<ControlPointRemap> parseControlPointRemap (
     const auto operation = it.optional<std::string> ("operation", "multiply");
     const auto transform = it.optional<std::string> ("transformfunction", "none");
     const bool positionInput = input == "positionbetweentwocontrolpoints" && output == "velocity";
-    const bool positionOutput = input == "maxlifetime" && output == "positionbetweentwocontrolpoints";
+    const bool fractionInput = !initializer && input == "lifetimefraction";
+    const bool positionOutput = (input == "maxlifetime" || fractionInput)
+        && output == "positionbetweentwocontrolpoints";
     const bool positionArithmetic = positionOutput
         && (operation == "multiply" || operation == "add" || operation == "subtract");
     const bool noiseVelocity = !initializer && input == "lifetimefraction" && output == "velocity"
@@ -1023,14 +1025,15 @@ static std::optional<ControlPointRemap> parseControlPointRemap (
         && transform == "fbmnoise" && it.optional ("transformoctaves", 3) == 3;
     const auto flags = it.optional ("flags", 1u);
     const bool supportedFlags = noiseVelocity ? flags == 1u : noiseSpeed ? flags == 3u : flags <= 3u;
-    const bool defaultBlend = initializer || (it.optional ("blendinstart", 0.0f) == 0.0f
-        && it.optional ("blendinend", 0.0f) == 0.0f && it.optional ("blendoutstart", 1.0f) == 1.0f
-        && it.optional ("blendoutend", 1.0f) == 1.0f);
+    const glm::vec4 blendTimes = initializer ? glm::vec4 (0.0f, 0.0f, 1.0f, 1.0f) : glm::vec4 (
+        it.optional ("blendinstart", 0.0f), it.optional ("blendinend", 0.0f),
+        it.optional ("blendoutstart", 1.0f), it.optional ("blendoutend", 1.0f));
+    const bool defaultBlend = blendTimes == glm::vec4 (0.0f, 0.0f, 1.0f, 1.0f);
     if ((!noiseVelocity && !noiseSpeed && ((!positionInput && !positionOutput) || transform != "none"))
         || (operation != (noiseSpeed ? "multiply" : "remap") && !positionArithmetic)
         || it.optional<std::string> ("inputcomponent", "all") != "all"
         || it.optional<std::string> ("outputcomponent", "all") != "all"
-        || !supportedFlags || !defaultBlend) {
+        || !supportedFlags || ((noiseVelocity || noiseSpeed) && !defaultBlend)) {
         // Keep unmeasured pairs, transforms, flags and octave counts explicit.
         sLog.error ("Unsupported particle ", initializer ? "remapinitialvalue" : "remapvalue",
                     " settings (input=", input, ", output=", output, ", operation=", operation,
@@ -1044,6 +1047,7 @@ static std::optional<ControlPointRemap> parseControlPointRemap (
         .mode = noiseVelocity ? ControlPointRemap::Mode::LifetimeNoiseToVelocity
                               : noiseSpeed ? ControlPointRemap::Mode::LifetimeFbmToSpeed
                               : positionInput ? ControlPointRemap::Mode::PositionToVelocity
+                              : fractionInput ? ControlPointRemap::Mode::LifetimeFractionToPosition
                               : ControlPointRemap::Mode::LifetimeToPosition,
         .inputRangeMin = it.user ("inputrangemin", properties, 0.0f),
         .inputRangeMax = it.user ("inputrangemax", properties, 1.0f),
@@ -1059,6 +1063,7 @@ static std::optional<ControlPointRemap> parseControlPointRemap (
                    : operation == "subtract" ? ControlPointRemap::Operation::Subtract
                    : ControlPointRemap::Operation::Remap,
         .flags = flags,
+        .blendTimes = blendTimes,
     };
 }
 
