@@ -10,6 +10,7 @@
 
 #include "CScene.h"
 #include "WallpaperEngine/Render/CTexture.h"
+#include "WallpaperEngine/Render/Shaders/Shader.h"
 #include "WallpaperEngine/Data/Parsers/TextureParser.h"
 #include "HdrBloom.h"
 #include "VolumetricLights.h"
@@ -70,10 +71,24 @@ CScene::CScene (
     // remain authored units, while perspective cameras use the output aspect.
     this->m_outputSize = context.getSceneOutputSize (screenName);
     this->m_textureReduction = context.getTextureReduction (wallpaper, context.getTextureQualityOutputSize (screenName));
+    const ComboMap noCombos;
+    const TextureMap noTextures;
     std::set<std::string> precachedTextures;
     for (const auto& material : scene->precachedMaterials) {
 	for (const auto& pass : material->passes) {
-	    for (const auto& [slot, name] : pass->textures) {
+	    TextureMap textures = pass->textures;
+	    try {
+		// Preprocessing reads sampler defaults without compiling a GL program.
+		const Shaders::Shader shader (
+		    this->getAssetLocator (), pass->shader, pass->combos, noCombos, pass->textures, noTextures, pass->constants
+		);
+		TextureMap defaults = shader.getVertex ().getTextures ();
+		for (const auto& [slot, name] : shader.getFragment ().getTextures ()) defaults[slot] = name;
+		for (const auto& [slot, name] : defaults) textures.try_emplace (slot, name);
+	    } catch (const std::exception& error) {
+		sLog.error ("Cannot precache shader defaults for ", pass->shader, ": ", error.what ());
+	    }
+	    for (const auto& [slot, name] : textures) {
 		if (name.empty () || name.starts_with ("_rt_") || name.starts_with ("_alias_")
 		    || name.starts_with ('$') || !precachedTextures.insert (name).second) continue;
 		try {
