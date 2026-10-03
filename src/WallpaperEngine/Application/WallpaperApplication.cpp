@@ -120,6 +120,7 @@ WallpaperApplication::WallpaperApplication (ApplicationContext& context) : m_con
 }
 
 WallpaperApplication::~WallpaperApplication () {
+    this->savePlaylists ();
     // A prepared result can own shared-context GL textures. Stop the producer and
     // destroy queued results while the render context is still current and alive.
     this->stopSwitchWorker ();
@@ -289,7 +290,10 @@ void WallpaperApplication::loadBackgrounds () {
 
 	if (this->m_context.settings.general.defaultPlaylist.has_value ()
 	    && !this->m_context.settings.general.defaultPlaylist->items.empty ()) {
-	    path = this->m_context.settings.general.defaultPlaylist->items.front ();
+	    path = this->restorePlaylistPath (
+		"default", *this->m_context.settings.general.defaultPlaylist,
+		this->m_context.settings.general.defaultPlaylist->items.front ()
+	    );
 	}
 
 	this->m_backgrounds["default"] = this->loadBackground (path);
@@ -302,11 +306,12 @@ void WallpaperApplication::loadBackgrounds () {
 	    continue;
 	}
 	// screens with no path should use the default
-	if (path.empty ()) {
-	    this->m_backgrounds[screen] = this->loadBackground (this->m_context.settings.general.defaultBackground);
-	} else {
-	    this->m_backgrounds[screen] = this->loadBackground (path);
+	auto background = path.empty () ? this->m_context.settings.general.defaultBackground : path;
+	if (const auto playlist = this->m_context.settings.general.screenPlaylists.find (screen);
+	    playlist != this->m_context.settings.general.screenPlaylists.end ()) {
+	    background = this->restorePlaylistPath (screen, playlist->second, background);
 	}
+	this->m_backgrounds[screen] = this->loadBackground (background);
     }
 
     // Load one background per span group
@@ -370,6 +375,51 @@ WallpaperApplication::buildPlaylistOrder (const ApplicationContext::PlaylistDefi
     return order;
 }
 
+std::filesystem::path WallpaperApplication::restorePlaylistPath (
+    const std::string& screen, const ApplicationContext::PlaylistDefinition& definition,
+    const std::filesystem::path& fallback
+) {
+    try {
+	if (auto state = PlaylistState::restore (screen, definition, this->m_playlistRng, std::chrono::system_clock::now ())) {
+	    const auto path = definition.items[state->order[state->orderIndex]];
+	    this->m_restoredPlaylists.insert_or_assign (screen, std::move (*state));
+	    return path;
+	}
+    } catch (const std::exception& error) {
+	sLog.error ("Cannot restore playlist for ", screen, ": ", error.what ());
+    }
+    return fallback;
+}
+
+void WallpaperApplication::savePlaylists () const {
+    const auto now = std::chrono::steady_clock::now ();
+    const auto wallNow = std::chrono::system_clock::now ();
+    for (const auto& [screen, playlist] : this->m_activePlaylists) {
+	if (playlist.definition.settings.mode != "timer" || playlist.definition.items.size () < 2) continue;
+	const auto reference = this->m_isPaused && !playlist.definition.settings.updateOnPause ? this->m_pauseStart : now;
+	const double delaySeconds = std::max<uint32_t> (1, playlist.definition.settings.delayMinutes) * 60.0;
+	const float elapsed = static_cast<float> (std::max (0.0, delaySeconds - std::chrono::duration<double> (playlist.nextSwitch - reference).count ()));
+	try {
+	    const auto current = this->m_backgrounds.find (screen);
+	    if (current == this->m_backgrounds.end ()) continue;
+	    const auto loadedPath = current->second->assetLocator->physicalPath ("project.json").parent_path ();
+	    std::size_t loadedIndex = playlist.order.size ();
+	    for (std::size_t i = 0; i < playlist.order.size (); i++) {
+		std::error_code error;
+		if (std::filesystem::equivalent (playlist.definition.items[playlist.order[i]], loadedPath, error)) {
+		    loadedIndex = i;
+		    if (i == playlist.orderIndex) break;
+		}
+	    }
+	    // A requested switch may still be loading; checkpoint the project actually shown.
+	    if (loadedIndex == playlist.order.size ()) continue;
+	    PlaylistState::save (screen, playlist.definition, { playlist.order, loadedIndex, elapsed }, wallNow);
+	} catch (const std::exception& error) {
+	    sLog.error ("Cannot save playlist for ", screen, ": ", error.what ());
+	}
+    }
+}
+
 void WallpaperApplication::initializePlaylists () {
     const bool hasDefaultPlaylist = this->m_context.settings.general.defaultPlaylist.has_value ();
     const bool hasScreenPlaylists = !this->m_context.settings.general.screenPlaylists.empty ();
@@ -391,13 +441,21 @@ void WallpaperApplication::initializePlaylists () {
 	ActivePlaylist state;
 
 	state.definition = playlist;
-	state.order = this->buildPlaylistOrder (playlist);
+	float restoredElapsed = 0;
+	const auto restored = this->m_restoredPlaylists.find (key);
+	if (restored != this->m_restoredPlaylists.end ()) {
+	    state.order = std::move (restored->second.order);
+	    state.orderIndex = restored->second.orderIndex;
+	    restoredElapsed = restored->second.elapsedSeconds;
+	} else {
+	    state.order = this->buildPlaylistOrder (playlist);
+	}
 
 	if (state.order.empty ()) {
 	    return;
 	}
 
-	if (currentPath.has_value ()) {
+	if (restored == this->m_restoredPlaylists.end () && currentPath.has_value ()) {
 	    state.orderIndex = 0;
 
 	    for (std::size_t i = 0; i < state.order.size (); i++) {
@@ -409,7 +467,9 @@ void WallpaperApplication::initializePlaylists () {
 	}
 
 	const uint32_t delayMinutes = std::max<uint32_t> (1, state.definition.settings.delayMinutes);
-	state.nextSwitch = now + std::chrono::minutes (delayMinutes);
+	state.nextSwitch = now + std::chrono::duration_cast<std::chrono::steady_clock::duration> (
+	    std::chrono::duration<double> (delayMinutes * 60.0 - restoredElapsed)
+	);
 	state.lastUpdate = now;
 
 	this->m_activePlaylists.insert_or_assign (key, std::move (state));
@@ -432,6 +492,7 @@ void WallpaperApplication::initializePlaylists () {
 	    : std::nullopt;
 	registerPlaylist (screen, playlist, currentPath);
     }
+    this->m_restoredPlaylists.clear ();
 }
 
 void WallpaperApplication::ensureBrowserForProject (const Project& project) {

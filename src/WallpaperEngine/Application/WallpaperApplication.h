@@ -4,6 +4,7 @@
 #include <random>
 
 #include "WallpaperEngine/Application/ApplicationContext.h"
+#include "WallpaperEngine/Application/PlaylistState.h"
 #include "WallpaperEngine/Assets/AssetLocator.h"
 
 #include "WallpaperEngine/Render/CWallpaper.h"
@@ -248,6 +249,11 @@ private:
     void processControlSocket ();
 
     void initializePlaylists ();
+    std::filesystem::path restorePlaylistPath (
+	const std::string& screen, const ApplicationContext::PlaylistDefinition& definition,
+	const std::filesystem::path& fallback
+    );
+    void savePlaylists () const;
     void updatePlaylists ();
     void advancePlaylist (
 	const std::string& screen, ActivePlaylist& playlist, const std::chrono::steady_clock::time_point& now
@@ -269,6 +275,7 @@ private:
     /** Maps screens to backgrounds */
     std::map<std::string, ProjectUniquePtr> m_backgrounds {};
     std::map<std::string, ActivePlaylist> m_activePlaylists {};
+    std::map<std::string, PlaylistState::State> m_restoredPlaylists {};
 
     std::unique_ptr<WallpaperEngine::Audio::Drivers::Detectors::AudioPlayingDetector> m_audioDetector = nullptr;
     std::unique_ptr<WallpaperEngine::Audio::AudioContext> m_audioContext = nullptr;

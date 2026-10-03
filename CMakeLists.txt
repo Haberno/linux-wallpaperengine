@@ -365,6 +365,8 @@ set(COMMON_SOURCES
 
     src/WallpaperEngine/Application/ApplicationContext.cpp
     src/WallpaperEngine/Application/ApplicationContext.h
+    src/WallpaperEngine/Application/PlaylistState.cpp
+    src/WallpaperEngine/Application/PlaylistState.h
     src/WallpaperEngine/Application/WallpaperApplication.cpp
     src/WallpaperEngine/Application/WallpaperApplication.h
 
@@ -659,6 +661,7 @@ if(BUILD_TESTING)
         src/WallpaperEngine/Testing/Cases/LightState.cpp
         src/WallpaperEngine/Testing/Cases/PropertyParser.cpp
         src/WallpaperEngine/Testing/Cases/LocalStorage.cpp
+        src/WallpaperEngine/Testing/Cases/PlaylistRestoration.cpp
         src/WallpaperEngine/Testing/Cases/ScriptRuntime.cpp
         src/WallpaperEngine/Testing/Cases/Utf8Text.cpp
         src/WallpaperEngine/Testing/Cases/JsonTolerance.cpp
