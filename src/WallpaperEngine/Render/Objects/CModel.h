@@ -2,6 +2,7 @@
 
 #include "CRenderable.h"
 #include "ModelBounds.h"
+#include "ModelData.h"
 #include "WallpaperEngine/Render/Objects/Effects/CPass.h"
 #include "WallpaperEngine/Scripting/ScriptableObject.h"
 
@@ -82,6 +83,8 @@ private:
 	GLuint vertexBuffer = GL_NONE;
 	GLuint indexBuffer = GL_NONE;
 	GLsizei indexCount = 0;
+	GLsizei vertexCount = 0;
+	GLenum indexType = GL_UNSIGNED_INT;
 	GLuint shadowVao = GL_NONE;
 	bool castsShadow = false;
 	bool shadowCulling = false;
@@ -96,6 +99,7 @@ private:
     void updateMatrices ();
 
     const Model3D& m_model;
+    std::shared_ptr<ModelData> m_modelData;
     /** Legacy SceneScript compatibility: published model layers read thisLayer.size. */
     Data::Model::DynamicValue m_size;
     // Stable addresses for the timelines registered with SceneScript. Controllers

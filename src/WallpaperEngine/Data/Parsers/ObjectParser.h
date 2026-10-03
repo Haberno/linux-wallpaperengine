@@ -17,6 +17,7 @@ using namespace WallpaperEngine::Data::Model;
 class ObjectParser {
 public:
     static ObjectUniquePtr parse (const JSON& it, const Project& project);
+    static ObjectData parseBase (const JSON& it, const Project& project);
 
     /**
      * While alive, 3D objects parsed on this thread that share an MDL read and parse it once;

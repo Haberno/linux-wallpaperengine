@@ -34,12 +34,89 @@ RenderSortClass passRenderClass (const BlendingMode mode) {
 }
 } // namespace
 
+ModelData::ModelData (std::vector<Scripting::ModelDataShape> input) {
+    glm::vec3 minimum (std::numeric_limits<float>::infinity ());
+    glm::vec3 maximum (-std::numeric_limits<float>::infinity ());
+    bool hasPositions = false;
+    for (auto& source : input) {
+	Shape shape;
+	shape.input = std::move (source);
+	auto& layout = shape.layout;
+	layout.vertexTag = shape.input.vertexFormat;
+	layout.strideBytes = shape.input.strideBytes;
+	uint32_t offset = 0;
+	const auto attribute = [&] (uint32_t flag, uint32_t components) {
+	    if ((layout.vertexTag & flag) == 0) {
+		return MdlMesh::AttributeAbsent;
+	    }
+	    const auto start = offset;
+	    offset += components * sizeof (float);
+	    return start;
+	};
+	layout.positionOffset = attribute (1, 3);
+	layout.normalOffset = attribute (2, 3);
+	layout.tangentOffset = attribute (4, 4);
+	layout.uvOffset = attribute (8, 2);
+	shape.colorOffset = attribute (0x8000, 4);
+	if (layout.positionOffset != MdlMesh::AttributeAbsent) {
+	    for (size_t vertex = 0; vertex < shape.input.vertices.size ();
+		 vertex += layout.strideBytes / sizeof (float)) {
+		const float* position = shape.input.vertices.data () + vertex + layout.positionOffset / sizeof (float);
+		minimum = glm::min (minimum, glm::vec3 (position[0], position[1], position[2]));
+		maximum = glm::max (maximum, glm::vec3 (position[0], position[1], position[2]));
+		hasPositions = true;
+	    }
+	}
+	if (shapes.empty ()) {
+	    mesh = layout;
+	}
+	MdlSubmesh submesh;
+	submesh.vertexTag = layout.vertexTag;
+	submesh.strideBytes = layout.strideBytes;
+	submesh.materialPath = shape.input.material;
+	mesh.submeshes.push_back (std::move (submesh));
+	shapes.push_back (std::move (shape));
+    }
+    mesh.hasBoundingBox = hasPositions;
+    if (hasPositions) {
+	mesh.boundingBoxMin = minimum;
+	mesh.boundingBoxMax = maximum;
+    }
+}
+
+void ModelData::upload () {
+    GLint arrayBuffer = 0;
+    glGetIntegerv (GL_ARRAY_BUFFER_BINDING, &arrayBuffer);
+    for (auto& shape : shapes) {
+	glGenBuffers (1, &shape.vertexBuffer);
+	glBindBuffer (GL_ARRAY_BUFFER, shape.vertexBuffer);
+	glBufferData (
+	    GL_ARRAY_BUFFER, shape.input.vertices.size () * sizeof (float), shape.input.vertices.data (),
+	    shape.input.vertexDynamic ? GL_DYNAMIC_DRAW : GL_STATIC_DRAW
+	);
+	if (shape.input.indexWidth != 0) {
+	    glGenBuffers (1, &shape.indexBuffer);
+	    glBindBuffer (GL_ARRAY_BUFFER, shape.indexBuffer);
+	    glBufferData (
+		GL_ARRAY_BUFFER, shape.input.indices.size (), shape.input.indices.data (),
+		shape.input.indexDynamic ? GL_DYNAMIC_DRAW : GL_STATIC_DRAW
+	    );
+	}
+    }
+    glBindBuffer (GL_ARRAY_BUFFER, static_cast<GLuint> (arrayBuffer));
+}
+
+ModelData::~ModelData () {
+    for (const auto& shape : shapes) {
+	glDeleteBuffers (1, &shape.vertexBuffer);
+	glDeleteBuffers (1, &shape.indexBuffer);
+    }
+}
+
 CModel::CModel (Wallpapers::CScene& scene, const Model3D& model) :
     CObject (scene, model), CRenderable (scene, model, **model.materials.begin ()), ScriptableObject (scene, model),
-    m_model (model),
-    m_size (
-	model.mesh.hasBoundingBox ? model.mesh.boundingBoxMax - model.mesh.boundingBoxMin : glm::vec3 (0.0f)
-    ) {
+    m_model (model), m_modelData (scene.findModelData (model.modelDataToken)),
+    m_size (model.mesh.hasBoundingBox ? model.mesh.boundingBoxMax - model.mesh.boundingBoxMin : glm::vec3 (0.0f)) {
     // Some older Workshop scenes bind the editor's 2D pivot script to a 3D model.
     // Expose its authored bounds as a vector-like size so those published scripts can
     // keep calculating their pivot even though current IModelLayer docs omit the field.
@@ -100,8 +177,10 @@ CModel::~CModel () {
     }
 
     for (const auto& submesh : this->m_submeshes) {
-	glDeleteBuffers (1, &submesh.vertexBuffer);
-	glDeleteBuffers (1, &submesh.indexBuffer);
+	if (!m_modelData) {
+	    glDeleteBuffers (1, &submesh.vertexBuffer);
+	    glDeleteBuffers (1, &submesh.indexBuffer);
+	}
 	if (submesh.shadowVao != GL_NONE) glDeleteVertexArrays (1, &submesh.shadowVao);
     }
 }
@@ -137,25 +216,37 @@ void CModel::setup () {
 	const auto& submesh = this->m_model.mesh.submeshes[submeshIndex];
 	SubmeshBuffers buffers {};
 
-	glGenBuffers (1, &buffers.vertexBuffer);
-	glBindBuffer (GL_ARRAY_BUFFER, buffers.vertexBuffer);
-	glBufferData (
-	    GL_ARRAY_BUFFER, submesh.vertices.size () * sizeof (float), submesh.vertices.data (), GL_STATIC_DRAW
-	);
+	if (m_modelData) {
+	    const auto& shape = m_modelData->shapes[submeshIndex];
+	    buffers.vertexBuffer = shape.vertexBuffer;
+	    buffers.indexBuffer = shape.indexBuffer;
+	    buffers.vertexCount
+		= static_cast<GLsizei> (shape.input.vertices.size () * sizeof (float) / shape.input.strideBytes);
+	    buffers.indexType = shape.input.indexWidth == 2 ? GL_UNSIGNED_SHORT : GL_UNSIGNED_INT;
+	    buffers.indexCount = shape.input.indexWidth == 0
+		? 0
+		: static_cast<GLsizei> (shape.input.indices.size () / shape.input.indexWidth);
+	} else {
+	    glGenBuffers (1, &buffers.vertexBuffer);
+	    glBindBuffer (GL_ARRAY_BUFFER, buffers.vertexBuffer);
+	    glBufferData (
+		GL_ARRAY_BUFFER, submesh.vertices.size () * sizeof (float), submesh.vertices.data (), GL_STATIC_DRAW
+	    );
 
-	glGenBuffers (1, &buffers.indexBuffer);
-	glBindBuffer (GL_ELEMENT_ARRAY_BUFFER, buffers.indexBuffer);
-	glBufferData (
-	    GL_ELEMENT_ARRAY_BUFFER, submesh.indices.size () * sizeof (uint32_t), submesh.indices.data (),
-	    GL_STATIC_DRAW
-	);
+	    glGenBuffers (1, &buffers.indexBuffer);
+	    glBindBuffer (GL_ELEMENT_ARRAY_BUFFER, buffers.indexBuffer);
+	    glBufferData (
+		GL_ELEMENT_ARRAY_BUFFER, submesh.indices.size () * sizeof (uint32_t), submesh.indices.data (),
+		GL_STATIC_DRAW
+	    );
 
-	// a container can pair vertex layouts (puppet models add a channelmap overlay next to
-	// the skinned body); the attribute setup below is built for the mesh-level tag, so a
-	// submesh that disagrees would read its vertices through the wrong stride
-	buffers.indexCount = submesh.vertexTag == this->m_model.mesh.vertexTag
-	    ? static_cast<GLsizei> (submesh.indices.size ())
-	    : 0;
+	    // a container can pair vertex layouts (puppet models add a channelmap overlay next to
+	    // the skinned body); the attribute setup below is built for the mesh-level tag, so a
+	    // submesh that disagrees would read its vertices through the wrong stride
+	    buffers.indexCount = submesh.vertexTag == this->m_model.mesh.vertexTag
+		? static_cast<GLsizei> (submesh.indices.size ())
+		: 0;
+	}
 	const auto& material = this->m_model.materials[submeshIndex];
 	const auto opaquePass = std::find_if (material->passes.begin (), material->passes.end (), [] (const auto& pass) {
 	    return pass->blending == BlendingMode_Normal;
@@ -286,18 +377,23 @@ void CModel::setupShadowProgram () {
 }
 
 void CModel::setupGeometryCallback (Effects::CPass* pass, size_t submeshIndex) {
-    const auto stride = static_cast<GLsizei> (this->m_model.mesh.strideBytes);
+    const auto& layout = m_modelData ? m_modelData->shapes[submeshIndex].layout : m_model.mesh;
+    const auto stride = static_cast<GLsizei> (layout.strideBytes);
 
     pass->setGeometryCallback (
 	[this, pass, stride, submeshIndex, revision = uint64_t (0),
-	 locations = std::array<GLint, 6> { -1, -1, -1, -1, -1, -1 }] () mutable {
-	    if (revision == pass->getShaderRevision ()) return;
+	 locations = std::array<GLint, 7> { -1, -1, -1, -1, -1, -1, -1 }] () mutable {
+	    if (revision == pass->getShaderRevision ()) {
+		return;
+	    }
 	    revision = pass->getShaderRevision ();
 	    // Each pass owns its VAO. Rebuild its layout only after a shader reload.
 	    for (const auto location : locations) {
-		if (location >= 0) glDisableVertexAttribArray (location);
+		if (location >= 0) {
+		    glDisableVertexAttribArray (location);
+		}
 	    }
-	    const auto& mesh = this->m_model.mesh;
+	    const auto& mesh = m_modelData ? m_modelData->shapes[submeshIndex].layout : m_model.mesh;
 	    const GLint position = glGetAttribLocation (pass->getProgramID (), "a_Position");
 	    const GLint normal = glGetAttribLocation (pass->getProgramID (), "a_Normal");
 	    const GLint tangent = glGetAttribLocation (pass->getProgramID (), "a_Tangent4");
@@ -305,11 +401,12 @@ void CModel::setupGeometryCallback (Effects::CPass* pass, size_t submeshIndex) {
 	    const GLint blendIndices = glGetAttribLocation (pass->getProgramID (), "a_BlendIndices");
 	    const GLint blendWeights = glGetAttribLocation (pass->getProgramID (), "a_BlendWeights");
 
-	    locations = { position, normal, tangent, texCoord, blendIndices, blendWeights };
+	    const GLint color = glGetAttribLocation (pass->getProgramID (), "a_Color");
+	    locations = { position, normal, tangent, texCoord, blendIndices, blendWeights, color };
 	    glBindBuffer (GL_ELEMENT_ARRAY_BUFFER, this->m_submeshes[submeshIndex].indexBuffer);
 	    glBindBuffer (GL_ARRAY_BUFFER, this->m_submeshes[submeshIndex].vertexBuffer);
 
-	    if (position >= 0) {
+	    if (position >= 0 && mesh.positionOffset != MdlMesh::AttributeAbsent) {
 		glEnableVertexAttribArray (position);
 		glVertexAttribPointer (
 		    position, 3, GL_FLOAT, GL_FALSE, stride, reinterpret_cast<void*> (mesh.positionOffset)
@@ -339,6 +436,15 @@ void CModel::setupGeometryCallback (Effects::CPass* pass, size_t submeshIndex) {
 		);
 	    }
 
+	    if (color >= 0 && m_modelData
+		&& m_modelData->shapes[submeshIndex].colorOffset != MdlMesh::AttributeAbsent) {
+		glEnableVertexAttribArray (color);
+		glVertexAttribPointer (
+		    color, 4, GL_FLOAT, GL_FALSE, stride,
+		    reinterpret_cast<void*> (m_modelData->shapes[submeshIndex].colorOffset)
+		);
+	    }
+
 	    if (this->m_skinningEnabled && blendIndices >= 0) {
 		glEnableVertexAttribArray (blendIndices);
 		glVertexAttribIPointer (
@@ -360,10 +466,15 @@ void CModel::setupGeometryCallback (Effects::CPass* pass, size_t submeshIndex) {
 	    const bool windingReversed = camera.isYFlipped () != camera.isOrthogonal ();
 	    glFrontFace (windingReversed ? GL_CW : GL_CCW);
 	    glBindBuffer (GL_ELEMENT_ARRAY_BUFFER, this->m_submeshes[submeshIndex].indexBuffer);
-	    glDrawElements (GL_TRIANGLES, this->m_submeshes[submeshIndex].indexCount, GL_UNSIGNED_INT, nullptr);
+	    const auto& buffers = m_submeshes[submeshIndex];
+	    if (m_modelData && buffers.indexBuffer == GL_NONE) {
+		glDrawArrays (GL_TRIANGLES, 0, buffers.vertexCount);
+	    } else {
+		glDrawElements (GL_TRIANGLES, buffers.indexCount, buffers.indexType, nullptr);
+	    }
 	    glFrontFace (GL_CCW);
 	},
-	[] () {}
+	[] () { }
     );
 }
 
@@ -586,6 +697,10 @@ void CModel::prepareRender () {
     this->updateAnimationPose ();
     this->updateMatrices ();
     this->m_posedShadowBounds = this->m_shadowBounds.evaluate (this->m_gpuSkinBones);
+    if (m_modelData && m_modelData->mesh.hasBoundingBox) {
+	m_posedShadowBounds.minimum = m_modelData->mesh.boundingBoxMin;
+	m_posedShadowBounds.maximum = m_modelData->mesh.boundingBoxMax;
+    }
 }
 
 void CModel::renderPasses (const std::optional<RenderSortClass> renderClass) {
@@ -635,10 +750,14 @@ void CModel::renderShadow (const glm::mat4& lightViewProjection) {
 	);
     }
 
-    const GLsizei stride = static_cast<GLsizei> (this->m_model.mesh.strideBytes);
     for (size_t submeshIndex = 0; submeshIndex < this->m_submeshes.size (); submeshIndex++) {
 	auto& buffers = this->m_submeshes[submeshIndex];
-	if (!buffers.castsShadow || buffers.indexCount == 0) continue;
+	const auto& layout = m_modelData ? m_modelData->shapes[submeshIndex].layout : m_model.mesh;
+	const auto stride = static_cast<GLsizei> (layout.strideBytes);
+	if (!buffers.castsShadow || (buffers.indexCount == 0 && buffers.vertexCount == 0)
+	    || layout.positionOffset == MdlMesh::AttributeAbsent) {
+	    continue;
+	}
 	if (buffers.shadowCulling) {
 	    glEnable (GL_CULL_FACE);
 	} else {
@@ -652,9 +771,7 @@ void CModel::renderShadow (const glm::mat4& lightViewProjection) {
 	    glBindVertexArray (buffers.shadowVao);
 	    glBindBuffer (GL_ARRAY_BUFFER, buffers.vertexBuffer);
 	    glEnableVertexAttribArray (0);
-	    glVertexAttribPointer (
-		0, 3, GL_FLOAT, GL_FALSE, stride, reinterpret_cast<void*> (this->m_model.mesh.positionOffset)
-	    );
+	    glVertexAttribPointer (0, 3, GL_FLOAT, GL_FALSE, stride, reinterpret_cast<void*> (layout.positionOffset));
 	    if (this->m_skinningEnabled) {
 		glEnableVertexAttribArray (1);
 		glVertexAttribIPointer (
@@ -670,9 +787,11 @@ void CModel::renderShadow (const glm::mat4& lightViewProjection) {
 	    glBindBuffer (GL_ELEMENT_ARRAY_BUFFER, buffers.indexBuffer);
 	}
 	glBindVertexArray (buffers.shadowVao);
-	glDrawElements (
-	    GL_TRIANGLES, this->m_submeshes[submeshIndex].indexCount, GL_UNSIGNED_INT, nullptr
-	);
+	if (m_modelData && buffers.indexBuffer == GL_NONE) {
+	    glDrawArrays (GL_TRIANGLES, 0, buffers.vertexCount);
+	} else {
+	    glDrawElements (GL_TRIANGLES, buffers.indexCount, buffers.indexType, nullptr);
+	}
     }
 
     glFrontFace (GL_CCW);

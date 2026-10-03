@@ -15,12 +15,14 @@ public:
     Render::Wallpapers::CScene& getScene () { return m_scene; }
     JSValue getInstance () const { return m_instance; }
     ScriptEngine& getEngine () const { return m_engine; }
+    JSValue makeModelDataHandle (uint32_t token);
 
 private:
     Render::Wallpapers::CScene& m_scene;
     ScriptEngine& m_engine;
 
     JSClassID m_classId;
+    JSClassID m_modelDataClassId = 0;
     JSClassDef m_definition;
     JSValue m_instance;
 };

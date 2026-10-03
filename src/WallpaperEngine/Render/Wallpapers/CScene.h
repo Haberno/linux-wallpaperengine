@@ -4,6 +4,7 @@
 #include "WallpaperEngine/Data/JSON.h"
 
 #include "WallpaperEngine/Render/CWallpaper.h"
+#include "WallpaperEngine/Render/Objects/ModelData.h"
 #include "WallpaperEngine/Scripting/ScriptEngine.h"
 
 #include <array>
@@ -48,6 +49,13 @@ public:
     );
 
     ~CScene () override;
+
+    uint32_t createModelData (
+	std::vector<Scripting::ModelDataShape> shapes,
+	std::optional<std::pair<glm::vec3, glm::vec3>> bounds = std::nullopt
+    );
+    void destroyModelData (uint32_t token);
+    std::shared_ptr<Objects::ModelData> findModelData (uint32_t token);
 
     /** Cooperative preparation runs on the render thread. Only enclosing, fully owned
      * construction boundaries may allow cancellation to unwind the scene. */
@@ -342,6 +350,7 @@ private:
     bool m_bloomSetupAttempted = false;
     // Keeps runtime-created layer data alive while its renderer refers to it.
     std::vector<ObjectUniquePtr> m_runtimeLayerData = {};
+    Objects::ModelDataStore m_modelData;
     std::set<int> m_layersToDestroy;
     std::set<int> m_objectsInCreation = {};
     std::map<int, CObject*> m_objects = {};

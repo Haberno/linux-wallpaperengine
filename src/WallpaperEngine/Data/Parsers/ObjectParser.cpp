@@ -26,21 +26,7 @@
 using namespace WallpaperEngine::Data::Parsers;
 using namespace WallpaperEngine::Data::Model;
 
-ObjectUniquePtr ObjectParser::parse (const JSON& it, const Project& project) {
-    // scenes emit every layer-type key on every object and set the unused ones to JSON
-    // null, so presence alone does not identify the type; image/sound/model/light are
-    // already type-checked below, particle/text/shape must reject nulls the same way
-    const auto imageIt = it.find ("image");
-    const auto soundIt = it.find ("sound");
-    const auto particleIt = it.find ("particle");
-    const auto textIt = it.find ("text");
-    const auto modelIt = it.find ("model");
-    const auto lightIt = it.find ("light");
-    const auto shapeIt = it.find ("shape");
-    // the runtime camera of a 3D scene is an object too, but WallpaperParser consumes it
-    // (origin/angles/fov/zoom plus its path/queuemode) before the object list is built
-    const auto cameraIt = it.find ("camera");
-
+ObjectData ObjectParser::parseBase (const JSON& it, const Project& project) {
     // Parse base object data
     // Some particle objects have numeric 'name' fields, so handle type mismatches gracefully
     ObjectData basedata;
@@ -92,6 +78,26 @@ ObjectUniquePtr ObjectParser::parse (const JSON& it, const Project& project) {
 
     basedata.initialConfiguration = it.dump ();
     basedata.disablePropagation = it.optional ("disablepropagation", false);
+
+    return basedata;
+}
+
+ObjectUniquePtr ObjectParser::parse (const JSON& it, const Project& project) {
+    // scenes emit every layer-type key on every object and set the unused ones to JSON
+    // null, so presence alone does not identify the type; image/sound/model/light are
+    // already type-checked below, particle/text/shape must reject nulls the same way
+    const auto imageIt = it.find ("image");
+    const auto soundIt = it.find ("sound");
+    const auto particleIt = it.find ("particle");
+    const auto textIt = it.find ("text");
+    const auto modelIt = it.find ("model");
+    const auto lightIt = it.find ("light");
+    const auto shapeIt = it.find ("shape");
+    // the runtime camera of a 3D scene is an object too, but WallpaperParser consumes it
+    // (origin/angles/fov/zoom plus its path/queuemode) before the object list is built
+    const auto cameraIt = it.find ("camera");
+
+    ObjectData basedata = parseBase (it, project);
 
     if (imageIt != it.end () && imageIt->is_string ()) {
 	return parseImage (it, project, std::move (basedata), *imageIt);

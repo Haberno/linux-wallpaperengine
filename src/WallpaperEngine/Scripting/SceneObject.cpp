@@ -437,10 +437,128 @@ JSValue scene_get_layer_index (JSContext* ctx, JSValueConst this_val, int argc, 
     return JS_NewInt32 (ctx, container->getScene ().getScriptableLayerIndex (layer));
 }
 
+namespace {
+struct ModelDataHandle {
+    SceneObject* scene;
+    uint32_t token;
+};
+void finalize_model_data (JSRuntime*, JSValue value) {
+    JSClassID id;
+    delete static_cast<ModelDataHandle*> (JS_GetAnyOpaque (value, &id));
+}
+
+bool model_bound (JSContext* ctx, JSValueConst value, glm::vec3& result) {
+    constexpr const char* names[] = { "x", "y", "z" };
+    for (int axis = 0; axis < 3; ++axis) {
+	ModelDataInput::Value component (ctx, JS_GetPropertyStr (ctx, value, names[axis]));
+	double number = 0;
+	if (JS_IsException (component.value) || JS_ToFloat64 (ctx, &number, component.value) < 0) {
+	    return false;
+	}
+	result[axis] = static_cast<float> (number);
+    }
+    return true;
+}
+}
+
+JSValue scene_create_model_data (JSContext* ctx, JSValueConst self, int argc, JSValueConst* argv) {
+    auto* container = get_opaque (self);
+    if (container->getEngine ().getRegisteringAssets () != nullptr) {
+	return JS_ThrowSyntaxError (ctx, "createModelData cannot be called from global scope.");
+    }
+    if (argc < 1) {
+	return JS_UNDEFINED;
+    }
+    std::vector<ModelDataShape> shapes;
+    ModelDataInput::Value shapeArray (ctx, JS_GetPropertyStr (ctx, argv[0], "shapes"));
+    if (JS_IsException (shapeArray.value)) {
+	return JS_EXCEPTION;
+    }
+    if (JS_IsArray (shapeArray.value)) {
+	ModelDataInput::Value length (ctx, JS_GetPropertyStr (ctx, shapeArray.value, "length"));
+	uint32_t count = 0;
+	if (JS_IsException (length.value) || JS_ToUint32 (ctx, &count, length.value) < 0) {
+	    return JS_EXCEPTION;
+	}
+	for (uint32_t index = 0; index < count; ++index) {
+	    ModelDataInput::Value input (ctx, JS_GetPropertyUint32 (ctx, shapeArray.value, index));
+	    ModelDataShape shape;
+	    if (JS_IsException (input.value) || !ModelDataInput::readShape (ctx, input.value, shape)) {
+		return JS_EXCEPTION;
+	    }
+	    shapes.push_back (std::move (shape));
+	}
+    } else {
+	ModelDataShape shape;
+	if (!ModelDataInput::readShape (ctx, argv[0], shape)) {
+	    return JS_EXCEPTION;
+	}
+	shapes.push_back (std::move (shape));
+    }
+    std::optional<std::pair<glm::vec3, glm::vec3>> bounds;
+    ModelDataInput::Value minimum (ctx, JS_GetPropertyStr (ctx, argv[0], "boundingBoxMins"));
+    if (JS_IsException (minimum.value)) {
+	return JS_EXCEPTION;
+    }
+    ModelDataInput::Value maximum (ctx, JS_GetPropertyStr (ctx, argv[0], "boundingBoxMaxs"));
+    if (JS_IsException (maximum.value)) {
+	return JS_EXCEPTION;
+    }
+    if (JS_IsObject (minimum.value) && JS_IsObject (maximum.value)) {
+	bounds.emplace ();
+	if (!model_bound (ctx, minimum.value, bounds->first) || !model_bound (ctx, maximum.value, bounds->second)) {
+	    return JS_EXCEPTION;
+	}
+    }
+    if (shapes.empty ()) {
+        return JS_ThrowSyntaxError (ctx, "Shapes missing.");
+    }
+    try {
+	return container->makeModelDataHandle (container->getScene ().createModelData (std::move (shapes), bounds));
+    } catch (const std::exception& error) {
+	return JS_ThrowSyntaxError (ctx, "%s", error.what ());
+    }
+}
+
+JSValue scene_destroy_model_data (JSContext* ctx, JSValueConst self, int argc, JSValueConst* argv) {
+    if (get_opaque (self)->getEngine ().getRegisteringAssets () != nullptr) {
+	return JS_ThrowSyntaxError (ctx, "destroyModelData cannot be called from global scope.");
+    }
+    // Native checks IsUint32; documented handle objects, strings and fractions are ignored.
+    if (argc == 0 || !JS_IsNumber (argv[0])) {
+	return JS_UNDEFINED;
+    }
+    double token = 0;
+    if (JS_ToFloat64 (ctx, &token, argv[0]) < 0) {
+	return JS_EXCEPTION;
+    }
+    if (std::isfinite (token) && token >= 0 && token <= UINT32_MAX && std::floor (token) == token) {
+	get_opaque (self)->getScene ().destroyModelData (static_cast<uint32_t> (token));
+    }
+    return JS_UNDEFINED;
+}
+
+JSValue SceneObject::makeModelDataHandle (uint32_t token) {
+    auto* ctx = m_engine.getContext ();
+    JSValue result = JS_NewObjectClass (ctx, m_modelDataClassId);
+    JS_SetOpaque (result, new ModelDataHandle { this, token });
+    JS_DefinePropertyValueStr (ctx, result, "__modelDataToken", JS_NewUint32 (ctx, token), 0);
+    return result;
+}
+
 static JSValue layer_config_replacer (
     JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv, int magic, JSValue* data
 ) {
     if (argc < 2) return JS_UNDEFINED;
+    if (JS_IsObject (argv[1])) {
+	ModelDataInput::Value convert (ctx, JS_GetPropertyStr (ctx, argv[1], "toConfigString"));
+	if (JS_IsException (convert.value)) {
+	    return JS_EXCEPTION;
+	}
+	if (JS_IsFunction (ctx, convert.value)) {
+	    return JS_Call (ctx, convert.value, argv[1], 0, nullptr);
+	}
+    }
     const auto& adapters = get_opaque (data[0])->getEngine ().getAdapters ();
     const int components = adapters.vec2->isInstance (argv[1]) ? 2
 	: adapters.vec3->isInstance (argv[1]) ? 3 : adapters.vec4->isInstance (argv[1]) ? 4 : 0;
@@ -491,6 +609,9 @@ JSValue scene_create_layer (JSContext* ctx, JSValueConst this_val, int argc, JSV
 	    ScopeGuard guard ([=] { JS_FreeCString (ctx, data); });
 	    try {
 		auto config = WallpaperEngine::Data::JSON::JSON::parse (data);
+		if (config.is_number ()) {
+		    config = WallpaperEngine::Data::JSON::JSON { { "model", config } };
+		}
 		auto* layer = container->getScene ().createLayer (
 		    std::move (config), container->getEngine ().getRunningModuleWorkshopId ());
 		return layer != nullptr && layer->is<ScriptableObject> ()
@@ -578,6 +699,23 @@ SceneObject::SceneObject (ScriptEngine& engine, Render::Wallpapers::CScene& scen
     this->m_instance = JS_NewObjectClass (this->m_engine.getContext (), this->m_classId);
 
     JS_DupValue (this->m_engine.getContext (), this->m_instance);
+
+    // IModelData's script object carries a token; it does not own the geometry lease.
+    auto* ctx = m_engine.getContext ();
+    const JSClassDef modelDataDefinition { .class_name = "IModelData", .finalizer = finalize_model_data };
+    JS_NewClassID (m_engine.getRuntime (), &m_modelDataClassId);
+    JS_NewClass (m_engine.getRuntime (), m_modelDataClassId, &modelDataDefinition);
+    constexpr char modelDataClass[] = R"JS((class IModelData {
+        static POSITION = 'position'; static NORMAL = 'normal'; static TANGENT_SIGNED = 'tangentSigned';
+        static UV = 'uv'; static COLOR = 'color';
+        toConfigString() { return this.__modelDataToken; }
+    }))JS";
+    JSValue constructor
+	= JS_Eval (ctx, modelDataClass, sizeof (modelDataClass) - 1, "<IModelData>", JS_EVAL_TYPE_GLOBAL);
+    JS_SetClassProto (ctx, m_modelDataClassId, JS_GetPropertyStr (ctx, constructor, "prototype"));
+    JSValue global = JS_GetGlobalObject (ctx);
+    JS_SetPropertyStr (ctx, global, "IModelData", constructor);
+    JS_FreeValue (ctx, global);
 
     // set properties
     JS_SetOpaque (this->m_instance, this);
@@ -746,6 +884,14 @@ SceneObject::SceneObject (ScriptEngine& engine, Render::Wallpapers::CScene& scen
     JS_DefinePropertyValueStr (
 	this->m_engine.getContext (), this->m_instance, "sortLayer",
 	JS_NewCFunction (this->m_engine.getContext (), scene_sort_layer, "sortLayer", 2), JS_PROP_ENUMERABLE
+    );
+    JS_DefinePropertyValueStr (
+	ctx, m_instance, "createModelData", JS_NewCFunction (ctx, scene_create_model_data, "createModelData", 1),
+	JS_PROP_ENUMERABLE
+    );
+    JS_DefinePropertyValueStr (
+	ctx, m_instance, "destroyModelData", JS_NewCFunction (ctx, scene_destroy_model_data, "destroyModelData", 1),
+	JS_PROP_ENUMERABLE
     );
     // TODO: ADD REST OF THE METHODS
 }

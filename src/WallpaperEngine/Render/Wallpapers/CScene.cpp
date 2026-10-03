@@ -16,6 +16,7 @@
 #include "WallpaperEngine/Logging/Log.h"
 
 #include "WallpaperEngine/Data/Model/Wallpaper.h"
+#include "WallpaperEngine/Data/Parsers/MaterialParser.h"
 #include "WallpaperEngine/Data/Parsers/ObjectParser.h"
 #include "WallpaperEngine/Data/Utils/ScopeGuard.h"
 
@@ -1945,6 +1946,26 @@ Render::CObject* CScene::createLayer (const std::string& modelPath, const std::s
     return this->createLayer (std::move (layer), workshopId);
 }
 
+uint32_t CScene::createModelData (
+    std::vector<Scripting::ModelDataShape> shapes, std::optional<std::pair<glm::vec3, glm::vec3>> bounds
+) {
+    // Validate materials before committing a token or allocating GPU storage.
+    for (const auto& shape : shapes) {
+	MaterialParser::load (getScene ().project, shape.material, true);
+    }
+    auto resource = std::make_unique<Objects::ModelData> (std::move (shapes));
+    if (bounds) {
+	resource->mesh.boundingBoxMin = bounds->first;
+	resource->mesh.boundingBoxMax = bounds->second;
+	resource->mesh.hasBoundingBox = true;
+    }
+    resource->upload ();
+    return m_modelData.insert (std::move (resource));
+}
+
+void CScene::destroyModelData (uint32_t token) { m_modelData.release (token); }
+std::shared_ptr<Objects::ModelData> CScene::findModelData (uint32_t token) { return m_modelData.find (token); }
+
 Render::CObject* CScene::createLayer (JSON layer, const std::string& workshopId) {
     if (!layer.is_object ()) return nullptr;
     // Allocate a fresh id above everything currently known (live objects + parse-time objects), so it
@@ -1969,7 +1990,27 @@ Render::CObject* CScene::createLayer (JSON layer, const std::string& workshopId)
     }
 
     try {
-	ObjectUniquePtr data = ObjectParser::parse (layer, this->getScene ().project);
+	ObjectUniquePtr data;
+	const auto model = layer.find ("model");
+	if (model != layer.end () && model->is_number ()) {
+	    const auto token = model->get<uint32_t> ();
+	    const auto resource = findModelData (token);
+	    if (!resource || resource->shapes.empty ()) {
+		return nullptr;
+	    }
+	    const auto& project = getScene ().project;
+	    Model3DData modelData;
+	    modelData.modelDataToken = token;
+	    modelData.mesh = resource->mesh;
+	    for (const auto& shape : resource->shapes) {
+		modelData.materials.push_back (MaterialParser::load (project, shape.input.material, true));
+	    }
+	    modelData.castShadow = layer.user ("castshadow", project.properties, true);
+	    modelData.perspective = layer.user ("perspective", project.properties, false);
+	    data = std::make_unique<Model3D> (ObjectParser::parseBase (layer, project), std::move (modelData));
+	} else {
+	    data = ObjectParser::parse (layer, this->getScene ().project);
+	}
 	Object* raw = data.get ();
 	this->m_runtimeLayerData.push_back (std::move (data));
 

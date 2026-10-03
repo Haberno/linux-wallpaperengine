@@ -891,6 +891,8 @@ public:
  * (origin/scale/angles/visible) live in the base ObjectData group fields.
  */
 struct Model3DData {
+    /** Scene-local token for SceneScript geometry; zero denotes a file-backed model. */
+    uint32_t modelDataToken = 0;
     /** The .mdl file the object references */
     std::string filename;
     /** Mesh data read from the MDLV container */
