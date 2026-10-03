@@ -1146,3 +1146,130 @@ TEST_CASE ("two-control-point scalar output preserves perpendicular simulation p
         points[1].position = { 60, 0, 0 };
     }
 }
+
+TEST_CASE ("rain remaps sample independent seeded velocity channels over lifetime", "[particle][remap][remap-noise]") {
+    using WallpaperEngine::Render::Objects::applyParticleControlPointRemap;
+    const struct { const char* minimum; const char* maximum; glm::vec3 expected, nextSeed, midpoint; } cases[] = {
+        { "-100 -50 0", "100 -500 0", { -51.527244f, 258.54266f, 0.0f },
+          { 7.5248338f, 329.34128f, 0.0f }, { 0, 275, 0 } },
+        { "-100 -200 0", "100 -1200 1", { -51.527244f, 663.42810f, .59818530f },
+          { 7.5248338f, 820.75839f, .62126880f }, { 0, 700, .5f } }
+    };
+    for (const auto& sample : cases) {
+        WallpaperEngine::Data::Model::Project project {};
+        auto data = WallpaperEngine::Data::JSON::JSON::parse (R"({"id":383,"particle":{"operator":[{
+            "name":"remapvalue","operation":"remap","output":"velocity",
+            "transformfunction":"simplexnoise","transforminputscale":10
+        }]}})");
+        data["particle"]["operator"][0]["outputrangemin"] = sample.minimum;
+        data["particle"]["operator"][0]["outputrangemax"] = sample.maximum;
+        const auto object = WallpaperEngine::Data::Parsers::ObjectParser::parse (data, project);
+        const auto* definition = object->as<Particle> ();
+        REQUIRE (definition != nullptr);
+        REQUIRE (definition->operators.size () == 1);
+        const auto* parsed = definition->operators.front ()->as<ControlPointRemapOperator> ();
+        REQUIRE (parsed != nullptr);
+        ParticleInstance particle;
+        particle.lifetime = 8;
+        particle.age = 2;
+        particle.oscillationRandom = .5f;
+        particle.velocity = { 700, 800, 900 };
+        particle.position = { 12, 34, 56 };
+        // Exact native kernel samples at x=2.5 and the bit-pattern seeds for
+        // .5, .5 xor 188294317, .5 xor 1228574339; no RGB seed fitting.
+        applyParticleControlPointRemap (particle, parsed->remap, {}, false);
+        for (int axis = 0; axis < 3; ++axis) {
+            CHECK (particle.velocity[axis] == Catch::Approx (sample.expected[axis]).margin (.0002f));
+        }
+        CHECK (particle.position == glm::vec3 (12, 34, 56));
+        CHECK (particle.oscillationRandom == .5f);
+        const auto velocity = particle.velocity;
+        applyParticleControlPointRemap (particle, parsed->remap, {}, false);
+        CHECK (particle.velocity == velocity);
+        particle.oscillationRandom = std::nextafter (.5f, 1.0f);
+        applyParticleControlPointRemap (particle, parsed->remap, {}, false);
+        for (int axis = 0; axis < 3; ++axis) {
+            CHECK (particle.velocity[axis] == Catch::Approx (sample.nextSeed[axis]).margin (.0002f));
+        }
+        particle.age = 0;
+        applyParticleControlPointRemap (particle, parsed->remap, {}, false);
+        CHECK (particle.velocity == sample.midpoint);
+    }
+}
+
+TEST_CASE ("seeded remap noise preserves native hash bits and lattice boundaries", "[particle][remap][remap-noise]") {
+    using WallpaperEngine::Render::Utils::seededSimplexNoise2D;
+    // Direct execution of native 1400fbe90, binary SHA256 40e2ce02...993b0.
+    // These differ from the permutation-based simplex used by other operators.
+    const struct { uint32_t seed; float x, y, expected; } cases[] = {
+        { 0u, 0, 0, 0 },
+        { 0u, .25f, 0, .8035542369f },
+        { 0x3f000000u, 2.5f, 0, -.5152724385f },
+        { 0x3f000001u, 2.5f, 0, .07524833828f },
+        { 0x3f000000u, -1.25f, 0, -.1699448228f },
+        { 0xffffffffu, .25f, -.5f, -.5190694928f },
+        { 0x80000000u, 1, 0, .3829292357f },
+        { 0x3f000000u, 2.5f, .1f, -.6222580075f },
+        { 0x3f000000u, .25f, .25f, .7642583847f },
+        { 0x3f000000u, .9999998808f, 0, .3829290569f },
+        { 0x3f000000u, 1.000000119f, 0, .3829295337f }
+    };
+    for (const auto& sample : cases) {
+        CAPTURE (sample.seed, sample.x, sample.y);
+        CHECK (seededSimplexNoise2D (sample.seed, sample.x, sample.y)
+               == Catch::Approx (sample.expected).margin (.000001f));
+    }
+}
+
+TEST_CASE ("rain FBM remaps clamp speed multiplication without changing direction", "[particle][remap][remap-noise]") {
+    using WallpaperEngine::Render::Objects::applyParticleControlPointRemap;
+    using WallpaperEngine::Render::Utils::seededFbmNoise2D;
+    const struct { uint32_t seed; float x, y, expected; } kernelCases[] = {
+        { 0x3f000000u, 1, 0, -.04425158352f },
+        { 0x3f000001u, 2, 0, -.5066438913f },
+        { 0xffffffffu, .25f, -.5f, -.3643205464f },
+        { 0u, -2, 0, -.2531152964f }
+    };
+    for (const auto& sample : kernelCases) {
+        CHECK (seededFbmNoise2D (sample.seed, sample.x, sample.y)
+               == Catch::Approx (sample.expected).margin (.000001f));
+    }
+    WallpaperEngine::Data::Model::Project project {};
+    const auto object = WallpaperEngine::Data::Parsers::ObjectParser::parse (
+        WallpaperEngine::Data::JSON::JSON::parse (R"({"id":384,"particle":{"operator":[{
+            "name":"remapvalue","output":"speed","outputrangemin":-5,"outputrangemax":7,
+            "transformfunction":"fbmnoise","transforminputscale":8,"flags":3
+        }]}})"), project);
+    const auto* definition = object->as<Particle> ();
+    REQUIRE (definition != nullptr);
+    REQUIRE (definition->operators.size () == 1);
+    const auto* parsed = definition->operators.front ()->as<ControlPointRemapOperator> ();
+    REQUIRE (parsed != nullptr);
+    // Native three-octave wrapper 1400fbc70 at x = lifetime fraction * 8.
+    // Its literal outputs map through -5..7, then flags 3 clamp to 0..1.
+    const struct { float fraction, random, multiplier; } cases[] = {
+        { 0, .5f, 1 },
+        { .0625f, .5f, 0 },
+        { .125f, .5f, .73449050f },
+        { .1875f, .5f, .08027795f },
+        { .25f, .5f, 1 },
+        { .25f, std::nextafter (.5f, 1.0f), 0 }
+    };
+    for (const auto& sample : cases) {
+        CAPTURE (sample.fraction, sample.random);
+        ParticleInstance particle;
+        particle.age = sample.fraction * 8;
+        particle.lifetime = 8;
+        particle.oscillationRandom = sample.random;
+        particle.velocity = { -30, 40, -50 };
+        applyParticleControlPointRemap (particle, parsed->remap, {}, false);
+        const glm::vec3 expected = glm::vec3 (-30, 40, -50) * sample.multiplier;
+        for (int axis = 0; axis < 3; ++axis) {
+            CHECK (particle.velocity[axis] == Catch::Approx (expected[axis]).margin (.0001f));
+        }
+        CHECK (particle.oscillationRandom == sample.random);
+        particle.velocity = glm::vec3 (0);
+        applyParticleControlPointRemap (particle, parsed->remap, {}, false);
+        CHECK (particle.velocity == glm::vec3 (0));
+    }
+}

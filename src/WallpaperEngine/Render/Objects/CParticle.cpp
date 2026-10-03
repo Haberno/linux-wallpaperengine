@@ -8,6 +8,7 @@
 
 #include <GL/glew.h>
 #include <algorithm>
+#include <bit>
 #include <cmath>
 #include <glm/gtc/constants.hpp>
 #include <glm/gtc/matrix_transform.hpp>
@@ -1491,6 +1492,36 @@ void WallpaperEngine::Render::Objects::applyParticleControlPointRemap (
     ParticleInstance& particle, const ControlPointRemap& remap,
     const std::vector<ControlPointData>& controlPoints, const bool initializer
 ) {
+    if (remap.mode == ControlPointRemap::Mode::LifetimeNoiseToVelocity
+        || remap.mode == ControlPointRemap::Mode::LifetimeFbmToSpeed) {
+        const float minimum = remap.inputRangeMin->value->getFloat ();
+        float span = remap.inputRangeMax->value->getFloat () - minimum;
+        if (span == 0.0f) span = std::numeric_limits<float>::epsilon ();
+        const float input = glm::clamp ((particle.getLifetimePos () - minimum) / span, 0.0f, 1.0f)
+            * remap.transformInputScale;
+        // Native shares this exact float-bit seed with oscillation/turbulence;
+        // independent random draws or numeric float-to-uint conversion differ.
+        const uint32_t seed = std::bit_cast<uint32_t> (particle.oscillationRandom);
+        if (remap.mode == ControlPointRemap::Mode::LifetimeFbmToSpeed) {
+            const float noise = seededFbmNoise2D (seed, input, 0.0f) * .5f + .5f;
+            const float outputMin = remap.outputRangeMin->value->getFloat ();
+            const float mapped = outputMin + noise * (remap.outputRangeMax->value->getFloat () - outputMin);
+            // Native speed multiplication preserves direction; flags 3 clamp
+            // the mapped scalar as well as the normalized input.
+            particle.velocity *= glm::clamp (mapped, 0.0f, 1.0f);
+            return;
+        }
+        const glm::vec3 noise {
+            seededSimplexNoise2D (seed, input, 0.0f),
+            seededSimplexNoise2D (seed ^ 188294317u, input, 0.0f),
+            seededSimplexNoise2D (seed ^ 1228574339u, input, 0.0f)
+        };
+        const glm::vec3 outputMin = remap.outputRangeMin->value->getVec3 ();
+        const glm::vec3 mapped = outputMin + (noise * .5f + .5f)
+            * (remap.outputRangeMax->value->getVec3 () - outputMin);
+        particle.velocity = mapped * glm::vec3 (1.0f, -1.0f, 1.0f);
+        return;
+    }
     // Native allocates the input pair too, but this scalar input branch reads
     // the OUTPUT pair (14023d074 / 140244c5e; paired native readback).
     const glm::vec3 start = controlPoints[remap.outputControlPoint0].position;
@@ -1535,10 +1566,15 @@ OperatorFunc CParticle::createControlPointRemapOperator (const ControlPointRemap
     includeControlPoint (remap.inputControlPoint1);
     includeControlPoint (remap.outputControlPoint0);
     includeControlPoint (remap.outputControlPoint1);
-    return [&remap] (std::vector<ParticleInstance>& particles, uint32_t count,
+    return [this, &remap] (std::vector<ParticleInstance>& particles, uint32_t count,
                      const std::vector<ControlPointData>& controlPoints, float, float) {
         for (uint32_t i = 0; i < count; ++i) {
-            if (particles[i].alive) applyParticleControlPointRemap (particles[i], remap, controlPoints, false);
+            if (!particles[i].alive) continue;
+            if ((remap.mode == ControlPointRemap::Mode::LifetimeNoiseToVelocity
+                 || remap.mode == ControlPointRemap::Mode::LifetimeFbmToSpeed) && particles[i].oscillationRandom < 0.0f) {
+                particles[i].oscillationRandom = WallpaperEngine::Maths::randomFloat (m_rng, 0.0f, 1.0f);
+            }
+            applyParticleControlPointRemap (particles[i], remap, controlPoints, false);
         }
     };
 }

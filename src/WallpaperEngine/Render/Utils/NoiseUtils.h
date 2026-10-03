@@ -1,6 +1,8 @@
 #pragma once
 
+#include <bit>
 #include <cmath>
+#include <cstdint>
 #include <glm/glm.hpp>
 
 namespace WallpaperEngine::Render::Utils {
@@ -70,6 +72,51 @@ inline float simplexNoise2D (float x, float y) {
     return 45.23065f * (corner (x0, y0, i, j)
 	+ corner (x0 - i1 + unskew, y0 - j1 + unskew, i + i1, j + j1)
 	+ corner (x0 - 1.0f + 2.0f * unskew, y0 - 1.0f + 2.0f * unskew, i + 1, j + 1));
+}
+
+// Native remap noise uses the particle random float's bits as its seed, not
+// the permutation table used by position offsets and turbulence (1400fbe90).
+inline float seededSimplexNoise2D (uint32_t seed, float x, float y) {
+    constexpr float skew = .3660253882408142f;
+    constexpr float unskew = .21132487058639526f;
+    const float s = (x + y) * skew;
+    const float i = std::floor (x + s), j = std::floor (y + s);
+    const float t = (j + i) * unskew;
+    const float x0 = x - (i - t), y0 = y - (j - t);
+    const uint32_t ix = static_cast<uint32_t> (static_cast<int32_t> (i)) * 501125321u;
+    const uint32_t iy = static_cast<uint32_t> (static_cast<int32_t> (j)) * 1136930381u;
+    const uint32_t dx = y0 < x0 ? 501125321u : 0u;
+    const uint32_t dy = y0 < x0 ? 0u : 1136930381u;
+    const auto corner = [seed] (float cx, float cy, uint32_t a, uint32_t b) {
+	uint32_t hash = (seed ^ a ^ b) * 668265261u;
+	hash ^= static_cast<uint32_t> (std::bit_cast<int32_t> (hash) >> 15);
+	const float gx = (hash & 1) ? -cx : cx;
+	const float gy = (hash & 2) ? -cy : cy;
+	const float gradient = (hash & 4) ? gy * 2.4142136573791504f + gx
+					 : gx * 2.4142136573791504f + gy;
+	const float weight = glm::max (.5f + ((-cx * cx) - cy * cy), 0.0f);
+	const float squared = weight * weight;
+	return gradient * (squared * squared);
+    };
+    return (corner (x0, y0, ix, iy)
+	    + corner ((x0 - (dx != 0)) + unskew, (y0 - (dy != 0)) + unskew, ix + dx, iy + dy)
+	    + corner (x0 - .5773502588272095f, y0 - .5773502588272095f,
+		      ix + 501125321u, iy + 1136930381u)) * 38.283687591552734f;
+}
+
+// Native remap's default FBM: three octaves, gain .5, lacunarity 2 and
+// normalized initial amplitude. Each octave increments the integer seed.
+inline float seededFbmNoise2D (uint32_t seed, float x, float y) {
+    float amplitude = 1.0f / 1.75f;
+    float sum = seededSimplexNoise2D (seed, x, y) * amplitude;
+    for (int octave = 1; octave < 3; ++octave) {
+	++seed;
+	x *= 2.0f;
+	y *= 2.0f;
+	amplitude *= .5f;
+	sum += seededSimplexNoise2D (seed, x, y) * amplitude;
+    }
+    return sum;
 }
 
 inline float fractalNoise2D (float x, float y, int octaves) {

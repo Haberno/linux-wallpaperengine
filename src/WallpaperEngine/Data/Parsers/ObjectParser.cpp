@@ -987,14 +987,19 @@ static std::optional<ControlPointRemap> parseControlPointRemap (
     const auto transform = it.optional<std::string> ("transformfunction", "none");
     const bool positionInput = input == "positionbetweentwocontrolpoints" && output == "velocity";
     const bool positionOutput = input == "maxlifetime" && output == "positionbetweentwocontrolpoints";
+    const bool noiseVelocity = !initializer && input == "lifetimefraction" && output == "velocity"
+        && transform == "simplexnoise";
+    const bool noiseSpeed = !initializer && input == "lifetimefraction" && output == "speed"
+        && transform == "fbmnoise" && it.optional ("transformoctaves", 3) == 3;
     const bool defaultBlend = initializer || (it.optional ("blendinstart", 0.0f) == 0.0f
         && it.optional ("blendinend", 0.0f) == 0.0f && it.optional ("blendoutstart", 1.0f) == 1.0f
         && it.optional ("blendoutend", 1.0f) == 1.0f);
-    if ((!positionInput && !positionOutput) || operation != "remap" || transform != "none"
+    if ((!noiseVelocity && !noiseSpeed && ((!positionInput && !positionOutput) || transform != "none"))
+        || operation != (noiseSpeed ? "multiply" : "remap")
         || it.optional<std::string> ("inputcomponent", "all") != "all"
         || it.optional<std::string> ("outputcomponent", "all") != "all"
-        || it.optional ("flags", 1u) != 1u || !defaultBlend) {
-        // Keep unsupported transforms explicit: a noise remap is not a linear remap.
+        || it.optional ("flags", 1u) != (noiseSpeed ? 3u : 1u) || !defaultBlend) {
+        // Keep unmeasured pairs, transforms, flags and octave counts explicit.
         sLog.error ("Unsupported particle ", initializer ? "remapinitialvalue" : "remapvalue",
                     " settings (input=", input, ", output=", output, ", operation=", operation,
                     ", transform=", transform, "); skipping");
@@ -1004,7 +1009,9 @@ static std::optional<ControlPointRemap> parseControlPointRemap (
         return std::min (static_cast<uint32_t> (it.optional (key, fallback)), 7u);
     };
     return ControlPointRemap {
-        .mode = positionInput ? ControlPointRemap::Mode::PositionToVelocity
+        .mode = noiseVelocity ? ControlPointRemap::Mode::LifetimeNoiseToVelocity
+                              : noiseSpeed ? ControlPointRemap::Mode::LifetimeFbmToSpeed
+                              : positionInput ? ControlPointRemap::Mode::PositionToVelocity
                               : ControlPointRemap::Mode::LifetimeToPosition,
         .inputRangeMin = it.user ("inputrangemin", properties, 0.0f),
         .inputRangeMax = it.user ("inputrangemax", properties, 1.0f),
@@ -1014,6 +1021,7 @@ static std::optional<ControlPointRemap> parseControlPointRemap (
         .inputControlPoint1 = point ("inputcontrolpoint1", 1),
         .outputControlPoint0 = point ("outputcontrolpoint0", 0),
         .outputControlPoint1 = point ("outputcontrolpoint1", 1),
+        .transformInputScale = it.optional ("transforminputscale", 2.0f),
     };
 }
 
