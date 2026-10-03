@@ -1598,7 +1598,14 @@ void WallpaperEngine::Render::Objects::applyParticleControlPointRemap (
         particle.velocity *= weight == 1.0f ? multiplier : 1.0f + (multiplier - 1.0f) * weight;
     } else if (remap.mode == ControlPointRemap::Mode::PositionToVelocity) {
         // Authored velocity uses the same Y-up coordinates as velocityrandom.
-        const glm::vec3 target = mapped * glm::vec3 (1.0f, -1.0f, 1.0f);
+        glm::vec3 target = mapped * glm::vec3 (1.0f, -1.0f, 1.0f);
+        switch (remap.operation) {
+            case ControlPointRemap::Operation::Remap: break;
+            // Multipliers are dimensionless factors, not reflected velocity deltas.
+            case ControlPointRemap::Operation::Multiply: target = particle.velocity * mapped; break;
+            case ControlPointRemap::Operation::Add: target = particle.velocity + target; break;
+            case ControlPointRemap::Operation::Subtract: target = particle.velocity - target; break;
+        }
         particle.velocity = weight == 1.0f ? target : particle.velocity + (target - particle.velocity) * weight;
     } else {
         // Native scalar arithmetic acts on current size or longitudinal fraction.

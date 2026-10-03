@@ -1029,7 +1029,7 @@ static std::optional<ControlPointRemap> parseControlPointRemap (
         && output == "positionbetweentwocontrolpoints";
     const bool sizeOutput = positionInput && output == "size";
     const bool speedOutput = positionInput && output == "speed";
-    const bool scalarArithmetic = (positionOutput || sizeOutput)
+    const bool arithmetic = (positionOutput || sizeOutput || (positionInput && output == "velocity"))
         && (operation == "multiply" || operation == "add" || operation == "subtract");
     const bool noiseVelocity = !initializer && input == "lifetimefraction" && output == "velocity"
         && transform == "simplexnoise";
@@ -1041,7 +1041,7 @@ static std::optional<ControlPointRemap> parseControlPointRemap (
         it.optional ("blendinstart", 0.0f), it.optional ("blendinend", 0.0f),
         it.optional ("blendoutstart", 1.0f), it.optional ("blendoutend", 1.0f));
     if ((!noiseVelocity && !noiseSpeed && ((!positionInput && !positionOutput) || transform != "none"))
-        || (operation != (noiseSpeed || speedOutput ? "multiply" : "remap") && !scalarArithmetic)
+        || (operation != (noiseSpeed || speedOutput ? "multiply" : "remap") && !arithmetic)
         || it.optional<std::string> ("inputcomponent", "all") != "all"
         || it.optional<std::string> ("outputcomponent", "all") != "all"
         || !supportedFlags) {

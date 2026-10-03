@@ -2544,3 +2544,71 @@ TEST_CASE ("upright sprite basis matches the native locked-axis draw helper", "[
     CHECK (calculateUprightParticleOrientation ({ 0, 0, 0 }, glm::mat3 (1), { 0, .8f, .6f }, false) == expected[0]);
     CHECK (calculateUprightParticleOrientation ({ 0, 7, 0 }, glm::mat3 (1), { 0, .8f, .6f }, false) == expected[0]);
 }
+
+TEST_CASE ("two-control-point velocity arithmetic preserves factors and reflects authored deltas", "[particle][remap][remap-position-velocity-arithmetic]") {
+    using WallpaperEngine::Render::Objects::applyParticleControlPointRemap;
+    using WallpaperEngine::Render::Objects::ControlPointData;
+    // Fixed native arithmetic controls, reflected into the fork's velocity space.
+    const struct { const char* operation; glm::vec3 full, half, clampedFull, clampedHalf; } cases[] = {
+        { "remap", { 2, -3, -4 }, { 3, -4.5f, 2 }, { 1, -1, 0 }, { 2.5f, -3.5f, 4 } },
+        { "multiply", { 8, -18, -32 }, { 6, -12, -12 }, { 4, -6, 0 }, { 4, -6, 4 } },
+        { "add", { 6, -9, 4 }, { 5, -7.5f, 6 }, { 5, -7, 8 }, { 4.5f, -6.5f, 8 } },
+        { "subtract", { 2, -3, 12 }, { 3, -4.5f, 10 }, { 3, -5, 8 }, { 3.5f, -5.5f, 8 } },
+        { "", { 8, -18, -32 }, { 6, -12, -12 }, { 4, -6, 0 }, { 4, -6, 4 } },
+    };
+    std::vector<ControlPointData> points (4);
+    points[0].position = { 1000, 0, 0 };
+    points[1].position = { 1100, 0, 0 };
+    points[2].position = { -12, 20, 7 };
+    points[3].position = { 20, 84, -25 };
+    for (const bool initializer : { true, false }) {
+        for (const auto& sample : cases) {
+            DYNAMIC_SECTION ("initializer=" << initializer << ", operation=" << sample.operation) {
+                for (const uint32_t flags : { 0u, 2u }) {
+                    for (const float age : { 0.0f, 2.0f, 4.0f }) {
+                        INFO ("flags=" << flags << ", age=" << age);
+                        WallpaperEngine::Data::Model::Project project {};
+                        auto data = WallpaperEngine::Data::JSON::JSON::parse (R"({"id":408,"particle":{}})");
+                        auto node = WallpaperEngine::Data::JSON::JSON::parse (R"({
+                            "input":"positionbetweentwocontrolpoints","output":"velocity",
+                            "outputrangemin":"1 2 -5","outputrangemax":"5 6 -1",
+                            "inputcontrolpoint0":0,"inputcontrolpoint1":1,
+                            "outputcontrolpoint0":2,"outputcontrolpoint1":3,
+                            "blendinstart":0,"blendinend":0.5
+                        })");
+                        node["name"] = initializer ? "remapinitialvalue" : "remapvalue";
+                        node["flags"] = flags;
+                        if (*sample.operation) node["operation"] = sample.operation;
+                        data["particle"][initializer ? "initializer" : "operator"] = { node };
+                        const auto object = WallpaperEngine::Data::Parsers::ObjectParser::parse (data, project);
+                        const auto* definition = object->as<Particle> ();
+                        REQUIRE (definition != nullptr);
+                        REQUIRE ((initializer ? definition->initializers.size () : definition->operators.size ()) == 1);
+                        const ControlPointRemap* remap = nullptr;
+                        if (initializer) {
+                            const auto* parsed = definition->initializers.front ()->as<ControlPointRemapInitializer> ();
+                            REQUIRE (parsed != nullptr);
+                            remap = &parsed->remap;
+                        } else {
+                            const auto* parsed = definition->operators.front ()->as<ControlPointRemapOperator> ();
+                            REQUIRE (parsed != nullptr);
+                            remap = &parsed->remap;
+                        }
+                        ParticleInstance particle;
+                        particle.position = { 2, 33, -1 }; // Signed output-pair projection = .25.
+                        particle.velocity = { 4, -6, 8 };
+                        particle.lifetime = 8;
+                        particle.age = age;
+                        applyParticleControlPointRemap (particle, *remap, points, initializer);
+                        const auto full = flags == 0 ? sample.full : sample.clampedFull;
+                        const auto half = flags == 0 ? sample.half : sample.clampedHalf;
+                        const auto expected = initializer || age == 4 ? full : age == 2 ? half : glm::vec3 (4, -6, 8);
+                        CHECK (particle.velocity == expected);
+                        CHECK (particle.position == glm::vec3 (2, 33, -1));
+                        CHECK (particle.age == age);
+                    }
+                }
+            }
+        }
+    }
+}
