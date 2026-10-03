@@ -84,7 +84,14 @@ MdlBoneFrame samplePose (const MdlActiveAnimation& layer, const std::vector<MdlB
     const float blend = frame - static_cast<float> (firstFrame);
     const auto& current = frames[std::min (firstFrame, frames.size () - 1)];
     const auto& next = frames[std::min (firstFrame + 1, frames.size () - 1)];
-    return blendPose (current, next, blend);
+    // Native 1401f89a0 uses shortest-hemisphere nlerp between authored frames,
+    // including the baked closing frame of a match-loop clip.
+    const auto nextRotation = glm::dot (current.rotation, next.rotation) < 0.0f ? -next.rotation : next.rotation;
+    return {
+	.translation = glm::mix (current.translation, next.translation, blend),
+	.rotation = glm::normalize (current.rotation * (1.0f - blend) + nextRotation * blend),
+	.scale = glm::mix (current.scale, next.scale, blend),
+    };
 }
 
 void composeLayer (

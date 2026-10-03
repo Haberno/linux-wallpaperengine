@@ -448,6 +448,36 @@ TEST_CASE ("MDLA unbaked clip ranges sample their source animation", "[mdl][anim
     }
 }
 
+TEST_CASE ("MDL match-loop closure uses native quaternion interpolation", "[mdl][animation]") {
+    MdlAnimationData data;
+    data.bones.resize (1);
+    MdlAnimationClip clip;
+    clip.flags = 0x401; // The model compiler bakes matchloop clips into their own tracks.
+    clip.mode = "loop";
+    clip.fps = 1;
+    clip.frameCount = 2;
+    clip.boneFrames.resize (1);
+    clip.boneFrames[0].resize (3);
+    clip.boneFrames[0][1].rotation = glm::angleAxis (glm::radians (120.0f), glm::vec3 (0, 0, 1));
+
+    for (const bool antipodal : { false, true }) {
+	CAPTURE (antipodal);
+	if (antipodal) clip.boneFrames[0][1].rotation = -clip.boneFrames[0][1].rotation;
+	for (const float time : { 0.25f, 1.25f, 2.25f, -0.75f }) {
+	    CAPTURE (time);
+	    const auto pose = MdlAnimationEvaluator::evaluate (data, {{ .animation = &clip, .time = time }});
+	    const bool closing = time == 1.25f || time < 0;
+	    // Native 1401f89a0 normalizes the shortest-hemisphere weighted sum.
+	    // A quarter-frame gives these exact unit-axis components; slerp differs.
+	    CHECK (pose.worldBones[0][0].x == Catch::Approx ((closing ? -1.0f : 23.0f) / 26.0f).margin (1e-6f));
+	    CHECK (pose.worldBones[0][0].y == Catch::Approx ((closing ? 15.0f : 7.0f) * std::sqrt (3.0f) / 26.0f).margin (1e-6f));
+	}
+    }
+    const auto end = MdlAnimationEvaluator::evaluate (data, {{ .animation = &clip, .frame = 2.0f }});
+    CHECK (end.worldBones[0][0].x == Catch::Approx (1));
+    CHECK (end.worldBones[0][0].y == Catch::Approx (0));
+}
+
 TEST_CASE ("MDL animation evaluator interpolates and composes parent bones") {
     const auto animationData = MdlAnimationParser::parse (makeAnimatedModelSections (), "synthetic.mdl");
     const std::vector<MdlActiveAnimation> active {
