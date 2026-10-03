@@ -88,6 +88,8 @@ std::optional<WallpaperEngine::Data::Model::MdlBoneSpring> parseSpring (const nl
 	.mass = number ("m", 0.0f),
 	.tip = vector ("tp"),
 	.maxDistance = number ("tm", 0.0f),
+	.limitTorque = flag ("lt"),
+	.maxTorque = flag ("lt") ? number ("ltmax", 0.0f) : 0.0f,
 	.limitAngles = flag ("la"),
 	.minAngles = vector ("lamin"),
 	.maxAngles = vector ("lamax"),

@@ -247,7 +247,6 @@ float wrapAngle (const float angle) {
 /**
  * One spring bone step from native 1401fdf90, returning the local physics transform that
  * follows the animated bone. `animatedWorld` already carries the parent's physics.
- * ponytail: the "lt" torque limit is not applied; no installed spring rig enables it.
  */
 glm::mat4 stepSpring (
     const MdlBoneSpring& spring, MdlPhysicsStep& physics, MdlPhysicsState::Bone& state, const glm::mat4& previous,
@@ -286,6 +285,17 @@ glm::mat4 stepSpring (
 	auto& velocity = state.angularVelocity;
 	velocity *= glm::slerp (identity, follow, std::min (drag * spring.rotationInertia * degree, 1.0f));
 	velocity *= glm::slerp (identity, glm::quat (-state.angles), std::min (spring.rotationStiffness * degree * dt, 1.0f));
+	if (spring.limitTorque) {
+	    // Native limits the three quaternion ratios, not Euler angles or total rotation.
+	    const glm::vec3 ratios = glm::vec3 (velocity.x, velocity.y, velocity.z) / velocity.w;
+	    glm::vec3 limited;
+	    for (int axis = 0; axis < 3; ++axis) {
+		const float angle = glm::degrees (2.0f * std::atan (ratios[axis]));
+		const float capped = std::max (-spring.maxTorque, std::min (spring.maxTorque, angle));
+		limited[axis] = std::tan (glm::radians (capped) * 0.5f);
+	    }
+	    velocity = glm::normalize (glm::quat (1.0f, limited.x, limited.y, limited.z));
+	}
 	// The velocity is one 60 Hz step; integrate it on top of the carried orientation.
 	const glm::quat step = glm::slerp (identity, velocity, std::min (dt * 60.0f, 1.0f));
 	glm::vec3 angles;

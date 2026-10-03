@@ -1076,3 +1076,70 @@ TEST_CASE ("Puppet morph layers preserve sparse targets and native activation", 
     pose = MdlAnimationEvaluator::evaluate (data, { base, clear, partial });
     CHECK (pose.puppetMorphMask == 8);
 }
+
+TEST_CASE ("Spring torque limits retain native scalar parsing and zero defaults", "[mdl][animation][physics][torque]") {
+    const std::vector<std::string> settings {
+	R"({"se":true,"r":true,"lt":true,"ltmax":7.5})",
+	R"({"se":true,"r":true,"lt":true})",
+	R"({"se":true,"r":true,"lt":true,"ltmax":"7.5"})",
+	R"({"se":true,"r":true,"lt":false,"ltmax":7.5})",
+	R"({"se":true,"r":true,"lt":1,"ltmax":7.5})",
+    };
+    std::vector<char> bytes;
+    appendMarker (bytes, "MDLS0002");
+    const auto endOffset = bytes.size ();
+    appendValue<uint32_t> (bytes, 0);
+    appendValue<uint32_t> (bytes, settings.size ());
+    for (const auto& setting : settings) {
+	appendString (bytes, "bone");
+	appendValue<uint32_t> (bytes, 1);
+	appendValue<int32_t> (bytes, -1);
+	appendValue<uint32_t> (bytes, 64);
+	appendMatrix (bytes, glm::mat4 (1));
+	appendString (bytes, setting);
+    }
+    patchU32 (bytes, endOffset, bytes.size ());
+    const auto parsed = MdlAnimationParser::parse (bytes, "torque.mdl");
+    REQUIRE (parsed.bones.size () == settings.size ());
+    for (size_t index = 0; index < settings.size (); ++index) {
+	REQUIRE (parsed.bones[index].spring.has_value ());
+	CHECK (parsed.bones[index].spring->limitTorque == (index < 3));
+	CHECK (parsed.bones[index].spring->maxTorque == Catch::Approx (index == 0 ? 7.5f : 0));
+    }
+}
+
+TEST_CASE ("Spring torque caps quaternion components before timestep integration", "[mdl][animation][physics][torque]") {
+    MdlAnimationData data;
+    data.bones = { { .name = "spring", .spring = MdlBoneSpring {
+	.rotation = true, .rotationInertia = 0, .limitTorque = true, .maxTorque = 10 } } };
+    const auto evaluate = [&] (const glm::quat& velocity, const float dt) {
+	MdlPhysicsState state;
+	MdlPhysicsStep physics { .state = state, .deltaTime = dt };
+	(void)MdlAnimationEvaluator::evaluate (data, {}, &physics);
+	state.bones[0].angularVelocity = velocity;
+	const auto pose = MdlAnimationEvaluator::evaluate (data, {}, &physics);
+	return std::make_pair (state.bones[0].angularVelocity, pose.worldBones[0]);
+    };
+    // These fixed ratios encode +40, -30 and +4 degrees independently. A total
+    // quaternion-angle cap or Euler clamp produces a different mixed-axis result.
+    const auto input = glm::normalize (glm::quat (1, 0.3639702343f, -0.2679491924f, 0.0349207695f));
+    const auto expected = glm::normalize (glm::quat (1, 0.08748866353f, -0.08748866353f, 0.0349207695f));
+    for (const float dt : { 1 / 120.0f, 1 / 60.0f, 1 / 30.0f }) {
+	const auto actual = evaluate (input, dt).first;
+	for (int component = 0; component < 4; ++component)
+	    CHECK (actual[component] == Catch::Approx (expected[component]).margin (1e-6f));
+    }
+    const auto zInput = glm::angleAxis (glm::radians (40.0f), glm::vec3 (0, 0, 1));
+    for (const float dt : { 1 / 120.0f, 1 / 60.0f, 1 / 30.0f }) {
+	const auto matrix = evaluate (zInput, dt).second;
+	const float angle = glm::radians (dt < 1 / 60.0f ? 5.0f : 10.0f);
+	CHECK (matrix[0][0] == Catch::Approx (std::cos (angle)).margin (1e-6f));
+	CHECK (matrix[0][1] == Catch::Approx (std::sin (angle)).margin (1e-6f));
+    }
+    data.bones[0].spring->maxTorque = 0;
+    CHECK (evaluate (input, 1 / 60.0f).first == glm::quat (1, 0, 0, 0));
+    data.bones[0].spring->limitTorque = false;
+    const auto untouched = evaluate (input, 1 / 60.0f).first;
+    for (int component = 0; component < 4; ++component)
+	CHECK (untouched[component] == Catch::Approx (input[component]).margin (1e-6f));
+}

@@ -30,6 +30,9 @@ struct MdlBoneSpring {
     glm::vec3 tip = glm::vec3 (0.0f);
     /** Translation offset limit in scene units before object scale (tm). */
     float maxDistance = 0.0f;
+    bool limitTorque = false; // lt
+    /** Per-axis quaternion rotation cap in degrees per 60 Hz velocity step (ltmax). */
+    float maxTorque = 0.0f;
     bool limitAngles = false; // la
     glm::vec3 minAngles = glm::vec3 (0.0f);
     glm::vec3 maxAngles = glm::vec3 (0.0f);
