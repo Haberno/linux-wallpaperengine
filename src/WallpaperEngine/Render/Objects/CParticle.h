@@ -24,6 +24,7 @@ namespace WallpaperEngine::Render::Objects {
 
 constexpr uint32_t DEFAULT_MAX_PARTICLES = 1000;
 
+[[nodiscard]] float advanceParticleRenderTime (double currentTime, double& previousTime);
 [[nodiscard]] float calculateParticleSimulationDelta (float elapsed, float rate);
 [[nodiscard]] float calculateParticleEmissionRate (float emitterRate, float count);
 [[nodiscard]] float calculateParticleLifetime (

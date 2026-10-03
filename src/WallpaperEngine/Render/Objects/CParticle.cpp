@@ -20,6 +20,12 @@ using namespace WallpaperEngine::Render::Objects;
 using namespace WallpaperEngine::Render::Utils;
 using namespace WallpaperEngine::Data::Model;
 
+float WallpaperEngine::Render::Objects::advanceParticleRenderTime (const double currentTime, double& previousTime) {
+    const float delta = previousTime == 0.0 ? 0.0f : static_cast<float> (currentTime - previousTime);
+    previousTime = currentTime;
+    return delta;
+}
+
 float WallpaperEngine::Render::Objects::calculateParticleSimulationDelta (const float elapsed, const float rate) {
     return glm::max (elapsed, 0.0f) * glm::max (rate, 0.0f);
 }
@@ -573,14 +579,9 @@ void CParticle::render () {
     }
     if (!m_particle.visible->value->getBool () || !isVisibleThroughParents ()) return;
 
-    // All children start with the parent, including systems with no root emitter.
-    if (m_time == 0.0) {
-	m_time = g_Time;
-    }
-
-    // Update particles
-    float dt = g_Time - static_cast<float> (m_time);
-    m_time = g_Time;
+    // All systems in this scene frame share one double driver sample. Narrow only
+    // the interval; float timestamps lose individual frames after long uptimes.
+    float dt = advanceParticleRenderTime (getScene ().getFrameRenderTime (), m_time);
 
     // Control-point motion uses elapsed frame time, before simulation rate and
     // the physics stability cap. Sample even when emission/rate is paused.
@@ -727,7 +728,7 @@ void CParticle::spawnEventChild (FollowChildSystem& child, const ParticleInstanc
     const glm::mat4 flipY = glm::scale (glm::mat4 (1.0f), glm::vec3 (1.0f, -1.0f, 1.0f));
     const glm::mat4 parentToLocal = glm::inverse (flipY * renderer.resolveWorldMatrix () * flipY);
     renderer.m_followPosition = glm::vec3 (parentToLocal * glm::vec4 (particle.position, 1.0f));
-    renderer.m_time = g_Time;
+    renderer.m_time = getScene ().getFrameRenderTime ();
     renderer.play ();
 }
 

@@ -978,6 +978,42 @@ TEST_CASE ("control point spaces match native mirrored-layer results", "[particl
     CHECK (resolveParticleControlPoint (offset, glm::inverse (glm::mat4 (0.0f)), true) == glm::vec3 (0.0f));
 }
 
+TEST_CASE ("particle frame clock retains individual long uptime intervals", "[particle][particle-time]") {
+    using WallpaperEngine::Render::Objects::advanceParticleRenderTime;
+    for (const double uptime : { 432000.0, 2678400.0 }) {
+        for (const double fps : { 60.0, 165.0 }) {
+            CAPTURE (uptime, fps);
+            double previous = uptime;
+            const double now = uptime + 1.0 / fps;
+            CHECK (advanceParticleRenderTime (now, previous) == Catch::Approx (1.0 / fps));
+            CHECK (previous == now);
+            CHECK (advanceParticleRenderTime (now, previous) == 0.0f);
+        }
+    }
+}
+
+TEST_CASE ("particle frame clock preserves activation and rebased anchors", "[particle][particle-time]") {
+    using WallpaperEngine::Render::Objects::advanceParticleRenderTime;
+    const double uptime = 432000.0;
+    const double interval = 1.0 / 60.0;
+    double previous = 0.0;
+    CHECK (advanceParticleRenderTime (uptime, previous) == 0.0f);
+    CHECK (advanceParticleRenderTime (uptime + interval, previous) == Catch::Approx (interval));
+
+    // A pooled child starts in its parent's current frame and advances on the next.
+    previous = uptime + interval;
+    CHECK (advanceParticleRenderTime (previous, previous) == 0.0f);
+    CHECK (advanceParticleRenderTime (uptime + 2 * interval, previous) == Catch::Approx (interval));
+
+    // Loading rebases the local anchor; a paused rate still samples the frame clock.
+    previous = uptime - 10.25;
+    previous += 10.25;
+    const float elapsed = advanceParticleRenderTime (uptime + interval, previous);
+    CHECK (elapsed == Catch::Approx (interval));
+    CHECK (calculateParticleSimulationDelta (elapsed, 0.0f) == 0.0f);
+    CHECK (advanceParticleRenderTime (uptime + 2 * interval, previous) == Catch::Approx (interval));
+}
+
 TEST_CASE ("particle instance rate scales the complete simulation", "[particle]") {
     CHECK (calculateParticleSimulationDelta (1.0f / 60.0f, 0.15f)
 	   == Catch::Approx (0.15f / 60.0f));
