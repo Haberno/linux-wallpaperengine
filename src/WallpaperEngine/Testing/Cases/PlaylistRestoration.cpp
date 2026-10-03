@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <cstdlib>
+#include <fstream>
 
 using WallpaperEngine::Application::ApplicationContext;
 namespace PlaylistState = WallpaperEngine::Application::PlaylistState;
@@ -81,4 +82,71 @@ TEST_CASE ("Timer playlists restore position and elapsed shutdown time", "[playl
 
     definition.items.push_back ("/wallpaper/d");
     CHECK_FALSE (PlaylistState::restore ("DP-1", definition, rng, at (1015), directory).has_value ());
+}
+
+TEST_CASE ("Named sequential playlists retain a checkpoint after appending items", "[playlist-append]") {
+    char name[] = "/tmp/lwe-playlist-append-test-XXXXXX";
+    const char* created = mkdtemp (name);
+    REQUIRE (created != nullptr);
+    const std::filesystem::path directory = created;
+    struct Cleanup {
+	std::filesystem::path path;
+	~Cleanup () {
+	    std::error_code ignored;
+	    std::filesystem::remove_all (path, ignored);
+	}
+    } cleanup { directory };
+    const auto at = [] (int64_t seconds) {
+	return std::chrono::system_clock::time_point { std::chrono::seconds (seconds) };
+    };
+    std::mt19937 rng (17);
+    ApplicationContext::PlaylistDefinition original;
+    original.name = "Evening";
+    original.items = { "/wallpaper/a", "/wallpaper/b", "/wallpaper/c" };
+    original.settings.delayMinutes = 1;
+    PlaylistState::save ("DP-1", original, { { 0, 1, 2 }, 1, 20 }, at (1000), directory);
+    auto appended = original;
+    appended.items.push_back ("/wallpaper/d");
+    const auto restored = PlaylistState::restore ("DP-1", appended, rng, at (1010), directory);
+    REQUIRE (restored.has_value ());
+    CHECK (restored->order == std::vector<std::size_t> { 0, 1, 2, 3 });
+    CHECK (restored->orderIndex == 1);
+    CHECK (restored->elapsedSeconds == 30);
+    auto unrelated = appended;
+    unrelated.name = "Morning";
+    CHECK_FALSE (PlaylistState::restore ("DP-1", unrelated, rng, at (1010), directory).has_value ());
+    CHECK_FALSE (PlaylistState::restore ("DP-2", appended, rng, at (1010), directory).has_value ());
+    unrelated = appended;
+    unrelated.settings.order = "random";
+    CHECK_FALSE (PlaylistState::restore ("DP-1", unrelated, rng, at (1010), directory).has_value ());
+    unrelated = appended;
+    std::swap (unrelated.items[0], unrelated.items[1]);
+    CHECK_FALSE (PlaylistState::restore ("DP-1", unrelated, rng, at (1010), directory).has_value ());
+    unrelated = original;
+    unrelated.items.pop_back ();
+    CHECK_FALSE (PlaylistState::restore ("DP-1", unrelated, rng, at (1010), directory).has_value ());
+    PlaylistState::save ("DP-1", original, { { 0, 1, 2 }, 2, 20 }, at (1000), directory);
+    const auto expired = PlaylistState::restore ("DP-1", appended, rng, at (1041), directory);
+    REQUIRE (expired.has_value ());
+    CHECK (expired->orderIndex == 3);
+    CHECK (expired->elapsedSeconds == Catch::Approx (0.01666665077f));
+    PlaylistState::save ("DP-1", original, { { 2, 0, 1 }, 1, 20 }, at (1000), directory);
+    CHECK_FALSE (PlaylistState::restore ("DP-1", appended, rng, at (1010), directory).has_value ());
+    original.name.clear ();
+    appended.name.clear ();
+    PlaylistState::save ("DP-1", original, { { 0, 1, 2 }, 1, 20 }, at (1000), directory);
+    CHECK_FALSE (PlaylistState::restore ("DP-1", appended, rng, at (1010), directory).has_value ());
+
+    // External v1 fixture: its filename was computed before the v2 implementation.
+    {
+	std::ofstream file (directory / "8b3ba580973b3028.json");
+	file << R"({"version":1,"identity":{"screen":"DP-legacy","items":["/wallpaper/a","/wallpaper/b","/wallpaper/c"],"mode":"timer","order":"sequential"},"order":[0,1,2],"index":1,"elapsed":20,"savedAt":1000})";
+    }
+    original.name = "Legacy";
+    const auto legacy = PlaylistState::restore ("DP-legacy", original, rng, at (1010), directory);
+    REQUIRE (legacy.has_value ());
+    CHECK (legacy->orderIndex == 1);
+    CHECK (legacy->elapsedSeconds == 30);
+    appended.name = original.name;
+    CHECK_FALSE (PlaylistState::restore ("DP-legacy", appended, rng, at (1010), directory).has_value ());
 }

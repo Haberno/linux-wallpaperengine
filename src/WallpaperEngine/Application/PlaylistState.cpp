@@ -10,6 +10,7 @@
 #include <cstdlib>
 #include <fstream>
 #include <iomanip>
+#include <numeric>
 #include <sstream>
 #include <stdexcept>
 #include <system_error>
@@ -33,13 +34,20 @@ std::filesystem::path stateDirectory (const std::filesystem::path& directory) {
 JSON identity (const std::string& screen, const ApplicationContext::PlaylistDefinition& definition) {
     std::vector<std::string> items;
     for (const auto& item : definition.items) items.push_back (item.string ());
-    return { { "screen", screen }, { "items", items }, { "order", definition.settings.order },
+    return { { "screen", screen }, { "name", definition.name }, { "items", items }, { "order", definition.settings.order },
 	     { "mode", definition.settings.mode } };
+}
+
+JSON checkpointKey (JSON identity) {
+    if (const auto name = identity.find ("name"); name != identity.end () && !name->get<std::string> ().empty ()) {
+	identity.erase ("items");
+    }
+    return identity;
 }
 
 std::filesystem::path filename (const std::filesystem::path& directory, const JSON& identity) {
     uint64_t hash = 14695981039346656037ull;
-    for (const unsigned char c : identity.dump ()) hash = (hash ^ c) * 1099511628211ull;
+    for (const unsigned char c : checkpointKey (identity).dump ()) hash = (hash ^ c) * 1099511628211ull;
     std::ostringstream name;
     name << std::hex << std::setw (16) << std::setfill ('0') << hash << ".json";
     return directory / name.str ();
@@ -68,16 +76,36 @@ std::optional<State> restore (
     if (definition.settings.mode != "timer" || definition.items.size () < 2) return std::nullopt;
     const auto storage = stateDirectory (directory);
     if (storage.empty ()) return std::nullopt;
-    const auto key = identity (screen, definition);
-    const auto path = filename (storage, key);
-    if (!std::filesystem::exists (path)) return std::nullopt;
+    auto key = identity (screen, definition);
+    auto path = filename (storage, key);
+    const bool legacy = !std::filesystem::exists (path);
+    if (legacy) {
+	// V1 lacks authored identity, so it is usable only for an exact item list.
+	key.erase ("name");
+	path = filename (storage, key);
+	if (!std::filesystem::exists (path)) return std::nullopt;
+    }
     std::ifstream input (path);
     if (!input) throw std::runtime_error ("Cannot read playlist state");
     const auto saved = JSON::parse (input);
-    if (saved.at ("version") != 1 || saved.at ("identity") != key) return std::nullopt;
+    if (saved.at ("version") != (legacy ? 1 : 2)) return std::nullopt;
+    const auto& previous = saved.at ("identity");
+    const auto& items = previous.at ("items");
+    const auto& currentItems = key.at ("items");
+    const bool appended = !legacy && !definition.name.empty () && definition.settings.order == "sequential"
+	&& checkpointKey (previous) == checkpointKey (key) && items.is_array () && items.size () >= 2
+	&& items.size () < currentItems.size () && std::equal (items.begin (), items.end (), currentItems.begin ());
+    if (previous != key && !appended) return std::nullopt;
     State state { saved.at ("order").get<std::vector<std::size_t>> (), saved.at ("index").get<std::size_t> (),
 		  saved.at ("elapsed").get<float> () };
-    if (!valid (state, definition.items.size ())) return std::nullopt;
+    if (!valid (state, items.size ())) return std::nullopt;
+    if (appended) {
+	for (std::size_t i = 0; i < state.order.size (); i++) {
+	    if (state.order[i] != i) return std::nullopt;
+	}
+	state.order.resize (definition.items.size ());
+	std::iota (state.order.begin (), state.order.end (), 0);
+    }
     const auto savedAt = saved.at ("savedAt").get<int64_t> ();
     state.elapsedSeconds += static_cast<float> (std::max (0.0, double (timestamp (now)) - double (savedAt)));
     if (!std::isfinite (state.elapsedSeconds)) return std::nullopt;
@@ -105,7 +133,7 @@ void save (
     if (storage.empty ()) return;
     const auto key = identity (screen, definition);
     const auto path = filename (storage, key);
-    const auto data = JSON { { "version", 1 }, { "identity", key }, { "order", state.order },
+    const auto data = JSON { { "version", 2 }, { "identity", key }, { "order", state.order },
 			    { "index", state.orderIndex }, { "elapsed", state.elapsedSeconds },
 			    { "savedAt", timestamp (now) } }.dump ();
     std::filesystem::create_directories (storage);
