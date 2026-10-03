@@ -200,6 +200,7 @@ CImage::CImage (Wallpapers::CScene& scene, const Image& image) :
     this->registerProperty ("alpha", *image.alpha);
     this->registerProperty ("color", *image.color);
     this->registerProperty ("parallaxDepth", *image.parallaxDepth);
+    this->registerProperty ("nointerpolation", *image.noInterpolation);
 
     // get scene width and height to calculate positions
     auto scene_width = static_cast<float> (scene.getWidth ());
@@ -209,7 +210,8 @@ CImage::CImage (Wallpapers::CScene& scene, const Image& image) :
     glm::vec3 origin = transform.origin;
     glm::vec2 size = this->getSize ();
     glm::vec3 scale = transform.scale;
-    const uint32_t interpolationFlags = image.noInterpolation ? TextureFlags_NoInterpolation : TextureFlags_NoFlags;
+    const uint32_t interpolationFlags
+	= image.noInterpolation->value->getBool () ? TextureFlags_NoInterpolation : TextureFlags_NoFlags;
 
     // Native composition layers have two authored forms. A layer with children
     // owns an isolated subtree surface; a childless layer is a full-frame stack

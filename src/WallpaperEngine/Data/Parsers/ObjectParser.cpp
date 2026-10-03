@@ -368,7 +368,7 @@ ObjectParser::parseImage (const JSON& it, const Project& project, ObjectData bas
 	    .colorBlendMode = it.user ("colorBlendMode", properties, 0),
 	    .brightness = it.user ("brightness", properties, 1.0f),
 	    .copyBackground = it.optional ("copybackground", true),
-	    .noInterpolation = it.optional ("nointerpolation", false),
+	    .noInterpolation = it.user ("nointerpolation", properties, false),
 	    .model = ModelParser::load (project, image),
 	    .effects = effects.has_value () ? parseEffects (*effects, project) : std::vector<ImageEffectUniquePtr> {},
 	    .animationLayers = animationLayers.has_value () ? parseAnimationLayers (*animationLayers, project)
