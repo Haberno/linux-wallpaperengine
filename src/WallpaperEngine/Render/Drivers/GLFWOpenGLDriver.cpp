@@ -82,7 +82,7 @@ GLFWOpenGLDriver::~GLFWOpenGLDriver () { glfwTerminate (); }
 
 Output::Output& GLFWOpenGLDriver::getOutput () { return *this->m_output; }
 
-float GLFWOpenGLDriver::getRenderTime () const { return static_cast<float> (glfwGetTime ()); }
+double GLFWOpenGLDriver::getRenderTime () const { return glfwGetTime (); }
 
 bool GLFWOpenGLDriver::closeRequested () { return glfwWindowShouldClose (this->m_window); }
 

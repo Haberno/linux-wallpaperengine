@@ -22,7 +22,7 @@ public:
     ~GLFWOpenGLDriver () override;
 
     [[nodiscard]] Output::Output& getOutput () override;
-    [[nodiscard]] float getRenderTime () const override;
+    [[nodiscard]] double getRenderTime () const override;
     bool closeRequested () override;
     void resizeWindow (glm::ivec2 size) override;
     void resizeWindow (glm::ivec4 sizeandpos) override;

@@ -62,7 +62,7 @@ public:
     ~WaylandOpenGLDriver ();
 
     [[nodiscard]] Output::Output& getOutput () override;
-    float getRenderTime () const override;
+    double getRenderTime () const override;
     bool closeRequested () override;
     [[nodiscard]] bool abnormalTermination () const override;
     void resizeWindow (glm::ivec2 size) override;

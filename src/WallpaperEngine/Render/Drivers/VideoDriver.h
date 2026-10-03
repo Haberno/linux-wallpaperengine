@@ -34,7 +34,7 @@ public:
     /**
      * @return The time that has passed since the driver started
      */
-    [[nodiscard]] virtual float getRenderTime () const = 0;
+    [[nodiscard]] virtual double getRenderTime () const = 0;
     /**
      * @return If a close was requested by the OS
      */

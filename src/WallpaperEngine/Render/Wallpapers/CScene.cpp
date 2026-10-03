@@ -856,8 +856,12 @@ void CScene::renderFrame (const glm::ivec4& viewport) {
     // Frame callbacks are per-output on Wayland. A 60 Hz scene can therefore render only once
     // while a 165 Hz output advances the application loop several times. Deriving dt only from
     // g_TimeLast loses those skipped intervals and stretches camera shots on the slower output.
-    this->m_sceneDeltaTime = calculateSceneDeltaTime (g_Time, this->m_previousSceneTime);
-    this->m_previousSceneTime = g_Time;
+    // Subtract double driver samples before narrowing; process-global g_Time is
+    // already a float and quantizes frame intervals after long process uptimes.
+    const double currentTime = this->isLoading ()
+        ? this->m_loadingRenderTime : this->getContext ().getDriver ().getRenderTime ();
+    this->m_sceneDeltaTime = calculateSceneDeltaTime (currentTime, this->m_previousSceneTime);
+    this->m_previousSceneTime = currentTime;
     this->m_sceneElapsedTime += this->m_sceneDeltaTime;
 
     // Camera layers are ordinary scriptable objects. Resolve their parent chain
@@ -1281,11 +1285,12 @@ float CScene::calculateCameraFadeAlpha (const float elapsedTime, const float dur
 }
 
 float CScene::calculateSceneDeltaTime (
-    const float currentTime, const std::optional<float> previousSceneTime
+    const double currentTime, const std::optional<double> previousSceneTime
 ) {
     // Loading and shader compilation happen before this scene can present its first frame.
     // Charging that time to a new scene skips one-shot entrances on cold starts and switches.
-    return previousSceneTime.has_value () ? glm::max (0.0f, currentTime - *previousSceneTime) : 0.0f;
+    return previousSceneTime.has_value ()
+        ? static_cast<float> (glm::max (0.0, currentTime - *previousSceneTime)) : 0.0f;
 }
 
 float CScene::getSceneFadeAlpha () const {
@@ -1833,7 +1838,7 @@ int CScene::getWidth () const { return this->m_camera->getWidth (); }
 
 int CScene::getHeight () const { return this->m_camera->getHeight (); }
 
-float CScene::getTime () const { return this->m_sceneElapsedTime; }
+float CScene::getTime () const { return static_cast<float> (this->m_sceneElapsedTime); }
 
 float CScene::getDeltaTime () const { return this->m_sceneDeltaTime; }
 

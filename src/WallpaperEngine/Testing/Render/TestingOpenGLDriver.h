@@ -20,7 +20,7 @@ public:
 
     [[nodiscard]] Output::Output& getOutput () override;
     [[nodiscard]] void* getProcAddress (const char* name) const override;
-    [[nodiscard]] float getRenderTime () const override;
+    [[nodiscard]] double getRenderTime () const override;
     bool closeRequested () override;
     void resizeWindow (glm::ivec2 size) override;
     void resizeWindow (glm::ivec4 sizeandpos) override;

@@ -306,6 +306,15 @@ TEST_CASE ("Scene timing includes global frames skipped by an asynchronous outpu
     CHECK (CScene::calculateSceneDeltaTime (1.0f, 2.0f) == 0.0f);
 }
 
+TEST_CASE ("Scene timing retains frame intervals after five days", "[scene-time]") {
+    // Native rolls its exposed scene clock after five days. Process timestamps must
+    // retain frame precision before subtraction even when a scene loaded recently.
+    const double previous = 432000.0;
+    const double interval = 1.0 / 60.0;
+    CHECK (CScene::calculateSceneDeltaTime (previous + interval, previous) == Catch::Approx (interval));
+    CHECK (CScene::calculateSceneDeltaTime (previous, previous) == 0.0f);
+}
+
 TEST_CASE ("Lit perspective images use the authored world transform") {
     glm::mat4 world = glm::translate (glm::mat4 (1.0f), glm::vec3 (-4.31196f, 1.66488f, 2.36022f));
     world = glm::rotate (world, 1.57080f, glm::vec3 (0.0f, 0.0f, 1.0f));

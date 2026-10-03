@@ -127,7 +127,7 @@ public:
     /** Recover the elapsed time for this scene rather than the application loop. Wayland outputs
      * can present independently, so a slower monitor may skip several global render iterations. */
     [[nodiscard]] static float
-    calculateSceneDeltaTime (float currentTime, std::optional<float> previousSceneTime);
+    calculateSceneDeltaTime (double currentTime, std::optional<double> previousSceneTime);
     /** Pack the authoring start/end values into common_fog.h's
      * {start, range, startDensity, densityRange} uniform layout. */
     [[nodiscard]] static glm::vec4
@@ -353,9 +353,9 @@ private:
     std::function<void (bool)> m_loadingCheckpoint;
     float m_loadingRenderTime = 0.0f;
     std::chrono::steady_clock::time_point m_loadingTimerTime;
-    std::optional<float> m_previousSceneTime = std::nullopt;
+    std::optional<double> m_previousSceneTime = std::nullopt;
     float m_sceneDeltaTime = 0.0f;
-    float m_sceneElapsedTime = 0.0f;
+    double m_sceneElapsedTime = 0.0;
     const CameraPathSource* m_activeCameraPathSource = nullptr;
     std::optional<size_t> m_activeCameraPathIndex = std::nullopt;
     float m_cameraPathElapsed = 0.0f;

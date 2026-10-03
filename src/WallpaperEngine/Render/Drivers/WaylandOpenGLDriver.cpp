@@ -665,8 +665,8 @@ void WaylandOpenGLDriver::dispatchEventQueue () {
 
 Output::Output& WaylandOpenGLDriver::getOutput () { return this->m_output; }
 
-float WaylandOpenGLDriver::getRenderTime () const {
-    return static_cast<float> (std::chrono::duration_cast<std::chrono::microseconds> (
+double WaylandOpenGLDriver::getRenderTime () const {
+    return static_cast<double> (std::chrono::duration_cast<std::chrono::microseconds> (
 				   std::chrono::high_resolution_clock::now () - renderStart
 	   )
 				   .count ())

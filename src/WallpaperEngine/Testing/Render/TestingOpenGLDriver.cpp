@@ -67,7 +67,7 @@ void* TestingOpenGLDriver::getProcAddress (const char* name) const {
     return reinterpret_cast<void*> (glfwGetProcAddress (name));
 }
 
-float TestingOpenGLDriver::getRenderTime () const { return static_cast<float> (glfwGetTime ()); }
+double TestingOpenGLDriver::getRenderTime () const { return glfwGetTime (); }
 
 bool TestingOpenGLDriver::closeRequested () { return glfwWindowShouldClose (this->m_window); }
 
