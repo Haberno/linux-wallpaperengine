@@ -467,12 +467,16 @@ static JSValue scriptable_transform_attachment_to_texture (
     JSContext* ctx, JSValueConst thisVal, int argc, JSValueConst* argv
 ) {
     auto* container = scriptable_container (thisVal);
-    auto* receiver = scriptable_image (thisVal);
-    if (container == nullptr || receiver == nullptr || argc < 2) return JS_UNDEFINED;
+    if (container == nullptr || argc < 2) return JS_UNDEFINED;
     const auto* source = resolve_scriptable_parent (ctx, *container, argv[0]);
     if (source == nullptr) return JS_UNDEFINED;
-    const auto matrix = receiver->transformAttachmentToTexture (
-        *source, attachment_world_matrix (ctx, *source, 1, argv + 1));
+    const glm::mat4 attachmentWorld = attachment_world_matrix (ctx, *source, 1, argv + 1);
+    std::optional<glm::mat3> matrix;
+    if (auto* image = scriptable_image (thisVal)) {
+        matrix = image->transformAttachmentToTexture (*source, attachmentWorld);
+    } else if (auto* text = dynamic_cast<WallpaperEngine::Render::Objects::CText*> (&container->object)) {
+        matrix = text->transformAttachmentToTexture (*source, attachmentWorld);
+    }
     return matrix.has_value () ? make_script_mat3 (ctx, *matrix) : JS_UNDEFINED;
 }
 
@@ -1231,7 +1235,9 @@ JSValue scriptableobject_property_get (JSContext* ctx, JSValueConst obj_val, JSA
     if (std::strcmp (name, "getChildren") == 0) {
 	return JS_NewCFunction (ctx, scriptable_get_children, name, 0);
     }
-    if (std::strcmp (name, "transformAttachmentToTexture") == 0 && scriptable_image (obj_val) != nullptr) {
+    if (std::strcmp (name, "transformAttachmentToTexture") == 0
+        && (scriptable_image (obj_val) != nullptr
+            || dynamic_cast<WallpaperEngine::Render::Objects::CText*> (&container->object) != nullptr)) {
         return JS_NewCFunction (ctx, scriptable_transform_attachment_to_texture, name, 2);
     }
     if (std::strcmp (name, "getAttachmentIndex") == 0) {

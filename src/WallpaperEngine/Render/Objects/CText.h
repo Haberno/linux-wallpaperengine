@@ -11,6 +11,7 @@
 #include <vector>
 
 #include <GL/glew.h>
+#include <glm/mat3x3.hpp>
 #include <glm/mat4x4.hpp>
 #include <glm/vec2.hpp>
 #include <glm/vec4.hpp>
@@ -106,6 +107,9 @@ public:
     void render () override;
     void prepareRenderEffects () { updateEffectVisibility (); }
     [[nodiscard]] glm::vec2 getSize ();
+    [[nodiscard]] std::optional<glm::mat3> transformAttachmentToTexture (
+        const CObject& source, const glm::mat4& attachmentWorld
+    );
 
 private:
     // Rebuilds the glyph texture (and matching quad VBO) from the given string.
@@ -137,6 +141,7 @@ private:
     std::string m_lastRenderedText;
     std::optional<std::string> m_lastSizedText;
     glm::vec2 m_scriptSize = { 0.0f, 0.0f };
+    glm::vec2 m_scriptAlignmentOffset = { 0.0f, 0.0f };
     unsigned int m_lastFontSize = 0;
     TextLayoutLimits m_lastLayoutLimits;
     glm::vec2 m_lastSpacing = glm::vec2 (0.0f);

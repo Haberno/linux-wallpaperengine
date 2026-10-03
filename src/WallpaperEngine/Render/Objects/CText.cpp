@@ -1,4 +1,5 @@
 #include "CText.h"
+#include "CImage.h"
 
 #include <algorithm>
 #include <cmath>
@@ -1177,11 +1178,47 @@ glm::vec2 CText::getSize () {
 	    pen += advance;
 	}
     }
-    m_scriptSize = computeTextEffectLayout (
+    const TextEffectLayout layout = computeTextEffectLayout (
 	m_text.alignment, m_text.verticalalign, bounds, ascender, descender, lineHeight, lines.size (), { 0, 0 }
-    ).surfaceSize;
+    );
+    m_scriptSize = layout.surfaceSize;
+    m_scriptAlignmentOffset = layout.compositeOffset * glm::vec2 (1, -1);
     m_lastSizedText = text;
     return m_scriptSize;
+}
+
+std::optional<glm::mat3> CText::transformAttachmentToTexture (
+    const CObject& source, const glm::mat4& attachmentWorld
+) {
+    const auto& camera = getScene ().getCamera ();
+    const Object& object = source.getObject ();
+    // This component covers direct ordinary text. Effect/background surfaces
+    // have a separate native padding gate; virtual projection is independent.
+    if (!camera.isOrthogonal () || m_text.perspective->value->getBool ()
+        || m_effectsEnabled || !m_text.effects.empty () || m_text.opaqueBackground->value->getBool ())
+        return std::nullopt;
+    if (object.is<Image> ()) {
+        const Image& image = *object.as<Image> ();
+        if (image.perspective->value->getBool () || image.model->fullscreen) return std::nullopt;
+    } else if (object.is<Model3D> ()) {
+        if (object.as<Model3D> ()->perspective->value->getBool ()) return std::nullopt;
+    } else {
+        return std::nullopt;
+    }
+    const glm::vec2 size = getSize ();
+    // Native text vtable+0x80 includes the generated font-mesh alignment.
+    // Measure on the CPU so a text write does not depend on a later GL rebuild.
+    const glm::mat4 receiverWorld = glm::translate (resolveWorldMatrix (), glm::vec3 (m_scriptAlignmentOffset, 0));
+    const glm::mat4 sceneToRender = glm::translate (glm::mat4 (1),
+        glm::vec3 (-camera.getWidth () * .5f, camera.getHeight () * .5f, 0))
+        * glm::scale (glm::mat4 (1), glm::vec3 (1, -1, 1));
+    const glm::mat4 viewProjection = camera.getProjection () * camera.getLookAt () * sceneToRender;
+    const glm::vec2 sourceOffset = source.resolveParallaxOffset () * glm::vec2 (1, -1);
+    const glm::vec2 receiverOffset = resolveParallaxOffset () * glm::vec2 (1, -1);
+    return CImage::calculateOrthographicAttachmentTextureMatrix (
+        attachmentWorld, receiverWorld,
+        glm::translate (viewProjection, glm::vec3 (sourceOffset, 0)),
+        glm::translate (viewProjection, glm::vec3 (receiverOffset, 0)), camera.getEye ().z, size);
 }
 
 void CText::rebuildTextureFrom (const std::string& text) {
