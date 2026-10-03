@@ -58,6 +58,7 @@ struct JSContext {
     JSObjectRef defineProperty = nullptr, hasOwnProperty = nullptr, stringify = nullptr, functionProto = nullptr;
     JSObjectRef objectProto = nullptr;
     JSObjectRef syntaxError = nullptr;
+    JSObjectRef uint8ArrayConstructor = nullptr, typedArrayValues = nullptr;
 };
 struct Native {
     JSContext* ctx;
@@ -418,12 +419,16 @@ JSContext* JS_NewContext (JSRuntime* rt) {
     c->syntaxError = get ("SyntaxError");
     c->stringify = get ("JSON.stringify");
     c->functionProto = get ("Function.prototype");
+    c->uint8ArrayConstructor = get ("Uint8Array");
+    c->typedArrayValues = get ("Uint8Array.prototype.values");
     JSValueProtect (c->jsc, c->defineProperty);
     JSValueProtect (c->jsc, c->hasOwnProperty);
     JSValueProtect (c->jsc, c->objectProto);
     JSValueProtect (c->jsc, c->syntaxError);
     JSValueProtect (c->jsc, c->stringify);
     JSValueProtect (c->jsc, c->functionProto);
+    JSValueProtect (c->jsc, c->uint8ArrayConstructor);
+    JSValueProtect (c->jsc, c->typedArrayValues);
     return c;
 }
 void JS_FreeContext (JSContext* c) {
@@ -474,6 +479,8 @@ void JS_FreeRuntime (JSRuntime* rt) {
 	JSValueUnprotect (c->jsc, c->syntaxError);
 	JSValueUnprotect (c->jsc, c->stringify);
 	JSValueUnprotect (c->jsc, c->functionProto);
+	JSValueUnprotect (c->jsc, c->uint8ArrayConstructor);
+	JSValueUnprotect (c->jsc, c->typedArrayValues);
 	JSGlobalContextRelease (c->jsc);
     }
     JSContextGroupRelease (rt->group);
@@ -914,6 +921,88 @@ JSValue JS_NewArrayBuffer (
     JSValueRef ex = nullptr;
     auto r = JSObjectMakeArrayBufferWithBytesNoCopy (c->jsc, bytes, size, freeBuffer, b, &ex);
     return finish (c, r, ex);
+}
+uint8_t* JS_GetArrayBuffer (JSContext* c, size_t* size, JSValue obj) {
+    *size = 0;
+    JSValueRef ex = nullptr;
+    auto value = toJsc (c, obj);
+    if (JSValueGetTypedArrayType (c->jsc, value, &ex) != kJSTypedArrayTypeArrayBuffer) {
+	if (ex) fail (c, ex);
+	else JS_ThrowTypeError (c, "not an ArrayBuffer");
+	return nullptr;
+    }
+    // The C API's byte getters do not reject detached buffers. A zero-length
+    // native view validates attachment without reading script-owned properties.
+    JSValueRef args[] = { value, JSValueMakeNumber (c->jsc, 0), JSValueMakeNumber (c->jsc, 0) };
+    JSObjectCallAsConstructor (c->jsc, c->uint8ArrayConstructor, 3, args, &ex);
+    if (ex) {
+	fail (c, ex);
+	return nullptr;
+    }
+    auto buffer = const_cast<JSObjectRef> (value);
+    auto length = JSObjectGetArrayBufferByteLength (c->jsc, buffer, &ex);
+    auto bytes = JSObjectGetArrayBufferBytesPtr (c->jsc, buffer, &ex);
+    if (ex) {
+	fail (c, ex);
+	return nullptr;
+    }
+    *size = length;
+    return static_cast<uint8_t*> (bytes);
+}
+int JS_GetTypedArrayType (JSValue obj) {
+    if (!JS_IsObject (obj)) return -1;
+    const auto* value = holder (obj);
+    switch (JSValueGetTypedArrayType (value->ctx->jsc, value->value, nullptr)) {
+	case kJSTypedArrayTypeUint8ClampedArray: return JS_TYPED_ARRAY_UINT8C;
+	case kJSTypedArrayTypeInt8Array: return JS_TYPED_ARRAY_INT8;
+	case kJSTypedArrayTypeUint8Array: return JS_TYPED_ARRAY_UINT8;
+	case kJSTypedArrayTypeInt16Array: return JS_TYPED_ARRAY_INT16;
+	case kJSTypedArrayTypeUint16Array: return JS_TYPED_ARRAY_UINT16;
+	case kJSTypedArrayTypeInt32Array: return JS_TYPED_ARRAY_INT32;
+	case kJSTypedArrayTypeUint32Array: return JS_TYPED_ARRAY_UINT32;
+	case kJSTypedArrayTypeBigInt64Array: return JS_TYPED_ARRAY_BIG_INT64;
+	case kJSTypedArrayTypeBigUint64Array: return JS_TYPED_ARRAY_BIG_UINT64;
+	case kJSTypedArrayTypeFloat32Array: return JS_TYPED_ARRAY_FLOAT32;
+	case kJSTypedArrayTypeFloat64Array: return JS_TYPED_ARRAY_FLOAT64;
+	default: return -1;
+    }
+}
+JSValue JS_GetTypedArrayBuffer (
+    JSContext* c, JSValue obj, size_t* byteOffset, size_t* byteLength, size_t* bytesPerElement
+) {
+    JSValueRef ex = nullptr;
+    auto value = toJsc (c, obj);
+    const auto type = JSValueGetTypedArrayType (c->jsc, value, &ex);
+    if (ex) return fail (c, ex);
+    size_t width;
+    switch (type) {
+	case kJSTypedArrayTypeInt8Array:
+	case kJSTypedArrayTypeUint8Array:
+	case kJSTypedArrayTypeUint8ClampedArray: width = 1; break;
+	case kJSTypedArrayTypeInt16Array:
+	case kJSTypedArrayTypeUint16Array: width = 2; break;
+	case kJSTypedArrayTypeInt32Array:
+	case kJSTypedArrayTypeUint32Array:
+	case kJSTypedArrayTypeFloat32Array: width = 4; break;
+	case kJSTypedArrayTypeFloat64Array:
+	case kJSTypedArrayTypeBigInt64Array:
+	case kJSTypedArrayTypeBigUint64Array: width = 8; break;
+	default: return JS_ThrowTypeError (c, "not a TypedArray");
+    }
+    auto view = const_cast<JSObjectRef> (value);
+    // The intrinsic validates detached and out-of-bounds resizable views; the
+    // C metadata getters return zero for those as well as valid empty views.
+    JSObjectCallAsFunction (c->jsc, c->typedArrayValues, view, 0, nullptr, &ex);
+    if (ex) return fail (c, ex);
+    auto buffer = JSObjectGetTypedArrayBuffer (c->jsc, view, &ex);
+    if (ex) return fail (c, ex);
+    const auto offset = JSObjectGetTypedArrayByteOffset (c->jsc, view, &ex);
+    const auto length = JSObjectGetTypedArrayByteLength (c->jsc, view, &ex);
+    if (ex) return fail (c, ex);
+    if (byteOffset) *byteOffset = offset;
+    if (byteLength) *byteLength = length;
+    if (bytesPerElement) *bytesPerElement = width;
+    return fromJsc (c, buffer);
 }
 static JSValue throwError (JSContext* c, const char* type, const char* fmt, va_list args) {
     char* message = nullptr;
