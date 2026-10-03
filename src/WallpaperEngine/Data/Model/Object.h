@@ -272,6 +272,12 @@ public:
     ControlPointRemap remap;
 };
 
+class InheritInitialEventColorInitializer : public ParticleInitializerBase {
+public:
+    explicit InheritInitialEventColorInitializer (bool copyOpacity) : copyOpacity (copyOpacity) { }
+    bool copyOpacity;
+};
+
 class ColorRandomInitializer : public ParticleInitializerBase {
 public:
     ColorRandomInitializer (UserSettingUniquePtr min, UserSettingUniquePtr max, float exponent = 1.0f) :

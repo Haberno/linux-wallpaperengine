@@ -157,6 +157,10 @@ struct ControlPointData {
     void sampleVelocity (const glm::vec3& simulationPosition, float frameTime);
 };
 
+void initializeParticleEventColor (
+    ParticleInstance& particle, const ParticleInstance* parent, bool copyOpacity
+);
+
 void applyParticleEventColor (
     ParticleInstance& particle, const ParticleInstance* parent, glm::vec4 blendTimes
 );
@@ -230,6 +234,7 @@ protected:
     // Initializer creators
     InitializerFunc createControlPointRemapInitializer (const ControlPointRemapInitializer& init);
     InitializerFunc createColorRandomInitializer (const ColorRandomInitializer& init);
+    InitializerFunc createInheritInitialEventColorInitializer (const InheritInitialEventColorInitializer& init);
     InitializerFunc createSizeRandomInitializer (const SizeRandomInitializer& init);
     InitializerFunc createAlphaRandomInitializer (const AlphaRandomInitializer& init);
     InitializerFunc createLifetimeRandomInitializer (const LifetimeRandomInitializer& init);

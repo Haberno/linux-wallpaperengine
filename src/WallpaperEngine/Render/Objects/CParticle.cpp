@@ -1622,6 +1622,8 @@ void CParticle::setupInitializers () {
 
 	if (initializer->is<ControlPointRemapInitializer> ()) {
 	    func = createControlPointRemapInitializer (*initializer->as<ControlPointRemapInitializer> ());
+	} else if (initializer->is<InheritInitialEventColorInitializer> ()) {
+	    func = createInheritInitialEventColorInitializer (*initializer->as<InheritInitialEventColorInitializer> ());
 	} else if (initializer->is<ColorRandomInitializer> ()) {
 	    func = createColorRandomInitializer (*initializer->as<ColorRandomInitializer> ());
 	} else if (initializer->is<SizeRandomInitializer> ()) {
@@ -1660,6 +1662,29 @@ void CParticle::setupInitializers () {
 	    m_initializers.push_back (std::move (func));
 	}
     }
+}
+
+void WallpaperEngine::Render::Objects::initializeParticleEventColor (
+    ParticleInstance& particle, const ParticleInstance* parent, const bool copyOpacity
+) {
+    if (!parent) return;
+    // Native opcode16 copies current parent values into the child's birth arrays.
+    // Unlike the per-step operator, the initializer has no parent lifetime gate.
+    particle.color = particle.initial.color = parent->color;
+    if (copyOpacity) particle.alpha = particle.initial.alpha = parent->alpha;
+}
+
+InitializerFunc CParticle::createInheritInitialEventColorInitializer (const InheritInitialEventColorInitializer& init) {
+    return [this, &init] (ParticleInstance& particle) {
+        if (!m_particleParent || m_eventParentSerial == 0) return;
+        const auto end = m_particleParent->m_particles.begin () + m_particleParent->m_particleCount;
+        const auto parent = std::find_if (m_particleParent->m_particles.begin (), end, [this] (const auto& candidate) {
+            return candidate.serial == m_eventParentSerial;
+        });
+        // Follow children sample the current retained record at each birth.
+        // Death-child retention after parent compaction remains unsupported.
+        if (parent != end) initializeParticleEventColor (particle, &*parent, init.copyOpacity);
+    };
 }
 
 InitializerFunc CParticle::createColorRandomInitializer (const ColorRandomInitializer& init) {

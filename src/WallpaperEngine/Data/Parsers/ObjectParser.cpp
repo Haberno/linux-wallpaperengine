@@ -1069,6 +1069,10 @@ ParticleInitializerUniquePtr ObjectParser::parseParticleInitializer (const JSON&
         auto remap = parseControlPointRemap (it, properties, true);
         if (remap) return std::make_unique<ControlPointRemapInitializer> (std::move (*remap));
         return nullptr;
+    } else if (name == "inheritinitialvaluefromevent") {
+        const auto input = it.optional<std::string> ("input", "setcolor");
+        if (input != "setcolor" && input != "setcoloropacity") return nullptr;
+        return std::make_unique<InheritInitialEventColorInitializer> (input == "setcoloropacity");
     } else if (name == "colorrandom") {
 	auto color = [&] (const char* key, const Color& defaultValue) {
 	    const auto value = it.optional (key);

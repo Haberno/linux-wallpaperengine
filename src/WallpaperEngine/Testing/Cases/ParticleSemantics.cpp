@@ -1607,3 +1607,53 @@ TEST_CASE ("event color blends current parent RGBA only while the parent lives",
     CHECK (untouched.color == glm::vec3 (1));
     CHECK (untouched.alpha == 1);
 }
+
+TEST_CASE ("birth event inheritance defaults to color without opacity", "[particle][event-initial-color]") {
+    WallpaperEngine::Data::Model::Project project {};
+    const auto object = WallpaperEngine::Data::Parsers::ObjectParser::parse (
+        WallpaperEngine::Data::JSON::JSON::parse (R"({"id":17,"particle":{"initializer":[
+            {"name":"inheritinitialvaluefromevent"},
+            {"name":"inheritinitialvaluefromevent","input":"setcoloropacity"},
+            {"name":"inheritinitialvaluefromevent","input":"setcolor"},
+            {"name":"inheritinitialvaluefromevent","input":"multiplycolor"}
+        ]}})"), project);
+    const auto* particle = object->as<Particle> ();
+    REQUIRE (particle != nullptr);
+    REQUIRE (particle->initializers.size () == 3);
+    for (size_t index = 0; index < 3; ++index) {
+        const auto* initializer = particle->initializers[index]->as<InheritInitialEventColorInitializer> ();
+        REQUIRE (initializer != nullptr);
+        CHECK (initializer->copyOpacity == (index == 1));
+    }
+}
+
+TEST_CASE ("birth event color records current parent values once", "[particle][event-initial-color]") {
+    using WallpaperEngine::Render::Objects::initializeParticleEventColor;
+    ParticleInstance parent;
+    parent.color = { .1f, .2f, .3f };
+    parent.alpha = .25f;
+    parent.initial.color = { .9f, .8f, .7f };
+    parent.initial.alpha = 1;
+    for (const bool copyOpacity : { false, true }) {
+        ParticleInstance child;
+        child.color = child.initial.color = { .8f, .6f, .4f };
+        child.alpha = child.initial.alpha = .75f;
+        // Native birth opcode16 has no alive/lifetime guard on a retained parent record.
+        initializeParticleEventColor (child, &parent, copyOpacity);
+        CHECK (child.color == parent.color);
+        CHECK (child.initial.color == parent.color);
+        CHECK (child.alpha == (copyOpacity ? .25f : .75f));
+        CHECK (child.initial.alpha == child.alpha);
+        CHECK (child.velocity == glm::vec3 (0));
+        CHECK (child.lifetime == 1);
+    }
+    ParticleInstance child;
+    initializeParticleEventColor (child, &parent, true);
+    parent.color = { .7f, .8f, .9f };
+    parent.alpha = .5f;
+    CHECK (child.initial.color == glm::vec3 (.1f, .2f, .3f));
+    CHECK (child.initial.alpha == .25f);
+    initializeParticleEventColor (child, nullptr, true);
+    CHECK (child.initial.color == glm::vec3 (.1f, .2f, .3f));
+    CHECK (child.initial.alpha == .25f);
+}
