@@ -76,8 +76,12 @@ void audio_callback (void* userdata, uint8_t* streamData, int length) {
 		// squaring. Keep the native gain precision on the normal float output.
 		auto* output = reinterpret_cast<float*> (streamDataPointer);
 		const auto* input = reinterpret_cast<const float*> (&buffer->audio_buf[buffer->audio_buf_index]);
+		const float channelGain[] = {
+		    driver->getSpec ().channels == 2 ? buffer->stream->getStereoGain (0) : 1.0f,
+		    driver->getSpec ().channels == 2 ? buffer->stream->getStereoGain (1) : 1.0f
+		};
 		for (int sample = 0; sample < len1 / static_cast<int> (sizeof (float)); sample++) {
-		    output[sample] = std::clamp (output[sample] + input[sample] * gain, -1.0f, 1.0f);
+		    output[sample] = std::clamp (output[sample] + input[sample] * gain * channelGain[sample % 2], -1.0f, 1.0f);
 		}
 	    } else {
 		SDL_MixAudioFormat (

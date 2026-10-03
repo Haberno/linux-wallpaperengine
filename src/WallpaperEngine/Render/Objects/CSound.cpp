@@ -3,6 +3,8 @@
 #include <cmath>
 #include <cstdlib>
 #include <glm/geometric.hpp>
+#include <glm/gtc/matrix_transform.hpp>
+#include <limits>
 
 #include "CSound.h"
 
@@ -99,6 +101,7 @@ bool CSound::attachPendingStream () {
     this->m_attenuation = 1.0f;
     this->m_minDistance = 1.0f;
     this->m_distanceGain = 1.0f;
+    this->m_stereoGain = glm::vec2 (1.0f);
     // Sample the original channel layout before attaching to the SDL callback.
 #if FF_API_OLD_CHANNEL_LAYOUT
     this->m_sourceChannels = stream->getContext ()->channels;
@@ -115,6 +118,7 @@ bool CSound::attachPendingStream () {
 	this->updateDistanceGain ();
     }
     stream->setGain (this->getGain () * this->m_distanceGain);
+    stream->setStereoGain (this->m_stereoGain.x, this->m_stereoGain.y);
     stream->setPaused (!this->m_playing);
     this->m_nextStartRemaining = std::max (0.0, stream->getDuration () + this->m_pendingDelay);
     this->m_lastCompletion = 0;
@@ -177,6 +181,7 @@ void CSound::render () {
     this->updateDistanceGain ();
     for (const auto& [id, stream] : this->m_audioStreams) {
 	stream->setGain (gain * this->m_distanceGain);
+	stream->setStereoGain (this->m_stereoGain.x, this->m_stereoGain.y);
 	stream->setPaused (!this->m_playing);
     }
 
@@ -292,6 +297,45 @@ float CSound::getGain () const {
     return std::isfinite (gain) ? gain : 0.0f;
 }
 
+glm::vec3 CSound::calculateAudioPosition (
+    const glm::vec3& source, const glm::vec3& eye, const glm::vec3& center, const glm::vec3& up,
+    const bool orthogonal, const glm::vec2& canvas
+) {
+    glm::vec3 listener = eye;
+    if (orthogonal) {
+	listener += glm::vec3 (canvas * 0.5f, 0.0f);
+	listener.z = 2000.0f;
+    }
+    // Native 1401891a0/14019d920 uses the ordinary look-at basis for audio;
+    // the reflected orthographic rendering view is a different coordinate space.
+    glm::vec3 position = glm::mat3 (glm::lookAt (eye, center, up)) * (source - listener);
+    position *= glm::vec3 (1.0f, -1.0f, -1.0f);
+    if (orthogonal) {
+	const float depth = (canvas.x + canvas.y) * 0.25f;
+	position = glm::normalize (position) * (std::max (0.0f, depth - source.z) / depth);
+    }
+    return position;
+}
+
+glm::vec2 CSound::calculateStereoGain (const glm::vec3& position) {
+    const float distance = glm::length (position);
+    const glm::vec3 direction = distance > std::numeric_limits<float>::epsilon ()
+	? position / distance : glm::vec3 (0.0f, 0.0f, -1.0f);
+    const float elevation = std::asin (std::clamp (direction.y, -1.0f, 1.0f));
+    float azimuth = std::atan2 (direction.x, -direction.z);
+    constexpr float halfPi = 1.5707963267948966f;
+    if (std::abs (azimuth) < halfPi) {
+	azimuth = std::copysign (std::min (std::abs (azimuth) * 1.5f, halfPi), azimuth);
+    }
+    // OpenAL Soft 1.21.1's single-band stereo decoder (native 1802cd148),
+    // verified against the installed DLL's silent non-HRTF loopback output.
+    const float side = -std::sin (azimuth) * std::cos (elevation) * 1.7320507764816284f;
+    const float front = std::cos (azimuth) * std::cos (elevation) * 1.7320507764816284f;
+    const float common = 0.5f + front * 0.05523056536912918f;
+    return glm::vec2 (common + side * 0.28867512941360474f, common - side * 0.28867512941360474f)
+	* 1.4142135623730951f; // FFmpeg has already applied 1/sqrt(2) to both mono output channels.
+}
+
 float CSound::calculateDistanceGain (
     const glm::vec3& source, const glm::vec3& listener, const bool orthogonal, const glm::vec2& canvas,
     const float attenuation, const float minDistance, const int sourceChannels
@@ -317,9 +361,14 @@ void CSound::updateDistanceGain () {
     // their previous position and gain until the next playback is created.
     const auto& camera = this->getScene ().getCamera ();
     const glm::vec3 source (this->resolveWorldMatrix ()[3]);
-    // Native orthographic normalization at the listener produces an invalid
-    // position, which OpenAL rejects while retaining the previous position.
-    if (camera.isOrthogonal () && source == camera.getEye ()) return;
+    const glm::vec3 position = calculateAudioPosition (
+	source, camera.getEye (), camera.getCenter (), camera.getUp (), camera.isOrthogonal (),
+	{ camera.getWidth (), camera.getHeight () }
+    );
+    // OpenAL rejects invalid positions, including normalization at an orthographic
+    // listener, and retains that handle's previous distance and direction.
+    if (!std::isfinite (position.x) || !std::isfinite (position.y) || !std::isfinite (position.z)) return;
+    this->m_stereoGain = this->m_sourceChannels == 1 ? calculateStereoGain (position) : glm::vec2 (1.0f);
     this->m_distanceGain = calculateDistanceGain (
 	source, camera.getEye (), camera.isOrthogonal (),
 	{ camera.getWidth (), camera.getHeight () }, this->m_attenuation, this->m_minDistance, this->m_sourceChannels

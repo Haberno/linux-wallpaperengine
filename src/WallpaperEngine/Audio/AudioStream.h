@@ -89,6 +89,14 @@ public:
     /** Linear per-layer gain; other stream users retain unity gain. */
     void setGain (float gain) { this->m_gain.store (gain, std::memory_order_relaxed); }
     [[nodiscard]] float getGain () const { return this->m_gain.load (std::memory_order_relaxed); }
+    /** Per-channel multipliers for the driver's float stereo output. */
+    void setStereoGain (float left, float right) {
+	this->m_stereoGain[0].store (left, std::memory_order_relaxed);
+	this->m_stereoGain[1].store (right, std::memory_order_relaxed);
+    }
+    [[nodiscard]] float getStereoGain (int channel) const {
+	return this->m_stereoGain[channel].load (std::memory_order_relaxed);
+    }
     /**
      * @param newRepeat true = repeat, false = no repeat
      */
@@ -195,6 +203,7 @@ private:
     std::atomic<bool> m_initialized = false;
     std::atomic<bool> m_paused = false;
     std::atomic<float> m_gain = 1.0f;
+    std::atomic<float> m_stereoGain[2] { 1.0f, 1.0f };
     /** Repeat enabled? */
     std::atomic<bool> m_repeat = false;
     /** Full playback passes so far; written by the read thread, read by the render thread */

@@ -29,7 +29,14 @@ public:
     void stop ();
     /** Authored playback state, independent of output volume and duplicate-screen ownership. */
     [[nodiscard]] bool isPlaying () const { return m_playing && !m_waiting; }
-    /** Native mono-source distance gain; directional panning is separate. */
+    /** Native listener coordinates, before the output-device speaker decoder. */
+    [[nodiscard]] static glm::vec3 calculateAudioPosition (
+	const glm::vec3& source, const glm::vec3& eye, const glm::vec3& center, const glm::vec3& up,
+	bool orthogonal, const glm::vec2& canvas
+    );
+    /** Non-HRTF stereo panpot gains, compensated for FFmpeg's mono-to-stereo matrix. */
+    [[nodiscard]] static glm::vec2 calculateStereoGain (const glm::vec3& position);
+    /** Native mono-source distance gain. */
     [[nodiscard]] static float calculateDistanceGain (
 	const glm::vec3& source, const glm::vec3& listener, bool orthogonal, const glm::vec2& canvas,
 	float attenuation, float minDistance, int sourceChannels
@@ -66,6 +73,7 @@ private:
     float m_attenuation = 1.0f;
     float m_minDistance = 1.0f;
     float m_distanceGain = 1.0f;
+    glm::vec2 m_stereoGain { 1.0f };
     int m_sourceChannels = 0;
     uint32_t m_lastCompletion = 0;
     std::mt19937 m_random { std::random_device {}() };
