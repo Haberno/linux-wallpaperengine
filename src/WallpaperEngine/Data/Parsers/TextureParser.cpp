@@ -316,7 +316,11 @@ bool TextureParser::canStreamMipmaps (const Texture& texture) {
     return texture.containerVersion != ContainerVersion_UNKNOWN
 	&& !texture.isVideoMp4 && !(texture.flags & TextureFlags_Video) && !texture.isAnimated ()
 	&& !texture.isVolume () && texture.variants.empty () && !texture.variantSource && texture.imageCount == 1
-	&& texture.images.contains (0) && texture.images.at (0).size () > 1;
+	&& texture.images.contains (0) && texture.images.at (0).size () > 1
+	// Native reader 14015c8d0 queues encoded/LZ4 work; plain raw chains are immediate.
+	// Keep mixed raw chains eager until their partial-result installation is established.
+	&& (texture.freeImageFormat != FIF_UNKNOWN || std::ranges::all_of (texture.images.at (0),
+	    [] (const auto& mipmap) { return mipmap->compression == 1; }));
 }
 
 void TextureParser::decodeMipmaps (const std::vector<Texture*>& textures, const bool initialMipOnly) {
@@ -408,8 +412,10 @@ TextureUniquePtr TextureParser::parse (const BinaryReader& file, const VariantSe
 	result->images.emplace (image, mipmaps);
     }
 
-    // A rejected later mip can reduce a deferred chain to one ordinary resource.
-    if (deferMipmaps && truncated && !canStreamMipmaps (*result)) decodeMipmaps (*result);
+    // Mixed raw chains and truncated single-level chains use ordinary construction.
+    // Finish any retained LZ4 before returning them to that synchronous path.
+    if (deferMipmaps && result->freeImageFormat == FIF_UNKNOWN && !canStreamMipmaps (*result))
+	decodeMipmaps (*result);
     if (truncated || !result->isAnimated ()) {
 	return result;
     }
