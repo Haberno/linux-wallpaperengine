@@ -126,7 +126,7 @@ void HdrBloom::render (const bool bloomEnabled) {
         return;
     }
     const auto& settings = m_scene.getScene ().camera.bloom.hdr;
-    const float time = m_scene.getTime ();
+    const double time = m_scene.getElapsedTime ();
     const int count = std::clamp (static_cast<int> (settings.iterations->evaluateFloat (time)), 1, int (m_levels.size ()));
     const float scatter = settings.scatter->evaluateFloat (time);
     const float threshold = settings.threshold->evaluateFloat (time);

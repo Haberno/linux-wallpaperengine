@@ -126,7 +126,7 @@ std::vector<PropertyAnimation::Event> PropertyAnimation::takeEvents (const doubl
     return result;
 }
 
-float PropertyAnimation::evaluateChannel (int channel, float time, float fallback) const {
+float PropertyAnimation::evaluateChannel (int channel, double time, float fallback) const {
     // The native property sampler blends whole-frame curve samples. Evaluating
     // the Bezier directly at fractional frames changes short authored loops.
     const float frame = frameAt (time);
@@ -198,12 +198,12 @@ float PropertyAnimation::evaluateFrame (int channel, float frame, float fallback
     return keyframes.back ().value;
 }
 
-float PropertyAnimation::evaluateFloat (const float base, const float time) const {
+float PropertyAnimation::evaluateFloat (const float base, const double time) const {
     const float value = this->evaluateChannel (0, time, this->relative ? 0.0f : base);
     return this->relative ? base + value : value;
 }
 
-glm::vec3 PropertyAnimation::evaluateVec3 (const glm::vec3& base, float time) const {
+glm::vec3 PropertyAnimation::evaluateVec3 (const glm::vec3& base, double time) const {
     glm::vec3 result = base;
 
     for (int channel = 0; channel < 3; channel++) {

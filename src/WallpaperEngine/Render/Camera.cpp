@@ -50,7 +50,7 @@ float Camera::getHeight () const { return this->m_height; }
 
 float Camera::getFov () const { return this->m_transform.fov; }
 
-float Camera::getDefaultFov (const float sceneTime) const {
+float Camera::getDefaultFov (const double sceneTime) const {
     const auto& projection = this->m_camera.projection;
     return (projection.isPerspective ? projection.fov : projection.perspectiveOverrideFov)
 	->evaluateFloat (sceneTime);
@@ -101,7 +101,7 @@ void Camera::setTransform (const CameraTransform& transform) {
 
 void Camera::resetTransform () {
     // Keep live user-property changes to the resting projection values.
-    const float sceneTime = this->m_scene.getTime ();
+    const double sceneTime = this->m_scene.getElapsedTime ();
     this->m_defaultTransform.fov = this->getDefaultFov (sceneTime);
     this->m_defaultTransform.zoom = this->m_camera.projection.zoom->evaluateFloat (sceneTime);
     this->m_transform = this->m_defaultTransform;

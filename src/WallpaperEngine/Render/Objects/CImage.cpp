@@ -104,7 +104,7 @@ std::optional<glm::vec3> findMagentaCompositeTint (const Image& image, const std
 
 }
 
-CImage::ResolvedTransform CImage::localTransform (const Object& object, float time) {
+CImage::ResolvedTransform CImage::localTransform (const Object& object, double time) {
     // Keyframed transform properties are sampled as a unit. Wallpaper Engine's
     // generic property parser allows animation on origin, scale, and angles.
     const glm::vec3 origin = object.origin->evaluateVec3 (time);
@@ -152,7 +152,7 @@ CImage::ResolvedTransform CImage::resolveTransform (const Object& object) const 
 
     // Accumulate top-down: the root's local transform is already its resolved
     // transform, then fold each child onto its already-resolved parent.
-    const float time = this->getScene ().getTime ();
+    const double time = this->getScene ().getElapsedTime ();
     const auto compose = [] (const ResolvedTransform& parent, const ResolvedTransform& local) {
 	const glm::vec3 offset = rotateVec3 (
 	    { local.origin.x * parent.scale.x, local.origin.y * parent.scale.y, local.origin.z * parent.scale.z },
@@ -2217,7 +2217,7 @@ void CImage::render () {
     // retain a pointer returned by getAlpha()/getUserAlpha(). This is especially
     // important for authored opening overlays that fade away to reveal the live
     // scene below them.
-    this->m_resolvedAlpha = this->m_image.alpha->evaluateFloat (this->getScene ().getTime ());
+    this->m_resolvedAlpha = this->m_image.alpha->evaluateFloat (this->getScene ().getElapsedTime ());
 
     glColorMask (true, true, true, true);
 
@@ -2331,7 +2331,7 @@ const glm::vec4& CImage::getColor4 () const {
 	this->m_resolvedColor4.a = 1.0f;
     }
     if (this->getScene ().isHdr ()) {
-        const float brightness = this->m_image.brightness->evaluateFloat (this->getScene ().getTime ());
+        const float brightness = this->m_image.brightness->evaluateFloat (this->getScene ().getElapsedTime ());
         this->m_resolvedColor4 *= glm::vec4 (brightness, brightness, brightness, 1.0f);
     }
     return this->m_resolvedColor4;
@@ -3017,7 +3017,7 @@ std::optional<glm::vec3> CImage::cursorLocalPosition (const glm::vec3& worldPosi
 	// its rendered position inherits a different root-layer parallax offset.
 	const glm::vec2 depth = getImage ().parallaxDepth->value->getVec2 ();
 	const glm::vec2 offset = calculateParallaxOffset (
-	    glm::vec2 (getObject ().origin->evaluateVec3 (getScene ().getTime ())), depth,
+	    glm::vec2 (getObject ().origin->evaluateVec3 (getScene ().getElapsedTime ())), depth,
 	    { getScene ().getWidth (), getScene ().getHeight () }, *getScene ().getParallaxDisplacement (),
 	    parallax.amount->value->getFloat ()
 	);

@@ -68,7 +68,7 @@ void CSound::load () {
     const auto& file = this->m_sound.sounds[index];
     double delay = 0.0;
     if (mode == "random") {
-	const float time = this->getScene ().getTime ();
+	const double time = this->getScene ().getElapsedTime ();
 	const float minimum = this->m_sound.minTime->evaluateFloat (time);
 	const float maximum = this->m_sound.maxTime->evaluateFloat (time);
 	const float fraction = std::uniform_real_distribution<float> (0.0f, 1.0f) (this->m_random);
@@ -109,7 +109,7 @@ bool CSound::attachPendingStream () {
     this->m_sourceChannels = stream->getContext ()->ch_layout.nb_channels;
 #endif
     if (this->m_sound.spatialization->value->getBool ()) {
-	const float time = this->getScene ().getTime ();
+	const double time = this->getScene ().getElapsedTime ();
 	const float attenuation = this->m_sound.attenuation->evaluateFloat (time);
 	const float minDistance = this->m_sound.minDistance->evaluateFloat (time);
 	// OpenAL rejects negative source parameters, retaining their unity defaults.
@@ -291,7 +291,7 @@ void CSound::stop () {
 }
 
 float CSound::getGain () const {
-    const float volume = this->m_sound.volume->evaluateFloat (this->getScene ().getTime ());
+    const float volume = this->m_sound.volume->evaluateFloat (this->getScene ().getElapsedTime ());
     // Native sound gain (FUN_1401f4c20) squares the authored layer volume.
     const float gain = volume * volume;
     return std::isfinite (gain) ? gain : 0.0f;

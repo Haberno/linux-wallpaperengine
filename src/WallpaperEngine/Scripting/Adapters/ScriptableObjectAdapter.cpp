@@ -1291,14 +1291,14 @@ JSValue scriptableobject_property_get (JSContext* ctx, JSValueConst obj_val, JSA
 	auto& property = container->object.getProperty (name);
 	const auto* setting = container->object.getPropertySetting (name);
 	if (setting != nullptr && std::string_view (name).starts_with ("instance.controlpoint")) {
-	    DynamicValue sampled (setting->evaluateVec3 (container->object.getScene ().getTime ()));
+	    DynamicValue sampled (setting->evaluateVec3 (container->object.getScene ().getElapsedTime ()));
 	    return container->adapter.getEngine ().getAdapters ().vec3->instantiate (sampled, true);
 	}
 	if (setting != nullptr && setting->animation != nullptr) {
 	    // A camera-follow script reads the animated layer pose, not the base
 	    // value stored in scene.json. Use owned snapshots so sampling relative
 	    // curves neither mutates their base nor leaves dangling vector adapters.
-	    const float time = container->object.getScene ().getTime ();
+	    const double time = container->object.getScene ().getElapsedTime ();
 	    auto& adapters = container->adapter.getEngine ().getAdapters ();
 	    switch (property.getType ()) {
 		case DynamicValue::Float:

@@ -71,19 +71,19 @@ struct PropertyAnimation {
      * time/value Bezier. Disabled handles collapse onto their keyframe.
      * Returns fallback when the channel has no keyframes.
      */
-    [[nodiscard]] float evaluateChannel (int channel, float time, float fallback) const;
+    [[nodiscard]] float evaluateChannel (int channel, double time, float fallback) const;
 
     /**
      * Samples channel 0 for a scalar property. Relative animations offset the
      * property's base value; absolute animations replace it.
      */
-    [[nodiscard]] float evaluateFloat (float base, float time) const;
+    [[nodiscard]] float evaluateFloat (float base, double time) const;
 
     /**
      * Samples channels 0-2 at the given time and combines them with the base value,
      * either as an offset (relative) or a replacement per animated channel.
      */
-    [[nodiscard]] glm::vec3 evaluateVec3 (const glm::vec3& base, float time) const;
+    [[nodiscard]] glm::vec3 evaluateVec3 (const glm::vec3& base, double time) const;
 
 private:
     [[nodiscard]] float evaluateFrame (int channel, float frame, float fallback) const;

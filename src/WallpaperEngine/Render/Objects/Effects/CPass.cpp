@@ -528,7 +528,7 @@ void CPass::setupRenderReferenceUniforms () {
 void CPass::setupRenderUniforms () {
     this->refreshUniformBindings ();
     if (m_usesLayerModelMatrix) m_layerModelMatrix = m_renderable.resolveLayerModelMatrix ();
-    const float time = m_renderable.getScene ().getTime ();
+    const double time = m_renderable.getScene ().getElapsedTime ();
     for (auto& [name, uniform] : m_animatedUniforms) {
 	const auto& animation = *uniform.setting->animation;
 	glm::vec4 value = uniform.setting->value->getVec4 ();

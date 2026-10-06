@@ -30,7 +30,7 @@ struct UserSetting {
      * Wallpaper Engine attaches animations to the property itself, so consumers
      * must sample the setting instead of reading DynamicValue directly.
      */
-    [[nodiscard]] float evaluateFloat (float time) const {
+    [[nodiscard]] float evaluateFloat (double time) const {
 	const float base = this->value->getFloat ();
 	return this->animation != nullptr ? this->animation->evaluateFloat (base, time) : base;
     }
@@ -38,7 +38,7 @@ struct UserSetting {
     /**
      * Resolve the current vector value, including absolute or relative keyframes.
      */
-    [[nodiscard]] glm::vec3 evaluateVec3 (float time) const {
+    [[nodiscard]] glm::vec3 evaluateVec3 (double time) const {
 	const glm::vec3 base = this->value->getVec3 ();
 	return this->animation != nullptr ? this->animation->evaluateVec3 (base, time) : base;
     }

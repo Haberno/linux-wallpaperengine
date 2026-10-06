@@ -660,7 +660,7 @@ void CScene::updateBloomState () {
 	return;
     }
 
-    const float sceneTime = this->getTime ();
+    const double sceneTime = this->getElapsedTime ();
     const float strength = bloom.strength->evaluateFloat (sceneTime);
     const float threshold = bloom.threshold->evaluateFloat (sceneTime);
     const glm::vec3 tint = bloom.tint->evaluateVec3 (sceneTime);
@@ -1070,7 +1070,7 @@ void CScene::renderFrame (const glm::ivec4& viewport) {
     // framebuffer's stale alpha, which every alpha-blended effect writeback then composites against
     glColorMask (true, true, true, true);
     // Scripts and other scenes can change this context state between frames.
-    const glm::vec3 clearColor = this->getScene ().colors.clear->evaluateVec3 (this->getTime ());
+    const glm::vec3 clearColor = this->getScene ().colors.clear->evaluateVec3 (this->getElapsedTime ());
     glClearColor (clearColor.r, clearColor.g, clearColor.b, 1.0f);
     const GLbitfield colorClear = this->getScene ().clearEnabled->value->getBool () ? GL_COLOR_BUFFER_BIT : 0;
     glClearDepth (m_sceneFBO->getFarDepth ());
@@ -1488,7 +1488,7 @@ std::vector<CScene::FrameRenderEntry> CScene::buildFrameRenderOrder () const {
 	    // boost shell ahead of its additive skybox, so its invisible surface
 	    // writes depth and cuts a black hole in the background (3759507080).
 	    const glm::vec4 origin = entry.modelClass.has_value ()
-		? glm::vec4 (object->getObject ().origin->evaluateVec3 (this->getTime ()), 1.0f)
+		? glm::vec4 (object->getObject ().origin->evaluateVec3 (this->getElapsedTime ()), 1.0f)
 		: object->resolveWorldMatrix () * glm::vec4 (0.0f, 0.0f, 0.0f, 1.0f);
 	    cameraDepth = (view * origin).z;
 	}
@@ -1566,8 +1566,8 @@ bool CScene::updateCameraObject () {
 	    transform.up = configuration.up;
 	}
 	const auto& projection = this->getScene ().camera.projection;
-	transform.fov = this->m_camera->getDefaultFov (this->getTime ());
-	transform.zoom = projection.zoom->evaluateFloat (this->getTime ());
+	transform.fov = this->m_camera->getDefaultFov (this->getElapsedTime ());
+	transform.zoom = projection.zoom->evaluateFloat (this->getElapsedTime ());
 	this->m_camera->setDefaultTransform (transform, false);
 	const bool pathActive = this->m_activeCameraPathSource != nullptr
 	    && this->m_activeCameraPathIndex.has_value ();
@@ -1584,7 +1584,7 @@ bool CScene::updateCameraObject () {
 	return false;
     }
 
-    const float sceneTime = this->getTime ();
+    const double sceneTime = this->getElapsedTime ();
     const auto& fallback = this->getScene ().camera.projection;
     const float fov = activeProjection != nullptr && activeProjection->fov != nullptr
 	? activeProjection->fov->evaluateFloat (sceneTime)
@@ -1787,7 +1787,7 @@ void CScene::updateLightState () {
 	    this->m_lights.pointShadowEnabled[point] = 0.0f;
 	    if (data.castShadow && point < 32 && (this->m_lights.pointShadowMask & (uint32_t (1) << point)) != 0) {
 		const float radius = data.radius->value->getFloat ();
-		const float sourceSize = data.sourceSize->evaluateFloat (this->getTime ());
+		const float sourceSize = data.sourceSize->evaluateFloat (this->getElapsedTime ());
 		const bool orthographic = this->getCamera ().isOrthogonal ();
 		this->m_lights.pointShadowProjections[point]
 		    = Objects::CLight::calculatePointShadowProjectionInfo (radius, sourceSize, orthographic, reverseDepth);

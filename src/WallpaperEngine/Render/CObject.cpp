@@ -24,7 +24,7 @@ RenderSortClass classifyMaterial (const Material& material) {
     return result;
 }
 
-glm::mat4 localMatrix (const Object& object, const float time) {
+glm::mat4 localMatrix (const Object& object, const double time) {
     const glm::vec3 origin = object.origin->evaluateVec3 (time);
 
     glm::vec3 scale = glm::vec3 (1.0f);
@@ -153,7 +153,7 @@ glm::vec2 CObject::resolveParallaxOffset () const {
     // scenes often omit the field and depend on that default (Gojo 3100265648 and the
     // puppet/window layer in 3487328036). Explicit 0,0 is the authored pin value.
     return calculateParallaxOffset (
-	glm::vec2 (current->origin->evaluateVec3 (this->m_scene.getTime ())), depth,
+	glm::vec2 (current->origin->evaluateVec3 (this->m_scene.getElapsedTime ())), depth,
 	{ this->m_scene.getWidth (), this->m_scene.getHeight () }, *this->m_scene.getParallaxDisplacement (),
 	parallax.amount->value->getFloat ()
     );
@@ -207,7 +207,7 @@ glm::mat4 CObject::resolveWorldMatrix () const {
 	chain[count++] = current;
     }
 
-    const float time = this->m_scene.getTime ();
+    const double time = this->m_scene.getElapsedTime ();
     glm::mat4 world = glm::mat4 (1.0f);
 
     for (int i = count - 1; i >= 0; --i) {

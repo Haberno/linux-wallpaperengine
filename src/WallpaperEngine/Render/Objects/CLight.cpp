@@ -144,7 +144,7 @@ glm::vec3 CLight::getPremultipliedColor () const {
 	return glm::vec3 (0.0f);
     }
 
-    const float time = getScene ().getTime ();
+    const double time = getScene ().getElapsedTime ();
     return m_light.color->evaluateVec3 (time) * m_light.intensity->evaluateFloat (time);
 }
 

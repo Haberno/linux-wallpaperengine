@@ -788,7 +788,7 @@ void CText::renderEffectChain (const glm::mat4& mvp, const float brightness, con
     glDisable (GL_CULL_FACE);
     if (m_text.opaqueBackground->value->getBool ()) {
 	const float backgroundBrightness = getScene ().isHdr ()
-	    ? m_text.backgroundBrightness->evaluateFloat (getScene ().getTime ()) : 1.0f;
+	    ? m_text.backgroundBrightness->evaluateFloat (getScene ().getElapsedTime ()) : 1.0f;
 	const glm::vec3 background = m_text.backgroundColor->value->getVec3 () * backgroundBrightness;
 	glClearColor (background.r, background.g, background.b, alpha);
 	glClear (GL_COLOR_BUFFER_BIT);
@@ -1098,17 +1098,17 @@ TextLayoutLimits CText::currentLayoutLimits () const {
 }
 
 glm::vec2 CText::currentSpacing () const {
-    return glm::vec2 (m_text.spacing->evaluateVec3 (getScene ().getTime ()));
+    return glm::vec2 (m_text.spacing->evaluateVec3 (getScene ().getElapsedTime ()));
 }
 
 glm::vec2 CText::currentPadding () const {
-    return glm::vec2 (m_text.padding->evaluateVec3 (getScene ().getTime ()));
+    return glm::vec2 (m_text.padding->evaluateVec3 (getScene ().getElapsedTime ()));
 }
 
 void CText::drawBackground (const glm::mat4& mvp, const float alpha) {
     if (!m_text.opaqueBackground->value->getBool ()) return;
     const float brightness = getScene ().isHdr ()
-	? m_text.backgroundBrightness->evaluateFloat (getScene ().getTime ()) : 1.0f;
+	? m_text.backgroundBrightness->evaluateFloat (getScene ().getElapsedTime ()) : 1.0f;
     const glm::vec3 color = m_text.backgroundColor->value->getVec3 () * brightness;
     const glm::mat4 backgroundMVP = mvp
 	* glm::translate (glm::mat4 (1.0f), glm::vec3 (m_effectCompositeOffset, 0.0f))
@@ -1627,11 +1627,11 @@ void CText::render () {
 	    || std::ranges::any_of (m_text.effects, [] (const auto& effect) { return effect->visible->value->getBool (); }));
 
     const glm::vec4 color = m_text.color->value->getVec4 ();
-    const float alpha = m_text.alpha->evaluateFloat (getScene ().getTime ());
+    const float alpha = m_text.alpha->evaluateFloat (getScene ().getElapsedTime ());
     // Native text draws (140257d70 / 140258050) multiply RGB by brightness
     // only with the HDR bloom flag (0x2000). LDR projects may save zero here.
     const float brightness = getScene ().isHdr ()
-	? m_text.brightness->evaluateFloat (getScene ().getTime ()) : 1.0f;
+	? m_text.brightness->evaluateFloat (getScene ().getElapsedTime ()) : 1.0f;
 
     // A preceding hidden image can leave its composite FBO and viewport bound.
     // Direct text draws must select the active scene/composition target themselves.

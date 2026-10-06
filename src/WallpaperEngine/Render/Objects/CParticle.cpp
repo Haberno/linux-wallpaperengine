@@ -846,7 +846,7 @@ void CParticle::updateControlPoints (const float frameTime) {
 	    if ((cp.flags & 5) == 0) {
 		if (const auto it = overrides.find (static_cast<int> (i)); it != overrides.end ()) {
 		    if (this == root || root->m_controlPointOverridesChanged[i] || it->second->animation != nullptr) {
-			const auto value = it->second->evaluateVec3 (getScene ().getTime ());
+			const auto value = it->second->evaluateVec3 (getScene ().getElapsedTime ());
 			if (value.x != std::numeric_limits<float>::max ()) offset = value;
 		    }
 		}
@@ -859,7 +859,7 @@ void CParticle::updateControlPoints (const float frameTime) {
 	    if ((cp.flags & 0x10005) == 0 && i < m_controlPointCount) {
 		if (const auto it = angles.find (static_cast<int> (i)); it != angles.end ()) {
 		    if (this == root || root->m_controlPointAnglesChanged || m_controlPointTimelines) {
-			const auto value = it->second->evaluateVec3 (getScene ().getTime ());
+			const auto value = it->second->evaluateVec3 (getScene ().getElapsedTime ());
 			// Native stores radians, composes Z*Y*X, and retains the last
 			// applied basis when the script restores the FLT_MAX sentinel.
 			if (value.x != std::numeric_limits<float>::max ()) {
@@ -3262,7 +3262,7 @@ void CParticle::updateMatrices () {
 	const glm::mat4 cameraWorld = glm::inverse (getScene ().getCamera ().getLookAt ());
 	const glm::mat3 viewToLocal = calculateBillboardParticleOrientation (m_modelMatrixInverse, cameraWorld, 0.0f);
 	const float roll = (m_particle.flags & 1) != 0 ? 0.0f
-	    : m_particle.angles->evaluateVec3 (getScene ().getTime ()).z;
+	    : m_particle.angles->evaluateVec3 (getScene ().getElapsedTime ()).z;
 	const glm::mat3 cameraToLocal = calculateBillboardParticleOrientation (
 	    m_modelMatrixInverse, cameraWorld, roll
 	);

@@ -263,7 +263,7 @@ void VolumetricLights::render (
     const auto& camera = m_scene.getCamera ();
     const auto viewProjection = nativeClip (camera.usesReverseDepth ()) * camera.getRasterProjection () * camera.getLookAt ();
     const auto& lights = m_scene.getLights ();
-    const float time = m_scene.getTime ();
+    const double time = m_scene.getElapsedTime ();
     size_t spot = 0, pointIndex = 0;
     for (const auto* light : lightObjects) {
         const auto& data = light->getLight ();

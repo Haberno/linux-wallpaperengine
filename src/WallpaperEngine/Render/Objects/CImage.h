@@ -142,7 +142,7 @@ protected:
      * parent chain. Used as the per-node step of resolveTransform.
      */
     [[nodiscard]] static ResolvedTransform
-    localTransform (const WallpaperEngine::Data::Model::Object& object, float time);
+    localTransform (const WallpaperEngine::Data::Model::Object& object, double time);
 
 private:
     [[nodiscard]] bool usesReverseProjection (const glm::mat4* projection) const;

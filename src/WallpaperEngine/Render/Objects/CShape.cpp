@@ -122,7 +122,7 @@ bool CShape::corner (const Effects::CPass& pass, const std::string& name, glm::v
     for (const auto* constants : { &pass.getOverride ().constants, &pass.getPass ().constants }) {
 	const auto entry = constants->find (name);
 	if (entry != constants->end ()) {
-	    value = glm::vec2 (entry->second->evaluateVec3 (getScene ().getTime ()));
+	    value = glm::vec2 (entry->second->evaluateVec3 (getScene ().getElapsedTime ()));
 	    return true;
 	}
     }
@@ -188,7 +188,7 @@ void CShape::render () {
     }
     m_mvp = m_viewProjection * m_model;
     m_mvpInverse = glm::inverse (m_mvp);
-    const float time = getScene ().getTime ();
+    const double time = getScene ().getElapsedTime ();
     m_alpha = m_shape.alpha->evaluateFloat (time);
     m_brightness = m_shape.brightness->evaluateFloat (time);
     m_color = m_shape.color->value->getVec3 ();
