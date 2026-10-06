@@ -14,6 +14,7 @@ public:
     struct Shape {
 	Scripting::ModelDataShape input;
 	std::string geometryMaterial;
+	uint32_t geometryVertexFormat = 0;
 	Data::Model::MdlMesh layout;
 	uint32_t colorOffset = Data::Model::MdlMesh::AttributeAbsent;
 	GLuint vertexBuffer = GL_NONE;

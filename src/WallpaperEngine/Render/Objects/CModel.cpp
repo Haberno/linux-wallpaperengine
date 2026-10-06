@@ -54,6 +54,7 @@ ModelData::ModelData (std::vector<Scripting::ModelDataShape> input) {
 	Shape shape;
 	shape.input = std::move (source);
 	shape.geometryMaterial = shape.input.material;
+	shape.geometryVertexFormat = shape.input.vertexFormat;
 	shape.drawCount = static_cast<GLsizei> (shape.input.indexWidth == 0
 	    ? shape.input.vertices.size () * sizeof (float) / shape.input.strideBytes
 	    : shape.input.indices.size () / shape.input.indexWidth);
@@ -180,8 +181,9 @@ const char* ModelData::applyData (const std::vector<Scripting::ModelDataShape>& 
 }
 
 const char* ModelData::replaceData (std::vector<Scripting::ModelDataShape> replacements) {
-    // Retained material changes bypass native shader validation. Recreated
-    // material/layout combinations still require its compiled input signature.
+    // Native validates only a supplied material on recreation. Omitted material
+    // retains the path and bypasses that gate; explicit material keeps a known
+    // compatible semantic superset until compiled input signatures are supported.
     if (replacements.size () > shapes.size ()) {
 	return "IModelData.replaceData currently requires the existing shape count";
     }
@@ -193,18 +195,19 @@ const char* ModelData::replaceData (std::vector<Scripting::ModelDataShape> repla
 	const bool recreate = layoutChanged || (replacement.deleteIndices && original.indexWidth != 0)
 	    || (replacement.hasVertices && (!original.vertexDynamic || replacement.vertexFloatCount > original.vertices.size ()))
 	    || (replacement.indexWidth != 0 && (!original.indexDynamic || replacement.indexCount > originalIndexCount));
-	if (recreate && original.material != shapes[index].geometryMaterial) {
-	    return "IModelData.replaceData requires compiled shader validation after retained material changes";
+	const bool suppliedMaterial = !replacement.material.empty ();
+	if (recreate && suppliedMaterial && (original.material != shapes[index].geometryMaterial
+	    || (replacement.vertexFormat & shapes[index].geometryVertexFormat) != shapes[index].geometryVertexFormat)) {
+	    return "IModelData.replaceData requires compiled shader validation for changed material or missing original semantics";
 	}
 	if (replacement.deleteShape
 	    || (recreate && !replacement.material.empty () && replacement.material != original.material)
-	    || (layoutChanged && ((replacement.vertexFormat & original.vertexFormat) != original.vertexFormat
-		|| (replacement.vertexFormat & ~0x800fu) != 0))
+	    || (layoutChanged && (replacement.vertexFormat & ~0x800fu) != 0)
 	    || (!layoutChanged && replacement.vertexFormat != 0 && replacement.strideBytes != original.strideBytes)
 	    || (!recreate && original.indexWidth == 0 && replacement.indexWidth != 0)
 	    || (recreate && (!replacement.hasVertices
 		|| replacement.vertexFormat == 0 || replacement.strideBytes == 0
-		|| replacement.material != original.material
+		|| (suppliedMaterial && replacement.material != original.material)
 		|| replacement.vertexFloatCount > replacement.vertices.size ()
 		|| (replacement.indexWidth != 0 && (replacement.indexWidth != 2 && replacement.indexWidth != 4))
 		|| (replacement.indexWidth != 0 && replacement.indexCount > replacement.indices.size () / replacement.indexWidth)))) {
@@ -270,6 +273,7 @@ const char* ModelData::replaceData (std::vector<Scripting::ModelDataShape> repla
 	}
 	// Parsing may have captured dynamic capacities before a property getter
 	// changed the original flags. Recreated buffers use only their logical views.
+	if (replacement.material.empty ()) replacement.material = shape.input.material;
 	replacement.vertices.resize (replacement.vertexFloatCount);
 	replacement.indices.resize (replacement.indexCount * replacement.indexWidth);
 	shape.input = std::move (replacement);
