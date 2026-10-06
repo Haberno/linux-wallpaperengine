@@ -1026,6 +1026,7 @@ static std::optional<ControlPointRemap> parseControlPointRemap (
     using Input = ControlPointRemap::Input;
     using Output = ControlPointRemap::Output;
     using Transform = ControlPointRemap::Transform;
+    using Component = ControlPointRemap::Component;
     const std::optional<Input> parsedInput = input == "positionbetweentwocontrolpoints" ? Input::BetweenPoints
         : input == "distancetocontrolpoint" ? Input::DistanceToPoint
         : input == "maxlifetime" ? Input::MaxLifetime
@@ -1034,13 +1035,14 @@ static std::optional<ControlPointRemap> parseControlPointRemap (
         : input == "speed" ? Input::Speed : input == "rotation" ? Input::Rotation
         : input == "angularspeed" ? Input::AngularSpeed : input == "runtime" ? Input::Runtime
         : input == "timeofday" ? Input::TimeOfDay
-        : input == "particlesystemtime" ? std::optional (Input::ParticleSystemTime) : std::nullopt;
+        : input == "particlesystemtime" ? Input::ParticleSystemTime
+        : input == "color" ? Input::Color : input == "position" ? Input::Position : input == "velocity" ? std::optional (Input::Velocity) : std::nullopt;
     const std::optional<Output> parsedOutput = output == "positionbetweentwocontrolpoints" ? Output::BetweenPoints
         : output == "distancetocontrolpoint" ? Output::DistanceToPoint
         : output == "maxlifetime" ? Output::MaxLifetime : output == "size" ? Output::Size
         : output == "opacity" ? Output::Opacity : output == "speed" ? Output::Speed
         : output == "velocity" ? Output::Velocity : output == "rotation" ? Output::Rotation
-        : output == "angularspeed" ? std::optional (Output::AngularSpeed) : std::nullopt;
+        : output == "color" ? Output::Color : output == "angularspeed" ? Output::AngularSpeed : output == "position" ? std::optional (Output::Position) : std::nullopt;
     const std::optional<Transform> parsedTransform = transform == "none" ? Transform::Identity
         : transform == "sine" ? Transform::Sine : transform == "square" ? Transform::Square
         : transform == "saw" ? Transform::Saw : transform == "triangle" ? Transform::Triangle
@@ -1051,9 +1053,7 @@ static std::optional<ControlPointRemap> parseControlPointRemap (
             && (!initializer || (parsedInput != Input::LifetimeFraction && parsedInput != Input::ParticleSystemTime)));
     const bool periodic = parsedTransform == Transform::Sine || parsedTransform == Transform::Square
         || parsedTransform == Transform::Saw || parsedTransform == Transform::Triangle;
-    // Vector normalization/components remain separate from the measured scalar transforms.
-    const bool linearTransform = parsedTransform == Transform::Identity
-        || (periodic && parsedOutput != Output::Velocity);
+    const bool linearTransform = parsedTransform == Transform::Identity || periodic;
     const bool speedOutput = parsedOutput == Output::Speed;
     const bool arithmetic = linearPair
         && (operation == "multiply" || operation == "add" || operation == "subtract");
@@ -1061,17 +1061,23 @@ static std::optional<ControlPointRemap> parseControlPointRemap (
         && parsedOutput == Output::Velocity && parsedTransform == Transform::SimplexNoise;
     const bool noiseSpeed = !initializer && parsedInput == Input::LifetimeFraction
         && speedOutput && parsedTransform == Transform::FbmNoise && it.optional ("transformoctaves", 3) == 3;
-    const auto inputComponent = it.optional<std::string> ("inputcomponent", "all");
-    const auto outputComponent = it.optional<std::string> ("outputcomponent", "all");
-    const auto knownComponent = [] (const std::string& component) {
-        return component == "all" || component == "x" || component == "y" || component == "z"
-            || component == "sum" || component == "average" || component == "max" || component == "min";
+    const auto parseComponent = [] (const std::string& component) -> std::optional<Component> {
+        if (component == "all") return Component::All;
+        if (component == "x") return Component::X;
+        if (component == "y") return Component::Y;
+        if (component == "z") return Component::Z;
+        if (component == "sum") return Component::Sum;
+        if (component == "average") return Component::Average;
+        if (component == "max") return Component::Max;
+        if (component == "min") return Component::Min;
+        return std::nullopt;
     };
-    // Native scalar inputs bypass selectors, and scalar outputs ignore them.
-    // Vector output selection and the separate noise modes keep their existing gates.
-    const bool supportedInputComponent = inputComponent == "all" || (linearPair && knownComponent (inputComponent));
-    const bool supportedOutputComponent = outputComponent == "all"
-        || (linearPair && parsedOutput != Output::Velocity && knownComponent (outputComponent));
+    const auto inputComponent = parseComponent (it.optional<std::string> ("inputcomponent", "all"));
+    const auto outputComponent = parseComponent (it.optional<std::string> ("outputcomponent", "all"));
+    // Scalar selectors are ignored; vectors select/reduce input or select output.
+    // The separate noise modes keep their existing all-component gate.
+    const bool supportedInputComponent = inputComponent == Component::All || (linearPair && inputComponent.has_value ());
+    const bool supportedOutputComponent = outputComponent == Component::All || (linearPair && outputComponent.has_value ());
     const auto flags = it.optional ("flags", 1u);
     const bool supportedFlags = noiseVelocity ? flags == 1u : noiseSpeed ? flags == 3u : flags <= 3u;
     const glm::vec4 blendTimes = initializer ? glm::vec4 (0.0f, 0.0f, 1.0f, 1.0f) : glm::vec4 (
@@ -1109,6 +1115,8 @@ static std::optional<ControlPointRemap> parseControlPointRemap (
                    : ControlPointRemap::Operation::Remap,
         .flags = flags,
         .blendTimes = blendTimes,
+        .inputComponent = *inputComponent,
+        .outputComponent = *outputComponent,
     };
 }
 

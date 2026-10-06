@@ -254,10 +254,11 @@ public:
 
 // The measured two-control-point and lifetime-noise subsets of native remaps.
 struct ControlPointRemap {
-    enum class Input { BetweenPoints, DistanceToPoint, MaxLifetime, LifetimeFraction, Size, Opacity, Speed, Rotation, AngularSpeed, Runtime, TimeOfDay, ParticleSystemTime };
-    enum class Output { BetweenPoints, DistanceToPoint, MaxLifetime, Size, Opacity, Speed, Velocity, Rotation, AngularSpeed };
+    enum class Input { BetweenPoints, DistanceToPoint, MaxLifetime, LifetimeFraction, Size, Opacity, Speed, Rotation, AngularSpeed, Runtime, TimeOfDay, ParticleSystemTime, Position, Velocity, Color };
+    enum class Output { BetweenPoints, DistanceToPoint, MaxLifetime, Size, Opacity, Speed, Velocity, Rotation, AngularSpeed, Position, Color };
     enum class Transform { Identity, Sine, Square, Saw, Triangle, SimplexNoise, FbmNoise };
     enum class Operation { Remap, Multiply, Add, Subtract };
+    enum class Component { All, X, Y, Z, Sum, Average, Max, Min };
     Input input;
     Output output;
     Transform transform;
@@ -273,6 +274,8 @@ struct ControlPointRemap {
     Operation operation { Operation::Remap };
     uint32_t flags { 1 };
     glm::vec4 blendTimes { 0.0f, 0.0f, 1.0f, 1.0f };
+    Component inputComponent { Component::All };
+    Component outputComponent { Component::All };
 };
 
 class ControlPointRemapInitializer : public ParticleInitializerBase {

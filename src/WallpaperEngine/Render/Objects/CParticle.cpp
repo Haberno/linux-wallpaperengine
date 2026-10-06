@@ -1587,6 +1587,9 @@ void WallpaperEngine::Render::Objects::applyParticleControlPointRemap (
     const float fraction = zeroInput ? 0.0f : glm::dot (particle.position - start, delta) / lengthSquared;
     float input = 0.0f;
     switch (remap.input) {
+        case ControlPointRemap::Input::Color:
+        case ControlPointRemap::Input::Position:
+        case ControlPointRemap::Input::Velocity: break;
         case ControlPointRemap::Input::BetweenPoints: input = fraction; break;
         case ControlPointRemap::Input::DistanceToPoint:
             input = glm::length (particle.position - controlPoints[remap.inputControlPoint0].position);
@@ -1606,37 +1609,59 @@ void WallpaperEngine::Render::Objects::applyParticleControlPointRemap (
         case ControlPointRemap::Input::Rotation: input = particle.rotation.z; break;
         case ControlPointRemap::Input::AngularSpeed: input = angularVelocityAvailable ? particle.angularVelocity.z : 0.0f; break;
     }
+    const bool vectorInput = remap.input == ControlPointRemap::Input::Position
+        || remap.input == ControlPointRemap::Input::Velocity || remap.input == ControlPointRemap::Input::Color;
+    glm::vec3 inputValue (input);
+    if (vectorInput) {
+        // Particle storage is reflected Y; remap components use authored coordinates.
+        inputValue = remap.input == ControlPointRemap::Input::Color
+            ? (initializer ? particle.initial.color : particle.color)
+            : (remap.input == ControlPointRemap::Input::Position ? particle.position : particle.velocity)
+                * glm::vec3 (1.0f, -1.0f, 1.0f);
+        using Component = ControlPointRemap::Component;
+        switch (remap.inputComponent) {
+            case Component::All: break;
+            case Component::X: inputValue = glm::vec3 (inputValue.x); break;
+            case Component::Y: inputValue = glm::vec3 (inputValue.y); break;
+            case Component::Z: inputValue = glm::vec3 (inputValue.z); break;
+            case Component::Sum: inputValue = glm::vec3 (inputValue.x + inputValue.y + inputValue.z); break;
+            case Component::Average: inputValue = glm::vec3 ((inputValue.x + inputValue.y + inputValue.z) * (1.0f / 3.0f)); break;
+            case Component::Max: inputValue = glm::vec3 (std::max ({ inputValue.x, inputValue.y, inputValue.z })); break;
+            case Component::Min: inputValue = glm::vec3 (std::min ({ inputValue.x, inputValue.y, inputValue.z })); break;
+        }
+    }
     const glm::vec3 minimum = remap.inputRangeMin->value->getVec3 ();
     glm::vec3 span = remap.inputRangeMax->value->getVec3 () - minimum;
     // Both native parsers replace exactly equal range endpoints with FLT_EPSILON.
     for (int axis = 0; axis < 3; ++axis) if (span[axis] == 0.0f) span[axis] = epsilon;
-    glm::vec3 normalized = (glm::vec3 (input) - minimum) / span;
+    glm::vec3 normalized = (inputValue - minimum) / span;
+    // Native operators normalize a scalar through range X, then replicate it.
+    if (!initializer && !vectorInput) normalized = glm::vec3 (normalized.x);
     if (remap.flags & 1u) normalized = glm::clamp (normalized, glm::vec3 (0), glm::vec3 (1));
-    if (remap.transform != ControlPointRemap::Transform::Identity) {
-        // Periodic transforms are admitted for scalar outputs only. Native
-        // applies input saturation before this stage and output saturation after.
-        const float phase = normalized.x * remap.transformInputScale;
+    if (remap.transform != ControlPointRemap::Transform::Identity) for (int axis = 0; axis < 3; ++axis) {
+        // Native transforms each normalized component before output saturation.
+        const float phase = normalized[axis] * remap.transformInputScale;
         switch (remap.transform) {
             case ControlPointRemap::Transform::Sine: {
-                const float angle = initializer ? (normalized.x * glm::pi<float> ()) * remap.transformInputScale
-                    : normalized.x * (remap.transformInputScale * glm::pi<float> ());
-                normalized.x = std::sin (angle - glm::half_pi<float> ()) * .5f + .5f;
+                const float angle = initializer ? (normalized[axis] * glm::pi<float> ()) * remap.transformInputScale
+                    : normalized[axis] * (remap.transformInputScale * glm::pi<float> ());
+                normalized[axis] = std::sin (angle - glm::half_pi<float> ()) * .5f + .5f;
                 break;
             }
             case ControlPointRemap::Transform::Square: {
                 const float fraction = phase - (initializer ? std::floor (phase) : std::trunc (phase));
                 // The scalar initializer rounds half away; SIMD rounds ties even.
-                normalized.x = (initializer ? std::round (fraction) : glm::roundEven (fraction))
+                normalized[axis] = (initializer ? std::round (fraction) : glm::roundEven (fraction))
                     + (phase < 0.0f ? 1.0f : 0.0f);
                 break;
             }
             case ControlPointRemap::Transform::Saw:
-                normalized.x = phase - (initializer ? std::floor (phase) : std::trunc (phase))
-                    + (normalized.x < 0.0f ? 1.0f : 0.0f);
+                normalized[axis] = phase - (initializer ? std::floor (phase) : std::trunc (phase))
+                    + (normalized[axis] < 0.0f ? 1.0f : 0.0f);
                 break;
             case ControlPointRemap::Transform::Triangle: {
                 const float fraction = std::abs (phase) - std::floor (std::abs (phase));
-                normalized.x = 1.0f - std::abs (fraction * 2.0f - 1.0f);
+                normalized[axis] = 1.0f - std::abs (fraction * 2.0f - 1.0f);
                 break;
             }
             default: break;
@@ -1678,12 +1703,20 @@ void WallpaperEngine::Render::Objects::applyParticleControlPointRemap (
         const float result = operate (distance);
         const float blended = weight == 1.0f ? result : distance + (result - distance) * weight;
         particle.position = start + direction * blended;
-    } else if (remap.output == ControlPointRemap::Output::Velocity) {
-        // Authored velocity uses the same Y-up coordinates as velocityrandom.
-        glm::vec3 target = mapped * glm::vec3 (1.0f, -1.0f, 1.0f);
+    } else if (remap.output == ControlPointRemap::Output::Velocity || remap.output == ControlPointRemap::Output::Position
+               || remap.output == ControlPointRemap::Output::Color) {
+        using Component = ControlPointRemap::Component;
+        // Native output reductions perform no write; only all and XYZ select channels.
+        if (remap.outputComponent > Component::Z) return;
+        const bool colorOutput = remap.output == ControlPointRemap::Output::Color;
+        glm::vec3& destination = colorOutput ? (initializer ? particle.initial.color : particle.color)
+            : remap.output == ControlPointRemap::Output::Position ? particle.position : particle.velocity;
+        // RGB stays in its stored units; only position/velocity reflect authored Y.
+        const glm::vec3 coordinateScale = colorOutput ? glm::vec3 (1.0f) : glm::vec3 (1.0f, -1.0f, 1.0f);
+        glm::vec3 target = mapped * coordinateScale;
         switch (remap.operation) {
             case ControlPointRemap::Operation::Remap: {
-                if (!initializer) {
+                if (!initializer && remap.outputComponent == Component::All) {
                     glm::vec4 blendTimes = remap.blendTimes;
                     blendTimes.x = std::min (blendTimes.x, blendTimes.y - 0.0001f);
                     blendTimes.w = std::max (blendTimes.w, blendTimes.z + 0.0001f);
@@ -1692,16 +1725,22 @@ void WallpaperEngine::Render::Objects::applyParticleControlPointRemap (
                     if ((blendTimes.y > 0.01f || blendTimes.z < 0.99f)
                         && (blendTimes.z - blendTimes.y > 0.01f || blendTimes.y - blendTimes.x > 0.01f
                             || blendTimes.w - blendTimes.z > 0.01f))
-                        target = glm::vec3 (mapped.x, -mapped.x, mapped.x);
+                        target = glm::vec3 (mapped.x) * coordinateScale;
                 }
                 break;
             }
             // Multipliers are dimensionless factors, not reflected velocity deltas.
-            case ControlPointRemap::Operation::Multiply: target = particle.velocity * mapped; break;
-            case ControlPointRemap::Operation::Add: target = particle.velocity + target; break;
-            case ControlPointRemap::Operation::Subtract: target = particle.velocity - target; break;
+            case ControlPointRemap::Operation::Multiply: target = destination * mapped; break;
+            case ControlPointRemap::Operation::Add: target = destination + target; break;
+            case ControlPointRemap::Operation::Subtract: target = destination - target; break;
         }
-        particle.velocity = weight == 1.0f ? target : particle.velocity + (target - particle.velocity) * weight;
+        if (remap.outputComponent == Component::All) {
+            destination = weight == 1.0f ? target : destination + (target - destination) * weight;
+        } else {
+            const int axis = static_cast<int> (remap.outputComponent) - static_cast<int> (Component::X);
+            destination[axis] = weight == 1.0f ? target[axis] : destination[axis] + (target[axis] - destination[axis]) * weight;
+        }
+        if (initializer && colorOutput) particle.color = particle.initial.color;
     } else {
         // Angular storage is allocated by angularvelocityrandom/angularmovement,
         // not by remap. Native skips angular output when its storage bit is clear.
@@ -1749,6 +1788,7 @@ InitializerFunc CParticle::createControlPointRemapInitializer (const ControlPoin
 OperatorFunc CParticle::createControlPointRemapOperator (const ControlPointRemapOperator& op) {
     const auto& remap = op.remap;
     if (remap.output == ControlPointRemap::Output::Opacity) m_hasAlphaOperators = true;
+    if (remap.output == ControlPointRemap::Output::Color) m_hasColorOperators = true;
     includeControlPoint (remap.inputControlPoint0);
     includeControlPoint (remap.inputControlPoint1);
     includeControlPoint (remap.outputControlPoint0);
