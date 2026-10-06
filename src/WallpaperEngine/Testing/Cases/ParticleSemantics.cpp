@@ -3765,3 +3765,195 @@ TEST_CASE ("radial operator leaves native nonfinite distance cases outside finit
         }
     }
 }
+
+TEST_CASE ("periodic transforms admit measured scalar two point paths and keep vector gates", "[particle][remap][remap-periodic]") {
+    for (const bool initializer : { true, false }) {
+        for (const auto transform : { "sine", "square", "saw", "triangle" }) {
+            for (const bool positionInput : { true, false }) {
+                WallpaperEngine::Data::Model::Project project {};
+                auto data = WallpaperEngine::Data::JSON::JSON::parse (R"({"id":440,"particle":{}})");
+                auto node = WallpaperEngine::Data::JSON::JSON::parse (R"({"operation":"remap"})");
+                node["name"] = initializer ? "remapinitialvalue" : "remapvalue";
+                node["input"] = positionInput ? "positionbetweentwocontrolpoints" : "size";
+                node["output"] = positionInput ? "size" : "positionbetweentwocontrolpoints";
+                node["transformfunction"] = transform;
+                data["particle"][initializer ? "initializer" : "operator"] = { node };
+                const auto object = WallpaperEngine::Data::Parsers::ObjectParser::parse (data, project);
+                const auto* particle = object->as<Particle> ();
+                CHECK ((initializer ? particle->initializers.size () : particle->operators.size ()) == 1);
+                node[positionInput ? "output" : "input"] = "velocity";
+                data["particle"][initializer ? "initializer" : "operator"] = { node };
+                const auto unsupported = WallpaperEngine::Data::Parsers::ObjectParser::parse (data, project);
+                CHECK ((initializer ? unsupported->as<Particle> ()->initializers.size ()
+                                    : unsupported->as<Particle> ()->operators.size ()) == 0);
+            }
+        }
+    }
+}
+
+TEST_CASE ("periodic scalar transforms match native phase scale and half step readbacks", "[particle][remap][remap-periodic]") {
+    using WallpaperEngine::Render::Objects::applyParticleControlPointRemap;
+    using WallpaperEngine::Render::Objects::ControlPointData;
+    // Literal native scalar initializer and SIMD operator readbacks. The native
+    // blended kernel independently agrees with the ordinary operator samples.
+    const struct { bool initializer; const char* transform; float input, scale, expected; } samples[] = {
+        { true, "sine", 0.5f, -3.0f, 0.499999911f },
+        { true, "sine", 0.5f, 0.0f, 0.0f },
+        { true, "sine", 0.5f, 0.5f, 0.146446615f },
+        { true, "sine", -1.0f, 2.0f, 0.0f },
+        { true, "sine", -0.25f, 2.0f, 0.50000006f },
+        { true, "sine", 0.25f, 2.0f, 0.5f },
+        { true, "sine", 0.5f, 2.0f, 1.0f },
+        { true, "sine", 1.0f, 2.0f, 0.0f },
+        { true, "square", 0.5f, -3.0f, 2.0f },
+        { true, "square", 0.5f, 0.0f, 0.0f },
+        { true, "square", 0.5f, 0.5f, 0.0f },
+        { true, "square", -1.0f, 2.0f, 1.0f },
+        { true, "square", -0.25f, 2.0f, 2.0f },
+        { true, "square", 0.249f, 2.0f, 0.0f },
+        { true, "square", 0.25f, 2.0f, 1.0f },
+        { true, "square", 0.251f, 2.0f, 1.0f },
+        { true, "square", 0.5f, 2.0f, 0.0f },
+        { true, "square", 1.0f, 2.0f, 0.0f },
+        { true, "saw", -0.25f, -3.0f, 1.75f },
+        { true, "saw", 0.5f, -3.0f, 0.5f },
+        { true, "saw", 0.5f, 0.0f, 0.0f },
+        { true, "saw", 0.5f, 0.5f, 0.25f },
+        { true, "saw", -1.0f, 2.0f, 1.0f },
+        { true, "saw", -0.25f, 2.0f, 1.5f },
+        { true, "saw", 0.25f, 2.0f, 0.5f },
+        { true, "saw", 0.5f, 2.0f, 0.0f },
+        { true, "saw", 1.0f, 2.0f, 0.0f },
+        { true, "triangle", 0.5f, -3.0f, 1.0f },
+        { true, "triangle", 0.5f, 0.0f, 0.0f },
+        { true, "triangle", 0.5f, 0.5f, 0.5f },
+        { true, "triangle", -1.0f, 2.0f, 0.0f },
+        { true, "triangle", -0.25f, 2.0f, 1.0f },
+        { true, "triangle", 0.25f, 2.0f, 1.0f },
+        { true, "triangle", 0.5f, 2.0f, 0.0f },
+        { true, "triangle", 1.0f, 2.0f, 0.0f },
+        { false, "sine", 0.5f, -3.0f, 0.499999911f },
+        { false, "sine", 0.5f, 0.0f, 0.0f },
+        { false, "sine", 0.5f, 0.5f, 0.146446586f },
+        { false, "sine", -1.0f, 2.0f, 0.0f },
+        { false, "sine", -0.25f, 2.0f, 0.50000006f },
+        { false, "sine", 0.25f, 2.0f, 0.5f },
+        { false, "sine", 0.5f, 2.0f, 1.0f },
+        { false, "sine", 1.0f, 2.0f, 0.0f },
+        { false, "square", 0.5f, -3.0f, 1.0f },
+        { false, "square", 0.5f, 0.0f, 0.0f },
+        { false, "square", 0.5f, 0.5f, 0.0f },
+        { false, "square", -1.0f, 2.0f, 1.0f },
+        { false, "square", -0.25f, 2.0f, 1.0f },
+        { false, "square", 0.249f, 2.0f, 0.0f },
+        { false, "square", 0.25f, 2.0f, 0.0f },
+        { false, "square", 0.251f, 2.0f, 1.0f },
+        { false, "square", 0.5f, 2.0f, 0.0f },
+        { false, "square", 1.0f, 2.0f, 0.0f },
+        { false, "saw", -0.25f, -3.0f, 1.75f },
+        { false, "saw", 0.5f, -3.0f, -0.5f },
+        { false, "saw", 0.5f, 0.0f, 0.0f },
+        { false, "saw", 0.5f, 0.5f, 0.25f },
+        { false, "saw", -1.0f, 2.0f, 1.0f },
+        { false, "saw", -0.25f, 2.0f, 0.5f },
+        { false, "saw", 0.25f, 2.0f, 0.5f },
+        { false, "saw", 0.5f, 2.0f, 0.0f },
+        { false, "saw", 1.0f, 2.0f, 0.0f },
+        { false, "triangle", 0.5f, -3.0f, 1.0f },
+        { false, "triangle", 0.5f, 0.0f, 0.0f },
+        { false, "triangle", 0.5f, 0.5f, 0.5f },
+        { false, "triangle", -1.0f, 2.0f, 0.0f },
+        { false, "triangle", -0.25f, 2.0f, 1.0f },
+        { false, "triangle", 0.25f, 2.0f, 1.0f },
+        { false, "triangle", 0.5f, 2.0f, 0.0f },
+        { false, "triangle", 1.0f, 2.0f, 0.0f },
+    };
+    std::vector<ControlPointData> points (2);
+    points[1].position = { 64, 0, 0 };
+    for (const auto& sample : samples) {
+        INFO (sample.transform << ", initializer=" << sample.initializer << ", input=" << sample.input << ", scale=" << sample.scale);
+        WallpaperEngine::Data::Model::Project project {};
+        auto data = WallpaperEngine::Data::JSON::JSON::parse (R"({"id":441,"particle":{}})");
+        auto node = WallpaperEngine::Data::JSON::JSON::parse (R"({
+            "input":"positionbetweentwocontrolpoints","output":"size","operation":"remap","flags":0
+        })");
+        node["name"] = sample.initializer ? "remapinitialvalue" : "remapvalue";
+        node["transformfunction"] = sample.transform;
+        node["transforminputscale"] = sample.scale;
+        data["particle"][sample.initializer ? "initializer" : "operator"] = { node };
+        const auto object = WallpaperEngine::Data::Parsers::ObjectParser::parse (data, project);
+        const auto* definition = object->as<Particle> ();
+        REQUIRE ((sample.initializer ? definition->initializers.size () : definition->operators.size ()) == 1);
+        const auto& remap = sample.initializer
+            ? definition->initializers.front ()->as<ControlPointRemapInitializer> ()->remap
+            : definition->operators.front ()->as<ControlPointRemapOperator> ()->remap;
+        ParticleInstance particle;
+        particle.position = { sample.input * 64, 12, -8 };
+        particle.size = particle.initial.size = 7;
+        particle.lifetime = 4;
+        particle.age = 1;
+        applyParticleControlPointRemap (particle, remap, points, sample.initializer);
+        CHECK (particle.size == Catch::Approx (sample.expected).epsilon (.00002).margin (.000002));
+        CHECK (particle.initial.size == Catch::Approx (sample.initializer ? sample.expected : 7).epsilon (.00002).margin (.000002));
+        CHECK (particle.position == glm::vec3 (sample.input * 64, 12, -8));
+    }
+}
+
+TEST_CASE ("periodic mapping clamps on each side before arithmetic and position blending", "[particle][remap][remap-periodic]") {
+    using WallpaperEngine::Render::Objects::applyParticleControlPointRemap;
+    using WallpaperEngine::Render::Objects::ControlPointData;
+    const struct { bool initializer; const char* transform; float raw, inputClamped; } samples[] = {
+        { true, "sine", 0.50000006f, 0.0f },
+        { true, "square", 2.0f, 0.0f },
+        { true, "saw", 1.5f, 0.0f },
+        { true, "triangle", 1.0f, 0.0f },
+        { false, "sine", 0.50000006f, 0.0f },
+        { false, "square", 1.0f, 0.0f },
+        { false, "saw", 0.5f, 0.0f },
+        { false, "triangle", 1.0f, 0.0f },
+    };
+    std::vector<ControlPointData> points (2);
+    points[1].position = { 64, 0, 0 };
+    for (const auto& sample : samples) {
+        for (const uint32_t flags : { 0u, 1u, 2u, 3u }) {
+            for (const std::string operation : { "remap", "multiply", "add", "subtract" }) {
+                for (const float age : { 0.0f, 1.0f, 2.0f }) {
+                    INFO (sample.transform << ", initializer=" << sample.initializer << ", flags=" << flags << ", operation=" << operation << ", age=" << age);
+                    WallpaperEngine::Data::Model::Project project {};
+                    auto data = WallpaperEngine::Data::JSON::JSON::parse (R"({"id":442,"particle":{}})");
+                    auto node = WallpaperEngine::Data::JSON::JSON::parse (R"({
+                        "input":"size","output":"positionbetweentwocontrolpoints",
+                        "inputrangemin":0.25,"inputrangemax":1.25,
+                        "outputrangemin":-1,"outputrangemax":3,"blendinend":0.5
+                    })");
+                    node["name"] = sample.initializer ? "remapinitialvalue" : "remapvalue";
+                    node["transformfunction"] = sample.transform;
+                    node["operation"] = operation;
+                    node["flags"] = flags;
+                    data["particle"][sample.initializer ? "initializer" : "operator"] = { node };
+                    const auto object = WallpaperEngine::Data::Parsers::ObjectParser::parse (data, project);
+                    const auto* definition = object->as<Particle> ();
+                    REQUIRE ((sample.initializer ? definition->initializers.size () : definition->operators.size ()) == 1);
+                    const auto& remap = sample.initializer
+                        ? definition->initializers.front ()->as<ControlPointRemapInitializer> ()->remap
+                        : definition->operators.front ()->as<ControlPointRemapOperator> ()->remap;
+                    ParticleInstance particle;
+                    particle.position = { 32, 12, -8 };
+                    particle.size = particle.initial.size = 0;
+                    particle.lifetime = 4;
+                    particle.age = age;
+                    const float transformed = flags & 1 ? sample.inputClamped : sample.raw;
+                    const float mapped = flags & 2 ? glm::clamp (-1 + 4 * transformed, 0.0f, 1.0f) : -1 + 4 * transformed;
+                    const float target = operation == "remap" ? mapped : operation == "multiply" ? .5f * mapped
+                        : operation == "add" ? .5f + mapped : .5f - mapped;
+                    const float weight = sample.initializer ? 1 : age * .5f;
+                    applyParticleControlPointRemap (particle, remap, points, sample.initializer);
+                    CHECK (particle.position.x == Catch::Approx (32 + 64 * (target - .5f) * weight).margin (.0001));
+                    CHECK (particle.position.y == 12);
+                    CHECK (particle.position.z == -8);
+                    CHECK (particle.size == 0);
+                }
+            }
+        }
+    }
+}

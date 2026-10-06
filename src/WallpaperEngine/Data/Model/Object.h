@@ -256,7 +256,7 @@ public:
 struct ControlPointRemap {
     enum class Input { BetweenPoints, DistanceToPoint, MaxLifetime, LifetimeFraction, Size, Opacity, Speed, Rotation, AngularSpeed, Runtime, TimeOfDay, ParticleSystemTime };
     enum class Output { BetweenPoints, DistanceToPoint, MaxLifetime, Size, Opacity, Speed, Velocity, Rotation, AngularSpeed };
-    enum class Transform { Identity, SimplexNoise, FbmNoise };
+    enum class Transform { Identity, Sine, Square, Saw, Triangle, SimplexNoise, FbmNoise };
     enum class Operation { Remap, Multiply, Add, Subtract };
     Input input;
     Output output;

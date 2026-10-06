@@ -1612,6 +1612,36 @@ void WallpaperEngine::Render::Objects::applyParticleControlPointRemap (
     for (int axis = 0; axis < 3; ++axis) if (span[axis] == 0.0f) span[axis] = epsilon;
     glm::vec3 normalized = (glm::vec3 (input) - minimum) / span;
     if (remap.flags & 1u) normalized = glm::clamp (normalized, glm::vec3 (0), glm::vec3 (1));
+    if (remap.transform != ControlPointRemap::Transform::Identity) {
+        // Periodic transforms are admitted for scalar outputs only. Native
+        // applies input saturation before this stage and output saturation after.
+        const float phase = normalized.x * remap.transformInputScale;
+        switch (remap.transform) {
+            case ControlPointRemap::Transform::Sine: {
+                const float angle = initializer ? (normalized.x * glm::pi<float> ()) * remap.transformInputScale
+                    : normalized.x * (remap.transformInputScale * glm::pi<float> ());
+                normalized.x = std::sin (angle - glm::half_pi<float> ()) * .5f + .5f;
+                break;
+            }
+            case ControlPointRemap::Transform::Square: {
+                const float fraction = phase - (initializer ? std::floor (phase) : std::trunc (phase));
+                // The scalar initializer rounds half away; SIMD rounds ties even.
+                normalized.x = (initializer ? std::round (fraction) : glm::roundEven (fraction))
+                    + (phase < 0.0f ? 1.0f : 0.0f);
+                break;
+            }
+            case ControlPointRemap::Transform::Saw:
+                normalized.x = phase - (initializer ? std::floor (phase) : std::trunc (phase))
+                    + (normalized.x < 0.0f ? 1.0f : 0.0f);
+                break;
+            case ControlPointRemap::Transform::Triangle: {
+                const float fraction = std::abs (phase) - std::floor (std::abs (phase));
+                normalized.x = 1.0f - std::abs (fraction * 2.0f - 1.0f);
+                break;
+            }
+            default: break;
+        }
+    }
     glm::vec3 mapped = remap.outputRangeMin->value->getVec3 ()
         + normalized * (remap.outputRangeMax->value->getVec3 () - remap.outputRangeMin->value->getVec3 ());
     // Output saturation applies before arithmetic, not to the final position.

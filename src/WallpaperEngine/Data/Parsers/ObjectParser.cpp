@@ -1042,11 +1042,18 @@ static std::optional<ControlPointRemap> parseControlPointRemap (
         : output == "velocity" ? Output::Velocity : output == "rotation" ? Output::Rotation
         : output == "angularspeed" ? std::optional (Output::AngularSpeed) : std::nullopt;
     const std::optional<Transform> parsedTransform = transform == "none" ? Transform::Identity
+        : transform == "sine" ? Transform::Sine : transform == "square" ? Transform::Square
+        : transform == "saw" ? Transform::Saw : transform == "triangle" ? Transform::Triangle
         : transform == "simplexnoise" ? Transform::SimplexNoise
         : transform == "fbmnoise" ? std::optional (Transform::FbmNoise) : std::nullopt;
     const bool linearPair = (parsedInput == Input::BetweenPoints && parsedOutput.has_value ())
         || (parsedOutput == Output::BetweenPoints && parsedInput.has_value ()
             && (!initializer || (parsedInput != Input::LifetimeFraction && parsedInput != Input::ParticleSystemTime)));
+    const bool periodic = parsedTransform == Transform::Sine || parsedTransform == Transform::Square
+        || parsedTransform == Transform::Saw || parsedTransform == Transform::Triangle;
+    // Vector normalization/components remain separate from the measured scalar transforms.
+    const bool linearTransform = parsedTransform == Transform::Identity
+        || (periodic && parsedOutput != Output::Velocity);
     const bool speedOutput = parsedOutput == Output::Speed;
     const bool arithmetic = linearPair
         && (operation == "multiply" || operation == "add" || operation == "subtract");
@@ -1059,7 +1066,7 @@ static std::optional<ControlPointRemap> parseControlPointRemap (
     const glm::vec4 blendTimes = initializer ? glm::vec4 (0.0f, 0.0f, 1.0f, 1.0f) : glm::vec4 (
         it.optional ("blendinstart", 0.0f), it.optional ("blendinend", 0.0f),
         it.optional ("blendoutstart", 1.0f), it.optional ("blendoutend", 1.0f));
-    if ((!noiseVelocity && !noiseSpeed && (!linearPair || parsedTransform != Transform::Identity))
+    if ((!noiseVelocity && !noiseSpeed && (!linearPair || !linearTransform))
         || (operation != (noiseSpeed ? "multiply" : "remap") && !arithmetic)
         || it.optional<std::string> ("inputcomponent", "all") != "all"
         || it.optional<std::string> ("outputcomponent", "all") != "all"
