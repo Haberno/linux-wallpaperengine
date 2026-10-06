@@ -2792,3 +2792,82 @@ TEST_CASE ("two-control-point opacity remaps clamp mapped values before alpha ar
         }
     }
 }
+
+TEST_CASE ("degenerate two-control-point inputs still map scalar and velocity outputs", "[particle][remap][remap-position-degenerate]") {
+    using WallpaperEngine::Render::Objects::applyParticleControlPointRemap;
+    using WallpaperEngine::Render::Objects::ControlPointData;
+    // Native initializer selects zero through FLT_EPSILON; operators project
+    // every positive squared length. Coincident/underflowed input selects zero.
+    const struct { const char* name; float distance; float initial, ordinary, blended; float transverse {}; } cases[] = {
+        { "coincident", 0, .25f, .25f, .525f },
+        { "below epsilon", 0x1p-24f, .25f, .375f, .5875f },
+        { "at epsilon", 0x1p-23f, .25f, .375f, .5875f },
+        { "above epsilon", 0x1p-22f, .375f, .375f, .5875f },
+        { "rounded epsilon", 0x1p-23f, .25f, .375f, .5875f, 3 * 0x1p-36f },
+        { "normal pair", 64, .375f, .375f, .5875f },
+        { "reversed tiny", -0x1p-24f, .25f, .125f, .4625f },
+        { "squared underflow", 0x1p-80f, .25f, .25f, .525f }
+    };
+    std::vector<ControlPointData> points (4);
+    points[0].position = { 1024, 512, -256 };
+    points[1].position = { 1088, 512, -256 }; // authored input pair is irrelevant
+    for (const auto& sample : cases) {
+        points[2].position = { 0, sample.transverse == 0 ? 8 : 0, -3 };
+        points[3].position = points[2].position + glm::vec3 (sample.distance, sample.transverse, 0);
+        for (const bool initializer : { true, false }) {
+            for (const bool blended : { false, true }) {
+                if (initializer && blended) continue;
+                for (const char* output : { "size", "opacity", "velocity", "speed" }) {
+                    INFO (sample.name << ", initializer=" << initializer << ", blended=" << blended << ", output=" << output);
+                    WallpaperEngine::Data::Model::Project project {};
+                    auto data = WallpaperEngine::Data::JSON::JSON::parse (R"({"id":416,"particle":{}})");
+                    auto node = WallpaperEngine::Data::JSON::JSON::parse (R"({
+                        "input":"positionbetweentwocontrolpoints","operation":"remap",
+                        "inputcontrolpoint0":0,"inputcontrolpoint1":1,
+                        "outputcontrolpoint0":2,"outputcontrolpoint1":3,
+                        "outputrangemin":0.25,"outputrangemax":0.75,"flags":0
+                    })");
+                    node["name"] = initializer ? "remapinitialvalue" : "remapvalue";
+                    node["output"] = output;
+                    const bool speed = std::string_view (output) == "speed";
+                    if (speed) node["operation"] = "multiply";
+                    if (blended) node["blendinend"] = .5f;
+                    data["particle"][initializer ? "initializer" : "operator"] = { node };
+                    const auto object = WallpaperEngine::Data::Parsers::ObjectParser::parse (data, project);
+                    const auto* definition = object->as<Particle> ();
+                    REQUIRE (definition != nullptr);
+                    REQUIRE ((initializer ? definition->initializers.size () : definition->operators.size ()) == 1);
+                    const auto& remap = initializer
+                        ? definition->initializers.front ()->as<ControlPointRemapInitializer> ()->remap
+                        : definition->operators.front ()->as<ControlPointRemapOperator> ()->remap;
+                    ParticleInstance particle;
+                    particle.position = { std::abs (sample.distance) * .25f, sample.transverse == 0 ? 20 : sample.transverse * .25f, -11 };
+                    particle.velocity = { 4, -8, 12 };
+                    particle.size = particle.alpha = .8f;
+                    particle.initial.size = particle.initial.alpha = .6f;
+                    particle.lifetime = 8;
+                    particle.age = 2;
+                    const glm::vec3 position = particle.position;
+                    applyParticleControlPointRemap (particle, remap, points, initializer);
+                    const float mapped = initializer ? sample.initial : sample.ordinary;
+                    const float scalar = blended ? sample.blended : mapped;
+                    CHECK (particle.size == Catch::Approx (std::string_view (output) == "size" ? scalar : .8f));
+                    CHECK (particle.alpha == Catch::Approx (std::string_view (output) == "opacity" ? scalar : .8f));
+                    CHECK (particle.initial.size == Catch::Approx (initializer && std::string_view (output) == "size" ? scalar : .6f));
+                    CHECK (particle.initial.alpha == Catch::Approx (initializer && std::string_view (output) == "opacity" ? scalar : .6f));
+                    glm::vec3 velocity { 4, -8, 12 };
+                    if (speed) velocity *= blended ? (1 + mapped) * .5f : mapped;
+                    else if (std::string_view (output) == "velocity") {
+                        const glm::vec3 target (mapped, -mapped, mapped);
+                        velocity = blended ? (velocity + target) * .5f : target;
+                    }
+                    CHECK (particle.velocity.x == Catch::Approx (velocity.x));
+                    CHECK (particle.velocity.y == Catch::Approx (velocity.y));
+                    CHECK (particle.velocity.z == Catch::Approx (velocity.z));
+                    CHECK (particle.position == position);
+                    CHECK (particle.age == 2);
+                }
+            }
+        }
+    }
+}

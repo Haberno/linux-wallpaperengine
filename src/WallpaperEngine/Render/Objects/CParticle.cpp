@@ -1573,10 +1573,15 @@ void WallpaperEngine::Render::Objects::applyParticleControlPointRemap (
     const glm::vec3 delta = controlPoints[remap.outputControlPoint1].position - start;
     const float lengthSquared = glm::dot (delta, delta);
     constexpr float epsilon = std::numeric_limits<float>::epsilon ();
-    // Coincident/tiny output behavior is outside the measured subset. Leave the
-    // particle unchanged instead of inventing a shared native degeneracy rule.
-    if (lengthSquared <= (initializer ? epsilon * epsilon : 0.0f)) return;
-    const float fraction = glm::dot (particle.position - start, delta) / lengthSquared;
+    const bool positionOutput = remap.mode == ControlPointRemap::Mode::PositionToPosition
+        || remap.mode == ControlPointRemap::Mode::LifetimeToPosition
+        || remap.mode == ControlPointRemap::Mode::LifetimeFractionToPosition;
+    // Degenerate position output remains outside the measured subset. Scalar
+    // input instead selects zero and still runs mapping/output (14023d1ff /
+    // 140244d85); initializer input uses the native FLT_EPSILON length boundary.
+    if (positionOutput && lengthSquared <= (initializer ? epsilon * epsilon : 0.0f)) return;
+    const bool zeroInput = !positionOutput && (initializer ? glm::length (delta) <= epsilon : lengthSquared <= 0.0f);
+    const float fraction = zeroInput ? 0.0f : glm::dot (particle.position - start, delta) / lengthSquared;
     const float input = remap.mode == ControlPointRemap::Mode::PositionToVelocity
                       || remap.mode == ControlPointRemap::Mode::PositionToPosition
                       || remap.mode == ControlPointRemap::Mode::PositionToSize
