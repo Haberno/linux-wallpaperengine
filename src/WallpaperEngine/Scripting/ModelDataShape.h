@@ -183,7 +183,8 @@ namespace ModelDataInput {
 	}
 	// Replacement maps only supplied dynamic buffers when neither logical view
 	// grows. Any recreation instead uses the incoming complete buffer sizes.
-	if (replacement && (parsed.vertexFormat == 0 || parsed.vertexFormat == originalVertexFormat)
+	if (replacement && (!parsed.deleteIndices || originalIndexWidth == 0)
+	    && (parsed.vertexFormat == 0 || parsed.vertexFormat == originalVertexFormat)
 	    && (!parsed.hasVertices || parsed.vertices.size () * sizeof (float) <= vertexCapacity)
 	    && (parsed.indexWidth == 0 || (originalIndexWidth != 0 && parsed.indexCount <= indexCapacity / originalIndexWidth))) {
 	    if (parsed.hasVertices && parsed.vertices.size () * sizeof (float) < vertexCapacity

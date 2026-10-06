@@ -184,19 +184,22 @@ const char* ModelData::replaceData (std::vector<Scripting::ModelDataShape> repla
 	const auto& replacement = replacements[index];
 	const auto& original = shapes[index].input;
 	const bool layoutChanged = replacement.vertexFormat != 0 && replacement.vertexFormat != original.vertexFormat;
-	const bool recreate = layoutChanged || (replacement.hasVertices && (!original.vertexDynamic || replacement.vertexFloatCount > original.vertices.size ()))
-	    || (replacement.indexWidth != 0 && (!original.indexDynamic || original.indexWidth == 0
-		|| replacement.indexCount > original.indices.size () / original.indexWidth));
-	if (replacement.deleteShape || replacement.deleteIndices
+	const size_t originalIndexCount = original.indexWidth == 0 ? 0 : original.indices.size () / original.indexWidth;
+	const bool recreate = layoutChanged || (replacement.deleteIndices && original.indexWidth != 0)
+	    || (replacement.hasVertices && (!original.vertexDynamic || replacement.vertexFloatCount > original.vertices.size ()))
+	    || (replacement.indexWidth != 0 && (!original.indexDynamic || replacement.indexCount > originalIndexCount));
+	if (replacement.deleteShape
 	    || (!replacement.material.empty () && replacement.material != original.material)
 	    || (layoutChanged && ((replacement.vertexFormat & original.vertexFormat) != original.vertexFormat
 		|| (replacement.vertexFormat & ~0x800fu) != 0))
 	    || (!layoutChanged && replacement.vertexFormat != 0 && replacement.strideBytes != original.strideBytes)
-	    || (original.indexWidth == 0 && replacement.indexWidth != 0)
-	    || (recreate && (!replacement.hasVertices || replacement.vertices.empty ()
+	    || (!recreate && original.indexWidth == 0 && replacement.indexWidth != 0)
+	    || (recreate && (!replacement.hasVertices
 		|| replacement.vertexFormat == 0 || replacement.strideBytes == 0
-		|| replacement.material != original.material || replacement.indexWidth != original.indexWidth
-		|| (original.indexWidth != 0 && replacement.indices.empty ())))) {
+		|| replacement.material != original.material
+		|| replacement.vertexFloatCount > replacement.vertices.size ()
+		|| (replacement.indexWidth != 0 && (replacement.indexWidth != 2 && replacement.indexWidth != 4))
+		|| (replacement.indexWidth != 0 && replacement.indexCount > replacement.indices.size () / replacement.indexWidth)))) {
 	    return "IModelData.replaceData currently requires unchanged material, retained semantics and complete recreated shapes";
 	}
 	if (!recreate && ((replacement.hasVertices && replacement.vertices.size () != original.vertices.size ())
@@ -224,9 +227,10 @@ const char* ModelData::replaceData (std::vector<Scripting::ModelDataShape> repla
 	auto& shape = shapes[index];
 	auto& replacement = replacements[index];
 	const bool layoutChanged = replacement.vertexFormat != 0 && replacement.vertexFormat != shape.input.vertexFormat;
-	const bool recreate = layoutChanged || (replacement.hasVertices && (!shape.input.vertexDynamic || replacement.vertexFloatCount > shape.input.vertices.size ()))
-	    || (replacement.indexWidth != 0 && (!shape.input.indexDynamic || shape.input.indexWidth == 0
-		|| replacement.indexCount > shape.input.indices.size () / shape.input.indexWidth));
+	const size_t originalIndexCount = shape.input.indexWidth == 0 ? 0 : shape.input.indices.size () / shape.input.indexWidth;
+	const bool recreate = layoutChanged || (replacement.deleteIndices && shape.input.indexWidth != 0)
+	    || (replacement.hasVertices && (!shape.input.vertexDynamic || replacement.vertexFloatCount > shape.input.vertices.size ()))
+	    || (replacement.indexWidth != 0 && (!shape.input.indexDynamic || replacement.indexCount > originalIndexCount));
 	if (!recreate) {
 	    // Native maps only supplied buffers and retains original flags. Its vertex
 	    // write/count change survives a subsequently rejected index buffer type.
@@ -275,10 +279,16 @@ const char* ModelData::replaceData (std::vector<Scripting::ModelDataShape> repla
 	glBindBuffer (GL_ARRAY_BUFFER, shape.vertexBuffer);
 	glBufferData (GL_ARRAY_BUFFER, shape.input.vertices.size () * sizeof (float), shape.input.vertices.data (),
 	    shape.input.vertexDynamic ? GL_DYNAMIC_DRAW : GL_STATIC_DRAW);
-	if (shape.indexBuffer != GL_NONE) {
+	if (shape.input.indexWidth != 0) {
+	    if (shape.indexBuffer == GL_NONE) {
+		glGenBuffers (1, &shape.indexBuffer);
+	    }
 	    glBindBuffer (GL_ARRAY_BUFFER, shape.indexBuffer);
 	    glBufferData (GL_ARRAY_BUFFER, shape.input.indices.size (), shape.input.indices.data (),
 		shape.input.indexDynamic ? GL_DYNAMIC_DRAW : GL_STATIC_DRAW);
+	} else if (shape.indexBuffer != GL_NONE) {
+	    glDeleteBuffers (1, &shape.indexBuffer);
+	    shape.indexBuffer = GL_NONE;
 	}
 	shape.drawCount = static_cast<GLsizei> (shape.input.indexWidth == 0
 	    ? shape.input.vertices.size () * sizeof (float) / shape.input.strideBytes
@@ -587,7 +597,8 @@ void CModel::setupGeometryCallback (Effects::CPass* pass, size_t submeshIndex) {
 
 	    const GLint color = glGetAttribLocation (pass->getProgramID (), "a_Color");
 	    locations = { position, normal, tangent, texCoord, blendIndices, blendWeights, color };
-	    glBindBuffer (GL_ELEMENT_ARRAY_BUFFER, this->m_submeshes[submeshIndex].indexBuffer);
+	    glBindBuffer (GL_ELEMENT_ARRAY_BUFFER, m_modelData ? m_modelData->shapes[submeshIndex].indexBuffer
+		: this->m_submeshes[submeshIndex].indexBuffer);
 	    glBindBuffer (GL_ARRAY_BUFFER, this->m_submeshes[submeshIndex].vertexBuffer);
 
 	    if (position >= 0 && mesh.positionOffset != MdlMesh::AttributeAbsent) {
@@ -649,13 +660,14 @@ void CModel::setupGeometryCallback (Effects::CPass* pass, size_t submeshIndex) {
 	    const auto& camera = this->getScene ().getCamera ();
 	    const bool windingReversed = camera.isYFlipped () != camera.isOrthogonal ();
 	    glFrontFace (windingReversed ? GL_CW : GL_CCW);
-	    glBindBuffer (GL_ELEMENT_ARRAY_BUFFER, this->m_submeshes[submeshIndex].indexBuffer);
 	    const auto& buffers = m_submeshes[submeshIndex];
-	    if (m_modelData && buffers.indexBuffer == GL_NONE) {
-		glDrawArrays (GL_TRIANGLES, 0, m_modelData->shapes[submeshIndex].drawCount);
+	    const auto* shape = m_modelData ? &m_modelData->shapes[submeshIndex] : nullptr;
+	    glBindBuffer (GL_ELEMENT_ARRAY_BUFFER, shape ? shape->indexBuffer : buffers.indexBuffer);
+	    if (shape && shape->input.indexWidth == 0) {
+		glDrawArrays (GL_TRIANGLES, 0, shape->drawCount);
 	    } else {
-		glDrawElements (GL_TRIANGLES, m_modelData ? m_modelData->shapes[submeshIndex].drawCount : buffers.indexCount,
-		    buffers.indexType, nullptr);
+		glDrawElements (GL_TRIANGLES, shape ? shape->drawCount : buffers.indexCount,
+		    shape ? (shape->input.indexWidth == 2 ? GL_UNSIGNED_SHORT : GL_UNSIGNED_INT) : buffers.indexType, nullptr);
 	    }
 	    glFrontFace (GL_CCW);
 	},
@@ -1018,14 +1030,20 @@ void CModel::renderShadow (const glm::mat4& lightViewProjection) {
 		    reinterpret_cast<void*> (this->m_model.mesh.blendWeightsOffset)
 		);
 	    }
-	    glBindBuffer (GL_ELEMENT_ARRAY_BUFFER, buffers.indexBuffer);
+	    glBindBuffer (GL_ELEMENT_ARRAY_BUFFER, m_modelData ? m_modelData->shapes[submeshIndex].indexBuffer : buffers.indexBuffer);
 	}
 	glBindVertexArray (buffers.shadowVao);
-	if (m_modelData && buffers.indexBuffer == GL_NONE) {
-	    glDrawArrays (GL_TRIANGLES, 0, m_modelData->shapes[submeshIndex].drawCount);
+	if (m_modelData) {
+	    const auto& shape = m_modelData->shapes[submeshIndex];
+	    glBindBuffer (GL_ELEMENT_ARRAY_BUFFER, shape.indexBuffer);
+	    if (shape.input.indexWidth == 0) {
+		glDrawArrays (GL_TRIANGLES, 0, shape.drawCount);
+	    } else {
+		glDrawElements (GL_TRIANGLES, shape.drawCount,
+		    shape.input.indexWidth == 2 ? GL_UNSIGNED_SHORT : GL_UNSIGNED_INT, nullptr);
+	    }
 	} else {
-	    glDrawElements (GL_TRIANGLES, m_modelData ? m_modelData->shapes[submeshIndex].drawCount : buffers.indexCount,
-		    buffers.indexType, nullptr);
+	    glDrawElements (GL_TRIANGLES, buffers.indexCount, buffers.indexType, nullptr);
 	}
     }
 
