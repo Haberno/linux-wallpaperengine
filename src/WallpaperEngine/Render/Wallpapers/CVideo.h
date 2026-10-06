@@ -40,6 +40,7 @@ private:
     GLPlayerUniquePtr m_player;
     std::shared_ptr<const TextureProvider> m_colorLut;
     float m_colorLutStrength = 1.0f;
+    bool m_colorLutDirty = false;
 
     bool m_muted = false;
     std::map<std::string, std::string> m_liveColorProperties;

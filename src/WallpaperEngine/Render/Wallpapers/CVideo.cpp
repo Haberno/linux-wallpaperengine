@@ -9,6 +9,8 @@
 #include <algorithm>
 #include <charconv>
 #include <cmath>
+#include <exception>
+#include <utility>
 
 using namespace WallpaperEngine;
 using namespace WallpaperEngine::Render;
@@ -46,13 +48,19 @@ CVideo::CVideo (
 void CVideo::setupColorLut () {
     const auto& properties = this->getVideo ().project.properties;
     const auto& overrides = this->getContext ().getApp ().getContext ().settings.general.properties;
+    const auto readOverride = [&] (const std::string& key) -> const std::string* {
+	if (const auto live = this->m_liveColorProperties.find (key); live != this->m_liveColorProperties.end ())
+	    return &live->second;
+	const auto override = overrides.find (key);
+	return override != overrides.end () ? &override->second : nullptr;
+    };
     std::string selection;
     if (const auto property = properties.find ("wcc_v"); property != properties.end ()
 	&& property->second->getType () == Data::Model::DynamicValue::String) {
 	selection = property->second->getString ();
     }
-    if (const auto override = overrides.find ("wcc_v"); override != overrides.end ()) {
-	selection = override->second;
+    if (const auto* override = readOverride ("wcc_v")) {
+	selection = *override;
     }
     float amount = 100.0f;
     if (const auto property = properties.find ("wcc_amt"); property != properties.end ()) {
@@ -60,18 +68,24 @@ void CVideo::setupColorLut () {
 	if (type == Data::Model::DynamicValue::Float || type == Data::Model::DynamicValue::Int)
 	    amount = property->second->getFloat ();
     }
-    if (const auto override = overrides.find ("wcc_amt"); override != overrides.end ()) {
-	const auto& text = override->second;
+    if (const auto* override = readOverride ("wcc_amt")) {
+	const auto& text = *override;
 	float parsed;
 	const auto result = std::from_chars (text.data (), text.data () + text.size (), parsed);
 	if (result.ec == std::errc {} && result.ptr == text.data () + text.size () && std::isfinite (parsed))
 	    amount = parsed;
     }
-    this->m_colorLutStrength = amount / 100.0f;
-    if (selection.empty () || this->m_colorLutStrength <= 0.0f) return;
-    this->m_colorLut = this->getContext ().resolveTexture ("lut/" + selection, this->getAssetLocator (), 1);
-    if (this->m_colorLut->getTextureTarget () != GL_TEXTURE_3D)
+    const float strength = amount / 100.0f;
+    if (selection.empty () || strength <= 0.0f) {
+	this->m_colorLut.reset ();
+	this->m_colorLutStrength = strength;
+	return;
+    }
+    auto colorLut = this->getContext ().resolveTexture ("lut/" + selection, this->getAssetLocator (), 1);
+    if (colorLut->getTextureTarget () != GL_TEXTURE_3D)
 	sLog.exception ("Video image filter requires a 3D texture");
+    this->m_colorLut = std::move (colorLut);
+    this->m_colorLutStrength = strength;
 }
 
 std::pair<GLuint, float> CVideo::getColorLut () const {
@@ -82,6 +96,16 @@ std::pair<GLuint, float> CVideo::getColorLut () const {
 CVideo::~CVideo () { this->m_player->decrementUsageCount (); }
 
 void CVideo::renderFrame (const glm::ivec4& viewport) {
+    // Texture creation must run after the output's graphics context becomes current.
+    if (this->m_colorLutDirty) {
+	try {
+	    this->setupColorLut ();
+	} catch (const std::exception& error) {
+	    sLog.error ("Cannot update video image filter: ", error.what ());
+	}
+	this->m_colorLutDirty = false;
+    }
+
     // ensure the video's audio follows audio detection rules
     if (this->getContext ().getApp ().getContext ().settings.audio.enabled
 	&& this->m_muted != this->getAudioContext ().getDriver ().getAudioDetector ().anythingPlaying ()) {
@@ -136,9 +160,16 @@ WallpaperState::TextureUVs CVideo::getPresentationUVs () const {
 
 bool CVideo::setColorProperty (const std::string& key, const std::string& value) {
     if (key != "alignmentfliph" && key != "wec_e" && key != "wec_brs" && key != "wec_con" && key != "wec_sa"
-	&& key != "wec_hue")
+	&& key != "wec_hue" && key != "wcc_v" && key != "wcc_amt")
 	return false;
+    if (key == "wcc_amt") {
+	float parsed;
+	const auto result = std::from_chars (value.data (), value.data () + value.size (), parsed);
+	if (result.ec != std::errc {} || result.ptr != value.data () + value.size () || !std::isfinite (parsed))
+	    return true;
+    }
     this->m_liveColorProperties.insert_or_assign (key, value);
+    if (key == "wcc_v" || key == "wcc_amt") this->m_colorLutDirty = true;
     return true;
 }
 
