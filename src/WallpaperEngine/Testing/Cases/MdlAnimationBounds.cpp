@@ -126,3 +126,28 @@ TEST_CASE ("Model culling precedes its virtual perspective projection", "[animat
     CHECK_FALSE (modelAnimationVolumeIntersects (volume, model, scene));
     CHECK (modelAnimationVolumeIntersects (volume, model, virtualDraw));
 }
+
+TEST_CASE ("Authored shadow volumes use the caster depth convention exactly once", "[animation-volume-shadow]") {
+    using WallpaperEngine::Render::Objects::modelAnimationVolumeIntersects;
+    const glm::mat4 identity (1);
+    const MdlAnimationBounds volume { glm::vec3 (-1), glm::vec3 (1) };
+    const auto conventional = glm::ortho (-160.0f, 160.0f, -90.0f, 90.0f, -1000.0f, 1000.0f);
+    auto native = conventional;
+    for (int column = 0; column < 4; ++column)
+        native[column][2] = (conventional[column][3] - conventional[column][2]) * 0.5f;
+    // The already-reverse caster matrix must not undergo the conventional remap.
+    const auto nearOutside = glm::translate (identity, glm::vec3 (0, 0, 2000));
+    CHECK_FALSE (modelAnimationVolumeIntersects (volume, nearOutside, native, true));
+    CHECK (modelAnimationVolumeIntersects (volume, nearOutside, native));
+    for (const auto location : { glm::vec3 (0), glm::vec3 (0, 0, -2500), glm::vec3 (0, 0, -3100),
+                                  glm::vec3 (0, 0, 2000), glm::vec3 (300, 0, 0) }) {
+        const auto model = glm::translate (identity, location);
+        CHECK (modelAnimationVolumeIntersects (volume, model, conventional)
+            == modelAnimationVolumeIntersects (volume, model, native, true));
+    }
+    // Admission is per active shadow viewport, independent of the main view.
+    const auto model = glm::translate (identity, glm::vec3 (1000, 0, 0));
+    CHECK_FALSE (modelAnimationVolumeIntersects (volume, model, native, true));
+    CHECK (modelAnimationVolumeIntersects (volume, model,
+        native * glm::translate (identity, glm::vec3 (-1000, 0, 0)), true));
+}

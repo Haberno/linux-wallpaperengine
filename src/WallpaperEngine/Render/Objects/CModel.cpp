@@ -945,8 +945,10 @@ void CModel::prepareRender () {
     const auto bounds = m_modelData ? std::optional<MdlAnimationBounds> {} : m_animationBounds;
     const auto volume = bounds.value_or (MdlAnimationBounds { mesh.boundingBoxMin, mesh.boundingBoxMax });
     const auto& camera = getScene ().getCamera ();
-    m_mainViewVisible = !(bounds || mesh.hasBoundingBox) || volume.minimum.x >= volume.maximum.x
-        || modelAnimationVolumeIntersects (volume, m_modelMatrix, camera.getProjection () * camera.getLookAt ());
+    m_renderBounds = (bounds || mesh.hasBoundingBox) && volume.minimum.x < volume.maximum.x
+        ? std::optional<MdlAnimationBounds> (volume) : std::nullopt;
+    m_mainViewVisible = !m_renderBounds
+        || modelAnimationVolumeIntersects (*m_renderBounds, m_modelMatrix, camera.getProjection () * camera.getLookAt ());
     this->m_posedShadowBounds = this->m_shadowBounds.evaluate (this->m_gpuSkinBones);
     // Rest-pose bounds cannot reject geometry displaced by an active morph.
     if (m_morphActive) m_posedShadowBounds = {};
@@ -986,7 +988,9 @@ void CModel::renderPasses (const std::optional<RenderSortClass> renderClass) {
 void CModel::renderShadow (const glm::mat4& lightViewProjection) {
     if (!this->m_frameVisible || !this->m_shadowProgram
 	|| !this->m_model.castShadow->value->getBool ()
-	|| !this->m_posedShadowBounds.intersects (lightViewProjection * this->m_modelMatrix)) {
+	|| !(m_renderBounds ? modelAnimationVolumeIntersects (*m_renderBounds, m_modelMatrix, lightViewProjection,
+            getScene ().getCamera ().usesReverseDepth ())
+            : m_posedShadowBounds.intersects (lightViewProjection * m_modelMatrix))) {
 	return;
     }
 

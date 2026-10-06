@@ -135,6 +135,7 @@ private:
     // Location queries only; identical depth shaders share it and draw through m_sharedShadowProgram.
     std::shared_ptr<const Shaders::ShaderProgramCache::SharedProgram> m_shadowProgram;
     std::shared_ptr<const Shaders::ShaderProgramCache::SharedProgram> m_sharedShadowProgram;
+    std::optional<Data::Model::MdlAnimationBounds> m_renderBounds;
     ModelBounds m_shadowBounds;
     ModelBounds::Box m_posedShadowBounds;
     bool m_frameVisible = false;
