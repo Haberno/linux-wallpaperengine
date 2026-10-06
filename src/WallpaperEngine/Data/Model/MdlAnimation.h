@@ -40,6 +40,14 @@ struct MdlBoneSpring {
     glm::bvec3 translationAxes = glm::bvec3 (true); // tax/tay/taz
 };
 
+/** IK rope settings remain active without spring mode (native 140265c30). */
+struct MdlBoneRope {
+    bool gravity = false;
+    float mass = 0.0f;
+    float friction = 0.0f; // clamp((tf / 100)^2, 0, 1)
+    bool stretch = false; // ikse
+};
+
 struct MdlBone {
     std::string name = {};
     uint32_t type = 0;
@@ -53,6 +61,7 @@ struct MdlBone {
     float ikAimDistance = 1.0f;
     bool ikAngleLimits = false;
     std::optional<MdlBoneSpring> spring;
+    std::optional<MdlBoneRope> rope;
 };
 
 struct MdlAttachment {
@@ -182,7 +191,7 @@ struct MdlPose {
     std::vector<float> depths;
 };
 
-/** Spring state one model instance carries between frames. */
+/** Physics state one model instance carries between frames. */
 struct MdlPhysicsState {
     struct Bone {
 	/** Per-step rotation; inertia and stiffness add to it, friction decays it. */
@@ -193,9 +202,20 @@ struct MdlPhysicsState {
 	glm::vec3 offset = glm::vec3 (0.0f);
 	glm::vec3 velocity = glm::vec3 (0.0f);
     };
+    struct RopePoint {
+	glm::vec3 current = glm::vec3 (0.0f);
+	glm::vec3 previous = glm::vec3 (0.0f);
+	bool initialized = false;
+    };
+    std::vector<RopePoint> ropePoints;
     std::vector<Bone> bones;
     /** Last frame's scene-space bone matrices after physics; empty before the first step. */
     std::vector<glm::mat4> previousWorld;
+};
+
+struct MdlRopeStep {
+    glm::vec3 gravity = glm::vec3 (0.0f);
+    float deltaTime = 0.0f;
 };
 
 struct MdlPhysicsStep {
@@ -203,6 +223,8 @@ struct MdlPhysicsStep {
     /** Model space to y-up scene space, including layer motion such as parallax. */
     glm::mat4 model = glm::mat4 (1.0f);
     float deltaTime = 0.0f;
+    /** Only supplied for a supported puppet scene; setup skinning does not advance ropes. */
+    std::optional<MdlRopeStep> rope;
 };
 
 class MdlAnimationEvaluator {

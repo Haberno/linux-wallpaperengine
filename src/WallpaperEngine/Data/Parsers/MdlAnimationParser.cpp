@@ -389,6 +389,17 @@ void parseSkeleton (
 		    parsed.ikAimDistance = std::max (distance->get<float> (), 1e-5f);
 		parsed.ikAngleLimits = enabled ("ikce");
 		parsed.spring = parseSpring (constraints);
+		if (enabled ("ik")) {
+		    const auto number = [&] (const char* key) {
+			const auto value = constraints.find (key);
+			return value != constraints.end () && value->is_number () ? value->get<float> () : 0.0f;
+		    };
+		    const float friction = number ("tf") / 100.0f;
+		    parsed.rope = MdlBoneRope {
+			.gravity = enabled ("ge"), .mass = number ("m"),
+			.friction = std::clamp (friction * friction, 0.0f, 1.0f), .stretch = enabled ("ikse"),
+		    };
+		}
 	    }
 	}
     }

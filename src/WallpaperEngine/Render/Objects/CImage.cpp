@@ -891,7 +891,7 @@ void CImage::selectPuppetAnimations (const double sceneTime) {
     }
 }
 
-void CImage::updatePuppetPositionBuffer (const glm::vec2& size) {
+void CImage::updatePuppetPositionBuffer (const glm::vec2& size, const bool stepRope) {
     if (this->m_puppetRawPositions.empty ()) {
 	return;
     }
@@ -914,6 +914,18 @@ void CImage::updatePuppetPositionBuffer (const glm::vec2& size) {
 	.deltaTime = static_cast<float> (std::max (sceneTime - this->m_puppetPhysicsTime, 0.0)),
     };
     this->m_puppetPhysicsTime = sceneTime;
+    const auto& scene = this->getScene ().getScene ();
+    // The current puppet model omits layer rotation. Wind and perspective ropes
+    // require their own world-force/model contracts before enabling this path.
+    if (stepRope && !scene.camera.projection.isPerspective && !scene.physics.windEnabled->value->getBool ()) {
+	physics.rope = MdlRopeStep {
+	    .gravity = scene.physics.gravityDirection->evaluateVec3 (sceneTime)
+		* scene.physics.gravityStrength->evaluateFloat (sceneTime),
+	    // Native seeds and predicts immediately, including layers created late in a scene.
+	    .deltaTime = this->getScene ().getDeltaTime (),
+	};
+    }
+
 
     // Vertex positions are stored in the assembled rest pose, so each bone applies
     // animatedWorld * inverseBindWorld. The same evaluator now drives 3D models too.
@@ -2631,7 +2643,7 @@ CImage::ResolvedTransform CImage::updateGeometryBuffers () {
     // puppet positions depend on the freshly updated scene quad (m_pos) and the animation time,
     // so re-skin after the scene position is known
     if (this->m_hasPuppetMesh) {
-	this->updatePuppetPositionBuffer (size);
+	this->updatePuppetPositionBuffer (size, transform.angles == glm::vec3 (0.0f));
     }
     return transform;
 }

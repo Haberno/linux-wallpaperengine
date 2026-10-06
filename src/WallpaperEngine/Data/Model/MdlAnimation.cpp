@@ -116,6 +116,112 @@ glm::vec3 directionOr (const glm::vec3& vector, const glm::vec3& fallback) {
     return length > 1e-6f ? vector / length : fallback;
 }
 
+/** Native 14026eb60/14026e340/140271910: independent, uncontrolled rope chains. */
+bool applyRope (const MdlAnimationData& data, MdlPhysicsStep& physics, MdlPose& pose) {
+    if (!physics.rope || data.ikGroups.size () != 1) return false;
+    const auto& group = data.ikGroups.front ();
+    if (group.hasDependencies || group.nodes.size () != 1 || group.nodes.front ().branches.size () != 1)
+	return false;
+    const auto& chain = group.nodes.front ().branches.front ();
+    if (chain.flags != 4 || chain.bones.size () < 2 || chain.bones.front () != group.root
+	|| group.nodes.front ().root != group.root) return false;
+    // Other skeleton bones need verified descendant/attachment propagation first.
+    if (chain.bones.size () != data.bones.size ()) return false;
+    // Mixed spring/rope rigs and joint limits need the native coupled group ordering.
+    for (const auto& bone : data.bones) if (bone.spring) return false;
+    for (size_t index = 0; index < chain.bones.size (); ++index) {
+	const auto bone = chain.bones[index];
+	if (bone >= data.bones.size () || bone >= data.boneLengths.size ()
+	    || bone >= data.boneDirections.size () || data.bones[bone].ikAngleLimits) return false;
+	if (index && (data.bones[bone].parent != static_cast<int32_t> (chain.bones[index - 1])
+	    || data.boneLengths[bone] <= 1e-6f
+	    || !data.boneDirections[chain.bones[index - 1]].contains (bone))) return false;
+    }
+    const auto tip = chain.bones.back ();
+    if (!data.bones[tip].rope || chain.maxLength <= 0.0f) return false;
+    const auto& settings = *data.bones[tip].rope;
+    const float determinant = glm::determinant (glm::mat3 (physics.model));
+    if (determinant == 0.0f || !std::isfinite (determinant)) return false;
+    const auto toLocal = glm::inverse (physics.model);
+    const auto worldPoint = [&] (const glm::vec3& point) { return glm::vec3 (physics.model * glm::vec4 (point, 1)); };
+    const auto localPoint = [&] (const glm::vec3& point) { return glm::vec3 (toLocal * glm::vec4 (point, 1)); };
+    auto& points = physics.state.ropePoints;
+    if (points.size () != data.bones.size ()) points.resize (data.bones.size ());
+    const auto root = chain.bones.front ();
+    const size_t end = chain.bones.size () - (data.bones[tip].ikFollowEnd ? 0 : 1);
+    points[root].current = worldPoint (glm::vec3 (pose.worldBones[root][3]));
+    if (!data.bones[tip].ikFollowEnd) {
+	const glm::vec3 origin (pose.worldBones[root][3]);
+	glm::vec3 target (pose.worldBones[tip][3]);
+	const auto delta = target - origin;
+	const float length = glm::length (delta);
+	if (!settings.stretch && length > chain.maxLength) target = origin + delta / length * chain.maxLength;
+	pose.worldBones[tip][3] = glm::vec4 (target, 1);
+	points[tip].current = worldPoint (target);
+    }
+    if (!points[root].initialized) {
+	points[root].initialized = true;
+	for (size_t index = 1; index < end; ++index) {
+	    auto& point = points[chain.bones[index]];
+	    point.current = point.previous = worldPoint (glm::vec3 (pose.worldBones[chain.bones[index]][3]));
+	}
+    }
+    const float dtSquared = physics.rope->deltaTime * physics.rope->deltaTime;
+    const auto acceleration = settings.gravity ? settings.mass * physics.rope->gravity : glm::vec3 (0);
+    for (size_t index = 1; index < end; ++index) {
+	const auto bone = chain.bones[index];
+	auto& point = points[bone];
+	auto predicted = point.current + point.current - point.previous;
+	const auto velocity = point.previous - point.current;
+	if (dtSquared > std::numeric_limits<float>::epsilon () && settings.friction > 0.01f
+	    && glm::dot (velocity, velocity) > 0.0001f)
+	    predicted += velocity * dtSquared * (1.0f / dtSquared) * settings.friction;
+	predicted += acceleration * dtSquared;
+	point.previous = point.current;
+	point.current = predicted;
+	pose.worldBones[bone][3] = glm::vec4 (localPoint (predicted), 1);
+    }
+    // Corrections carry into the next predictor; this frame retains its predicted translations.
+    for (const bool forward : { false, true }) {
+	const float distance = glm::length (points[tip].current - points[root].current);
+	const float stretch = settings.stretch && distance > chain.maxLength ? distance / chain.maxLength : 1.0f;
+	for (size_t index = 1; index < end; ++index) {
+	    const size_t childIndex = forward ? index : chain.bones.size () - index;
+	    const auto child = chain.bones[childIndex];
+	    const auto parent = chain.bones[childIndex - 1];
+	    auto childPoint = localPoint (points[child].current);
+	    auto parentPoint = localPoint (points[parent].current);
+	    const auto delta = childPoint - parentPoint;
+	    const float length = glm::length (delta);
+	    const float error = data.boneLengths[child] * stretch - length;
+	    if (std::abs (error) <= 0.001f) continue;
+	    const auto direction = length <= 0.01f ? glm::vec3 (0.707f, 0.707f, 0) : delta / length;
+	    if (index == 1) {
+		if (forward) childPoint += direction * error;
+		else parentPoint -= direction * error;
+	    } else {
+		childPoint += direction * (error * 0.5f);
+		parentPoint -= direction * (error * 0.5f);
+	    }
+	    if (index != 1 || forward) points[child].current = worldPoint (childPoint);
+	    if (index != 1 || !forward) points[parent].current = worldPoint (parentPoint);
+	}
+    }
+    for (size_t index = 0; index + 1 < chain.bones.size (); ++index) {
+	const auto bone = chain.bones[index];
+	const auto child = chain.bones[index + 1];
+	const auto reference = data.boneDirections[bone].at (child);
+	const auto position = pose.worldBones[bone][3];
+	const auto direction = directionOr (glm::vec3 (pose.worldBones[child][3] - position), reference);
+	const auto rotation = glm::rotation (directionOr (reference, direction), direction);
+	pose.worldBones[bone] = glm::mat4_cast (rotation) * glm::inverse (data.bones[bone].inverseBindWorld);
+	pose.worldBones[bone][3] = position;
+    }
+    for (size_t bone = 0; bone < data.bones.size (); ++bone)
+	pose.skinBones[bone] = pose.worldBones[bone] * data.bones[bone].inverseBindWorld;
+    return true;
+}
+
 /** Fixed-length, independent IK chains, as evaluated by the native 140271910 solver. */
 void applyBoneControls (
     const MdlAnimationData& data, const std::vector<MdlActiveAnimation>& layers,
@@ -418,7 +524,8 @@ MdlPose MdlAnimationEvaluator::evaluate (
 	    physics->state.previousWorld[bone] = physics->model * pose.worldBones[bone];
     }
 
-    if (!animationData.ikGroups.empty ()) applyBoneControls (animationData, activeAnimations, locals, pose);
+    if (!animationData.ikGroups.empty () && !(physics && applyRope (animationData, *physics, pose)))
+	applyBoneControls (animationData, activeAnimations, locals, pose);
 
     // scalar blend tracks compose exactly like the bones do, one value per track row
     size_t blendRows = 0;

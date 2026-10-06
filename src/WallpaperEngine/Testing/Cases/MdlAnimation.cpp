@@ -1,4 +1,5 @@
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstdint>
 #include <cstring>
@@ -1203,4 +1204,184 @@ TEST_CASE ("MDLA morph samples cannot become a following clip header", "[mdl][mo
     CHECK (pose.puppetMorphMask == 1);
     REQUIRE (pose.puppetMorphWeights.size () == 1);
     CHECK (pose.puppetMorphWeights[0] == Catch::Approx (0.65f));
+}
+
+namespace {
+MdlAnimationData ropeRig (const bool freeEnd = false, const bool gravity = true) {
+    MdlAnimationData data;
+    data.boneLengths = { 0, 30, 30, 30 };
+    data.boneDirections.resize (4);
+    for (uint32_t index = 0; index < 4; ++index) {
+	data.bones.push_back ({
+	    .parent = static_cast<int32_t> (index) - 1,
+	    .bindLocal = glm::translate (glm::mat4 (1), glm::vec3 (index ? 30 : -45, 0, 0)),
+	    .inverseBindWorld = glm::translate (glm::mat4 (1), glm::vec3 (45 - 30 * static_cast<int> (index), 0, 0)),
+	});
+	if (index) data.boneDirections[index - 1][index] = { 1, 0, 0 };
+    }
+    data.bones.back ().ikFollowEnd = freeEnd;
+    data.bones.back ().rope = MdlBoneRope { .gravity = gravity, .mass = 1 };
+    data.ikGroups = {{ .nodes = {{ .branches = {{ .flags = 4, .maxLength = 90, .bones = { 0, 1, 2, 3 } }} }} }};
+    return data;
+}
+}
+
+TEST_CASE ("MDLS retains IK gravity and friction without spring mode", "[mdl][animation][physics][rope]") {
+    std::vector<char> bytes;
+    appendMarker (bytes, "MDLS0002");
+    const auto endOffset = bytes.size ();
+    appendValue<uint32_t> (bytes, 0);
+    appendValue<uint32_t> (bytes, 4);
+    for (const auto* metadata : {
+	R"({"ik":true,"ge":true,"m":2.5,"tf":-50,"ikse":true,"ikfe":true})",
+	R"({"ik":true,"ge":1,"m":"2","tf":200})", R"({"ik":true})", R"({"ik":false,"ge":true,"m":1})"
+    }) {
+	appendString (bytes, "tip");
+	appendValue<uint32_t> (bytes, 1);
+	appendValue<int32_t> (bytes, -1);
+	appendValue<uint32_t> (bytes, 64);
+	appendMatrix (bytes, glm::mat4 (1));
+	appendString (bytes, metadata);
+    }
+    patchU32 (bytes, endOffset, bytes.size ());
+    const auto parsed = MdlAnimationParser::parse (bytes, "rope.mdl");
+    REQUIRE (parsed.bones.size () == 4);
+    for (const auto& bone : parsed.bones) CHECK_FALSE (bone.spring);
+    REQUIRE (parsed.bones[0].rope);
+    CHECK (parsed.bones[0].rope->gravity);
+    CHECK (parsed.bones[0].rope->mass == 2.5f);
+    CHECK (parsed.bones[0].rope->friction == 0.25f);
+    CHECK (parsed.bones[0].rope->stretch);
+    CHECK (parsed.bones[0].ikFollowEnd);
+    REQUIRE (parsed.bones[1].rope);
+    CHECK_FALSE (parsed.bones[1].rope->gravity);
+    CHECK (parsed.bones[1].rope->mass == 0.0f);
+    CHECK (parsed.bones[1].rope->friction == 1.0f);
+    REQUIRE (parsed.bones[2].rope);
+    CHECK (parsed.bones[2].rope->mass == 0.0f);
+    CHECK (parsed.bones[2].rope->friction == 0.0f);
+    CHECK_FALSE (parsed.bones[3].rope);
+}
+
+TEST_CASE ("Ropes replay native predicted poses and retain corrected state", "[mdl][animation][physics][rope]") {
+    // wallpaper64.exe 40e2ce021e9352324fadb3b8f72b8ba2a7ee95b71cc571d5b9f84be75cd993b0,
+    // native08 synthetic four-bone rig, 2026-10-06: hooks 14026eb60/140271910/14026e340.
+    // These literals are captured values, independent of the evaluator under test.
+    struct Frame {
+	float dt;
+	std::array<glm::vec2, 4> positions;
+	std::array<glm::vec2, 3> basisX;
+    };
+    const std::array<Frame, 4> pinned = {{
+	{ 0.0351076983f, {{ { -45.0f, 0.0f }, { -15.0f, -0.110931396f }, { 15.0f, -0.110931396f }, { 45.0f, 0.0f } }},
+	  {{ { 0.999993145f, -0.00369768799f }, { 1.0f, 0.0f }, { 0.999993145f, 0.00369768799f } }} },
+	{ 0.0342923999f, {{ { -45.0f, 0.0f }, { -15.0f, -0.327701569f }, { 15.0f, -0.327701569f }, { 45.0f, 0.0f } }},
+	  {{ { 0.999940336f, -0.0109227346f }, { 1.0f, 0.0f }, { 0.999940336f, 0.0109227346f } }} },
+	{ 0.0332053006f, {{ { -45.0f, 0.0f }, { -15.0009155f, -0.643642426f }, { 14.9990845f, -0.643665314f }, { 45.0f, 0.0f } }},
+	  {{ { 0.999769926f, -0.0214504674f }, { 1.0f, 0.0f }, { 0.999769926f, 0.0214499217f } }} },
+	{ 0.0327802002f, {{ { -45.0f, 0.0f }, { -15.0034485f, -1.05589676f }, { 14.9965515f, -1.05602264f }, { 45.0f, 0.0f } }},
+	  {{ { 0.999381006f, -0.0351788178f }, { 1.0f, 0.0f }, { 0.999381185f, 0.0351749286f } }} },
+    }};
+    const std::array<glm::vec2, 4> pinnedCurrent = {{ { 115.0f, 45.0f }, { 144.994507f, 43.9450226f }, { 174.994507f, 43.9447517f }, { 205.0f, 45.0f } }};
+    const std::array<glm::vec2, 4> pinnedPrevious = {{ { 0.0f, 0.0f }, { 144.998047f, 44.3565712f }, { 174.998047f, 44.3565025f }, { 0.0f, 0.0f } }};
+    const std::array<Frame, 4> free = {{
+	{ 0.0351076983f, {{ { -45.0f, 0.0f }, { -15.0f, -0.110931396f }, { 15.0f, -0.110931396f }, { 45.0f, -0.110931396f } }},
+	  {{ { 0.999993145f, -0.00369768799f }, { 1.0f, 0.0f }, { 1.0f, 0.0f } }} },
+	{ 0.0342923999f, {{ { -45.0f, 0.0f }, { -15.0f, -0.327697754f }, { 15.0f, -0.327697754f }, { 45.0f, -0.327697754f } }},
+	  {{ { 0.999940336f, -0.010922607f }, { 1.0f, 0.0f }, { 1.0f, 0.0f } }} },
+	{ 0.0332053006f, {{ { -45.0f, 0.0f }, { -15.0018005f, -0.643684387f }, { 15.0f, -0.643699646f }, { 45.0f, -0.643699646f } }},
+	  {{ { 0.999769866f, -0.0214524958f }, { 1.0f, 0.0f }, { 1.0f, 0.0f } }} },
+	{ 0.0327802002f, {{ { -45.0f, 0.0f }, { -15.0039215f, -1.05626678f }, { 14.9975891f, -1.05641174f }, { 44.9975891f, -1.05641174f } }},
+	  {{ { 0.999380589f, -0.035191685f }, { 1.0f, 0.0f }, { 1.0f, 0.0f } }} },
+    }};
+    const std::array<glm::vec2, 4> freeCurrent = {{ { 115.007706f, 74.9997253f }, { 144.992981f, 73.9440079f }, { 174.995285f, 73.9435883f }, { 204.995285f, 73.9435883f } }};
+    const std::array<glm::vec2, 4> freePrevious = {{ { 0.0f, 0.0f }, { 144.997589f, 74.3563766f }, { 174.998795f, 74.3563004f }, { 204.998795f, 74.3563004f } }};
+    for (const bool freeEnd : { false, true }) {
+	CAPTURE (freeEnd);
+	const auto data = ropeRig (freeEnd);
+	const auto& frames = freeEnd ? free : pinned;
+	MdlPhysicsState state;
+	for (const auto& frame : frames) {
+	    MdlPhysicsStep physics {
+		.state = state,
+		.model = glm::translate (glm::mat4 (1), glm::vec3 (160, freeEnd ? 75 : 45, 0)),
+		.rope = MdlRopeStep { .gravity = { 0, -90, 0 }, .deltaTime = frame.dt },
+	    };
+	    const auto pose = MdlAnimationEvaluator::evaluate (data, {}, &physics);
+	    REQUIRE (state.ropePoints.size () == 4);
+	    for (size_t bone = 0; bone < 4; ++bone) {
+		for (int axis = 0; axis < 2; ++axis) {
+		    CHECK (pose.worldBones[bone][3][axis] == Catch::Approx (frame.positions[bone][axis]).margin (2e-4f));
+		    if (bone < 3)
+			CHECK (pose.worldBones[bone][0][axis] == Catch::Approx (frame.basisX[bone][axis]).margin (2e-4f));
+		}
+		CHECK (pose.worldBones[bone][3].z == 0.0f);
+		CHECK (pose.skinBones[bone] == pose.worldBones[bone] * data.bones[bone].inverseBindWorld);
+	    }
+	    CHECK (glm::mat3 (pose.worldBones.back ()) == glm::mat3 (1));
+	}
+	for (size_t bone = 0; bone < 4; ++bone) for (int axis = 0; axis < 2; ++axis) {
+	    CHECK (state.ropePoints[bone].current[axis] == Catch::Approx ((freeEnd ? freeCurrent : pinnedCurrent)[bone][axis]).margin (2e-4f));
+	    CHECK (state.ropePoints[bone].previous[axis] == Catch::Approx ((freeEnd ? freePrevious : pinnedPrevious)[bone][axis]).margin (2e-4f));
+	}
+    }
+    const auto data = ropeRig (false, false);
+    MdlPhysicsState state;
+    for (const auto& frame : pinned) {
+	MdlPhysicsStep physics {
+	    .state = state, .model = glm::translate (glm::mat4 (1), glm::vec3 (160, 105, 0)),
+	    .rope = MdlRopeStep { .gravity = { 0, -90, 0 }, .deltaTime = frame.dt },
+	};
+	const auto pose = MdlAnimationEvaluator::evaluate (data, {}, &physics);
+	for (const auto& skin : pose.skinBones) CHECK (skin == glm::mat4 (1));
+    }
+}
+
+TEST_CASE ("Rope inertia at zero delta is separate from spring integration", "[mdl][animation][physics][rope]") {
+    auto data = ropeRig (true, false);
+    data.bones.back ().rope->friction = 1.0f;
+    for (const float dt : { 0.0f, 0.1f }) {
+	MdlPhysicsState state;
+	state.bones.resize (4);
+	state.ropePoints.resize (4);
+	state.ropePoints[0].initialized = true;
+	for (int bone = 0; bone < 4; ++bone) {
+	    state.ropePoints[bone].current = { -45 + 30 * bone, 0, 0 };
+	    state.ropePoints[bone].previous = { -45 + 30 * bone, -1, 0 };
+	}
+	MdlPhysicsStep physics { .state = state, .rope = MdlRopeStep { .deltaTime = dt } };
+	const auto pose = MdlAnimationEvaluator::evaluate (data, {}, &physics);
+	// Native source applies no friction at dt=0, but still extrapolates current-previous.
+	CHECK (pose.worldBones[1][3].y == Catch::Approx (dt == 0 ? 1.0f : 0.0f).margin (1e-6f));
+	CHECK (state.ropePoints[1].previous.y == 0.0f);
+    }
+}
+
+TEST_CASE ("Unsupported rope routes preserve authored pose and ordinary state", "[mdl][animation][physics][rope]") {
+    for (int route = 0; route < 8; ++route) {
+	CAPTURE (route);
+	auto data = ropeRig ();
+	MdlPhysicsState state;
+	MdlPhysicsStep physics { .state = state, .rope = MdlRopeStep { .gravity = { 0, -90, 0 }, .deltaTime = 0.1f } };
+	if (route == 0) physics.rope.reset ();
+	if (route == 1) data.ikGroups[0].hasDependencies = true;
+	if (route == 2) data.ikGroups[0].nodes[0].branches[0].flags = 5;
+	if (route == 3) data.bones[1].spring = MdlBoneSpring {};
+	if (route == 4) data.bones[1].ikAngleLimits = true;
+	if (route == 5) physics.model = glm::scale (glm::mat4 (1), glm::vec3 (0));
+	if (route == 6) data.ikGroups[0].nodes[0].root = 1;
+	if (route == 7) {
+	    // A side branch must retain its authored parent-relative placement.
+	    data.bones.push_back ({
+		.parent = 1, .bindLocal = glm::translate (glm::mat4 (1), glm::vec3 (0, 5, 0)),
+		.inverseBindWorld = glm::translate (glm::mat4 (1), glm::vec3 (15, -5, 0)),
+	    });
+	    data.boneLengths.push_back (5);
+	    data.boneDirections.resize (5);
+	    data.boneDirections[1][4] = { 0, 1, 0 };
+	}
+	const auto pose = MdlAnimationEvaluator::evaluate (data, {}, &physics);
+	CHECK (state.ropePoints.empty ());
+	for (const auto& skin : pose.skinBones) CHECK (skin == glm::mat4 (1));
+    }
 }

@@ -165,7 +165,7 @@ private:
     void renderPuppetAlbedo ();
     [[nodiscard]] const WallpaperEngine::Data::Model::MdlAnimationClip* findPuppetAnimationClip (uint32_t id) const;
     void selectPuppetAnimations (double sceneTime);
-    void updatePuppetPositionBuffer (const glm::vec2& size);
+    void updatePuppetPositionBuffer (const glm::vec2& size, bool stepRope = false);
     void updatePuppetClippingCommands (const PuppetClippingPlan& plan);
     [[nodiscard]] std::optional<ResolvedTransform> puppetAttachmentTransform (const std::string& name) const;
     void setupPuppetGeometryCallback (Effects::CPass* pass, bool samplesSourceTexture) const;
