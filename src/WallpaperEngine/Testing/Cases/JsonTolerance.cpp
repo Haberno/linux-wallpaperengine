@@ -51,6 +51,64 @@ TEST_CASE ("explicit scene precache acquires material dependencies without an au
     CHECK (scene->precachedMaterials.front ()->passes.front ()->textures.at (0) == "delayed");
 }
 
+TEST_CASE ("general precache acquires filtered material dependencies without an authored layer", "[asset-precache]") {
+    auto filesystem = std::make_unique<Container> ();
+    filesystem->getVFS ().add ("scene.json", R"({
+	"camera":{"center":"0 0 -1","eye":"0 0 0","up":"0 1 0"},
+	"general":{"orthogonalprojection":{"width":320,"height":180},
+	  "precache":["materials/general.json","materials/general.json","materials_suffix.json",
+	    null,42,"fonts/unused.ttf","images/unused.tex","models/unused.mdl"]},
+	"objects":[]
+    })");
+    filesystem->getVFS ().add ("materials/general.json", R"({
+	"passes":[{"shader":"copy","textures":["general"]}]
+    })");
+    filesystem->getVFS ().add ("materials_suffix.json", R"({
+	"passes":[{"shader":"copy","textures":["prefix"]}]
+    })");
+    Project project {};
+    project.type = Project::Type_Scene;
+    project.assetLocator = std::make_unique<WallpaperEngine::Assets::AssetLocator> (std::move (filesystem));
+    const auto wallpaper = WallpaperParser::parse (JSON ("scene.json"), project);
+    const auto* scene = wallpaper->as<Scene> ();
+    REQUIRE (scene->objects.empty ());
+    REQUIRE (scene->precachedMaterials.size () == 2);
+    CHECK (scene->precachedMaterials.front ()->filename == "materials/general.json");
+    REQUIRE (scene->precachedMaterials.front ()->passes.size () == 1);
+    CHECK (scene->precachedMaterials.front ()->passes.front ()->textures.at (0) == "general");
+    CHECK (scene->precachedMaterials.at (1)->filename == "materials_suffix.json");
+    REQUIRE (scene->precachedMaterials.at (1)->passes.size () == 1);
+    CHECK (scene->precachedMaterials.at (1)->passes.front ()->textures.at (0) == "prefix");
+}
+
+TEST_CASE ("authored general precache takes precedence over the root compatibility field", "[asset-precache]") {
+    for (const JSON authored : { JSON::array ({ "materials/general.json" }), JSON::array (), JSON (nullptr), JSON (42) }) {
+	auto data = JSON::parse (R"({
+	    "camera":{"center":"0 0 -1","eye":"0 0 0","up":"0 1 0"},
+	    "general":{"orthogonalprojection":{"width":320,"height":180}},"objects":[],
+	    "precache":["materials/legacy.json"]
+	})");
+	data["general"]["precache"] = authored;
+	auto filesystem = std::make_unique<Container> ();
+	filesystem->getVFS ().add ("scene.json", data.dump ());
+	for (const std::string name : { "general", "legacy" }) {
+	    filesystem->getVFS ().add ("materials/" + name + ".json", R"({"passes":[{"shader":"copy"}]})");
+	}
+	Project project {};
+	project.type = Project::Type_Scene;
+	project.assetLocator = std::make_unique<WallpaperEngine::Assets::AssetLocator> (std::move (filesystem));
+	const auto wallpaper = WallpaperParser::parse (JSON ("scene.json"), project);
+	const auto* scene = wallpaper->as<Scene> ();
+	REQUIRE (scene->objects.empty ());
+	if (authored.is_array () && !authored.empty ()) {
+	    REQUIRE (scene->precachedMaterials.size () == 1);
+	    CHECK (scene->precachedMaterials.front ()->filename == "materials/general.json");
+	} else {
+	    CHECK (scene->precachedMaterials.empty ());
+	}
+    }
+}
+
 TEST_CASE ("dynamic strings preserve song titles and script layer names containing spaces") {
     const Properties properties;
     for (const std::string text : { "mxpheebz - The Beach", "Code therapy w / R...", "Song Title", "22:49 PM", "1 2oops" }) {

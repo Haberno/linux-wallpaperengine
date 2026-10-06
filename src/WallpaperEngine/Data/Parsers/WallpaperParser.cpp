@@ -230,7 +230,9 @@ SceneUniquePtr WallpaperParser::parseScene (const JSON& file, Project& project) 
         }
     );
 
-    if (const auto precache = scene.optional ("precache"); precache && precache->is_array ()) {
+    // Native stores precache in general; retain the older root field as a fallback.
+    const auto& precacheSource = general.find ("precache") != general.end () ? general : scene;
+    if (const auto precache = precacheSource.optional ("precache"); precache && precache->is_array ()) {
 	std::set<std::string> loaded;
 	for (const auto& entry : *precache) {
 	    if (!entry.is_string ()) continue;
