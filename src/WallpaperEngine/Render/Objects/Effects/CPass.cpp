@@ -861,53 +861,7 @@ void CPass::setupShaders () {
     this->m_combos.insert_or_assign ("FOG_DIST", this->m_fogCombos.x);
     this->m_combos.insert_or_assign ("FOG_HEIGHT", this->m_fogCombos.y);
 
-    // scenes with lights need LightingV1 modules compiled with matching uniform array sizes;
-    // 2D scenes have no light objects, keeping their shader compilation untouched
-    const auto& lights = this->m_renderable.getScene ().getLights ();
-
-    if (lights.directionalCount > 0) {
-	this->m_combos.insert_or_assign ("LIGHTS_DIRECTIONAL", lights.directionalCount);
-    }
-
-    if (lights.directionalShadowCount > 0) {
-	this->m_combos.insert_or_assign ("LIGHTS_DIRECTIONAL_SHADOW", lights.directionalShadowCount);
-	this->m_combos.insert_or_assign (
-	    "LIGHTS_DIRECTIONAL_SHADOW_MASK", static_cast<int> (lights.directionalShadowMask)
-	);
-    }
-
-    if (lights.pointCount > 0) {
-	this->m_combos.insert_or_assign ("LIGHTS_POINT", lights.pointCount);
-    }
-
-    if (lights.pointShadowCount > 0) {
-	this->m_combos.insert_or_assign ("LIGHTS_POINT_SHADOW", lights.pointShadowCount);
-	this->m_combos.insert_or_assign ("LIGHTS_POINT_SHADOW_MASK", static_cast<int> (lights.pointShadowMask));
-    }
-
-    if (lights.spotCount > 0) {
-	this->m_combos.insert_or_assign ("LIGHTS_SPOT", lights.spotCount);
-    }
-    if (lights.spotCookieMask != 0) {
-	this->m_combos.insert_or_assign ("LIGHTS_COOKIE", 1);
-	this->m_combos.insert_or_assign ("LIGHTS_SPOT_COOKIE_MASK", static_cast<int> (lights.spotCookieMask));
-    }
-
-    if (lights.spotShadowCount > 0) {
-	this->m_combos.insert_or_assign ("LIGHTS_SPOT_SHADOW", lights.spotShadowCount);
-	this->m_combos.insert_or_assign ("LIGHTS_SPOT_SHADOW_MASK", static_cast<int> (lights.spotShadowMask));
-    }
-
-    if (lights.shadowViewCount > 0) {
-	this->m_combos.insert_or_assign ("LIGHTS_SHADOW_FEATURES", lights.shadowFeatureCount);
-	this->m_combos.insert_or_assign ("LIGHTS_SHADOW_MAPPING", 1);
-        this->m_combos.insert_or_assign ("REVERSEDEPTH", this->m_renderable.getScene ().getCamera ().usesReverseDepth () ? 1 : 0);
-	this->m_combos.insert_or_assign ("LIGHTS_SHADOW_MAPPING_QUALITY", 2);
-    }
-
-    if (lights.tubeCount > 0) {
-	this->m_combos.insert_or_assign ("LIGHTS_TUBE", lights.tubeCount);
-    }
+    this->m_renderable.getScene ().applyLightCombos (this->m_combos);
 
     // Image samplers opt into TEX<n>FORMAT with formatcombo metadata. Keep
     // concrete formats until preprocessing discovers those requests. DecompressNormal

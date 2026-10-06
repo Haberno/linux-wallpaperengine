@@ -73,92 +73,6 @@ CScene::CScene (
     // remain authored units, while perspective cameras use the output aspect.
     this->m_outputSize = context.getSceneOutputSize (screenName);
     this->m_textureReduction = context.getTextureReduction (wallpaper, context.getTextureQualityOutputSize (screenName));
-    const ComboMap noCombos;
-    const TextureMap noTextures;
-    std::set<std::string> precachedTextures;
-    std::map<std::string, std::pair<int, int>> precachedTextureMetadata;
-    for (const auto& material : scene->precachedMaterials) {
-	for (const auto& pass : material->passes | std::views::take (1)) {
-	    TextureMap textures = pass->textures;
-	    std::set<int> formatRequests;
-	    bool shaderMetadataReady = false;
-	    bool shaderFogEnabled = false;
-	    try {
-		// Discover file dependencies before selecting the load-time shader variant.
-		const Shaders::Shader shader (
-		    this->getAssetLocator (), pass->shader, pass->combos, noCombos, pass->textures, noTextures, pass->constants
-		);
-		TextureMap defaults = shader.getVertex ().getTextures ();
-		for (const auto& [slot, name] : shader.getFragment ().getTextures ()) defaults[slot] = name;
-		for (const auto& [slot, name] : defaults) textures.try_emplace (slot, name);
-		for (const auto& [slot, name] : textures) {
-		    if (shader.getVertex ().requestsTextureFormat (slot)
-			|| shader.getFragment ().requestsTextureFormat (slot)) formatRequests.insert (slot);
-		}
-		ComboMap discovered = shader.getVertex ().getDiscoveredCombos ();
-		for (const auto& [name, value] : shader.getFragment ().getDiscoveredCombos ()) discovered[name] = value;
-		for (const auto& [name, value] : pass->combos) discovered[name] = value;
-		if (const auto fog = discovered.find ("FOG"); fog != discovered.end ()) shaderFogEnabled = fog->second != 0;
-		shaderMetadataReady = true;
-	    } catch (const std::exception& error) {
-		sLog.error ("Cannot precache shader defaults for ", pass->shader, ": ", error.what ());
-	    }
-	    for (const auto& [slot, name] : textures) {
-		if (name.empty () || name.starts_with ("_rt_") || name.starts_with ("_alias_")
-		    || name.starts_with ('$') || !precachedTextures.insert (name).second) continue;
-		try {
-		    // Shader-only defaults are discovered after the initial texture batch.
-		    const auto prepared = context.prepareTextureFallbacks (
-			{ name }, this->getAssetLocator (), scene->project.properties, this->m_textureReduction
-		    );
-		    auto texture = this->resolveTexture (name);
-		    precachedTextureMetadata.emplace (
-			name, std::pair { static_cast<int> (texture->getFormat ()),
-			    static_cast<int> ((texture->getFlags () & TextureFlags_ComponentMask) >> 20) }
-		    );
-		    this->m_precachedTextures.emplace_back (std::move (texture));
-		} catch (const std::exception& error) {
-		    sLog.error ("Cannot precache texture ", name, ": ", error.what ());
-		}
-		// Service outgoing frames between dependencies, including cache misses.
-		this->loadingCheckpoint (true);
-	    }
-	    // Native material acquisition selects only pass zero and retains its shader resource.
-	    if (pass == material->passes.front () && shaderMetadataReady) {
-		try {
-		    ComboMap combos = pass->combos;
-		    combos.insert_or_assign ("HDR", this->isHdr () ? 1 : 0);
-		    combos.insert_or_assign ("SCENE_ORTHO", isPerspective ? 0 : 1);
-		    combos.insert_or_assign ("ALPHATOCOVERAGE", pass->blending == BlendingMode_AlphaToCoverage ? 1 : 0);
-		    combos.insert_or_assign (
-			"FOG_DIST", isPerspective && shaderFogEnabled && scene->fog.distance.enabled->value->getBool ()
-		    );
-		    combos.insert_or_assign (
-			"FOG_HEIGHT", isPerspective && shaderFogEnabled && scene->fog.height.enabled->value->getBool ()
-		    );
-		    for (const auto& [slot, name] : textures) {
-			if (const auto metadata = precachedTextureMetadata.find (name); metadata != precachedTextureMetadata.end ()) {
-			    const std::string prefix = "TEX" + std::to_string (slot);
-			    combos.insert_or_assign (prefix + "COMPONENTS", metadata->second.second);
-			    if (formatRequests.contains (slot)) combos.insert_or_assign (prefix + "FORMAT", metadata->second.first);
-			}
-		    }
-		    Shaders::Shader shader (
-			this->getAssetLocator (), pass->shader, combos, noCombos, pass->textures, noTextures, pass->constants
-		    );
-		    const auto [vertex, fragment] = Shaders::GLSLContext::get ().toGlsl (shader.vertex (), shader.fragment ());
-		    std::shared_ptr<Shaders::ShaderProgramCache::SharingGroup> group;
-		    this->m_precachedPrograms.emplace_back (context.getShaderProgramCache ().interfaceProgram (vertex, fragment, group));
-		} catch (const std::exception& error) {
-		    sLog.error ("Cannot precache shader program ", pass->shader, ": ", error.what ());
-		}
-		this->loadingCheckpoint (true);
-	    }
-	}
-    }
-    // Module-scope scene scripts can query the output during registration.
-    this->registerFogScripts ();
-    this->updateFogState ();
     if (isPerspective) {
 	width = this->m_outputSize.x;
 	height = this->m_outputSize.y;
@@ -423,6 +337,93 @@ CScene::CScene (
 	}
     }
     m_camera->setReverseDepth (isPerspective && ClipDepthScope::supported ());
+    const ComboMap noCombos;
+    const TextureMap noTextures;
+    std::set<std::string> precachedTextures;
+    std::map<std::string, std::pair<int, int>> precachedTextureMetadata;
+    for (const auto& material : scene->precachedMaterials) {
+	for (const auto& pass : material->passes | std::views::take (1)) {
+	    TextureMap textures = pass->textures;
+	    ComboMap combos = pass->combos;
+	    this->applyLightCombos (combos);
+	    std::set<int> formatRequests;
+	    bool shaderMetadataReady = false;
+	    bool shaderFogEnabled = false;
+	    try {
+		// Discover file dependencies before selecting the load-time shader variant.
+		const Shaders::Shader shader (
+		    this->getAssetLocator (), pass->shader, combos, noCombos, pass->textures, noTextures, pass->constants
+		);
+		TextureMap defaults = shader.getVertex ().getTextures ();
+		for (const auto& [slot, name] : shader.getFragment ().getTextures ()) defaults[slot] = name;
+		for (const auto& [slot, name] : defaults) textures.try_emplace (slot, name);
+		for (const auto& [slot, name] : textures) {
+		    if (shader.getVertex ().requestsTextureFormat (slot)
+			|| shader.getFragment ().requestsTextureFormat (slot)) formatRequests.insert (slot);
+		}
+		ComboMap discovered = shader.getVertex ().getDiscoveredCombos ();
+		for (const auto& [name, value] : shader.getFragment ().getDiscoveredCombos ()) discovered[name] = value;
+		for (const auto& [name, value] : pass->combos) discovered[name] = value;
+		if (const auto fog = discovered.find ("FOG"); fog != discovered.end ()) shaderFogEnabled = fog->second != 0;
+		shaderMetadataReady = true;
+	    } catch (const std::exception& error) {
+		sLog.error ("Cannot precache shader defaults for ", pass->shader, ": ", error.what ());
+	    }
+	    for (const auto& [slot, name] : textures) {
+		if (name.empty () || name.starts_with ("_rt_") || name.starts_with ("_alias_")
+		    || name.starts_with ('$') || !precachedTextures.insert (name).second) continue;
+		try {
+		    // Shader-only defaults are discovered after the initial texture batch.
+		    const auto prepared = context.prepareTextureFallbacks (
+			{ name }, this->getAssetLocator (), scene->project.properties, this->m_textureReduction
+		    );
+		    auto texture = this->resolveTexture (name);
+		    precachedTextureMetadata.emplace (
+			name, std::pair { static_cast<int> (texture->getFormat ()),
+			    static_cast<int> ((texture->getFlags () & TextureFlags_ComponentMask) >> 20) }
+		    );
+		    this->m_precachedTextures.emplace_back (std::move (texture));
+		} catch (const std::exception& error) {
+		    sLog.error ("Cannot precache texture ", name, ": ", error.what ());
+		}
+		// Service outgoing frames between dependencies, including cache misses.
+		this->loadingCheckpoint (true);
+	    }
+	    // Native material acquisition selects only pass zero and retains its shader resource.
+	    if (pass == material->passes.front () && shaderMetadataReady) {
+		try {
+		    combos.insert_or_assign ("HDR", this->isHdr () ? 1 : 0);
+		    combos.insert_or_assign ("SCENE_ORTHO", isPerspective ? 0 : 1);
+		    combos.insert_or_assign ("ALPHATOCOVERAGE", pass->blending == BlendingMode_AlphaToCoverage ? 1 : 0);
+		    combos.insert_or_assign (
+			"FOG_DIST", isPerspective && shaderFogEnabled && scene->fog.distance.enabled->value->getBool ()
+		    );
+		    combos.insert_or_assign (
+			"FOG_HEIGHT", isPerspective && shaderFogEnabled && scene->fog.height.enabled->value->getBool ()
+		    );
+		    for (const auto& [slot, name] : textures) {
+			if (const auto metadata = precachedTextureMetadata.find (name); metadata != precachedTextureMetadata.end ()) {
+			    const std::string prefix = "TEX" + std::to_string (slot);
+			    combos.insert_or_assign (prefix + "COMPONENTS", metadata->second.second);
+			    if (formatRequests.contains (slot)) combos.insert_or_assign (prefix + "FORMAT", metadata->second.first);
+			}
+		    }
+		    Shaders::Shader shader (
+			this->getAssetLocator (), pass->shader, combos, noCombos, pass->textures, noTextures, pass->constants
+		    );
+		    const auto [vertex, fragment] = Shaders::GLSLContext::get ().toGlsl (shader.vertex (), shader.fragment ());
+		    std::shared_ptr<Shaders::ShaderProgramCache::SharingGroup> group;
+		    this->m_precachedPrograms.emplace_back (context.getShaderProgramCache ().interfaceProgram (vertex, fragment, group));
+		} catch (const std::exception& error) {
+		    sLog.error ("Cannot precache shader program ", pass->shader, ": ", error.what ());
+		}
+		this->loadingCheckpoint (true);
+	    }
+	}
+    }
+    // Module-scope scene scripts can query the output during registration.
+    this->registerFogScripts ();
+    this->updateFogState ();
     const auto requestedSamples = context.getApp ().getContext ().settings.render.msaaSamples;
     const auto samples = scene->hasModelLayer ? requestedSamples : 1;
     this->setupFramebuffers (isPerspective || hasModels || samples > 1, this->m_outputSize, samples, this->getColorFormat (), m_camera->usesReverseDepth ());
@@ -1739,6 +1740,54 @@ void CScene::updateMouse (const glm::ivec4& viewport) {
 }
 
 const CScene::SceneLights& CScene::getLights () const { return this->m_lights; }
+
+void CScene::applyLightCombos (ComboMap& combos) const {
+    const auto& lights = this->getLights ();
+
+    if (lights.directionalCount > 0) {
+	combos.insert_or_assign ("LIGHTS_DIRECTIONAL", lights.directionalCount);
+    }
+
+    if (lights.directionalShadowCount > 0) {
+	combos.insert_or_assign ("LIGHTS_DIRECTIONAL_SHADOW", lights.directionalShadowCount);
+	combos.insert_or_assign (
+	    "LIGHTS_DIRECTIONAL_SHADOW_MASK", static_cast<int> (lights.directionalShadowMask)
+	);
+    }
+
+    if (lights.pointCount > 0) {
+	combos.insert_or_assign ("LIGHTS_POINT", lights.pointCount);
+    }
+
+    if (lights.pointShadowCount > 0) {
+	combos.insert_or_assign ("LIGHTS_POINT_SHADOW", lights.pointShadowCount);
+	combos.insert_or_assign ("LIGHTS_POINT_SHADOW_MASK", static_cast<int> (lights.pointShadowMask));
+    }
+
+    if (lights.spotCount > 0) {
+	combos.insert_or_assign ("LIGHTS_SPOT", lights.spotCount);
+    }
+    if (lights.spotCookieMask != 0) {
+	combos.insert_or_assign ("LIGHTS_COOKIE", 1);
+	combos.insert_or_assign ("LIGHTS_SPOT_COOKIE_MASK", static_cast<int> (lights.spotCookieMask));
+    }
+
+    if (lights.spotShadowCount > 0) {
+	combos.insert_or_assign ("LIGHTS_SPOT_SHADOW", lights.spotShadowCount);
+	combos.insert_or_assign ("LIGHTS_SPOT_SHADOW_MASK", static_cast<int> (lights.spotShadowMask));
+    }
+
+    if (lights.shadowViewCount > 0) {
+	combos.insert_or_assign ("LIGHTS_SHADOW_FEATURES", lights.shadowFeatureCount);
+	combos.insert_or_assign ("LIGHTS_SHADOW_MAPPING", 1);
+        combos.insert_or_assign ("REVERSEDEPTH", this->getCamera ().usesReverseDepth () ? 1 : 0);
+	combos.insert_or_assign ("LIGHTS_SHADOW_MAPPING_QUALITY", 2);
+    }
+
+    if (lights.tubeCount > 0) {
+	combos.insert_or_assign ("LIGHTS_TUBE", lights.tubeCount);
+    }
+}
 
 void CScene::updateLightState () {
     const bool reverseDepth = this->getCamera ().usesReverseDepth ();

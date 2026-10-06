@@ -269,6 +269,7 @@ public:
     };
 
     [[nodiscard]] const SceneLights& getLights () const;
+    void applyLightCombos (ComboMap& combos) const;
 
     struct SceneFog {
 	bool distanceEnabled = false;
