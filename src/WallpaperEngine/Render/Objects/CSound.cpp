@@ -82,10 +82,11 @@ void CSound::load () {
     // Reading the file and opening a stream (probing it, building the decoder and resampler) took
     // 50-100 ms that hitched a frame whenever a layer started, e.g. as a switch transition finished.
     // Build the stream on a worker; unload () waits for it, so the locator outlives the task.
+    const bool spatial = this->getScene ().getAudioContext ().getDriver ().supportsSpatialSound ();
     this->m_pendingStream = std::async (
 	std::launch::async,
-	[&context = this->getScene ().getAudioContext (), &locator = this->getAssetLocator (), file, repeat] {
-	    return std::make_unique<Audio::AudioStream> (context, locator.read (file), repeat);
+	[&context = this->getScene ().getAudioContext (), &locator = this->getAssetLocator (), file, repeat, spatial] {
+	    return std::make_unique<Audio::AudioStream> (context, locator.read (file), repeat, spatial);
 	}
     );
 }
@@ -102,6 +103,7 @@ bool CSound::attachPendingStream () {
     this->m_minDistance = 1.0f;
     this->m_distanceGain = 1.0f;
     this->m_stereoGain = glm::vec2 (1.0f);
+    this->m_audioPosition = glm::vec3 (0.0f);
     // Sample the original channel layout before attaching to the SDL callback.
 #if FF_API_OLD_CHANNEL_LAYOUT
     this->m_sourceChannels = stream->getContext ()->channels;
@@ -113,10 +115,12 @@ bool CSound::attachPendingStream () {
 	const float attenuation = this->m_sound.attenuation->evaluateFloat (time);
 	const float minDistance = this->m_sound.minDistance->evaluateFloat (time);
 	// OpenAL rejects negative source parameters, retaining their unity defaults.
-	if (attenuation >= 0.0f) this->m_attenuation = attenuation;
-	if (minDistance >= 0.0f) this->m_minDistance = minDistance;
+	if (std::isfinite (attenuation) && attenuation >= 0.0f) this->m_attenuation = attenuation;
+	if (std::isfinite (minDistance) && minDistance >= 0.0f) this->m_minDistance = minDistance;
 	this->updateDistanceGain ();
     }
+    stream->setSpatialParameters ({ { this->m_audioPosition.x, this->m_audioPosition.y, this->m_audioPosition.z },
+        this->getGain (), this->m_attenuation, this->m_minDistance });
     stream->setGain (this->getGain () * this->m_distanceGain);
     stream->setStereoGain (this->m_stereoGain.x, this->m_stereoGain.y);
     stream->setPaused (!this->m_playing);
@@ -180,6 +184,8 @@ void CSound::render () {
     const float gain = this->getGain ();
     this->updateDistanceGain ();
     for (const auto& [id, stream] : this->m_audioStreams) {
+        stream->setSpatialParameters ({ { this->m_audioPosition.x, this->m_audioPosition.y, this->m_audioPosition.z },
+            gain, this->m_attenuation, this->m_minDistance });
 	stream->setGain (gain * this->m_distanceGain);
 	stream->setStereoGain (this->m_stereoGain.x, this->m_stereoGain.y);
 	stream->setPaused (!this->m_playing);
@@ -368,6 +374,7 @@ void CSound::updateDistanceGain () {
     // OpenAL rejects invalid positions, including normalization at an orthographic
     // listener, and retains that handle's previous distance and direction.
     if (!std::isfinite (position.x) || !std::isfinite (position.y) || !std::isfinite (position.z)) return;
+    this->m_audioPosition = position;
     this->m_stereoGain = this->m_sourceChannels == 1 ? calculateStereoGain (position) : glm::vec2 (1.0f);
     this->m_distanceGain = calculateDistanceGain (
 	source, camera.getEye (), camera.isOrthogonal (),

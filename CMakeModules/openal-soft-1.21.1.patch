@@ -1,0 +1,67 @@
+--- a/common/aloptional.h
++++ b/common/aloptional.h
+@@ -116,7 +116,7 @@
+ 
+     const T* operator->() const { return std::addressof(mStore.mValue); }
+     T* operator->() { return std::addressof(mStore.mValue); }
+-    const T& operator*() const& { return this->mValue; }
++    const T& operator*() const& { return mStore.mValue; }
+     T& operator*() & { return mStore.mValue; }
+     const T&& operator*() const&& { return std::move(mStore.mValue); }
+     T&& operator*() && { return std::move(mStore.mValue); }
+--- a/common/strutils.cpp
++++ b/common/strutils.cpp
+@@ -4,6 +4,7 @@
+ #include "strutils.h"
+ 
+ #include <cstdlib>
++#include <cstring>
+ 
+ 
+ #ifdef _WIN32
+@@ -45,6 +46,12 @@
+ 
+ al::optional<std::string> getenv(const char *envname)
+ {
++#ifdef LWE_PRIVATE_OPENAL
++    // This private loopback component does not consume another application's
++    // OpenAL preferences, nor change process-wide environment variables.
++    if(std::strncmp(envname, "ALSOFT_", 7) == 0 || std::strncmp(envname, "__ALSOFT_", 9) == 0)
++        return al::nullopt;
++#endif
+     const char *str{std::getenv(envname)};
+     if(str && str[0] != '\0')
+         return al::make_optional<std::string>(str);
+--- a/alc/alc.cpp
++++ b/alc/alc.cpp
+@@ -1033,7 +1033,9 @@
+         }
+         TRACE("Supported backends: %s\n", names.c_str());
+     }
++#ifndef LWE_PRIVATE_OPENAL
+     ReadALConfig();
++#endif
+ 
+     if(auto suspendmode = al::getenv("__ALSOFT_SUSPEND_CONTEXT"))
+     {
+--- a/alc/hrtf.cpp
++++ b/alc/hrtf.cpp
+@@ -1217,6 +1217,10 @@
+     std::lock_guard<std::mutex> _{EnumeratedHrtfLock};
+     EnumeratedHrtfs.clear();
+ 
++#ifdef LWE_PRIVATE_OPENAL
++    if(!GetResource(IDR_DEFAULT_HRTF_MHR).empty())
++        AddBuiltInEntry("Built-In HRTF", IDR_DEFAULT_HRTF_MHR);
++#else
+     bool usedefaults{true};
+     if(auto pathopt = ConfigValueStr(devname, nullptr, "hrtf-paths"))
+     {
+@@ -1261,6 +1265,7 @@
+             AddBuiltInEntry("Built-In HRTF", IDR_DEFAULT_HRTF_MHR);
+     }
+ 
++#endif
+     al::vector<std::string> list;
+     list.reserve(EnumeratedHrtfs.size());
+     for(auto &entry : EnumeratedHrtfs)

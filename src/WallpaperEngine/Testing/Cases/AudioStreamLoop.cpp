@@ -63,12 +63,11 @@ void writeU32 (std::vector<char>& output, const size_t offset, const uint32_t va
     output[offset + 3] = static_cast<char> ((value >> 24) & 0xff);
 }
 
-std::shared_ptr<MemoryStream> shortPcmWave (const uint16_t sample = 0) {
-    constexpr uint32_t sampleRate = 8000;
-    constexpr uint32_t sampleCount = 800;
-    constexpr uint16_t channelCount = 1;
+std::shared_ptr<MemoryStream> shortPcmWave (const uint16_t sample = 0, const uint32_t sampleRate = 8000,
+                                            const uint16_t channelCount = 1) {
+    const uint32_t sampleCount = sampleRate / 10;
     constexpr uint16_t bitsPerSample = 16;
-    constexpr uint32_t dataSize = sampleCount * channelCount * bitsPerSample / 8;
+    const uint32_t dataSize = sampleCount * channelCount * bitsPerSample / 8;
 
     std::vector<char> wave (44 + dataSize, 0);
     std::memcpy (wave.data (), "RIFF", 4);
@@ -83,7 +82,7 @@ std::shared_ptr<MemoryStream> shortPcmWave (const uint16_t sample = 0) {
     writeU16 (wave, 34, bitsPerSample);
     std::memcpy (wave.data () + 36, "data", 4);
     writeU32 (wave, 40, dataSize);
-    for (uint32_t index = 0; index < sampleCount; index++) {
+    for (uint32_t index = 0; index < sampleCount * channelCount; index++) {
 	writeU16 (wave, 44 + index * sizeof (uint16_t), sample);
     }
 
@@ -378,4 +377,108 @@ TEST_CASE ("sound distance attenuation follows the native listener space", "[aud
     REQUIRE (CSound::calculateDistanceGain ({ 50, 80, 600 }, listener, true, canvas, 1.0f, 1.0f, 1) == 1.0f);
     REQUIRE (CSound::calculateDistanceGain ({ 10, 20, 45 }, listener, false, canvas, 1.0f, 0.0f, 1) == 1.0f);
     REQUIRE (CSound::calculateDistanceGain (listener, listener, false, canvas, 1.0f, 0.0f, 1) == 1.0f);
+}
+
+TEST_CASE ("sound decoding preserves supported channel layouts and every partial frame", "[audio][spatial]") {
+    char executable[] = "tests";
+    char* argv[] = { executable };
+    ApplicationContext applicationContext (1, argv);
+    applicationContext.state.general.keepRunning = true;
+    FullScreenDetector fullscreenDetector (applicationContext);
+    AudioPlayingDetector audioDetector (applicationContext, fullscreenDetector);
+    PlaybackRecorder recorder;
+    TestingAudioDriver driver (applicationContext, audioDetector, recorder);
+    AudioContext audioContext (driver);
+    const std::array<std::pair<unsigned, uint32_t>, 7> layouts {{
+        { 1, AV_CH_LAYOUT_MONO }, { 2, AV_CH_LAYOUT_STEREO }, { 4, AV_CH_LAYOUT_QUAD },
+        { 6, AV_CH_LAYOUT_5POINT1 }, { 7, AV_CH_LAYOUT_6POINT1 }, { 8, AV_CH_LAYOUT_7POINT1 },
+        { 3, AV_CH_LAYOUT_SURROUND }
+    }};
+    for (const auto& [channels, mask] : layouts) {
+        INFO ("channels=" << channels);
+        constexpr unsigned frames = 37;
+        const unsigned dataSize = frames * channels * sizeof (uint16_t);
+        std::vector<char> wave (68 + dataSize);
+        std::memcpy (wave.data (), "RIFF", 4); writeU32 (wave, 4, wave.size () - 8);
+        std::memcpy (wave.data () + 8, "WAVEfmt ", 8); writeU32 (wave, 16, 40);
+        writeU16 (wave, 20, 0xfffe); writeU16 (wave, 22, channels);
+        writeU32 (wave, 24, 48000); writeU32 (wave, 28, 48000 * channels * 2);
+        writeU16 (wave, 32, channels * 2); writeU16 (wave, 34, 16);
+        writeU16 (wave, 36, 22); writeU16 (wave, 38, 16); writeU32 (wave, 40, mask);
+        const uint8_t pcmGuid[] { 1, 0, 0, 0, 0, 0, 16, 0, 128, 0, 0, 170, 0, 56, 155, 113 };
+        std::memcpy (wave.data () + 44, pcmGuid, sizeof (pcmGuid));
+        std::memcpy (wave.data () + 60, "data", 4); writeU32 (wave, 64, dataSize);
+        for (unsigned frame = 0; frame < frames; ++frame) for (unsigned channel = 0; channel < channels; ++channel)
+            writeU16 (wave, 68 + (frame * channels + channel) * 2, (channel + 1) * 1024);
+        auto data = std::make_unique<char[]> (wave.size ());
+        std::memcpy (data.get (), wave.data (), wave.size ());
+        AudioStream stream (audioContext, std::make_shared<MemoryStream> (std::move (data), wave.size ()), false, true);
+        const bool supported = channels != 3;
+        REQUIRE (stream.usesSpatialMixer () == supported);
+        const unsigned outputChannels = supported ? channels : 2;
+        REQUIRE (stream.getOutputChannels () == outputChannels);
+        std::vector<float> block (7 * outputChannels), output;
+        bool ended = false;
+        const auto deadline = std::chrono::steady_clock::now () + std::chrono::seconds (2);
+        while (!ended && std::chrono::steady_clock::now () < deadline) {
+            const int bytes = stream.decodeFrame (reinterpret_cast<uint8_t*> (block.data ()), block.size () * sizeof (float) - 1);
+            if (bytes == AVERROR_EOF) ended = true;
+            else if (bytes > 0) output.insert (output.end (), block.begin (), block.begin () + bytes / sizeof (float));
+            else std::this_thread::yield ();
+        }
+        REQUIRE (ended);
+        REQUIRE (output.size () == frames * outputChannels);
+        if (supported) for (unsigned i = 0; i < output.size (); ++i)
+            REQUIRE (output[i] == Catch::Approx (float (i % channels + 1) / 32.0f));
+        stream.stop ();
+    }
+
+    AudioStream fallback (audioContext, shortPcmWave (4096), false, true);
+    REQUIRE (fallback.usesSpatialMixer ());
+    REQUIRE (fallback.getOutputSampleRate () == 8000);
+    fallback.useLegacyOutput ();
+    REQUIRE_FALSE (fallback.usesSpatialMixer ());
+    REQUIRE (fallback.getOutputChannels () == 2);
+    REQUIRE (fallback.getOutputSampleRate () == 48000);
+    fallback.stop ();
+}
+
+TEST_CASE ("sound source rates and scalar fallback drain across repeated boundaries", "[audio][spatial][loop][source-rate]") {
+    char executable[] = "tests";
+    char* argv[] = { executable };
+    ApplicationContext applicationContext (1, argv);
+    applicationContext.state.general.keepRunning = true;
+    FullScreenDetector fullscreenDetector (applicationContext);
+    AudioPlayingDetector audioDetector (applicationContext, fullscreenDetector);
+    PlaybackRecorder recorder;
+    TestingAudioDriver driver (applicationContext, audioDetector, recorder);
+    AudioContext audioContext (driver);
+    for (const unsigned sourceChannels : { 1, 2 }) for (const bool native : { true, false }) {
+        AudioStream stream (audioContext, shortPcmWave (4096, 32000, sourceChannels), true, true);
+        if (!native) stream.useLegacyOutput ();
+        const unsigned channels = native ? sourceChannels : 2;
+        const unsigned rate = native ? 32000 : 48000;
+        REQUIRE (stream.usesSpatialMixer () == native);
+        REQUIRE (stream.getOutputSampleRate () == rate);
+        REQUIRE (stream.getOutputChannels () == channels);
+        std::vector<float> block (7 * channels);
+        unsigned completed = 0, frames = 0;
+        double sum = 0;
+        const auto deadline = std::chrono::steady_clock::now () + std::chrono::seconds (2);
+        while (completed < 3 && std::chrono::steady_clock::now () < deadline) {
+            const int bytes = stream.decodeFrame (reinterpret_cast<uint8_t*> (block.data ()), block.size () * sizeof (float) - 1);
+            if (bytes == AVERROR_EOF) {
+                REQUIRE (frames == rate / 10);
+                const double gain = native || sourceChannels == 2 ? 1.0 : 1.0 / std::sqrt (2.0);
+                REQUIRE (sum == Catch::Approx (rate / 10 * channels * .125 * gain).margin (0.02));
+                frames = 0; sum = 0; ++completed;
+            } else if (bytes > 0) {
+                REQUIRE (bytes % (channels * sizeof (float)) == 0);
+                frames += bytes / (channels * sizeof (float));
+                for (unsigned i = 0; i < bytes / sizeof (float); ++i) sum += block[i];
+            } else std::this_thread::yield ();
+        }
+        REQUIRE (completed == 3);
+        stream.stop ();
+    }
 }

@@ -1,0 +1,21 @@
+This distribution dynamically loads its private liblwe-openal shared library,
+OpenAL Soft version1.21.1, Copyright (C) Christopher Fitzgerald and other
+contributors. OpenAL Soft is licensed under the GNU Library General
+Public License version2 or, at your option, any later version. See COPYING
+and the individual upstream source headers for notices and terms.
+
+Complete corresponding component source is included in the source directory.
+It includes the local modifications listed in the accompanying patch.
+
+Original upstream source:
+https://github.com/kcat/openal-soft/tree/1.21.1
+Archive: https://codeload.github.com/kcat/openal-soft/tar.gz/refs/tags/1.21.1
+SHA256: 8ac17e4e3b32c1af3d5508acfffb838640669b4274606b7892aa796ca9d7467f
+
+The accompanying openal-soft-1.21.1.patch fixes one optional member access for
+current compilers and confines the private component to built-in defaults and
+its upstream HRTF data, without reading user OpenAL settings or changing the
+process environment. Hardware backends and utilities are disabled at build
+time. The shared library remains separately replaceable and is not statically
+linked into linux-wallpaperengine. Distributors must retain the license,
+notices, patch and corresponding source availability required by the license.

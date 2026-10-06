@@ -41,6 +41,7 @@ namespace Audio {
 	     * @param stream
 	     */
 	    virtual int addStream (AudioStream* stream) = 0;
+            [[nodiscard]] virtual bool supportsSpatialSound () const { return false; }
 
 	    /**
 	     *

@@ -145,6 +145,7 @@ add_subdirectory(${CEF_LIBCEF_DLL_WRAPPER_PATH} libcef_dll_wrapper)
 add_subdirectory(src/External/glslang-WallpaperEngine glslang)
 add_subdirectory(src/External/SPIRV-Cross-WallpaperEngine spirv-cross)
 add_subdirectory(src/External/kissfft kissfft)
+include(CMakeModules/PrivateOpenAL.cmake)
 add_subdirectory(src/External/argparse argparse)
 set(QJS_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
 option(WPENGINE_SCENESCRIPT_JIT "Use JavaScriptCore for JIT-compiled SceneScript" ON)
@@ -405,6 +406,8 @@ set(COMMON_SOURCES
     src/WallpaperEngine/Audio/Drivers/SDLAudioDriver.h
     src/WallpaperEngine/Audio/AudioContext.cpp
     src/WallpaperEngine/Audio/AudioContext.h
+    src/WallpaperEngine/Audio/SoundSpatialMixer.cpp
+    src/WallpaperEngine/Audio/SoundOutputMetadata.cpp
     src/WallpaperEngine/Audio/AudioStream.cpp
     src/WallpaperEngine/Audio/AudioStream.h
 
@@ -686,6 +689,7 @@ if(BUILD_TESTING)
         src/WallpaperEngine/Testing/Cases/ParticleColorParsing.cpp
         src/WallpaperEngine/Testing/Cases/AudioSpectrum.cpp
         src/WallpaperEngine/Testing/Cases/AudioStreamLoop.cpp
+        src/WallpaperEngine/Testing/Cases/SoundSpatial.cpp
         src/WallpaperEngine/Testing/Cases/ShaderIncludes.cpp
         src/WallpaperEngine/Testing/Cases/ShaderProgramCache.cpp
         src/WallpaperEngine/Testing/Cases/ShaderDiskCache.cpp
@@ -723,7 +727,8 @@ target_link_libraries (linux-wallpaperengine-lib PUBLIC
     libcef_lib
     libcef_dll_wrapper
     argparse
-    ${WPENGINE_SCRIPT_RUNTIME})
+    ${WPENGINE_SCRIPT_RUNTIME}
+    lwe-sound-spatial)
 
 if (BUILD_TESTING)
     target_link_libraries (tests PRIVATE
@@ -750,7 +755,8 @@ if (BUILD_TESTING)
         libcef_lib
         libcef_dll_wrapper
         argparse
-        ${WPENGINE_SCRIPT_RUNTIME})
+        ${WPENGINE_SCRIPT_RUNTIME}
+    lwe-sound-spatial)
 endif()
 
 target_compile_definitions(linux-wallpaperengine-lib PUBLIC ERRORONLY=${ERRORONLY})

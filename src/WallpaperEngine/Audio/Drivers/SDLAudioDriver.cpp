@@ -1,8 +1,12 @@
 #include "SDLAudioDriver.h"
 #include "WallpaperEngine/Logging/Log.h"
+#include "WallpaperEngine/Data/Utils/ScopeGuard.h"
 
 #include <algorithm>
 #include <cmath>
+#include <unistd.h>
+#include <array>
+#include <cstring>
 
 #define SDL_AUDIO_BUFFER_SIZE 4096
 #define MAX_AUDIO_FRAME_SIZE 192000
@@ -22,7 +26,10 @@ void audio_callback (void* userdata, uint8_t* streamData, int length) {
 
     SDL_LockMutex (driver->getStreamMutex ());
 
+    driver->mixSpatialSound (streamData, length);
+
     for (const auto& buffer : driver->getStreams () | std::views::values) {
+        if (buffer->source != 0) continue;
 	uint8_t* streamDataPointer = streamData;
 	int streamLength = length;
 	bool completedEmptyPass = false;
@@ -120,14 +127,33 @@ SDLAudioDriver::SDLAudioDriver (
 					  .callback = audio_callback,
 					  .userdata = this };
 
+    const bool ownStreamHint = SDL_GetHint (SDL_HINT_AUDIO_DEVICE_STREAM_NAME) == nullptr;
+    if (ownStreamHint) SDL_SetHint (SDL_HINT_AUDIO_DEVICE_STREAM_NAME, "Wallpaper sound");
+    const std::string streamName = SDL_GetHint (SDL_HINT_AUDIO_DEVICE_STREAM_NAME)
+        ? SDL_GetHint (SDL_HINT_AUDIO_DEVICE_STREAM_NAME) : "";
     this->m_deviceID
 	= SDL_OpenAudioDevice (nullptr, false, &requestedSpec, &this->m_audioSpec, SDL_AUDIO_ALLOW_ANY_CHANGE);
+
+    if (ownStreamHint) SDL_ResetHint (SDL_HINT_AUDIO_DEVICE_STREAM_NAME);
 
     if (this->m_deviceID == 0) {
 	sLog.error ("SDL_OpenAudioDevice: ", SDL_GetError ());
 	return;
     }
 
+    if (this->m_audioSpec.format == AUDIO_F32SYS && this->m_audioSpec.channels == 2) {
+        try {
+            this->m_spatialMixer = std::make_unique<SoundSpatialMixer> (
+                SoundSpatialMixer::defaultLibrary (), this->m_audioSpec.freq, false);
+            const char* backend = SDL_GetCurrentAudioDriver ();
+            if (!streamName.empty () && backend
+                && (std::strcmp (backend, "pulseaudio") == 0 || std::strcmp (backend, "pipewire") == 0))
+                this->m_outputMetadata = std::make_unique<SoundOutputMetadata> (streamName, getpid ());
+        } catch (const std::exception& error) {
+            this->m_spatialMixer.reset ();
+            sLog.error ("Using ordinary sound output: ", error.what ());
+        }
+    }
     SDL_PauseAudioDevice (this->m_deviceID, 0);
 
     this->m_initialized = true;
@@ -138,6 +164,9 @@ SDLAudioDriver::~SDLAudioDriver () {
 	SDL_CloseAudioDevice (this->m_deviceID);
     }
 
+    // Stop all pull callbacks before releasing their reader/decoder storage.
+    this->m_spatialMixer.reset ();
+    this->m_outputMetadata.reset ();
     for (auto* buffer : this->m_streams | std::views::values) {
 	delete buffer;
     }
@@ -158,10 +187,31 @@ int SDLAudioDriver::addStream (AudioStream* stream) {
     this->m_lastStreamID++;
 
     SDL_LockMutex (this->m_streamListMutex);
+    Data::Utils::ScopeGuard unlock ([&] { SDL_UnlockMutex (this->m_streamListMutex); });
 
-    this->m_streams.insert_or_assign (newStreamId, new SDLAudioBuffer { stream });
-
-    SDL_UnlockMutex (this->m_streamListMutex);
+    auto buffer = std::make_unique<SDLAudioBuffer> ();
+    buffer->stream = stream;
+    if (stream->usesSpatialMixer () && this->supportsSpatialSound ()) {
+        buffer->reader = std::make_unique<SoundStreamReader> (
+            std::span<uint8_t> (buffer->audio_buf), stream->getOutputChannels (),
+            [] (void* state, uint8_t* output, int bytes) {
+                auto* input = static_cast<AudioStream*> (state);
+                if (input->isQueueEmpty ()) SDL_CondSignal (input->getWaitCondition ());
+                const int decoded = input->decodeFrame (output, bytes);
+                return decoded == AVERROR_EOF ? SoundStreamReader::End : std::max (0, decoded);
+            }, stream, stream->getOutputSampleRate (), this->m_audioSpec.freq);
+        try {
+            buffer->source = this->m_spatialMixer->add (stream->getOutputChannels (), SoundStreamReader::read,
+                buffer->reader.get (), stream->getOutputSampleRate ());
+        } catch (const std::exception& error) {
+            buffer->reader.reset ();
+            stream->useLegacyOutput ();
+            sLog.error ("Using ordinary sound stream: ", error.what ());
+        }
+    } else if (stream->usesSpatialMixer ()) {
+        stream->useLegacyOutput ();
+    }
+    this->m_streams.emplace (newStreamId, buffer.release ());
 
     return newStreamId;
 }
@@ -171,6 +221,15 @@ void SDLAudioDriver::removeStream (const int streamId) {
     SDL_LockMutex (this->m_streamListMutex);
     if (const auto stream = this->m_streams.find (streamId); stream != this->m_streams.end ()) {
 	removed = stream->second;
+        if (removed->source && this->m_spatialMixer) {
+            try { this->m_spatialMixer->remove (removed->source); }
+            catch (...) {
+                // A failed context binding must not leave a callback pointing
+                // at the reader which is about to be destroyed.
+                this->m_spatialMixer.reset ();
+                this->m_spatialFailed = true;
+            }
+        }
 	this->m_streams.erase (stream);
     }
     SDL_UnlockMutex (this->m_streamListMutex);
@@ -208,3 +267,52 @@ int SDLAudioDriver::getChannels () const { return this->m_audioSpec.channels; }
 const SDL_AudioSpec& SDLAudioDriver::getSpec () const { return this->m_audioSpec; }
 
 SDL_mutex* SDLAudioDriver::getStreamMutex () const { return this->m_streamListMutex; }
+
+void SDLAudioDriver::update () {
+    AudioDriver::update ();
+    if (this->m_spatialFailed && !this->m_reportedSpatialFailure) {
+        sLog.error ("Private sound mixer failed; sound output is paused");
+        this->m_reportedSpatialFailure = true;
+    }
+    if (!this->m_outputMetadata || this->m_spatialFailed) return;
+    this->m_outputMetadata->update ();
+    const bool headphones = this->m_outputMetadata->output () == SoundOutput::Headphones;
+    if (headphones == this->m_headphones) return;
+    SDL_LockMutex (this->m_streamListMutex);
+    try {
+        this->m_spatialMixer->setHeadphones (headphones);
+        this->m_headphones = headphones;
+    } catch (const std::exception& error) {
+        sLog.error ("Cannot select sound output mode: ", error.what ());
+    }
+    SDL_UnlockMutex (this->m_streamListMutex);
+}
+
+void SDLAudioDriver::mixSpatialSound (uint8_t* output, int length) noexcept {
+    if (!this->m_spatialMixer || this->m_spatialFailed) return;
+    try {
+        for (const auto& buffer : this->m_streams | std::views::values) {
+            if (!buffer->source) continue;
+            auto parameters = buffer->stream->getSpatialParameters ();
+            parameters.paused = parameters.paused || !buffer->stream->isInitialized ();
+            parameters.gain *= static_cast<float> (this->getApplicationContext ().state.audio.volume) / SDL_MIX_MAXVOLUME;
+            buffer->spatialPaused = parameters.paused;
+            buffer->reader->repeat = buffer->stream->isRepeat ();
+            buffer->reader->tail = this->m_headphones ? SoundStreamReader::FilterTail : 0;
+            this->m_spatialMixer->update (buffer->source, parameters);
+        }
+        const int frames = length / (2 * sizeof (float));
+        this->m_spatialMixer->render (reinterpret_cast<float*> (output), frames);
+        for (const auto& buffer : this->m_streams | std::views::values) {
+            if (!buffer->source || buffer->spatialPaused) continue;
+            const unsigned completed = buffer->reader->consumed (frames);
+            for (unsigned pass = 0; pass < completed; ++pass) buffer->stream->notifyPlaybackCompletion ();
+        }
+        auto* samples = reinterpret_cast<float*> (output);
+        for (int sample = 0; sample < frames * 2; ++sample) samples[sample] = std::clamp (samples[sample], -1.0f, 1.0f);
+    } catch (...) {
+        // Never unwind through SDL's C callback. Report once on the render thread.
+        std::memset (output, 0, length);
+        this->m_spatialFailed = true;
+    }
+}

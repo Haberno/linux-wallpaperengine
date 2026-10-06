@@ -142,8 +142,8 @@ AudioStream::AudioStream (AudioContext& context, const std::string& filename, co
     }
 }
 
-AudioStream::AudioStream (AudioContext& context, const ReadStreamSharedPtr& buffer, const bool repeat) :
-    m_audioContext (context), m_repeat (repeat) {
+AudioStream::AudioStream (AudioContext& context, const ReadStreamSharedPtr& buffer, const bool repeat, const bool spatial) :
+    m_spatial (spatial), m_audioContext (context), m_repeat (repeat) {
     try {
 	// setup a custom context first
 	this->m_formatContext = avformat_alloc_context ();
@@ -317,63 +317,7 @@ void AudioStream::initialize () {
     this->m_queue->packetList = av_fifo_alloc2 (1, sizeof (MyAVPacketList), AV_FIFO_FLAG_AUTO_GROW);
 #endif
 
-#if FF_API_OLD_CHANNEL_LAYOUT
-    int64_t out_channel_layout;
-
-    // set output audio channels based on the input audio channels
-    switch (this->m_audioContext.getChannels ()) {
-	case 1:
-	    out_channel_layout = AV_CH_LAYOUT_MONO;
-	    break;
-	case 2:
-	    out_channel_layout = AV_CH_LAYOUT_STEREO;
-	    break;
-	default:
-	    out_channel_layout = AV_CH_LAYOUT_SURROUND;
-	    break;
-    }
-
-    // initialize swrctx
-    this->m_swrctx = swr_alloc_set_opts (
-	nullptr, out_channel_layout, this->m_audioContext.getFormat (), this->m_audioContext.getSampleRate (),
-	this->getContext ()->channel_layout, this->getContext ()->sample_fmt, this->getContext ()->sample_rate, 0,
-	nullptr
-    );
-#else
-    AVChannelLayout out_channel_layout;
-    int64_t out_channel_mask;
-
-    // set output audio channels based on the input audio channels
-    switch (this->m_audioContext.getChannels ()) {
-	case 1:
-	    out_channel_mask = AV_CH_LAYOUT_MONO;
-	    break;
-	case 2:
-	    out_channel_mask = AV_CH_LAYOUT_STEREO;
-	    break;
-	default:
-	    out_channel_mask = AV_CH_LAYOUT_SURROUND;
-	    break;
-    }
-
-    if (av_channel_layout_from_mask (&out_channel_layout, out_channel_mask) != 0) {
-	sLog.exception ("Cannot get channel layout from mask");
-    }
-
-    swr_alloc_set_opts2 (
-	&this->m_swrctx, &out_channel_layout, this->m_audioContext.getFormat (), this->m_audioContext.getSampleRate (),
-	&this->m_context->ch_layout, this->m_context->sample_fmt, this->m_context->sample_rate, 0, nullptr
-    );
-#endif
-
-    if (this->m_swrctx == nullptr) {
-	sLog.exception ("Cannot initialize swrctx for audio resampling");
-    }
-
-    // initialize the context
-    if (swr_init (this->m_swrctx) < 0) {
-	sLog.exception ("Failed to initialize the resampling context.");
-    }
+    this->configureResampler ();
 
     // setup the queue information
     this->m_queue->mutex = SDL_CreateMutex ();
@@ -391,6 +335,71 @@ void AudioStream::initialize () {
     }
 
     this->m_initialized = true;
+}
+
+void AudioStream::useLegacyOutput () {
+    if (!this->m_spatial) return;
+    this->m_spatial = false;
+    swr_free (&this->m_swrctx);
+    this->configureResampler ();
+}
+
+void AudioStream::configureResampler () {
+#if FF_API_OLD_CHANNEL_LAYOUT
+    const int inputChannels = this->m_context->channels;
+    const uint64_t inputMask = this->m_context->channel_layout ? this->m_context->channel_layout
+        : inputChannels == 1 ? AV_CH_LAYOUT_MONO : inputChannels == 2 ? AV_CH_LAYOUT_STEREO : 0;
+#else
+    const int inputChannels = this->m_context->ch_layout.nb_channels;
+    // Ordinary PCM WAVs may omit layout metadata. Mono/stereo still have an
+    // unambiguous order; do not guess custom or unspecified multichannel order.
+    const uint64_t inputMask = this->m_context->ch_layout.order == AV_CHANNEL_ORDER_NATIVE
+        ? this->m_context->ch_layout.u.mask
+        : this->m_context->ch_layout.order == AV_CHANNEL_ORDER_UNSPEC
+            ? inputChannels == 1 ? AV_CH_LAYOUT_MONO : inputChannels == 2 ? AV_CH_LAYOUT_STEREO : 0
+            : 0;
+#endif
+    // These interleaved layouts have the same channel order as OpenAL1.21.1.
+    // Unsupported layouts retain the existing SDL downmix rather than being
+    // mislabeled as a different collection of virtual speakers.
+    this->m_spatial = this->m_spatial && (inputMask == AV_CH_LAYOUT_MONO || inputMask == AV_CH_LAYOUT_STEREO
+        || inputMask == AV_CH_LAYOUT_QUAD || inputMask == AV_CH_LAYOUT_5POINT1
+        || inputMask == AV_CH_LAYOUT_5POINT1_BACK || inputMask == AV_CH_LAYOUT_6POINT1
+        || inputMask == AV_CH_LAYOUT_7POINT1);
+    this->m_outputChannels = this->m_spatial ? inputChannels : this->m_audioContext.getChannels ();
+    // Native alBufferData receives the decoder rate; OpenAL owns source-rate conversion.
+    this->m_outputSampleRate = this->m_spatial ? this->m_context->sample_rate : this->m_audioContext.getSampleRate ();
+    this->m_outputFormat = this->m_spatial ? AV_SAMPLE_FMT_FLT : this->m_audioContext.getFormat ();
+    const uint64_t outputMask = this->m_spatial ? inputMask
+        : this->m_outputChannels == 1 ? AV_CH_LAYOUT_MONO
+        : this->m_outputChannels == 2 ? AV_CH_LAYOUT_STEREO : AV_CH_LAYOUT_SURROUND;
+#if FF_API_OLD_CHANNEL_LAYOUT
+    this->m_swrctx = swr_alloc_set_opts (
+        nullptr, outputMask, this->m_outputFormat, this->m_outputSampleRate,
+        inputMask, this->m_context->sample_fmt, this->m_context->sample_rate, 0, nullptr
+    );
+#else
+    AVChannelLayout outputLayout {};
+    if (av_channel_layout_from_mask (&outputLayout, outputMask) != 0) {
+        sLog.exception ("Cannot get channel layout from mask");
+    }
+    const int result = swr_alloc_set_opts2 (
+        &this->m_swrctx, &outputLayout, this->m_outputFormat, this->m_outputSampleRate,
+        &this->m_context->ch_layout, this->m_context->sample_fmt, this->m_context->sample_rate, 0, nullptr
+    );
+    av_channel_layout_uninit (&outputLayout);
+    if (result < 0) sLog.exception ("Cannot initialize audio conversion");
+#endif
+
+    if (this->m_swrctx == nullptr) {
+	sLog.exception ("Cannot initialize swrctx for audio resampling");
+    }
+
+    // initialize the context
+    if (swr_init (this->m_swrctx) < 0) {
+	sLog.exception ("Failed to initialize the resampling context.");
+    }
+
 }
 
 void AudioStream::queuePacket (AVPacket* pkt) {
@@ -570,7 +579,7 @@ int AudioStream::resampleAudio (uint8_t* out_buf, const int out_size) {
     // retrieve output samples number taking into account the progressive delay
     const int out_nb_samples = av_rescale_rnd (
 	swr_get_delay (this->m_swrctx, this->getContext ()->sample_rate) + in_nb_samples,
-	this->m_audioContext.getSampleRate (), this->getContext ()->sample_rate, AV_ROUND_UP
+	this->m_outputSampleRate, this->getContext ()->sample_rate, AV_ROUND_UP
     );
 
     // check output samples number was correctly retrieved
@@ -579,12 +588,12 @@ int AudioStream::resampleAudio (uint8_t* out_buf, const int out_size) {
 	return -1;
     }
 
-    // swr was configured for the SDL output layout. Allocating with the input
+    // Allocate for the configured output layout, including preserved sound channels. Allocating with the input
     // channel count under-allocated mono sources while swr wrote stereo data,
     // corrupting the heap and eventually tripping the stack protector.
-    const int out_nb_channels = this->m_audioContext.getChannels ();
+    const int out_nb_channels = this->m_outputChannels;
     ret = av_samples_alloc_array_and_samples (
-	&resampled_data, &out_linesize, out_nb_channels, out_nb_samples, this->m_audioContext.getFormat (), 1
+	&resampled_data, &out_linesize, out_nb_channels, out_nb_samples, this->m_outputFormat, 1
     );
 
     if (ret < 0) {
@@ -614,7 +623,7 @@ int AudioStream::resampleAudio (uint8_t* out_buf, const int out_size) {
 
     // Get the required buffer size for the given audio parameters
     const int resampled_data_size
-	= av_samples_get_buffer_size (&out_linesize, out_nb_channels, ret, this->m_audioContext.getFormat (), 1);
+	= av_samples_get_buffer_size (&out_linesize, out_nb_channels, ret, this->m_outputFormat, 1);
 
     // check audio buffer size
     if (resampled_data_size < 0) {
@@ -624,8 +633,13 @@ int AudioStream::resampleAudio (uint8_t* out_buf, const int out_size) {
     }
 
     // copy the resampled data to the output buffer up to out_size bytes
-    const int copied_size = std::min (resampled_data_size, out_size);
+    const int frameBytes = out_nb_channels * av_get_bytes_per_sample (this->m_outputFormat);
+    const int copied_size = std::min (resampled_data_size, out_size - out_size % frameBytes);
     memcpy (out_buf, resampled_data[0], copied_size);
+    if (copied_size < resampled_data_size) {
+        this->m_resampledPending.assign (resampled_data[0] + copied_size, resampled_data[0] + resampled_data_size);
+        this->m_resampledIndex = 0;
+    }
     freeResampledData ();
 
     // The caller uses this as the readable byte count for its fixed-size
@@ -635,7 +649,7 @@ int AudioStream::resampleAudio (uint8_t* out_buf, const int out_size) {
 
 int AudioStream::drainResampler (uint8_t* out_buf, const int out_size) {
     const int bytesPerFrame
-	= av_get_bytes_per_sample (this->m_audioContext.getFormat ()) * this->m_audioContext.getChannels ();
+	= av_get_bytes_per_sample (this->m_outputFormat) * this->m_outputChannels;
     if (bytesPerFrame <= 0 || out_size < bytesPerFrame) {
 	return 0;
     }
@@ -645,6 +659,15 @@ int AudioStream::drainResampler (uint8_t* out_buf, const int out_size) {
 }
 
 int AudioStream::decodeFrame (uint8_t* audioBuffer, const int bufferSize) {
+    const int frameBytes = this->m_outputChannels * av_get_bytes_per_sample (this->m_outputFormat);
+    if (frameBytes <= 0 || bufferSize < frameBytes) return 0;
+    if (!this->m_resampledPending.empty ()) {
+        const auto count = std::min (size_t (bufferSize - bufferSize % frameBytes), this->m_resampledPending.size () - this->m_resampledIndex);
+        std::memcpy (audioBuffer, this->m_resampledPending.data () + this->m_resampledIndex, count);
+        this->m_resampledIndex += count;
+        if (this->m_resampledIndex == this->m_resampledPending.size ()) this->m_resampledPending.clear ();
+        return static_cast<int> (count);
+    }
     // FFmpeg's send/receive state belongs exclusively to the SDL callback. The
     // reader thread only demuxes packets and queues loop-boundary reset markers.
     while (this->m_audioContext.getApplicationContext ().state.general.keepRunning && this->isInitialized ()) {

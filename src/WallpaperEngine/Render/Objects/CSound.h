@@ -74,6 +74,7 @@ private:
     float m_minDistance = 1.0f;
     float m_distanceGain = 1.0f;
     glm::vec2 m_stereoGain { 1.0f };
+    glm::vec3 m_audioPosition { 0.0f };
     int m_sourceChannels = 0;
     uint32_t m_lastCompletion = 0;
     std::mt19937 m_random { std::random_device {}() };

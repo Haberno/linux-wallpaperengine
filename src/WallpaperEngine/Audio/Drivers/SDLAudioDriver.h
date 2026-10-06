@@ -1,6 +1,11 @@
 #pragma once
 
 #include <map>
+#include <memory>
+#include <atomic>
+#include "WallpaperEngine/Audio/SoundSpatialMixer.h"
+#include "WallpaperEngine/Audio/SoundStreamReader.h"
+#include "WallpaperEngine/Audio/SoundOutputMetadata.h"
 #include <vector>
 
 #include "WallpaperEngine/Audio/AudioStream.h"
@@ -19,6 +24,9 @@ struct SDLAudioBuffer {
     uint8_t audio_buf[(MAX_AUDIO_FRAME_SIZE * 3) / 2] = { 0 };
     unsigned int audio_buf_size = 0;
     unsigned int audio_buf_index = 0;
+    SoundSpatialMixer::Source source = 0;
+    std::unique_ptr<SoundStreamReader> reader;
+    bool spatialPaused = true;
 };
 
 /**
@@ -34,6 +42,10 @@ public:
 
     /** @inheritdoc */
     int addStream (AudioStream* stream) override;
+    [[nodiscard]] bool supportsSpatialSound () const override { return this->m_spatialMixer != nullptr && !this->m_spatialFailed; }
+    void update () override;
+    /** The stream mutex is held by the SDL callback throughout this operation. */
+    void mixSpatialSound (uint8_t* output, int length) noexcept;
     /** @inheritdoc */
     void removeStream (int streamId) override;
     /**
@@ -60,11 +72,16 @@ private:
     /** The last streamID used */
     int m_lastStreamID = 0;
     /** The device's ID */
-    SDL_AudioDeviceID m_deviceID;
+    SDL_AudioDeviceID m_deviceID = 0;
     /** If the driver is initialized or not */
     bool m_initialized = false;
     /** The sound output configuration */
     SDL_AudioSpec m_audioSpec {};
+    std::unique_ptr<SoundSpatialMixer> m_spatialMixer;
+    std::unique_ptr<SoundOutputMetadata> m_outputMetadata;
+    bool m_headphones = false;
+    std::atomic<bool> m_spatialFailed = false;
+    bool m_reportedSpatialFailure = false;
     /** All the playable steams */
     std::map<int, SDLAudioBuffer*> m_streams {};
 };

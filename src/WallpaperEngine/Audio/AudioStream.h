@@ -3,6 +3,7 @@
 #include <atomic>
 #include <cstdint>
 #include <string>
+#include <vector>
 
 extern "C" {
 #include <libavcodec/avcodec.h>
@@ -17,6 +18,7 @@ extern "C" {
 #include <SDL_thread.h>
 
 #include "WallpaperEngine/Audio/AudioContext.h"
+#include "WallpaperEngine/Audio/SoundSpatialMixer.h"
 
 // TODO: FIND A BETTER PLACE TO DO THIS? OLD_API MIGHT EXIST BUT THIS DEFINE MIGHT NOT BE DEFINED...
 #ifndef FF_API_FIFO_OLD_API
@@ -41,7 +43,7 @@ using namespace WallpaperEngine::FileSystem;
 class AudioStream {
 public:
     AudioStream (AudioContext& context, const std::string& filename, bool repeat = false);
-    AudioStream (AudioContext& context, const ReadStreamSharedPtr& buffer, bool repeat = false);
+    AudioStream (AudioContext& context, const ReadStreamSharedPtr& buffer, bool repeat = false, bool spatial = false);
     AudioStream (AudioContext& audioContext, AVCodecContext* context);
     ~AudioStream ();
 
@@ -96,6 +98,26 @@ public:
     }
     [[nodiscard]] float getStereoGain (int channel) const {
 	return this->m_stereoGain[channel].load (std::memory_order_relaxed);
+    }
+    /** Select fallback output before registering this stream with the driver. */
+    void useLegacyOutput ();
+    [[nodiscard]] bool usesSpatialMixer () const { return this->m_spatial; }
+    [[nodiscard]] int getOutputChannels () const { return this->m_outputChannels; }
+    [[nodiscard]] int getOutputSampleRate () const { return this->m_outputSampleRate; }
+    void setSpatialParameters (const SoundSpatialMixer::Parameters& parameters) {
+        for (unsigned i = 0; i < 3; ++i) this->m_position[i].store (parameters.position[i], std::memory_order_relaxed);
+        this->m_spatialGain.store (parameters.gain, std::memory_order_relaxed);
+        this->m_attenuation.store (parameters.attenuation, std::memory_order_relaxed);
+        this->m_minimumDistance.store (parameters.minimumDistance, std::memory_order_relaxed);
+    }
+    [[nodiscard]] SoundSpatialMixer::Parameters getSpatialParameters () const {
+        SoundSpatialMixer::Parameters parameters;
+        for (unsigned i = 0; i < 3; ++i) parameters.position[i] = this->m_position[i].load (std::memory_order_relaxed);
+        parameters.gain = this->m_spatialGain.load (std::memory_order_relaxed);
+        parameters.attenuation = this->m_attenuation.load (std::memory_order_relaxed);
+        parameters.minimumDistance = this->m_minimumDistance.load (std::memory_order_relaxed);
+        parameters.paused = this->isPaused ();
+        return parameters;
     }
     /**
      * @param newRepeat true = repeat, false = no repeat
@@ -194,7 +216,16 @@ private:
      * Initializes queues and ffmpeg resampling
      */
     void initialize ();
+    void configureResampler ();
 
+    std::vector<uint8_t> m_resampledPending;
+    size_t m_resampledIndex = 0;
+    bool m_spatial = false;
+    int m_outputChannels = 0;
+    int m_outputSampleRate = 0;
+    AVSampleFormat m_outputFormat = AV_SAMPLE_FMT_NONE;
+    std::atomic<float> m_position[3] { 0.0f, 0.0f, 0.0f };
+    std::atomic<float> m_spatialGain = 1.0f, m_attenuation = 1.0f, m_minimumDistance = 1.0f;
     /** The SwrContext that handles resampling */
     SwrContext* m_swrctx = nullptr;
     /** The audio context this stream will be played under */
