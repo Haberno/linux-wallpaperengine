@@ -164,6 +164,12 @@ struct MdlActiveAnimation {
     bool enabled = true;
 };
 
+/** Native general-model state is independent for every submesh. */
+struct MdlModelMorphState {
+    std::vector<float> weights;
+    uint64_t mask = 0;
+};
+
 struct MdlPose {
     std::vector<glm::mat4> worldBones = {};
     std::vector<glm::mat4> skinBones = {};
@@ -201,6 +207,9 @@ struct MdlPhysicsStep {
 
 class MdlAnimationEvaluator {
 public:
+    [[nodiscard]] static std::vector<MdlModelMorphState> evaluateModelMorphs (
+        const std::vector<MdlActiveAnimation>& activeAnimations
+    );
     [[nodiscard]] static MdlPose evaluate (
 	const MdlAnimationData& animationData, const std::vector<MdlActiveAnimation>& activeAnimations,
 	MdlPhysicsStep* physics = nullptr

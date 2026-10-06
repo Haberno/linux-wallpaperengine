@@ -85,4 +85,54 @@ inline glm::vec3 evaluatePuppetMorphOffset (
 ) {
     return glm::vec3 (evaluatePuppetMorph (body, targets, morphIndex, unmorphedSkinnedPosition));
 }
+/** The general model shader indexes packed XYZ/normal deltas by vertex ID.
+ * 1401d7760 uploads RGBA16_SNORM; model_vertex_v1.h applies them before skinning.
+ * Tangent-bearing maps use a separate unsupported native upload branch.
+ */
+inline bool deformModelMorphVertices (
+    const MdlMesh& mesh, const MdlSubmesh& body, const std::vector<float>& weights,
+    uint64_t mask, std::vector<float>& vertices
+) {
+    if (mask == 0 || body.morphTargets.empty () || (body.flags & 0x800) != 0
+        || body.vertexTag != mesh.vertexTag || (mesh.vertexTag & 0x10001) != 1
+        || mesh.strideBytes == 0 || body.morphVertexCount != body.vertices.size () * sizeof (float) / mesh.strideBytes)
+        return false;
+    const bool normals = (body.flags & 0x400) != 0 && mesh.normalOffset != MdlMesh::AttributeAbsent;
+    std::vector<size_t> selected;
+    for (size_t index = 0; index < body.morphTargets.size () && index < weights.size () && index < 64; ++index) {
+        if ((mask & (uint64_t { 1 } << index)) == 0) continue;
+        const auto& target = body.morphTargets[index];
+        if (target.positionDeltas.size () != body.morphVertexCount * 3
+            || (normals && target.normalDeltas.size () != body.morphVertexCount * 3)) return false;
+        selected.push_back (index);
+        if (selected.size () == 11) break;
+    }
+    if (selected.empty ()) return false;
+    // Native selects the first eleven active indices, then orders them by weight.
+    std::stable_sort (selected.begin (), selected.end (), [&] (size_t left, size_t right) {
+        return weights[left] > weights[right];
+    });
+    vertices = body.vertices;
+    const size_t stride = mesh.strideBytes / sizeof (float);
+    const auto snorm = [] (int16_t value) { return std::max (float (value) / 32767.0f, -1.0f); };
+    for (size_t vertex = 0; vertex < body.morphVertexCount; ++vertex) {
+        glm::vec3 positionDelta (0.0f), normalDelta (0.0f);
+        for (const auto index : selected) {
+            const auto& target = body.morphTargets[index];
+            for (size_t axis = 0; axis < 3; ++axis) {
+                positionDelta[axis] += snorm (target.positionDeltas[vertex * 3 + axis]) * weights[index];
+                if (normals) normalDelta[axis] += snorm (target.normalDeltas[vertex * 3 + axis]) * weights[index];
+            }
+        }
+        const size_t position = vertex * stride + mesh.positionOffset / sizeof (float);
+        for (size_t axis = 0; axis < 3; ++axis) vertices[position + axis] += positionDelta[axis] * body.morphScale;
+        if (normals) {
+            const size_t offset = vertex * stride + mesh.normalOffset / sizeof (float);
+            const auto normal = glm::normalize (glm::vec3 (vertices[offset], vertices[offset + 1], vertices[offset + 2])
+                + normalDelta * 3.465f);
+            for (size_t axis = 0; axis < 3; ++axis) vertices[offset + axis] = normal[axis];
+        }
+    }
+    return true;
+}
 } // namespace WallpaperEngine::Data::Model

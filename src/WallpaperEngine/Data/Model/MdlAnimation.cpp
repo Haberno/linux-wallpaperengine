@@ -525,6 +525,48 @@ MdlPose MdlAnimationEvaluator::evaluate (
     return pose;
 }
 
+std::vector<MdlModelMorphState> MdlAnimationEvaluator::evaluateModelMorphs (
+    const std::vector<MdlActiveAnimation>& activeAnimations
+) {
+    std::vector<MdlModelMorphState> result;
+    // 14021c480 skips zero-weight model layers and clamps only partial replacement.
+    // Puppet activation and unclamped partial blending remain a separate contract.
+    for (const auto& layer : activeAnimations) {
+        if (!layer.enabled || !layer.animation || layer.weight <= 0.0f) continue;
+        const auto& submeshes = layer.animation->morphTracks;
+        result.resize (std::max (result.size (), submeshes.size ()));
+        const float weight = std::clamp (layer.weight, 0.0f, 1.0f);
+        for (size_t submesh = 0; submesh < submeshes.size (); ++submesh) {
+            auto& state = result[submesh];
+            for (const auto& track : submeshes[submesh]) {
+                if (track.target >= 64 || track.frames.empty ()) continue;
+                if (state.weights.size () <= track.target) state.weights.resize (track.target + 1, 0.0f);
+                const float sample = sampleScalarTrack (layer, track.frames);
+                const bool active = std::abs (sample) >= std::numeric_limits<float>::epsilon ();
+                const uint64_t bit = uint64_t { 1 } << track.target;
+                float& value = state.weights[track.target];
+                if (layer.additive) {
+                    if (!active) continue;
+                    state.mask |= bit;
+                    const float contribution = sample * weight;
+                    value = std::clamp (value + contribution, std::min (value, contribution), std::max (value, contribution));
+                } else if (weight == 1.0f) {
+                    if (active) {
+                        state.mask |= bit;
+                        value = sample;
+                    } else {
+                        state.mask &= ~bit;
+                    }
+                } else {
+                    if (active) state.mask |= bit;
+                    value = std::clamp (glm::mix (value, sample, weight), 0.0f, 1.0f);
+                }
+            }
+        }
+    }
+    return result;
+}
+
 std::optional<glm::mat4> MdlAnimationEvaluator::attachmentTransform (
     const MdlAnimationData& animationData, const std::vector<glm::mat4>& worldBones, const std::string& name
 ) {

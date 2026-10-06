@@ -12,6 +12,7 @@
 #include <glm/gtc/type_ptr.hpp>
 
 #include "WallpaperEngine/Data/Model/MdlAnimation.h"
+#include "WallpaperEngine/Data/Model/MdlMorph.h"
 #include "WallpaperEngine/Logging/Log.h"
 
 using namespace WallpaperEngine;
@@ -318,6 +319,8 @@ void CModel::setup () {
     CRenderable::setup ();
 
     this->m_skinningEnabled = this->m_model.mesh.skinned && !this->m_model.animationData.bones.empty ();
+    this->m_morphingEnabled = !m_modelData && !m_model.animationData.bones.empty ()
+        && std::ranges::any_of (m_model.mesh.submeshes, [] (const auto& body) { return !body.morphTargets.empty (); });
 
     if (!this->m_model.animationData.bones.empty ()) {
 	this->updateAnimationPose ();
@@ -385,6 +388,10 @@ void CModel::setup () {
 		&& !cur->combos.contains ("DOUBLESIDEDLIGHTING")) {
 		runtimeCombos.emplace ("DOUBLESIDEDLIGHTING", 1);
 	    }
+            if (m_morphingEnabled && cur->shader == "generic4") {
+                // Position/normal morphs are already applied to the shared color/shadow VBO.
+                runtimeCombos.insert_or_assign ("MORPHING", 0);
+            }
 	    if (this->m_skinningEnabled) {
 		runtimeCombos.insert_or_assign ("SKINNING", 1);
 		runtimeCombos.insert_or_assign ("BONECOUNT", static_cast<int> (this->m_gpuSkinBones.size ()));
@@ -727,6 +734,14 @@ void CModel::updateAnimationPose () const {
 	    .frame = layer->timeline.frameAt (sceneTime) });
     }
 
+    if (m_morphingEnabled) {
+        auto morphs = MdlAnimationEvaluator::evaluateModelMorphs (activeAnimations);
+        if (!std::equal (morphs.begin (), morphs.end (), m_modelMorphs.begin (), m_modelMorphs.end (),
+            [] (const auto& next, const auto& previous) { return next.mask == previous.mask && next.weights == previous.weights; })) {
+            m_modelMorphs = std::move (morphs);
+            m_morphDirty = true;
+        }
+    }
     auto pose = MdlAnimationEvaluator::evaluate (animationData, activeAnimations);
     this->m_worldBones = std::move (pose.worldBones);
     this->m_skinBones = std::move (pose.skinBones);
@@ -735,6 +750,31 @@ void CModel::updateAnimationPose () const {
 	this->m_gpuSkinBones[bone] = glm::mat4x3 (this->m_skinBones[bone]);
     }
     this->m_poseTime = sceneTime;
+}
+
+void CModel::updateMorphBuffers () {
+    if (!m_morphDirty) return;
+    m_morphDirty = false;
+    m_morphActive = false;
+    GLint previous = 0;
+    glGetIntegerv (GL_ARRAY_BUFFER_BINDING, &previous);
+    for (size_t index = 0; index < m_submeshes.size (); ++index) {
+        auto& buffers = m_submeshes[index];
+        const auto& body = m_model.mesh.submeshes[index];
+        if (!std::ranges::all_of (m_model.materials[index]->passes,
+            [] (const auto& pass) { return pass->shader == "generic4"; })) continue;
+        const bool wasMorphed = !buffers.morphVertices.empty ();
+        const bool morphed = index < m_modelMorphs.size () && deformModelMorphVertices (
+            m_model.mesh, body, m_modelMorphs[index].weights, m_modelMorphs[index].mask, buffers.morphVertices
+        );
+        m_morphActive |= morphed;
+        if (!morphed && !wasMorphed) continue;
+        const auto& vertices = morphed ? buffers.morphVertices : body.vertices;
+        glBindBuffer (GL_ARRAY_BUFFER, buffers.vertexBuffer);
+        glBufferSubData (GL_ARRAY_BUFFER, 0, vertices.size () * sizeof (float), vertices.data ());
+        if (!morphed) buffers.morphVertices.clear ();
+    }
+    glBindBuffer (GL_ARRAY_BUFFER, static_cast<GLuint> (previous));
 }
 
 glm::mat4 CModel::resolveModelMatrix () const {
@@ -824,7 +864,10 @@ void CModel::prepareRender () {
 	&& this->isVisibleThroughParents ();
     if (!this->m_frameVisible) return;
     this->updateMatrices ();
+    this->updateMorphBuffers ();
     this->m_posedShadowBounds = this->m_shadowBounds.evaluate (this->m_gpuSkinBones);
+    // Rest-pose bounds cannot reject geometry displaced by an active morph.
+    if (m_morphActive) m_posedShadowBounds = {};
     if (m_modelData && m_modelData->mesh.hasBoundingBox) {
 	m_posedShadowBounds.minimum = m_modelData->mesh.boundingBoxMin;
 	m_posedShadowBounds.maximum = m_modelData->mesh.boundingBoxMax;

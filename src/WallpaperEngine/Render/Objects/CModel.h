@@ -88,12 +88,14 @@ private:
 	GLuint shadowVao = GL_NONE;
 	bool castsShadow = false;
 	bool shadowCulling = false;
+        std::vector<float> morphVertices;
     };
 
     void setupGeometryCallback (Effects::CPass* pass, size_t submeshIndex);
     void setupShadowProgram ();
     void renderPasses (std::optional<RenderSortClass> renderClass);
     void updateAnimationPose () const;
+    void updateMorphBuffers ();
     void syncAnimationLayers () const;
     [[nodiscard]] glm::mat4 resolveModelMatrix () const;
     void updateMatrices ();
@@ -114,6 +116,10 @@ private:
     mutable std::vector<glm::mat4x3> m_gpuSkinBones = {};
     mutable float m_poseTime = std::numeric_limits<float>::quiet_NaN ();
     bool m_skinningEnabled = false;
+    bool m_morphingEnabled = false;
+    bool m_morphActive = false;
+    mutable bool m_morphDirty = false;
+    mutable std::vector<Data::Model::MdlModelMorphState> m_modelMorphs;
 
     glm::mat4 m_modelMatrix = glm::mat4 (1.0f);
     glm::mat4 m_viewProjectionMatrix = glm::mat4 (1.0f);
