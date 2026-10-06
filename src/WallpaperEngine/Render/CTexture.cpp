@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstring>
 #include <ranges>
 #include <lz4.h>
 
@@ -154,6 +155,7 @@ CTexture::CTexture (
 		    sLog.exception ("Cannot decode texture image");
 		}
 	    } else {
+		if (dataptr == nullptr) sLog.exception ("Cannot decode raw texture mip");
 		// Texture payloads are tightly packed, with no per-row padding. GL defaults
 		// GL_UNPACK_ALIGNMENT to 4, so for any format whose row is not a multiple of four
 		// bytes the driver reads a padded row stride and runs off the end of the buffer.
@@ -542,15 +544,33 @@ std::shared_ptr<CTexture> CTexture::createStreaming (
     }
     const auto& mipmaps = header->images.at (0);
     const auto& required = mipmaps[std::min<size_t> (2, mipmaps.size () - 1)];
-    if (!required->decodedData) sLog.exception ("Cannot decode required texture mip");
+    const bool imageFormat = header->freeImageFormat != FIF_UNKNOWN;
+    if (imageFormat ? !required->decodedData : !required->uncompressedData)
+	sLog.exception ("Cannot decode required texture mip");
 
     auto temporary = std::make_unique<Texture> (*header);
+    const auto& first = mipmaps.front ();
+    if (!imageFormat && (header->format == TextureFormat_DXT1 || header->format == TextureFormat_DXT3
+	    || header->format == TextureFormat_DXT5)
+	&& size_t (first->uncompressedSize) == size_t (first->width) * first->height * 4
+	&& !isBlockCompressedPayload (header->format, first->width, first->height, first->uncompressedSize)) {
+	// Tiny raw RGBA mips can have the same byte count as one DXT block.
+	// Preserve the complete chain's format decision for its temporary level.
+	temporary->format = TextureFormat_ARGB8888;
+    }
     auto mipmap = std::make_shared<Mipmap> ();
     mipmap->width = required->width;
     mipmap->height = required->height;
     mipmap->decodedWidth = required->decodedWidth;
     mipmap->decodedHeight = required->decodedHeight;
-    mipmap->decodedData = std::move (required->decodedData);
+    if (imageFormat) {
+	mipmap->decodedData = std::move (required->decodedData);
+    } else {
+	// The complete raw chain still needs this level; copy only the small required mip.
+	mipmap->uncompressedSize = required->uncompressedSize;
+	mipmap->uncompressedData = std::make_unique<char[]> (required->uncompressedSize);
+	std::memcpy (mipmap->uncompressedData.get (), required->uncompressedData.get (), required->uncompressedSize);
+    }
     temporary->images[0] = { mipmap };
     auto texture = std::make_shared<CTexture> (context, std::move (temporary), textureReduction);
 
@@ -558,7 +578,8 @@ std::shared_ptr<CTexture> CTexture::createStreaming (
     auto metadata = std::make_unique<Texture> (*header);
     size_t bytes = 0;
     for (auto& entry : metadata->images.at (0)) {
-	bytes += entry->uncompressedSize + size_t (entry->width) * entry->height * 4;
+	bytes += size_t (entry->uncompressedSize) + (entry->compressedData ? entry->compressedSize : 0)
+	    + (imageFormat ? size_t (entry->width) * entry->height * 4 : 0);
 	auto dimensions = std::make_shared<Mipmap> ();
 	dimensions->width = entry->width;
 	dimensions->height = entry->height;
@@ -595,8 +616,9 @@ void CTexture::refreshMipStream () {
     auto header = std::move (this->m_mipStream->texture);
     const auto& mipmaps = header->images.at (0);
     const size_t first = this->m_reduceMipmaps && mipmaps.size () > 1 ? 1 : 0;
+    const bool imageFormat = header->freeImageFormat != FIF_UNKNOWN;
     const bool failed = std::ranges::any_of (mipmaps | std::views::drop (first),
-	[] (const auto& mipmap) { return !mipmap->decodedData; });
+	[imageFormat] (const auto& mipmap) { return imageFormat ? !mipmap->decodedData : !mipmap->uncompressedData; });
     if (failed) {
 	// Native 1400eef70 publishes a 6x6 yellow/black error texture on a failed result.
 	header = std::make_unique<Texture> ();

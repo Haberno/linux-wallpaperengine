@@ -20,21 +20,22 @@ class TextureParser {
 public:
     using VariantSelector = std::function<bool (const JSON&)>;
     static TextureUniquePtr parse (const BinaryReader& file);
-    static TextureUniquePtr parse (const BinaryReader& file, const VariantSelector& selector);
+    static TextureUniquePtr parse (const BinaryReader& file, const VariantSelector& selector, bool deferMipmaps = false);
     /** Compiled reference dimensions/flags without acquiring or decoding pixel payloads. */
     static TextureUniquePtr loadHeader (const WallpaperEngine::Assets::AssetLocator& locator, const std::string& filename);
-    static TextureUniquePtr load (const WallpaperEngine::Assets::AssetLocator& locator, const std::string& filename);
+    /** Prepared loads may retain static raw LZ4 until the required/optional decode batches. */
+    static TextureUniquePtr load (const WallpaperEngine::Assets::AssetLocator& locator, const std::string& filename, bool deferMipmaps = false);
     static TextureUniquePtr parseImage (const std::string& contents, const JSON& metadata);
     static TextureUniquePtr selectVariants (const Texture& texture, const VariantSelector& selector);
     static std::vector<uint32_t> selectedVariants (const Texture& texture, const VariantSelector& selector);
     static bool matchesCondition (const JSON& condition, const Properties& properties);
     static TextureUniquePtr parse (
 	const BinaryReader& file, const std::string& filename,
-	std::function<std::string (const std::string&)> metadataLoader
+	std::function<std::string (const std::string&)> metadataLoader, bool deferMipmaps = false
     );
-    static MipmapSharedPtr parseMipmap (const BinaryReader& file, const Texture& header);
+    static MipmapSharedPtr parseMipmap (const BinaryReader& file, const Texture& header, bool deferDecompression = false);
     /**
-     * Decodes image-format (FIF) mipmaps into raw RGBA pixels so the render
+     * Unpacks retained LZ4 and decodes image-format (FIF) mipmaps so the render
      * thread only has to upload them, meant to run off the render thread
      */
     static void decodeMipmaps (Texture& texture);
@@ -44,7 +45,7 @@ public:
      * the cores: a single texture holds 3.4 on average and its level 0 is most of the work
      */
     static void decodeMipmaps (const std::vector<Texture*>& textures, bool initialMipOnly = false);
-    /** Bounded startup streaming: compiled encoded static 2D images without variants. */
+    /** Bounded startup streaming: compiled static 2D images without variants. */
     static bool canStreamMipmaps (const Texture& texture);
     static FrameSharedPtr parseFrame (const BinaryReader& file);
     static FrameSharedPtr parseFrameV1 (const BinaryReader& file);

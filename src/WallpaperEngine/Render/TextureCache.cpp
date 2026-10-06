@@ -332,7 +332,7 @@ PreparedTextureFallbacks TextureCache::prepareFallbacks (
 	    continue;
 	}
 	try {
-	    auto parsed = TextureParser::load (locator, name);
+	    auto parsed = TextureParser::load (locator, name, true);
 	    // Conditional selection retains its existing property-owned resolver semantics.
 	    if (!parsed->variantSource) pending.emplace_back (name, std::move (parsed));
 	} catch (const std::runtime_error& error) {

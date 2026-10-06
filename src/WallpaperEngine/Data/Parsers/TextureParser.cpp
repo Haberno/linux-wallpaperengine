@@ -254,7 +254,21 @@ void checkPayloadSize (const BinaryReader& file, int stored, int unpacked) {
     }
 }
 
-void decodeMipmap (Mipmap& mipmap) {
+void decodeMipmap (Mipmap& mipmap, const bool imageFormat = true) {
+    if (mipmap.compressedData && !mipmap.uncompressedData) {
+	// Publish only complete output. Optional LZ4/allocation failure leaves this
+	// record incomplete for the render-thread error resource, never a null upload.
+	try {
+	    auto unpacked = std::make_unique<char[]> (mipmap.uncompressedSize);
+	    if (LZ4_decompress_safe (mipmap.compressedData.get (), unpacked.get (),
+		    mipmap.compressedSize, mipmap.uncompressedSize) != mipmap.uncompressedSize) return;
+	    mipmap.uncompressedData = std::move (unpacked);
+	    mipmap.compressedData.reset ();
+	} catch (const std::bad_alloc&) {
+	    return;
+	}
+    }
+    if (!imageFormat || !mipmap.uncompressedData || mipmap.decodedData) return;
     int width = 0, height = 0, fileChannels = 0;
     stbi_uc* pixels = stbi_load_from_memory (
 	reinterpret_cast<unsigned char*> (mipmap.uncompressedData.get ()), mipmap.uncompressedSize, &width, &height,
@@ -272,17 +286,17 @@ void decodeMipmap (Mipmap& mipmap) {
 }
 
 /** Every mipmap of the texture that still has to be decoded, appended to out */
-void collectDecodable (Texture& texture, std::vector<Mipmap*>& out) {
-    // videos are fed to the player as-is and non-FIF formats upload their raw data
-    // directly, so only image-format textures have anything to decode
-    if (texture.isVideoMp4 || texture.flags & TextureFlags_Video || texture.freeImageFormat == FIF_UNKNOWN) {
+void collectDecodable (Texture& texture, std::vector<std::pair<Mipmap*, bool>>& out) {
+    // Videos are fed to the player as-is. Raw textures may still own packed LZ4.
+    if (texture.isVideoMp4 || texture.flags & TextureFlags_Video) {
 	return;
     }
 
     for (auto& [index, mipmaps] : texture.images) {
 	for (const auto& mipmap : mipmaps) {
-	    if (mipmap->decodedData == nullptr && mipmap->uncompressedData != nullptr) {
-		out.emplace_back (mipmap.get ());
+	    const bool imageFormat = texture.freeImageFormat != FIF_UNKNOWN;
+	    if (mipmap->compressedData || (imageFormat && !mipmap->decodedData && mipmap->uncompressedData)) {
+		out.emplace_back (mipmap.get (), imageFormat);
 	    }
 	}
     }
@@ -290,28 +304,30 @@ void collectDecodable (Texture& texture, std::vector<Mipmap*>& out) {
 } // namespace
 
 void TextureParser::decodeMipmaps (Texture& texture) {
-    std::vector<Mipmap*> pending;
+    std::vector<std::pair<Mipmap*, bool>> pending;
     collectDecodable (texture, pending);
 
-    for (Mipmap* mipmap : pending) {
-	decodeMipmap (*mipmap);
+    for (const auto& [mipmap, imageFormat] : pending) {
+	decodeMipmap (*mipmap, imageFormat);
     }
 }
 
 bool TextureParser::canStreamMipmaps (const Texture& texture) {
-    return texture.containerVersion != ContainerVersion_UNKNOWN && texture.freeImageFormat != FIF_UNKNOWN
+    return texture.containerVersion != ContainerVersion_UNKNOWN
 	&& !texture.isVideoMp4 && !(texture.flags & TextureFlags_Video) && !texture.isAnimated ()
-	&& !texture.isVolume () && !texture.variantSource && texture.imageCount == 1
+	&& !texture.isVolume () && texture.variants.empty () && !texture.variantSource && texture.imageCount == 1
 	&& texture.images.contains (0) && texture.images.at (0).size () > 1;
 }
 
 void TextureParser::decodeMipmaps (const std::vector<Texture*>& textures, const bool initialMipOnly) {
-    std::vector<Mipmap*> pending;
+    std::vector<std::pair<Mipmap*, bool>> pending;
     for (Texture* texture : textures) {
 	if (initialMipOnly && canStreamMipmaps (*texture)) {
 	    const auto& mipmaps = texture->images.at (0);
 	    const auto& mipmap = mipmaps[std::min<size_t> (2, mipmaps.size () - 1)];
-	    if (!mipmap->decodedData && mipmap->uncompressedData) pending.push_back (mipmap.get ());
+	    const bool imageFormat = texture->freeImageFormat != FIF_UNKNOWN;
+	    if (mipmap->compressedData || (imageFormat && !mipmap->decodedData && mipmap->uncompressedData))
+		pending.emplace_back (mipmap.get (), imageFormat);
 	} else {
 	    collectDecodable (*texture, pending);
 	}
@@ -324,7 +340,7 @@ void TextureParser::decodeMipmaps (const std::vector<Texture*>& textures, const 
     std::atomic<size_t> next = 0;
     const auto worker = [&next, &pending] {
 	for (size_t index = next++; index < pending.size (); index = next++) {
-	    decodeMipmap (*pending[index]);
+	    decodeMipmap (*pending[index].first, pending[index].second);
 	}
     };
 
@@ -343,7 +359,7 @@ void TextureParser::decodeMipmaps (const std::vector<Texture*>& textures, const 
 
 TextureUniquePtr TextureParser::parse (const BinaryReader& file) { return parse (file, VariantSelector {}); }
 
-TextureUniquePtr TextureParser::parse (const BinaryReader& file, const VariantSelector& selector) {
+TextureUniquePtr TextureParser::parse (const BinaryReader& file, const VariantSelector& selector, const bool deferMipmaps) {
     // BinaryReader is also used by older parsers. Require complete reads here so a
     // truncated patch cannot turn an unchecked integer/string read into an allocation.
     auto& input = file.base ();
@@ -367,9 +383,12 @@ TextureUniquePtr TextureParser::parse (const BinaryReader& file, const VariantSe
 	    throw std::runtime_error ("Invalid texture mip count");
 	}
 	MipmapList mipmaps;
+	const bool deferRaw = deferMipmaps && result->freeImageFormat == FIF_UNKNOWN
+	    && !result->isVideoMp4 && !(result->flags & TextureFlags_Video) && !result->isAnimated ()
+	    && !result->isVolume () && result->variants.empty () && result->imageCount == 1 && mipmapCount > 1;
 
 	for (uint32_t mipmap = 0; mipmap < mipmapCount; mipmap++) {
-	    auto parsed = parseMipmap (file, *result);
+	    auto parsed = parseMipmap (file, *result, deferRaw);
 
 	    if (parsed == nullptr) {
 		truncated = true;
@@ -389,6 +408,8 @@ TextureUniquePtr TextureParser::parse (const BinaryReader& file, const VariantSe
 	result->images.emplace (image, mipmaps);
     }
 
+    // A rejected later mip can reduce a deferred chain to one ordinary resource.
+    if (deferMipmaps && truncated && !canStreamMipmaps (*result)) decodeMipmaps (*result);
     if (truncated || !result->isAnimated ()) {
 	return result;
     }
@@ -398,7 +419,7 @@ TextureUniquePtr TextureParser::parse (const BinaryReader& file, const VariantSe
     return result;
 }
 
-MipmapSharedPtr TextureParser::parseMipmap (const BinaryReader& file, const Texture& header) {
+MipmapSharedPtr TextureParser::parseMipmap (const BinaryReader& file, const Texture& header, const bool deferDecompression) {
     auto result = std::make_shared<Mipmap> ();
     const bool isVideo = (header.flags & TextureFlags_Video) != 0;
 
@@ -450,6 +471,11 @@ MipmapSharedPtr TextureParser::parseMipmap (const BinaryReader& file, const Text
     }
 
     checkPayloadSize (file, result->compressedSize, result->uncompressedSize);
+    if (deferDecompression && result->compression == 1) {
+	result->compressedData = std::make_unique<char[]> (result->compressedSize);
+	file.next (result->compressedData.get (), result->compressedSize);
+	return result;
+    }
     result->uncompressedData = std::unique_ptr<char[]> (new char[result->uncompressedSize]);
 
     if (result->compression == 1) {
@@ -805,10 +831,10 @@ FIF TextureParser::parseFIF (uint32_t value) {
 
 TextureUniquePtr TextureParser::parse (
     const BinaryReader& file, const std::string& filename,
-    std::function<std::string (const std::string&)> metadataLoader
+    std::function<std::string (const std::string&)> metadataLoader, const bool deferMipmaps
 ) {
     // Parse the binary .tex file first
-    auto result = parse (file);
+    auto result = parse (file, VariantSelector {}, deferMipmaps);
 
     // Try to load optional .tex-json metadata for spritesheet data
     if (metadataLoader) {
@@ -1142,7 +1168,7 @@ TextureUniquePtr TextureParser::loadHeader (const WallpaperEngine::Assets::Asset
 }
 
 TextureUniquePtr
-TextureParser::load (const WallpaperEngine::Assets::AssetLocator& locator, const std::string& filename) {
+TextureParser::load (const WallpaperEngine::Assets::AssetLocator& locator, const std::string& filename, const bool deferMipmaps) {
     const auto metadataLoader = [&locator] (const std::string& name) {
 	return locator.readString (std::filesystem::path ("materials") / name);
     };
@@ -1160,7 +1186,7 @@ TextureParser::load (const WallpaperEngine::Assets::AssetLocator& locator, const
 	parseSpritesheetMetadata (*result, filename, [&metadata] (const std::string&) { return metadata.dump (); });
 	return result;
     }
-    auto result = parse (BinaryReader (compiled), filename, metadataLoader);
+    auto result = parse (BinaryReader (compiled), filename, metadataLoader, deferMipmaps);
     if (!result->variants.empty ()) {
 	compiled->seekg (0, std::ios::beg);
 	result->variantSource = std::make_shared<const std::string> (

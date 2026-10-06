@@ -907,7 +907,7 @@ parseProjectTextures (const Project& project, const bool initialMipOnly = false)
     for (const auto& name : collectProjectTextures (project)) {
 	try {
 	    textures.emplace_back (
-		name, WallpaperEngine::Data::Parsers::TextureParser::load (*project.assetLocator, name)
+		name, WallpaperEngine::Data::Parsers::TextureParser::load (*project.assetLocator, name, initialMipOnly)
 	    );
 	} catch (const std::exception&) {
 	    // ignored, the render thread falls back to loading it synchronously
