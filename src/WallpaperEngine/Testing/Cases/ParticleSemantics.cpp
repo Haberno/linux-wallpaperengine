@@ -3225,3 +3225,153 @@ TEST_CASE ("size input remains independent of tiny initializer position output",
     CHECK (particle.size == .75f);
     CHECK (particle.initial.size == .25f);
 }
+
+TEST_CASE ("opacity remaps read birth or working opacity before moving between control points", "[particle][remap][remap-opacity-position]") {
+    using WallpaperEngine::Render::Objects::applyParticleControlPointRemap;
+    using WallpaperEngine::Render::Objects::ControlPointData;
+    const struct { const char* operation; glm::vec3 initial, full, half; } cases[] = {
+        { nullptr, { -4, 21, 5 }, { 6, 41, -5 }, { 4, 37, -3 } },
+        { "remap", { 2, 33, -1 }, { 42, 113, -41 }, { 22, 73, -21 } },
+        { "multiply", { -4, 21, 5 }, { 6, 41, -5 }, { 4, 37, -3 } },
+        { "add", { 10, 49, -9 }, { 50, 129, -49 }, { 26, 81, -25 } },
+        { "subtract", { -6, 17, 7 }, { -46, -63, 47 }, { -22, -15, 23 } }
+    };
+    std::vector<ControlPointData> points (4);
+    points[0].position = { 1000, 0, 0 };
+    points[1].position = { 1100, 0, 0 };
+    points[2].position = { -12, 20, 7 };
+    points[3].position = { 20, 84, -25 };
+    for (const bool initializer : { true, false }) {
+        DYNAMIC_SECTION ("initializer=" << initializer) {
+            for (const auto& sample : cases) {
+                for (const float age : { 0.0f, 1.0f, 2.0f }) {
+                    INFO ("operation=" << (sample.operation ? sample.operation : "default") << ", age=" << age);
+                    WallpaperEngine::Data::Model::Project project {};
+                    auto data = WallpaperEngine::Data::JSON::JSON::parse (R"({"id":425,"particle":{}})");
+                    auto node = WallpaperEngine::Data::JSON::JSON::parse (R"({
+                        "input":"opacity","output":"positionbetweentwocontrolpoints","outputrangemax":2,
+                        "inputcontrolpoint0":0,"inputcontrolpoint1":1,"outputcontrolpoint0":2,"outputcontrolpoint1":3,
+                        "blendinstart":0,"blendinend":0.5
+                    })");
+                    node["name"] = initializer ? "remapinitialvalue" : "remapvalue";
+                    if (sample.operation) node["operation"] = sample.operation;
+                    data["particle"][initializer ? "initializer" : "operator"] = { node };
+                    const auto object = WallpaperEngine::Data::Parsers::ObjectParser::parse (data, project);
+                    const auto* definition = object->as<Particle> ();
+                    REQUIRE (definition != nullptr);
+                    REQUIRE ((initializer ? definition->initializers.size () : definition->operators.size ()) == 1);
+                    const auto& remap = initializer
+                        ? definition->initializers.front ()->as<ControlPointRemapInitializer> ()->remap
+                        : definition->operators.front ()->as<ControlPointRemapOperator> ()->remap;
+                    ParticleInstance particle;
+                    particle.position = { 2, 33, -1 };
+                    particle.velocity = { 7, -11, 13 };
+                    particle.alpha = .75f;
+                    particle.initial.alpha = .125f;
+                    particle.size = .5f;
+                    particle.lifetime = 4;
+                    particle.age = age;
+                    applyParticleControlPointRemap (particle, remap, points, initializer);
+                    CHECK (particle.position == (initializer ? sample.initial : age == 2 ? sample.full : age == 1 ? sample.half : glm::vec3 (2, 33, -1)));
+                    CHECK (particle.alpha == .75f);
+                    CHECK (particle.initial.alpha == .125f);
+                    CHECK (particle.velocity == glm::vec3 (7, -11, 13));
+                    CHECK (particle.size == .5f);
+                    CHECK (particle.lifetime == 4);
+                    CHECK (particle.age == age);
+                }
+            }
+        }
+    }
+}
+
+TEST_CASE ("opacity inputs retain signed values until the authored remap clamps", "[particle][remap][remap-opacity-position]") {
+    using WallpaperEngine::Render::Objects::applyParticleControlPointRemap;
+    using WallpaperEngine::Render::Objects::ControlPointData;
+    const struct { uint32_t flags; float initialX, operatorX; } cases[] = {
+        { 0, 3584, -1024 }, { 1, 1536, -512 }, { 2, 64, 0 }, { 3, 64, 0 }
+    };
+    std::vector<ControlPointData> points (2);
+    points[1].position = { 64, 0, 0 };
+    for (const bool initializer : { true, false }) {
+        DYNAMIC_SECTION ("initializer=" << initializer) {
+            for (const auto& sample : cases) {
+                INFO ("flags=" << sample.flags);
+                WallpaperEngine::Data::Model::Project project {};
+                auto data = WallpaperEngine::Data::JSON::JSON::parse (R"({"id":426,"particle":{}})");
+                auto node = WallpaperEngine::Data::JSON::JSON::parse (R"({
+                    "input":"opacity","output":"positionbetweentwocontrolpoints","operation":"remap",
+                    "outputrangemin":"-8 100 200","outputrangemax":"24 120 240"
+                })");
+                node["name"] = initializer ? "remapinitialvalue" : "remapvalue";
+                node["flags"] = sample.flags;
+                data["particle"][initializer ? "initializer" : "operator"] = { node };
+                const auto object = WallpaperEngine::Data::Parsers::ObjectParser::parse (data, project);
+                const auto* definition = object->as<Particle> ();
+                REQUIRE (definition != nullptr);
+                REQUIRE ((initializer ? definition->initializers.size () : definition->operators.size ()) == 1);
+                const auto& remap = initializer
+                    ? definition->initializers.front ()->as<ControlPointRemapInitializer> ()->remap
+                    : definition->operators.front ()->as<ControlPointRemapOperator> ()->remap;
+                ParticleInstance particle;
+                particle.position = { 32, 12, -8 };
+                particle.alpha = -.25f;
+                particle.initial.alpha = 2;
+                applyParticleControlPointRemap (particle, remap, points, initializer);
+                CHECK (particle.position == glm::vec3 (initializer ? sample.initialX : sample.operatorX, 12, -8));
+                CHECK (particle.alpha == -.25f);
+                CHECK (particle.initial.alpha == 2);
+            }
+        }
+    }
+}
+
+TEST_CASE ("opacity input remains independent of tiny initializer position output", "[particle][remap][remap-opacity-position]") {
+    using WallpaperEngine::Render::Objects::applyParticleControlPointRemap;
+    using WallpaperEngine::Render::Objects::ControlPointData;
+    WallpaperEngine::Data::Model::Project project {};
+    const auto object = WallpaperEngine::Data::Parsers::ObjectParser::parse (
+        WallpaperEngine::Data::JSON::JSON::parse (R"({"id":427,"particle":{"initializer":[{
+            "name":"remapinitialvalue","input":"opacity","output":"positionbetweentwocontrolpoints",
+            "operation":"remap","outputrangemax":2.81474976710656e14
+        }]}})"), project);
+    const auto* definition = object->as<Particle> ();
+    REQUIRE (definition != nullptr);
+    REQUIRE (definition->initializers.size () == 1);
+    const auto& remap = definition->initializers.front ()->as<ControlPointRemapInitializer> ()->remap;
+    REQUIRE (remap.outputRangeMax->value->getFloat () == 0x1p48f);
+    std::vector<ControlPointData> points (2);
+    points[1].position = { std::numeric_limits<float>::epsilon (), 0, 0 };
+    ParticleInstance particle;
+    particle.position = { .25f, .5f, -.75f };
+    particle.alpha = .75f;
+    particle.initial.alpha = .25f;
+    applyParticleControlPointRemap (particle, remap, points, true);
+    CHECK (particle.position == glm::vec3 (1.25f, .5f, -.75f));
+    CHECK (particle.alpha == .75f);
+    CHECK (particle.initial.alpha == .25f);
+}
+
+TEST_CASE ("opacity position input observes a prior working-alpha operator", "[particle][remap][remap-opacity-position]") {
+    using WallpaperEngine::Render::Objects::applyParticleControlPointRemap;
+    using WallpaperEngine::Render::Objects::ControlPointData;
+    WallpaperEngine::Data::Model::Project project {};
+    const auto object = WallpaperEngine::Data::Parsers::ObjectParser::parse (
+        WallpaperEngine::Data::JSON::JSON::parse (R"({"id":428,"particle":{"operator":[
+            {"name":"remapvalue","input":"positionbetweentwocontrolpoints","output":"opacity"},
+            {"name":"remapvalue","input":"opacity","output":"positionbetweentwocontrolpoints","operation":"remap"}
+        ]}})"), project);
+    const auto* definition = object->as<Particle> ();
+    REQUIRE (definition != nullptr);
+    REQUIRE (definition->operators.size () == 2);
+    std::vector<ControlPointData> points (2);
+    points[1].position = { 64, 0, 0 };
+    ParticleInstance particle;
+    particle.position = { 32, 12, -8 };
+    particle.alpha = particle.initial.alpha = .75f;
+    for (const auto& op : definition->operators)
+        applyParticleControlPointRemap (particle, op->as<ControlPointRemapOperator> ()->remap, points, false);
+    CHECK (particle.position == glm::vec3 (24, 12, -8));
+    CHECK (particle.alpha == .375f);
+    CHECK (particle.initial.alpha == .75f);
+}

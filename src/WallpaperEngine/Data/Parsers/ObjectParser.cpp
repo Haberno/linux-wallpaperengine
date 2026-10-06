@@ -1027,7 +1027,8 @@ static std::optional<ControlPointRemap> parseControlPointRemap (
         && (output == "velocity" || output == "positionbetweentwocontrolpoints" || output == "size" || output == "speed" || output == "opacity" || output == "maxlifetime");
     const bool fractionInput = !initializer && input == "lifetimefraction";
     const bool sizeInput = input == "size" && output == "positionbetweentwocontrolpoints";
-    const bool positionOutput = (input == "maxlifetime" || fractionInput || positionInput || sizeInput)
+    const bool opacityInput = input == "opacity" && output == "positionbetweentwocontrolpoints";
+    const bool positionOutput = (input == "maxlifetime" || fractionInput || positionInput || sizeInput || opacityInput)
         && output == "positionbetweentwocontrolpoints";
     const bool sizeOutput = positionInput && output == "size";
     const bool speedOutput = positionInput && output == "speed";
@@ -1066,6 +1067,7 @@ static std::optional<ControlPointRemap> parseControlPointRemap (
                               : lifetimeOutput ? ControlPointRemap::Mode::PositionToLifetime
                               : sizeOutput ? ControlPointRemap::Mode::PositionToSize
                               : sizeInput ? ControlPointRemap::Mode::SizeToPosition
+                              : opacityInput ? ControlPointRemap::Mode::OpacityToPosition
                               : positionInput && positionOutput ? ControlPointRemap::Mode::PositionToPosition
                               : positionInput ? ControlPointRemap::Mode::PositionToVelocity
                               : fractionInput ? ControlPointRemap::Mode::LifetimeFractionToPosition
