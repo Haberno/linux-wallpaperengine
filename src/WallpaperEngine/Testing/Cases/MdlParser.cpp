@@ -90,8 +90,8 @@ std::vector<char> makeModel (
 
 /**
  * Puppet models pair a skinned body with a channelmap overlay: a second submesh using a
- * different vertex tag, an extra header field and a padding run that is not all zeros.
- * Mirrors Kirby_puppet.mdl, whose padding carries stray control bytes.
+ * different vertex tag and an extra header field. Each revision-23 submesh ends
+ * with the native empty auxiliary/range/clipping tail.
  */
 std::vector<char> makeTwoLayoutModel () {
     std::vector<char> data;
@@ -110,13 +110,6 @@ std::vector<char> makeTwoLayoutModel () {
 
     bool first = true;
     for (const auto& [path, tag] : submeshes) {
-	if (!first) {
-	    // the padding between submeshes, control bytes and all
-	    for (const uint8_t byte : { 0x00, 0x01, 0x10, 0x00, 0x20, 0x07, 0x00, 0x00, 0x00 }) {
-		data.push_back (static_cast<char> (byte));
-	    }
-	}
-
 	data.insert (data.end (), path.begin (), path.end ());
 	data.push_back ('\0');
 
@@ -141,12 +134,11 @@ std::vector<char> makeTwoLayoutModel () {
 	    appendValue (data, index);
 	}
 
+	appendValue<uint8_t> (data, 0);
+	appendValue<uint8_t> (data, 0);
+	appendValue<uint32_t> (data, 0);
 	first = false;
     }
-
-    appendValue<uint8_t> (data, 0);
-    appendValue<uint8_t> (data, 0);
-    appendValue<uint32_t> (data, 0);
 
     return data;
 }
@@ -704,5 +696,90 @@ TEST_CASE ("Rayman MDMP preserves its dormant authored targets", "[.][mdl][morph
 	    CHECK (std::all_of (target.normalDeltas.begin (), target.normalDeltas.end (),
 		[] (int16_t value) { return value == 0; }));
 	}
+    }
+}
+
+TEST_CASE ("MDLV optional tails belong to each submesh", "[mdl][submesh-tails]") {
+    for (const uint32_t version : { 20u, 21u, 23u }) {
+	INFO ("MDLV version " << version);
+	auto data = makeModel (0, 15, 48, {}, version, 1, false);
+	const uint32_t two = 2;
+	std::memcpy (data.data () + 17, &two, sizeof (two));
+	const auto appendTail = [&] (uint32_t part, uint32_t secondFirst) {
+	    if (version < 21) return;
+	    appendValue<uint8_t> (data, 1);
+	    appendValue<uint32_t> (data, part + 1);
+	    appendValue<uint32_t> (data, 12);
+	    for (float value : { float (part + 1), 2.0f, 3.0f }) appendValue (data, value);
+	    appendValue<uint8_t> (data, 1);
+	    appendValue<uint32_t> (data, 32);
+	    for (uint32_t range = 0; range < 2; ++range) {
+		appendValue<uint32_t> (data, 20 + part * 10 + range);
+		appendValue<int32_t> (data, -50 - static_cast<int32_t> (part));
+		appendValue<uint32_t> (data, range == 0 ? 0 : secondFirst);
+		appendValue<uint32_t> (data, 3);
+	    }
+	    if (version < 23) return;
+	    appendValue<uint32_t> (data, 1);
+	    appendValue<uint64_t> (data, 100 + part);
+	    const std::string asset = "masks/submesh" + std::to_string (part);
+	    data.insert (data.end (), asset.begin (), asset.end ());
+	    data.push_back ('\0');
+	    appendValue<uint32_t> (data, 0);
+	    appendValue<uint32_t> (data, 1);
+	    appendValue<uint32_t> (data, 1);
+	    appendValue<uint32_t> (data, 1);
+	    appendValue<uint32_t> (data, 0);
+	};
+	appendTail (0, 0);
+	auto second = makeModel (0, 15, 48, {}, version, 1, false);
+	const uint32_t bytes = 12;
+	std::memcpy (second.data () + second.size () - 10, &bytes, sizeof (bytes));
+	for (uint16_t index : { 0, 1, 2 }) appendValue (second, index);
+	data.insert (data.end (), second.begin () + 21, second.end ());
+	appendTail (1, 3);
+	const auto mesh = MdlParser::parse (data, "per-submesh-tail.mdl");
+	REQUIRE (mesh.submeshes.size () == 2);
+	CHECK (mesh.submeshes[0].indices.size () == 3);
+	CHECK (mesh.submeshes[1].indices.size () == 6);
+	if (version < 21) {
+	    CHECK (mesh.auxiliaryPositions.empty ());
+	    CHECK (mesh.submeshes[1].drawRanges.empty ());
+	    continue;
+	}
+	CHECK (mesh.auxiliaryHeader == 1);
+	REQUIRE (mesh.auxiliaryPositions.size () == 1);
+	CHECK (mesh.auxiliaryPositions[0].x == 1);
+	REQUIRE (mesh.drawRanges.size () == 2);
+	CHECK (mesh.drawRanges[0].partId == 20);
+	for (uint32_t part = 0; part < 2; ++part) {
+	    const auto& submesh = mesh.submeshes[part];
+	    CHECK (submesh.auxiliaryHeader == part + 1);
+	    REQUIRE (submesh.auxiliaryPositions.size () == 1);
+	    CHECK (submesh.auxiliaryPositions[0].x == part + 1);
+	    REQUIRE (submesh.drawRanges.size () == 2);
+	    CHECK (submesh.drawRanges[1].submeshIndex == part);
+	    CHECK (submesh.drawRanges[1].partId == 21 + part * 10);
+	    CHECK (submesh.drawRanges[1].depthOffset == -50 - static_cast<int32_t> (part));
+	    CHECK (submesh.drawRanges[1].firstIndex == (part == 0 ? 0 : 3));
+	    REQUIRE (submesh.clippingDescriptors.size () == (version == 23 ? 1 : 0));
+	    if (version == 23) {
+		CHECK (submesh.clippingDescriptors[0].opaqueId == 100 + part);
+		CHECK (submesh.clippingDescriptors[0].targets == std::vector<uint32_t> { 1 });
+		CHECK (submesh.clippingDescriptors[0].sources == std::vector<uint32_t> { 0 });
+	    }
+	}
+	REQUIRE (mesh.clippingDescriptors.size () == (version == 23 ? 1 : 0));
+	if (version == 23) {
+	    CHECK (mesh.clippingDescriptors[0].opaqueId == 100);
+	    auto invalidReference = data;
+	    const uint32_t outsideLocalRanges = 2;
+	    std::memcpy (invalidReference.data () + invalidReference.size () - 12,
+		&outsideLocalRanges, sizeof (outsideLocalRanges));
+	    CHECK_THROWS (MdlParser::parse (invalidReference, "nonlocal-range-reference.mdl"));
+	}
+	// Reject a truncated required field in the second submesh's tail.
+	data.pop_back ();
+	CHECK_THROWS (MdlParser::parse (data, "truncated-second-tail.mdl"));
     }
 }

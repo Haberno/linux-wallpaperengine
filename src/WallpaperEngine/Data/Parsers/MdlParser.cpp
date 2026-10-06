@@ -266,9 +266,7 @@ MdlMesh MdlParser::parse (const std::vector<char>& data, const std::string& file
 	// a submesh lists materialCount paths back to back; the first one draws it and the
 	// rest are auxiliary (channelmaps and the like), but all of them have to be stepped over
 	for (uint32_t material = 0; material < materialCount; material++) {
-	    // submeshes are separated by a short run of padding, usually 6 zero bytes; Kirby_puppet
-	    // leaves other control bytes in it, and no material path starts below '!', so skip the
-	    // whole low range instead. A real desync still trips the stride and index checks below
+	    // Retain the existing control-byte padding tolerance for material paths.
 	    while (offset < data.size () && static_cast<unsigned char> (data[offset]) <= ' ') {
 		offset++;
 	    }
@@ -385,88 +383,95 @@ MdlMesh MdlParser::parse (const std::vector<char>& data, const std::string& file
 	    }
 	}
 
+	// Native 140261880 reads revision-21/23 tails inside the submesh loop.
+	if (version >= 21) {
+	    const bool hasAuxiliaryPositions = readValue<uint8_t> (data, offset, filename) != 0;
+	    if (hasAuxiliaryPositions) {
+		submesh.auxiliaryHeader = readValue<uint32_t> (data, offset, filename);
+		const auto byteCount = readValue<uint32_t> (data, offset, filename);
+		constexpr uint32_t vec3Bytes = sizeof (float) * 3;
+
+		if (byteCount % vec3Bytes != 0 || byteCount > data.size () - offset) {
+		    sLog.exception ("Invalid MDLV auxiliary position block in ", filename);
+		}
+
+		submesh.auxiliaryPositions.reserve (byteCount / vec3Bytes);
+		const size_t end = offset + byteCount;
+		while (offset < end) {
+		    glm::vec3 position;
+		    position.x = readValue<float> (data, offset, filename);
+		    position.y = readValue<float> (data, offset, filename);
+		    position.z = readValue<float> (data, offset, filename);
+		    if (!std::isfinite (position.x) || !std::isfinite (position.y) || !std::isfinite (position.z)) {
+			sLog.exception ("MDLV auxiliary position contains a non-finite value in ", filename);
+		    }
+		    submesh.auxiliaryPositions.push_back (position);
+		}
+	    }
+
+	    const bool hasDrawRanges = readValue<uint8_t> (data, offset, filename) != 0;
+	    if (hasDrawRanges) {
+		const auto byteCount = readValue<uint32_t> (data, offset, filename);
+		constexpr uint32_t recordBytes = sizeof (uint32_t) * 4;
+
+		if (byteCount % recordBytes != 0 || byteCount > data.size () - offset) {
+		    sLog.exception ("Invalid MDLV draw range block in ", filename);
+		}
+
+		submesh.drawRanges.reserve (byteCount / recordBytes);
+		const size_t end = offset + byteCount;
+		while (offset < end) {
+		    MdlDrawRange range {
+			.partId = readValue<uint32_t> (data, offset, filename),
+			.submeshIndex = submeshIndex,
+			.depthOffset = readValue<int32_t> (data, offset, filename),
+			.firstIndex = readValue<uint32_t> (data, offset, filename),
+			.indexCount = readValue<uint32_t> (data, offset, filename),
+		    };
+
+		    const size_t submeshIndexCount = submesh.indices.size ();
+		    if (range.firstIndex > submeshIndexCount || range.indexCount > submeshIndexCount - range.firstIndex) {
+			sLog.exception ("MDLV draw range exceeds its submesh index buffer in ", filename);
+		    }
+
+		    submesh.drawRanges.push_back (range);
+		}
+	    }
+	}
+
+	if (version >= 23) {
+	    const auto descriptorCount = readValue<uint32_t> (data, offset, filename);
+	    // Every descriptor needs at least its id, an empty string terminator, flags,
+	    // and two zero list counts. This also bounds reserve() on malformed input.
+	    constexpr size_t minimumDescriptorBytes
+		= sizeof (uint64_t) + sizeof (char) + sizeof (uint32_t) * 3;
+	    if (descriptorCount > (data.size () - offset) / minimumDescriptorBytes) {
+		sLog.exception ("Invalid MDLV clipping descriptor count in ", filename);
+	    }
+
+	    submesh.clippingDescriptors.reserve (descriptorCount);
+	    for (uint32_t descriptorIndex = 0; descriptorIndex < descriptorCount; descriptorIndex++) {
+		MdlClippingDescriptor descriptor;
+		descriptor.opaqueId = readValue<uint64_t> (data, offset, filename);
+		descriptor.maskAsset = readString (data, offset, filename);
+		descriptor.flags = readValue<uint32_t> (data, offset, filename);
+		descriptor.targets
+		    = readRangeReferences (data, offset, filename, submesh.drawRanges.size (), "target");
+		descriptor.sources
+		    = readRangeReferences (data, offset, filename, submesh.drawRanges.size (), "source");
+		submesh.clippingDescriptors.push_back (std::move (descriptor));
+	    }
+	}
+
 	mesh.submeshes.push_back (std::move (submesh));
     }
 
-    // Revisions 21 and newer append two independently optional blocks after the
-    // final submesh and before the MDLS animation section.
-    if (version >= 21) {
-	const bool hasAuxiliaryPositions = readValue<uint8_t> (data, offset, filename) != 0;
-	if (hasAuxiliaryPositions) {
-	    mesh.auxiliaryHeader = readValue<uint32_t> (data, offset, filename);
-	    const auto byteCount = readValue<uint32_t> (data, offset, filename);
-	    constexpr uint32_t vec3Bytes = sizeof (float) * 3;
-
-	    if (byteCount % vec3Bytes != 0 || byteCount > data.size () - offset) {
-		sLog.exception ("Invalid MDLV auxiliary position block in ", filename);
-	    }
-
-	    mesh.auxiliaryPositions.reserve (byteCount / vec3Bytes);
-	    const size_t end = offset + byteCount;
-	    while (offset < end) {
-		glm::vec3 position;
-		position.x = readValue<float> (data, offset, filename);
-		position.y = readValue<float> (data, offset, filename);
-		position.z = readValue<float> (data, offset, filename);
-		if (!std::isfinite (position.x) || !std::isfinite (position.y) || !std::isfinite (position.z)) {
-		    sLog.exception ("MDLV auxiliary position contains a non-finite value in ", filename);
-		}
-		mesh.auxiliaryPositions.push_back (position);
-	    }
-	}
-
-	const bool hasDrawRanges = readValue<uint8_t> (data, offset, filename) != 0;
-	if (hasDrawRanges) {
-	    const auto byteCount = readValue<uint32_t> (data, offset, filename);
-	    constexpr uint32_t recordBytes = sizeof (uint32_t) * 4;
-
-	    if (byteCount % recordBytes != 0 || byteCount > data.size () - offset) {
-		sLog.exception ("Invalid MDLV draw range block in ", filename);
-	    }
-
-	    mesh.drawRanges.reserve (byteCount / recordBytes);
-	    const size_t end = offset + byteCount;
-	    while (offset < end) {
-		MdlDrawRange range {
-		    .partId = readValue<uint32_t> (data, offset, filename),
-		    .depthOffset = readValue<int32_t> (data, offset, filename),
-		    .firstIndex = readValue<uint32_t> (data, offset, filename),
-		    .indexCount = readValue<uint32_t> (data, offset, filename),
-		};
-
-		const size_t submeshIndexCount = mesh.submeshes.front ().indices.size ();
-		if (range.firstIndex > submeshIndexCount || range.indexCount > submeshIndexCount - range.firstIndex) {
-		    sLog.exception ("MDLV draw range exceeds its submesh index buffer in ", filename);
-		}
-
-		mesh.drawRanges.push_back (range);
-	    }
-	}
-    }
-
-    if (version >= 23) {
-	const auto descriptorCount = readValue<uint32_t> (data, offset, filename);
-	// Every descriptor needs at least its id, an empty string terminator, flags,
-	// and two zero list counts. This also bounds reserve() on malformed input.
-	constexpr size_t minimumDescriptorBytes
-	    = sizeof (uint64_t) + sizeof (char) + sizeof (uint32_t) * 3;
-	if (descriptorCount > (data.size () - offset) / minimumDescriptorBytes) {
-	    sLog.exception ("Invalid MDLV clipping descriptor count in ", filename);
-	}
-
-	mesh.clippingDescriptors.reserve (descriptorCount);
-	for (uint32_t descriptorIndex = 0; descriptorIndex < descriptorCount; descriptorIndex++) {
-	    MdlClippingDescriptor descriptor;
-	    descriptor.opaqueId = readValue<uint64_t> (data, offset, filename);
-	    descriptor.maskAsset = readString (data, offset, filename);
-	    descriptor.flags = readValue<uint32_t> (data, offset, filename);
-	    descriptor.targets
-		= readRangeReferences (data, offset, filename, mesh.drawRanges.size (), "target");
-	    descriptor.sources
-		= readRangeReferences (data, offset, filename, mesh.drawRanges.size (), "source");
-	    mesh.clippingDescriptors.push_back (std::move (descriptor));
-	}
-    }
+    // Existing puppet consumers operate on the first body submesh only.
+    const auto& body = mesh.submeshes.front ();
+    mesh.auxiliaryHeader = body.auxiliaryHeader;
+    mesh.auxiliaryPositions = body.auxiliaryPositions;
+    mesh.drawRanges = body.drawRanges;
+    mesh.clippingDescriptors = body.clippingDescriptors;
 
     readMorphTargets (data, offset, filename, mesh);
     return mesh;
