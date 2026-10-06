@@ -20,6 +20,13 @@ using namespace WallpaperEngine::Render::Objects;
 using WallpaperEngine::Render::RenderSortClass;
 
 namespace {
+bool supportsModelMorphShader (const std::string& shader) {
+    // Stock generic3/4 and model_vertex_v1 consumers apply the same local
+    // position/normal deltas before skinning and any shader-specific motion.
+    return shader == "generic3" || shader == "generic4" || shader == "chroma4"
+        || shader == "foliage4" || shader == "fur4";
+}
+
 RenderSortClass passRenderClass (const BlendingMode mode) {
     switch (mode) {
 	case BlendingMode_Translucent:
@@ -409,7 +416,7 @@ void CModel::setup () {
 		&& !cur->combos.contains ("DOUBLESIDEDLIGHTING")) {
 		runtimeCombos.emplace ("DOUBLESIDEDLIGHTING", 1);
 	    }
-            if (m_morphingEnabled && cur->shader == "generic4") {
+            if (m_morphingEnabled && supportsModelMorphShader (cur->shader)) {
                 // Position/normal morphs are already applied to the shared color/shadow VBO.
                 runtimeCombos.insert_or_assign ("MORPHING", 0);
             }
@@ -783,7 +790,7 @@ void CModel::updateMorphBuffers () {
         auto& buffers = m_submeshes[index];
         const auto& body = m_model.mesh.submeshes[index];
         if (!std::ranges::all_of (m_model.materials[index]->passes,
-            [] (const auto& pass) { return pass->shader == "generic4"; })) continue;
+            [] (const auto& pass) { return supportsModelMorphShader (pass->shader); })) continue;
         const bool wasMorphed = !buffers.morphVertices.empty ();
         const bool morphed = index < m_modelMorphs.size () && deformModelMorphVertices (
             m_model.mesh, body, m_modelMorphs[index].weights, m_modelMorphs[index].mask, buffers.morphVertices
