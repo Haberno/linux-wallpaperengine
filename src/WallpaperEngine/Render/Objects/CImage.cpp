@@ -2921,8 +2921,6 @@ std::optional<glm::mat3> CImage::transformAttachmentToTexture (
 ) const {
     const auto& camera = this->getScene ().getCamera ();
     const Object& object = source.getObject ();
-    // Fullscreen composition retains a separate contract.
-    if (this->m_image.model->fullscreen) return std::nullopt;
     const bool virtualReceiver = this->m_image.perspective->value->getBool ();
     bool virtualSource = false;
     if (object.is<Image> ()) {
@@ -2934,6 +2932,10 @@ std::optional<glm::mat3> CImage::transformAttachmentToTexture (
     } else {
         return std::nullopt;
     }
+    // Native fullscreen receivers project through their authored transform,
+    // using their logical texture dimensions rather than the fullscreen draw extent.
+    const glm::vec2 size = this->m_image.model->fullscreen
+        ? glm::vec2 (this->m_texture->getRealWidth (), this->m_texture->getRealHeight ()) : this->getSize ();
     if (!camera.isOrthogonal ()) {
         const glm::mat4 viewProjection = camera.getProjection () * camera.getLookAt ();
         const glm::vec3 receiverEye = virtualReceiver
@@ -2941,7 +2943,7 @@ std::optional<glm::mat3> CImage::transformAttachmentToTexture (
         // Native depth .5 / 1 maps to conventional GL clip depth 0 / 1.
         return calculateOrthographicAttachmentTextureMatrix (
             attachmentWorld, this->resolveWorldMatrix (), viewProjection, viewProjection,
-            camera.getEye ().z, this->getSize (), receiverEye, virtualReceiver ? 1.0f : 0.0f);
+            camera.getEye ().z, size, receiverEye, virtualReceiver ? 1.0f : 0.0f);
     }
     const glm::mat4 sceneToRender = glm::translate (glm::mat4 (1),
         glm::vec3 (-camera.getWidth () * .5f, camera.getHeight () * .5f, 0))
@@ -2971,7 +2973,7 @@ std::optional<glm::mat3> CImage::transformAttachmentToTexture (
         attachmentWorld, this->resolveWorldMatrix (),
         glm::translate (virtualSource ? virtualViewProjection : viewProjection, glm::vec3 (sourceOffset, 0)),
         glm::translate (virtualReceiver ? virtualViewProjection : viewProjection, glm::vec3 (receiverOffset, 0)),
-        camera.getEye ().z, this->getSize (), receiverEye);
+        camera.getEye ().z, size, receiverEye);
 }
 
 static glm::mat4 cursorPlaneTransform (const glm::mat4& world) {
