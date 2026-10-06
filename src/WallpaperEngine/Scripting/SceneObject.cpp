@@ -579,12 +579,12 @@ static JSValue model_change_data (JSContext* ctx, JSValueConst self, int argc, J
     if (argc < 1) {
 	return JS_UNDEFINED;
     }
-    struct Capacity { size_t vertexBytes; size_t indexBytes; uint8_t indexWidth; };
+    struct Capacity { size_t vertexBytes; size_t indexBytes; uint8_t indexWidth; uint32_t vertexFormat; };
     std::vector<Capacity> capacities;
     if (auto resource = handle->scene->getScene ().findModelData (handle->token); resource) {
 	for (const auto& shape : resource->shapes) {
 	    capacities.push_back ({ !replace || shape.input.vertexDynamic ? shape.input.vertices.size () * sizeof (float) : 0,
-		!replace || shape.input.indexDynamic ? shape.input.indices.size () : 0, shape.input.indexWidth });
+		!replace || shape.input.indexDynamic ? shape.input.indices.size () : 0, shape.input.indexWidth, shape.input.vertexFormat });
 	}
     }
     // Do not keep a resource lease across property getters invoked by parsing.
@@ -605,7 +605,8 @@ static JSValue model_change_data (JSContext* ctx, JSValueConst self, int argc, J
 	    ModelDataShape update;
 	    if (JS_IsException (input.value) || !ModelDataInput::readShape (ctx, input.value, update, false,
 		    index < capacities.size () ? capacities[index].vertexBytes : 0,
-		    index < capacities.size () ? capacities[index].indexBytes : 0, replace, index < capacities.size () ? capacities[index].indexWidth : 0)) {
+		    index < capacities.size () ? capacities[index].indexBytes : 0, replace, index < capacities.size () ? capacities[index].indexWidth : 0,
+		    index < capacities.size () ? capacities[index].vertexFormat : 0)) {
 		return JS_EXCEPTION;
 	    }
 	    updates.push_back (std::move (update));
@@ -613,7 +614,8 @@ static JSValue model_change_data (JSContext* ctx, JSValueConst self, int argc, J
     } else {
 	ModelDataShape update;
 	if (!ModelDataInput::readShape (ctx, argv[0], update, false,
-		capacities.empty () ? 0 : capacities[0].vertexBytes, capacities.empty () ? 0 : capacities[0].indexBytes, replace, capacities.empty () ? 0 : capacities[0].indexWidth)) {
+		capacities.empty () ? 0 : capacities[0].vertexBytes, capacities.empty () ? 0 : capacities[0].indexBytes, replace, capacities.empty () ? 0 : capacities[0].indexWidth,
+		capacities.empty () ? 0 : capacities[0].vertexFormat)) {
 	    return JS_EXCEPTION;
 	}
 	updates.push_back (std::move (update));

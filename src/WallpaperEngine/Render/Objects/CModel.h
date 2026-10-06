@@ -86,6 +86,7 @@ private:
 	GLsizei vertexCount = 0;
 	GLenum indexType = GL_UNSIGNED_INT;
 	GLuint shadowVao = GL_NONE;
+	uint32_t shadowVertexTag = 0;
 	bool castsShadow = false;
 	bool shadowCulling = false;
         std::vector<float> morphVertices;

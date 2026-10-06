@@ -71,7 +71,7 @@ namespace ModelDataInput {
     }
 
     /** Parse one native shape. Returns false with a pending JS exception. */
-    inline bool readShape (JSContext* ctx, JSValueConst input, ModelDataShape& result, bool creation = true, size_t vertexCapacity = 0, size_t indexCapacity = 0, bool replacement = false, uint8_t originalIndexWidth = 0) {
+    inline bool readShape (JSContext* ctx, JSValueConst input, ModelDataShape& result, bool creation = true, size_t vertexCapacity = 0, size_t indexCapacity = 0, bool replacement = false, uint8_t originalIndexWidth = 0, uint32_t originalVertexFormat = 0) {
 	ModelDataShape parsed;
 	if (!creation && !JS_IsObject (input)) {
 	    parsed.deleteShape = JS_IsNull (input);
@@ -183,7 +183,8 @@ namespace ModelDataInput {
 	}
 	// Replacement maps only supplied dynamic buffers when neither logical view
 	// grows. Any recreation instead uses the incoming complete buffer sizes.
-	if (replacement && (!parsed.hasVertices || parsed.vertices.size () * sizeof (float) <= vertexCapacity)
+	if (replacement && (parsed.vertexFormat == 0 || parsed.vertexFormat == originalVertexFormat)
+	    && (!parsed.hasVertices || parsed.vertices.size () * sizeof (float) <= vertexCapacity)
 	    && (parsed.indexWidth == 0 || (originalIndexWidth != 0 && parsed.indexCount <= indexCapacity / originalIndexWidth))) {
 	    if (parsed.hasVertices && parsed.vertices.size () * sizeof (float) < vertexCapacity
 		&& !copyView (ctx, vertices.value, parsed.vertices, vertexCapacity)) {

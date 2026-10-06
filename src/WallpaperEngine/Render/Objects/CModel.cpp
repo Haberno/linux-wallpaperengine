@@ -52,23 +52,8 @@ ModelData::ModelData (std::vector<Scripting::ModelDataShape> input) {
 	shape.drawCount = static_cast<GLsizei> (shape.input.indexWidth == 0
 	    ? shape.input.vertices.size () * sizeof (float) / shape.input.strideBytes
 	    : shape.input.indices.size () / shape.input.indexWidth);
-	auto& layout = shape.layout;
-	layout.vertexTag = shape.input.vertexFormat;
-	layout.strideBytes = shape.input.strideBytes;
-	uint32_t offset = 0;
-	const auto attribute = [&] (uint32_t flag, uint32_t components) {
-	    if ((layout.vertexTag & flag) == 0) {
-		return MdlMesh::AttributeAbsent;
-	    }
-	    const auto start = offset;
-	    offset += components * sizeof (float);
-	    return start;
-	};
-	layout.positionOffset = attribute (1, 3);
-	layout.normalOffset = attribute (2, 3);
-	layout.tangentOffset = attribute (4, 4);
-	layout.uvOffset = attribute (8, 2);
-	shape.colorOffset = attribute (0x8000, 4);
+	updateLayout (shape);
+	const auto& layout = shape.layout;
 	if (layout.positionOffset != MdlMesh::AttributeAbsent) {
 	    for (size_t vertex = 0; vertex < shape.input.vertices.size ();
 		 vertex += layout.strideBytes / sizeof (float)) {
@@ -93,6 +78,26 @@ ModelData::ModelData (std::vector<Scripting::ModelDataShape> input) {
 	mesh.boundingBoxMin = minimum;
 	mesh.boundingBoxMax = maximum;
     }
+}
+
+void ModelData::updateLayout (Shape& shape) {
+    auto& layout = shape.layout;
+    layout.vertexTag = shape.input.vertexFormat;
+    layout.strideBytes = shape.input.strideBytes;
+    uint32_t offset = 0;
+    const auto attribute = [&] (uint32_t flag, uint32_t components) {
+	if ((layout.vertexTag & flag) == 0) {
+	    return MdlMesh::AttributeAbsent;
+	}
+	const auto start = offset;
+	offset += components * sizeof (float);
+	return start;
+    };
+    layout.positionOffset = attribute (1, 3);
+    layout.normalOffset = attribute (2, 3);
+    layout.tangentOffset = attribute (4, 4);
+    layout.uvOffset = attribute (8, 2);
+    shape.colorOffset = attribute (0x8000, 4);
 }
 
 void ModelData::upload () {
@@ -170,33 +175,46 @@ const char* ModelData::applyData (const std::vector<Scripting::ModelDataShape>& 
 }
 
 const char* ModelData::replaceData (std::vector<Scripting::ModelDataShape> replacements) {
-    // Material/layout changes and added/deleted shapes require rebuilding every
-    // retained layer's material passes. Prefix replacements leave trailing shapes.
+    // The same shader remains compatible when every original semantic is kept.
+    // Material changes and semantic removals still require shader validation.
     if (replacements.size () > shapes.size ()) {
 	return "IModelData.replaceData currently requires the existing shape count";
     }
     for (size_t index = 0; index < replacements.size (); ++index) {
 	const auto& replacement = replacements[index];
 	const auto& original = shapes[index].input;
-	const bool recreate = (replacement.hasVertices && (!original.vertexDynamic || replacement.vertexFloatCount > original.vertices.size ()))
+	const bool layoutChanged = replacement.vertexFormat != 0 && replacement.vertexFormat != original.vertexFormat;
+	const bool recreate = layoutChanged || (replacement.hasVertices && (!original.vertexDynamic || replacement.vertexFloatCount > original.vertices.size ()))
 	    || (replacement.indexWidth != 0 && (!original.indexDynamic || original.indexWidth == 0
 		|| replacement.indexCount > original.indices.size () / original.indexWidth));
 	if (replacement.deleteShape || replacement.deleteIndices
 	    || (!replacement.material.empty () && replacement.material != original.material)
-	    || (replacement.vertexFormat != 0 && (replacement.vertexFormat != original.vertexFormat || replacement.strideBytes != original.strideBytes))
+	    || (layoutChanged && ((replacement.vertexFormat & original.vertexFormat) != original.vertexFormat
+		|| (replacement.vertexFormat & ~0x800fu) != 0))
+	    || (!layoutChanged && replacement.vertexFormat != 0 && replacement.strideBytes != original.strideBytes)
 	    || (original.indexWidth == 0 && replacement.indexWidth != 0)
 	    || (recreate && (!replacement.hasVertices || replacement.vertices.empty ()
-		|| replacement.vertexFormat != original.vertexFormat || replacement.strideBytes != original.strideBytes
+		|| replacement.vertexFormat == 0 || replacement.strideBytes == 0
 		|| replacement.material != original.material || replacement.indexWidth != original.indexWidth
 		|| (original.indexWidth != 0 && replacement.indices.empty ())))) {
-	    return "IModelData.replaceData currently requires unchanged material/layout and complete recreated shapes";
+	    return "IModelData.replaceData currently requires unchanged material, retained semantics and complete recreated shapes";
 	}
 	if (!recreate && ((replacement.hasVertices && replacement.vertices.size () != original.vertices.size ())
 	    || (replacement.indexWidth != 0 && replacement.indexWidth == original.indexWidth
 		&& replacement.indices.size () != original.indices.size ()))) {
 	    return "Model replacement backing copy does not match the original allocation";
 	}
-	if (recreate && (replacement.vertexFloatCount * sizeof (float)) % original.strideBytes != 0) {
+	uint32_t packedStride = 0;
+	if (layoutChanged) {
+	    for (const auto [flag, components] : std::array<std::pair<uint32_t, uint32_t>, 5> {
+		     { { 1, 3 }, { 2, 3 }, { 4, 4 }, { 8, 2 }, { 0x8000, 4 } } }) {
+		if ((replacement.vertexFormat & flag) != 0) {
+		    packedStride += components * sizeof (float);
+		}
+	    }
+	}
+	if (recreate && ((layoutChanged && replacement.strideBytes != packedStride)
+	    || (replacement.vertexFloatCount * sizeof (float)) % replacement.strideBytes != 0)) {
 	    return "Inconsistent vertex buffer size";
 	}
     }
@@ -205,7 +223,8 @@ const char* ModelData::replaceData (std::vector<Scripting::ModelDataShape> repla
     for (size_t index = 0; index < replacements.size (); ++index) {
 	auto& shape = shapes[index];
 	auto& replacement = replacements[index];
-	const bool recreate = (replacement.hasVertices && (!shape.input.vertexDynamic || replacement.vertexFloatCount > shape.input.vertices.size ()))
+	const bool layoutChanged = replacement.vertexFormat != 0 && replacement.vertexFormat != shape.input.vertexFormat;
+	const bool recreate = layoutChanged || (replacement.hasVertices && (!shape.input.vertexDynamic || replacement.vertexFloatCount > shape.input.vertices.size ()))
 	    || (replacement.indexWidth != 0 && (!shape.input.indexDynamic || shape.input.indexWidth == 0
 		|| replacement.indexCount > shape.input.indices.size () / shape.input.indexWidth));
 	if (!recreate) {
@@ -238,8 +257,21 @@ const char* ModelData::replaceData (std::vector<Scripting::ModelDataShape> repla
 	replacement.vertices.resize (replacement.vertexFloatCount);
 	replacement.indices.resize (replacement.indexCount * replacement.indexWidth);
 	shape.input = std::move (replacement);
+	if (layoutChanged) {
+	    updateLayout (shape);
+	    mesh.submeshes[index].vertexTag = shape.layout.vertexTag;
+	    mesh.submeshes[index].strideBytes = shape.layout.strideBytes;
+	    if (index == 0) {
+		mesh.vertexTag = shape.layout.vertexTag;
+		mesh.strideBytes = shape.layout.strideBytes;
+		mesh.positionOffset = shape.layout.positionOffset;
+		mesh.normalOffset = shape.layout.normalOffset;
+		mesh.tangentOffset = shape.layout.tangentOffset;
+		mesh.uvOffset = shape.layout.uvOffset;
+	    }
+	}
 	// Keep the names referenced by every live color/shadow VAO while replacing
-	// their storage. Static buffers or capacity growth recreate both complete buffers.
+	// their storage. Static buffers, capacity growth or layout changes recreate both complete buffers.
 	glBindBuffer (GL_ARRAY_BUFFER, shape.vertexBuffer);
 	glBufferData (GL_ARRAY_BUFFER, shape.input.vertices.size () * sizeof (float), shape.input.vertices.data (),
 	    shape.input.vertexDynamic ? GL_DYNAMIC_DRAW : GL_STATIC_DRAW);
@@ -530,23 +562,22 @@ void CModel::setupShadowProgram () {
 }
 
 void CModel::setupGeometryCallback (Effects::CPass* pass, size_t submeshIndex) {
-    const auto& layout = m_modelData ? m_modelData->shapes[submeshIndex].layout : m_model.mesh;
-    const auto stride = static_cast<GLsizei> (layout.strideBytes);
-
     pass->setGeometryCallback (
-	[this, pass, stride, submeshIndex, revision = uint64_t (0),
+	[this, pass, submeshIndex, revision = uint64_t (0), vertexTag = uint32_t (0),
 	 locations = std::array<GLint, 7> { -1, -1, -1, -1, -1, -1, -1 }] () mutable {
-	    if (revision == pass->getShaderRevision ()) {
+	    const auto& mesh = m_modelData ? m_modelData->shapes[submeshIndex].layout : m_model.mesh;
+	    if (revision == pass->getShaderRevision () && vertexTag == mesh.vertexTag) {
 		return;
 	    }
 	    revision = pass->getShaderRevision ();
-	    // Each pass owns its VAO. Rebuild its layout only after a shader reload.
+	    vertexTag = mesh.vertexTag;
+	    const auto stride = static_cast<GLsizei> (mesh.strideBytes);
+	    // Every retained pass refreshes after a shader reload or shared layout change.
 	    for (const auto location : locations) {
 		if (location >= 0) {
 		    glDisableVertexAttribArray (location);
 		}
 	    }
-	    const auto& mesh = m_modelData ? m_modelData->shapes[submeshIndex].layout : m_model.mesh;
 	    const GLint position = glGetAttribLocation (pass->getProgramID (), "a_Position");
 	    const GLint normal = glGetAttribLocation (pass->getProgramID (), "a_Normal");
 	    const GLint tangent = glGetAttribLocation (pass->getProgramID (), "a_Tangent4");
@@ -966,8 +997,11 @@ void CModel::renderShadow (const glm::mat4& lightViewProjection) {
 	// Shadows have no output flip; retain authored winding changes here too.
 	glFrontFace (this->getScene ().getCamera ().isOrthogonal () ? GL_CW : GL_CCW);
 
-	if (buffers.shadowVao == GL_NONE) {
-	    glGenVertexArrays (1, &buffers.shadowVao);
+	if (buffers.shadowVao == GL_NONE || buffers.shadowVertexTag != layout.vertexTag) {
+	    if (buffers.shadowVao == GL_NONE) {
+		glGenVertexArrays (1, &buffers.shadowVao);
+	    }
+	    buffers.shadowVertexTag = layout.vertexTag;
 	    glBindVertexArray (buffers.shadowVao);
 	    glBindBuffer (GL_ARRAY_BUFFER, buffers.vertexBuffer);
 	    glEnableVertexAttribArray (0);

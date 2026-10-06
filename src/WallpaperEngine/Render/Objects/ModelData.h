@@ -28,6 +28,9 @@ public:
     const char* replaceData (std::vector<Scripting::ModelDataShape> replacements);
     std::vector<Shape> shapes;
     Data::Model::MdlMesh mesh;
+
+private:
+    static void updateLayout (Shape& shape);
 };
 
 /** A script lease plus weak lookup; live layers retain the resource after release. */
