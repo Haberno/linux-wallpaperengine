@@ -448,7 +448,10 @@ void CText::setupEffectChain () {
     const bool sampledByLayer = std::ranges::any_of (getScene ().getScene ().objects, [this] (const auto& object) {
 	return std::ranges::find (object->dependencies, getId ()) != object->dependencies.end ();
     });
-    if (m_text.effects.empty () && !sampledByLayer && (m_colorBlendMode == 0 || m_colorBlendMode == 31)) return;
+    const auto& fog = getScene ().getScene ().fog;
+    const bool sceneForcesOffscreen = fog.distance.enabled->value->getBool () || fog.height.enabled->value->getBool ();
+    if (m_text.effects.empty () && !sampledByLayer && !sceneForcesOffscreen
+        && (m_colorBlendMode == 0 || m_colorBlendMode == 31)) return;
 
     // wallpaper64.exe sizes this surface from the generated font line box plus the
     // authored padding. The serialized editor size is not part of text rendering.
@@ -1127,7 +1130,9 @@ glm::vec2 CText::getSize () {
     const auto surfaceSize = [this] {
         // Native offscreen surfaces/opaque backgrounds add padding to the mesh;
         // direct text ignores padding. Keep the cached line box unpadded.
+        const auto& fog = getScene ().getScene ().fog;
         const glm::vec2 padding = m_effectsEnabled || !m_text.effects.empty () || m_text.opaqueBackground->value->getBool ()
+            || fog.distance.enabled->value->getBool () || fog.height.enabled->value->getBool ()
             ? glm::min (currentPadding (), glm::vec2 (512.0f)) : glm::vec2 (0);
         return m_scriptSize + padding * 2.0f;
     };
