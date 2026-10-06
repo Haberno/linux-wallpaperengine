@@ -1260,7 +1260,7 @@ TEST_CASE ("two-control-point remaps retain only the measured linear subset", "[
             ],"operator":[
                 {"name":"remapvalue","input":"positionbetweentwocontrolpoints","output":"velocity","operation":"remap"},
                 {"name":"remapvalue","input":"maxlifetime","output":"positionbetweentwocontrolpoints","operation":"remap"},
-                {"name":"remapvalue","input":"speed","output":"positionbetweentwocontrolpoints","operation":"remap"},
+                {"name":"remapvalue","input":"color","output":"positionbetweentwocontrolpoints","operation":"remap"},
                 {"name":"remapvalue","input":"positionbetweentwocontrolpoints","output":"velocity","operation":"remap","flags":4},
                 {"name":"remapvalue","input":"lifetimefraction","output":"velocity","operation":"remap","transformfunction":"simplexnoise","inputcomponent":"x"},
                 {"name":"remapvalue","input":"positionbetweentwocontrolpoints","output":"velocity","operation":"remap","outputcomponent":"x"},
@@ -1276,11 +1276,13 @@ TEST_CASE ("two-control-point remaps retain only the measured linear subset", "[
     REQUIRE (particle->operators.size () == 3);
     const auto* defaultVelocity = particle->initializers.back ()->as<ControlPointRemapInitializer> ();
     REQUIRE (defaultVelocity != nullptr);
-    CHECK (defaultVelocity->remap.mode == ControlPointRemap::Mode::PositionToVelocity);
+    CHECK (defaultVelocity->remap.input == ControlPointRemap::Input::BetweenPoints);
+    CHECK (defaultVelocity->remap.output == ControlPointRemap::Output::Velocity);
     CHECK (defaultVelocity->remap.operation == ControlPointRemap::Operation::Multiply);
     const auto* defaultSize = particle->operators.back ()->as<ControlPointRemapOperator> ();
     REQUIRE (defaultSize != nullptr);
-    CHECK (defaultSize->remap.mode == ControlPointRemap::Mode::PositionToSize);
+    CHECK (defaultSize->remap.input == ControlPointRemap::Input::BetweenPoints);
+    CHECK (defaultSize->remap.output == ControlPointRemap::Output::Size);
     CHECK (defaultSize->remap.operation == ControlPointRemap::Operation::Remap);
 }
 
@@ -1449,7 +1451,7 @@ TEST_CASE ("two-control-point position arithmetic rejects unmeasured settings", 
             {"name":"remapvalue","input":"lifetimefraction","output":"speed","operation":"multiply","transformfunction":"fbmnoise","flags":3,"transformoctaves":2},
             {"name":"remapvalue","input":"maxlifetime","output":"positionbetweentwocontrolpoints","operation":"add","outputcomponent":"x"},
             {"name":"remapvalue","input":"positionbetweentwocontrolpoints","output":"velocity","operation":"divide"},
-            {"name":"remapvalue","input":"speed","output":"positionbetweentwocontrolpoints","operation":"add"}
+            {"name":"remapvalue","input":"color","output":"positionbetweentwocontrolpoints","operation":"add"}
         ]}})"), project);
     const auto* definition = object->as<Particle> ();
     REQUIRE (definition != nullptr);
@@ -3374,4 +3376,148 @@ TEST_CASE ("opacity position input observes a prior working-alpha operator", "[p
     CHECK (particle.position == glm::vec3 (24, 12, -8));
     CHECK (particle.alpha == .375f);
     CHECK (particle.initial.alpha == .75f);
+}
+
+TEST_CASE ("two point remaps read native speed and Z angle channels", "[particle][remap][remap-kinematic]") {
+    using WallpaperEngine::Render::Objects::applyParticleControlPointRemap;
+    using WallpaperEngine::Render::Objects::ControlPointData;
+    std::vector<ControlPointData> points (2);
+    points[1].position = { 64, 0, 0 };
+    for (const bool initializer : { true, false }) {
+        for (const auto& sample : { std::pair { "speed", 320.0f }, std::pair { "rotation", -32.0f }, std::pair { "angularspeed", 0.0f } }) {
+            INFO ("initializer=" << initializer << ", input=" << sample.first);
+            WallpaperEngine::Data::Model::Project project {};
+            auto data = WallpaperEngine::Data::JSON::JSON::parse (R"({"id":430,"particle":{}})");
+            auto node = WallpaperEngine::Data::JSON::JSON::parse (R"({
+                "output":"positionbetweentwocontrolpoints","operation":"remap","flags":0
+            })");
+            node["name"] = initializer ? "remapinitialvalue" : "remapvalue";
+            node["input"] = sample.first;
+            data["particle"][initializer ? "initializer" : "operator"] = { node };
+            const auto object = WallpaperEngine::Data::Parsers::ObjectParser::parse (data, project);
+            const auto* definition = object->as<Particle> ();
+            REQUIRE ((initializer ? definition->initializers.size () : definition->operators.size ()) == 1);
+            const auto& remap = initializer
+                ? definition->initializers.front ()->as<ControlPointRemapInitializer> ()->remap
+                : definition->operators.front ()->as<ControlPointRemapOperator> ()->remap;
+            ParticleInstance particle;
+            particle.position = { 32, 12, -8 };
+            particle.velocity = { 3, 4, 0 };
+            particle.rotation = { 7, 9, -.5f };
+            particle.angularVelocity = { 8, 10, 4 };
+            applyParticleControlPointRemap (particle, remap, points, initializer);
+            CHECK (particle.position == glm::vec3 (sample.second, 12, -8));
+            CHECK (particle.velocity == glm::vec3 (3, 4, 0));
+            CHECK (particle.rotation == glm::vec3 (7, 9, -.5f));
+            CHECK (particle.angularVelocity == glm::vec3 (8, 10, 4));
+            if (std::string_view (sample.first) == "angularspeed") {
+                applyParticleControlPointRemap (particle, remap, points, initializer, true);
+                CHECK (particle.position == glm::vec3 (256, 12, -8));
+                CHECK (particle.angularVelocity == glm::vec3 (8, 10, 4));
+            }
+        }
+    }
+}
+
+TEST_CASE ("two point speed outputs preserve native direction zero and arithmetic", "[particle][remap][remap-kinematic]") {
+    using WallpaperEngine::Render::Objects::applyParticleControlPointRemap;
+    using WallpaperEngine::Render::Objects::ControlPointData;
+    // Unchanged native enum 4 output instructions, binary 40e2ce02: initializer,
+    // ordinary operator, and half-blended operator. Reciprocal SIMD tolerance.
+    const struct { bool initializer, blended; const char* operation; glm::vec3 expected; } samples[] = {
+        { true, false, "remap", { -1.200000048f, -1.600000024f, -0.000000000f } },
+        { true, false, "multiply", { -6.000000000f, -8.000000000f, -0.000000000f } },
+        { true, false, "add", { 1.800000072f, 2.400000095f, 0.000000000f } },
+        { true, false, "subtract", { 4.199999809f, 5.599999905f, 0.000000000f } },
+        { false, false, "remap", { -1.199707031f, -1.599609375f, -0.000000000f } },
+        { false, false, "multiply", { -5.998535156f, -7.998046875f, -0.000000000f } },
+        { false, false, "add", { 1.799560547f, 2.399414062f, 0.000000000f } },
+        { false, false, "subtract", { 4.198974609f, 5.598632812f, 0.000000000f } },
+        { false, true, "remap", { 0.899780273f, 1.199707031f, 0.000000000f } },
+        { false, true, "multiply", { -1.499633789f, -1.999511719f, -0.000000000f } },
+        { false, true, "add", { 2.399414062f, 3.199218750f, 0.000000000f } },
+        { false, true, "subtract", { 3.599121094f, 4.798828125f, 0.000000000f } },
+    };
+    std::vector<ControlPointData> points (2);
+    points[1].position = { 64, 0, 0 };
+    for (const auto& sample : samples) {
+        INFO ("initializer=" << sample.initializer << ", blended=" << sample.blended << ", operation=" << sample.operation);
+        WallpaperEngine::Data::Model::Project project {};
+        auto data = WallpaperEngine::Data::JSON::JSON::parse (R"({"id":431,"particle":{}})");
+        auto node = WallpaperEngine::Data::JSON::JSON::parse (R"({
+            "input":"positionbetweentwocontrolpoints","output":"speed","flags":0,
+            "outputrangemin":-2,"outputrangemax":-2
+        })");
+        node["name"] = sample.initializer ? "remapinitialvalue" : "remapvalue";
+        node["operation"] = sample.operation;
+        if (sample.blended) node["blendinend"] = .5;
+        data["particle"][sample.initializer ? "initializer" : "operator"] = { node };
+        const auto object = WallpaperEngine::Data::Parsers::ObjectParser::parse (data, project);
+        const auto* definition = object->as<Particle> ();
+        REQUIRE ((sample.initializer ? definition->initializers.size () : definition->operators.size ()) == 1);
+        const auto& remap = sample.initializer
+            ? definition->initializers.front ()->as<ControlPointRemapInitializer> ()->remap
+            : definition->operators.front ()->as<ControlPointRemapOperator> ()->remap;
+        for (const bool zero : { false, true }) {
+            ParticleInstance particle;
+            particle.position = { 32, 12, -8 };
+            particle.velocity = zero ? glm::vec3 (0) : glm::vec3 (3, 4, 0);
+            particle.lifetime = 4;
+            particle.age = 1;
+            applyParticleControlPointRemap (particle, remap, points, sample.initializer);
+            const glm::vec3 expected = zero ? glm::vec3 (0) : sample.expected;
+            for (int axis = 0; axis < 3; ++axis)
+                CHECK (particle.velocity[axis] == Catch::Approx (expected[axis]).epsilon (.0004).margin (.00001));
+            CHECK (particle.position == glm::vec3 (32, 12, -8));
+        }
+    }
+}
+
+TEST_CASE ("two point angle outputs retain native radians and optional storage", "[particle][remap][remap-kinematic]") {
+    using WallpaperEngine::Render::Objects::applyParticleControlPointRemap;
+    using WallpaperEngine::Render::Objects::ControlPointData;
+    const struct { const char* operation; float rotation, angular; } samples[] = {
+        { "remap", -2, -2 }, { "multiply", 1, -8 }, { "add", -2.5f, 2 }, { "subtract", 1.5f, 6 }
+    };
+    std::vector<ControlPointData> points (2);
+    points[1].position = { 64, 0, 0 };
+    for (const bool initializer : { true, false }) {
+        for (const auto output : { "rotation", "angularspeed" }) {
+            for (const auto& sample : samples) {
+                INFO ("initializer=" << initializer << ", output=" << output << ", operation=" << sample.operation);
+                WallpaperEngine::Data::Model::Project project {};
+                auto data = WallpaperEngine::Data::JSON::JSON::parse (R"({"id":432,"particle":{}})");
+                auto node = WallpaperEngine::Data::JSON::JSON::parse (R"({
+                    "input":"positionbetweentwocontrolpoints","flags":0,"outputrangemin":-2,"outputrangemax":-2,
+                    "blendinend":0.5
+                })");
+                node["name"] = initializer ? "remapinitialvalue" : "remapvalue";
+                node["operation"] = sample.operation;
+                node["output"] = output;
+                data["particle"][initializer ? "initializer" : "operator"] = { node };
+                const auto object = WallpaperEngine::Data::Parsers::ObjectParser::parse (data, project);
+                const auto* definition = object->as<Particle> ();
+                REQUIRE ((initializer ? definition->initializers.size () : definition->operators.size ()) == 1);
+                const auto& remap = initializer
+                    ? definition->initializers.front ()->as<ControlPointRemapInitializer> ()->remap
+                    : definition->operators.front ()->as<ControlPointRemapOperator> ()->remap;
+                ParticleInstance particle;
+                particle.position = { 32, 12, -8 };
+                particle.rotation = { 7, 9, -.5f };
+                particle.angularVelocity = { 8, 10, 4 };
+                particle.lifetime = 4;
+                particle.age = 1;
+                applyParticleControlPointRemap (particle, remap, points, initializer);
+                const bool rotation = std::string_view (output) == "rotation";
+                CHECK (particle.rotation == glm::vec3 (7, 9, rotation ? (initializer ? sample.rotation : -.5f + (sample.rotation + .5f) * .5f) : -.5f));
+                CHECK (particle.angularVelocity == glm::vec3 (8, 10, 4));
+                CHECK (particle.position == glm::vec3 (32, 12, -8));
+                if (!rotation) {
+                    applyParticleControlPointRemap (particle, remap, points, initializer, true);
+                    CHECK (particle.angularVelocity == glm::vec3 (8, 10, initializer ? sample.angular : 4 + (sample.angular - 4) * .5f));
+                    CHECK (particle.rotation == glm::vec3 (7, 9, -.5f));
+                }
+            }
+        }
+    }
 }

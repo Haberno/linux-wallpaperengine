@@ -190,7 +190,7 @@ void applyParticleBetweenControlPointConstraint (
 
 void applyParticleControlPointRemap (
     ParticleInstance& particle, const ControlPointRemap& remap,
-    const std::vector<ControlPointData>& controlPoints, bool initializer
+    const std::vector<ControlPointData>& controlPoints, bool initializer, bool angularVelocityAvailable = false
 );
 
 /**
@@ -367,6 +367,7 @@ private:
     size_t m_pendingEmitterCount = 0;
     std::vector<InitializerFunc> m_initializers;
     std::vector<OperatorFunc> m_operators;
+    bool m_hasAngularVelocity { false };
     bool m_hasAlphaOperators { false };
     bool m_hasColorOperators { false };
 

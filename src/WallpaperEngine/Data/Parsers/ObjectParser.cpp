@@ -1023,30 +1023,40 @@ static std::optional<ControlPointRemap> parseControlPointRemap (
     const auto output = it.optional<std::string> ("output", "size");
     const auto operation = it.optional<std::string> ("operation", "multiply");
     const auto transform = it.optional<std::string> ("transformfunction", "none");
-    const bool positionInput = input == "positionbetweentwocontrolpoints"
-        && (output == "velocity" || output == "positionbetweentwocontrolpoints" || output == "size" || output == "speed" || output == "opacity" || output == "maxlifetime");
-    const bool fractionInput = !initializer && input == "lifetimefraction";
-    const bool sizeInput = input == "size" && output == "positionbetweentwocontrolpoints";
-    const bool opacityInput = input == "opacity" && output == "positionbetweentwocontrolpoints";
-    const bool positionOutput = (input == "maxlifetime" || fractionInput || positionInput || sizeInput || opacityInput)
-        && output == "positionbetweentwocontrolpoints";
-    const bool sizeOutput = positionInput && output == "size";
-    const bool speedOutput = positionInput && output == "speed";
-    const bool opacityOutput = positionInput && output == "opacity";
-    const bool lifetimeOutput = positionInput && output == "maxlifetime";
-    const bool arithmetic = (positionOutput || sizeOutput || opacityOutput || lifetimeOutput || (positionInput && output == "velocity"))
+    using Input = ControlPointRemap::Input;
+    using Output = ControlPointRemap::Output;
+    using Transform = ControlPointRemap::Transform;
+    const std::optional<Input> parsedInput = input == "positionbetweentwocontrolpoints" ? Input::BetweenPoints
+        : input == "maxlifetime" ? Input::MaxLifetime
+        : input == "lifetimefraction" ? Input::LifetimeFraction
+        : input == "size" ? Input::Size : input == "opacity" ? Input::Opacity
+        : input == "speed" ? Input::Speed : input == "rotation" ? Input::Rotation
+        : input == "angularspeed" ? std::optional (Input::AngularSpeed) : std::nullopt;
+    const std::optional<Output> parsedOutput = output == "positionbetweentwocontrolpoints" ? Output::BetweenPoints
+        : output == "maxlifetime" ? Output::MaxLifetime : output == "size" ? Output::Size
+        : output == "opacity" ? Output::Opacity : output == "speed" ? Output::Speed
+        : output == "velocity" ? Output::Velocity : output == "rotation" ? Output::Rotation
+        : output == "angularspeed" ? std::optional (Output::AngularSpeed) : std::nullopt;
+    const std::optional<Transform> parsedTransform = transform == "none" ? Transform::Identity
+        : transform == "simplexnoise" ? Transform::SimplexNoise
+        : transform == "fbmnoise" ? std::optional (Transform::FbmNoise) : std::nullopt;
+    const bool linearPair = (parsedInput == Input::BetweenPoints && parsedOutput.has_value ())
+        || (parsedOutput == Output::BetweenPoints && parsedInput.has_value ()
+            && (!initializer || parsedInput != Input::LifetimeFraction));
+    const bool speedOutput = parsedOutput == Output::Speed;
+    const bool arithmetic = linearPair
         && (operation == "multiply" || operation == "add" || operation == "subtract");
-    const bool noiseVelocity = !initializer && input == "lifetimefraction" && output == "velocity"
-        && transform == "simplexnoise";
-    const bool noiseSpeed = !initializer && input == "lifetimefraction" && output == "speed"
-        && transform == "fbmnoise" && it.optional ("transformoctaves", 3) == 3;
+    const bool noiseVelocity = !initializer && parsedInput == Input::LifetimeFraction
+        && parsedOutput == Output::Velocity && parsedTransform == Transform::SimplexNoise;
+    const bool noiseSpeed = !initializer && parsedInput == Input::LifetimeFraction
+        && speedOutput && parsedTransform == Transform::FbmNoise && it.optional ("transformoctaves", 3) == 3;
     const auto flags = it.optional ("flags", 1u);
     const bool supportedFlags = noiseVelocity ? flags == 1u : noiseSpeed ? flags == 3u : flags <= 3u;
     const glm::vec4 blendTimes = initializer ? glm::vec4 (0.0f, 0.0f, 1.0f, 1.0f) : glm::vec4 (
         it.optional ("blendinstart", 0.0f), it.optional ("blendinend", 0.0f),
         it.optional ("blendoutstart", 1.0f), it.optional ("blendoutend", 1.0f));
-    if ((!noiseVelocity && !noiseSpeed && ((!positionInput && !positionOutput) || transform != "none"))
-        || (operation != (noiseSpeed || speedOutput ? "multiply" : "remap") && !arithmetic)
+    if ((!noiseVelocity && !noiseSpeed && (!linearPair || parsedTransform != Transform::Identity))
+        || (operation != (noiseSpeed ? "multiply" : "remap") && !arithmetic)
         || it.optional<std::string> ("inputcomponent", "all") != "all"
         || it.optional<std::string> ("outputcomponent", "all") != "all"
         || !supportedFlags) {
@@ -1060,18 +1070,9 @@ static std::optional<ControlPointRemap> parseControlPointRemap (
         return std::min (static_cast<uint32_t> (it.optional (key, fallback)), 7u);
     };
     return ControlPointRemap {
-        .mode = noiseVelocity ? ControlPointRemap::Mode::LifetimeNoiseToVelocity
-                              : noiseSpeed ? ControlPointRemap::Mode::LifetimeFbmToSpeed
-                              : speedOutput ? ControlPointRemap::Mode::PositionToSpeed
-                              : opacityOutput ? ControlPointRemap::Mode::PositionToOpacity
-                              : lifetimeOutput ? ControlPointRemap::Mode::PositionToLifetime
-                              : sizeOutput ? ControlPointRemap::Mode::PositionToSize
-                              : sizeInput ? ControlPointRemap::Mode::SizeToPosition
-                              : opacityInput ? ControlPointRemap::Mode::OpacityToPosition
-                              : positionInput && positionOutput ? ControlPointRemap::Mode::PositionToPosition
-                              : positionInput ? ControlPointRemap::Mode::PositionToVelocity
-                              : fractionInput ? ControlPointRemap::Mode::LifetimeFractionToPosition
-                              : ControlPointRemap::Mode::LifetimeToPosition,
+        .input = *parsedInput,
+        .output = *parsedOutput,
+        .transform = *parsedTransform,
         .inputRangeMin = it.user ("inputrangemin", properties, 0.0f),
         .inputRangeMax = it.user ("inputrangemax", properties, 1.0f),
         .outputRangeMin = it.user ("outputrangemin", properties, 0.0f),

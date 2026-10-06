@@ -1532,11 +1532,11 @@ static float particleOperatorBlend (float lifetimePosition, glm::vec4 blendTimes
 
 void WallpaperEngine::Render::Objects::applyParticleControlPointRemap (
     ParticleInstance& particle, const ControlPointRemap& remap,
-    const std::vector<ControlPointData>& controlPoints, const bool initializer
+    const std::vector<ControlPointData>& controlPoints, const bool initializer, const bool angularVelocityAvailable
 ) {
     const float weight = initializer ? 1.0f : particleOperatorBlend (particle.getLifetimePos (), remap.blendTimes);
-    if (remap.mode == ControlPointRemap::Mode::LifetimeNoiseToVelocity
-        || remap.mode == ControlPointRemap::Mode::LifetimeFbmToSpeed) {
+    if (remap.transform == ControlPointRemap::Transform::SimplexNoise
+        || remap.transform == ControlPointRemap::Transform::FbmNoise) {
         const float minimum = remap.inputRangeMin->value->getFloat ();
         float span = remap.inputRangeMax->value->getFloat () - minimum;
         if (span == 0.0f) span = std::numeric_limits<float>::epsilon ();
@@ -1545,7 +1545,7 @@ void WallpaperEngine::Render::Objects::applyParticleControlPointRemap (
         // Native shares this exact float-bit seed with oscillation/turbulence;
         // independent random draws or numeric float-to-uint conversion differ.
         const uint32_t seed = std::bit_cast<uint32_t> (particle.oscillationRandom);
-        if (remap.mode == ControlPointRemap::Mode::LifetimeFbmToSpeed) {
+        if (remap.transform == ControlPointRemap::Transform::FbmNoise) {
             const float noise = seededFbmNoise2D (seed, input, 0.0f) * .5f + .5f;
             const float outputMin = remap.outputRangeMin->value->getFloat ();
             const float mapped = outputMin + noise * (remap.outputRangeMax->value->getFloat () - outputMin);
@@ -1574,11 +1574,7 @@ void WallpaperEngine::Render::Objects::applyParticleControlPointRemap (
     const glm::vec3 delta = controlPoints[remap.outputControlPoint1].position - start;
     const float lengthSquared = glm::dot (delta, delta);
     constexpr float epsilon = std::numeric_limits<float>::epsilon ();
-    const bool positionOutput = remap.mode == ControlPointRemap::Mode::PositionToPosition
-        || remap.mode == ControlPointRemap::Mode::LifetimeToPosition
-        || remap.mode == ControlPointRemap::Mode::LifetimeFractionToPosition
-        || remap.mode == ControlPointRemap::Mode::SizeToPosition
-        || remap.mode == ControlPointRemap::Mode::OpacityToPosition;
+    const bool positionOutput = remap.output == ControlPointRemap::Output::BetweenPoints;
     const float length = initializer ? glm::length (delta) : 0.0f;
     const bool tinyInitializer = initializer && length <= epsilon;
     // Operator position-output degeneracy remains outside the measured subset.
@@ -1587,18 +1583,19 @@ void WallpaperEngine::Render::Objects::applyParticleControlPointRemap (
     if (positionOutput && !initializer && lengthSquared <= 0.0f) return;
     const bool zeroInput = tinyInitializer || (!positionOutput && lengthSquared <= 0.0f);
     const float fraction = zeroInput ? 0.0f : glm::dot (particle.position - start, delta) / lengthSquared;
-    const float input = remap.mode == ControlPointRemap::Mode::PositionToVelocity
-                      || remap.mode == ControlPointRemap::Mode::PositionToPosition
-                      || remap.mode == ControlPointRemap::Mode::PositionToSize
-                      || remap.mode == ControlPointRemap::Mode::PositionToOpacity
-                      || remap.mode == ControlPointRemap::Mode::PositionToLifetime
-                      || remap.mode == ControlPointRemap::Mode::PositionToSpeed ? fraction
-                      : remap.mode == ControlPointRemap::Mode::LifetimeFractionToPosition ? particle.getLifetimePos ()
-                      // Native size input reads birth +0x278 or working +0x270.
-                      : remap.mode == ControlPointRemap::Mode::SizeToPosition ? (initializer ? particle.initial.size : particle.size)
-                      // Alpha arrays alias until an alpha-writing operator separates them.
-                      : remap.mode == ControlPointRemap::Mode::OpacityToPosition ? (initializer ? particle.initial.alpha : particle.alpha)
-                      : particle.lifetime;
+    float input = 0.0f;
+    switch (remap.input) {
+        case ControlPointRemap::Input::BetweenPoints: input = fraction; break;
+        case ControlPointRemap::Input::MaxLifetime: input = particle.lifetime; break;
+        case ControlPointRemap::Input::LifetimeFraction: input = particle.getLifetimePos (); break;
+        // Native size input reads birth +0x278 or working +0x270.
+        case ControlPointRemap::Input::Size: input = initializer ? particle.initial.size : particle.size; break;
+        // Alpha arrays alias until an alpha-writing operator separates them.
+        case ControlPointRemap::Input::Opacity: input = initializer ? particle.initial.alpha : particle.alpha; break;
+        case ControlPointRemap::Input::Speed: input = glm::length (particle.velocity); break;
+        case ControlPointRemap::Input::Rotation: input = particle.rotation.z; break;
+        case ControlPointRemap::Input::AngularSpeed: input = angularVelocityAvailable ? particle.angularVelocity.z : 0.0f; break;
+    }
     const glm::vec3 minimum = remap.inputRangeMin->value->getVec3 ();
     glm::vec3 span = remap.inputRangeMax->value->getVec3 () - minimum;
     // Both native parsers replace exactly equal range endpoints with FLT_EPSILON.
@@ -1609,10 +1606,26 @@ void WallpaperEngine::Render::Objects::applyParticleControlPointRemap (
         + normalized * (remap.outputRangeMax->value->getVec3 () - remap.outputRangeMin->value->getVec3 ());
     // Output saturation applies before arithmetic, not to the final position.
     if (remap.flags & 2u) mapped = glm::clamp (mapped, glm::vec3 (0), glm::vec3 (1));
-    if (remap.mode == ControlPointRemap::Mode::PositionToSpeed) {
-        const float multiplier = mapped.x;
-        particle.velocity *= weight == 1.0f ? multiplier : 1.0f + (multiplier - 1.0f) * weight;
-    } else if (remap.mode == ControlPointRemap::Mode::PositionToVelocity) {
+    const auto operate = [&remap, &mapped] (const float current) {
+        switch (remap.operation) {
+            case ControlPointRemap::Operation::Remap: return mapped.x;
+            case ControlPointRemap::Operation::Multiply: return current * mapped.x;
+            case ControlPointRemap::Operation::Add: return current + mapped.x;
+            case ControlPointRemap::Operation::Subtract: return current - mapped.x;
+        }
+        return mapped.x;
+    };
+    if (remap.output == ControlPointRemap::Output::Speed) {
+        if (remap.operation == ControlPointRemap::Operation::Multiply) {
+            particle.velocity *= weight == 1.0f ? mapped.x : 1.0f + (mapped.x - 1.0f) * weight;
+        } else {
+            const float speed = glm::length (particle.velocity);
+            const float result = operate (speed);
+            const float blended = weight == 1.0f ? result : speed + (result - speed) * weight;
+            // Native scales the existing direction, including when its length is zero.
+            particle.velocity *= speed > 0.0f ? blended / speed : blended;
+        }
+    } else if (remap.output == ControlPointRemap::Output::Velocity) {
         // Authored velocity uses the same Y-up coordinates as velocityrandom.
         glm::vec3 target = mapped * glm::vec3 (1.0f, -1.0f, 1.0f);
         switch (remap.operation) {
@@ -1637,28 +1650,25 @@ void WallpaperEngine::Render::Objects::applyParticleControlPointRemap (
         }
         particle.velocity = weight == 1.0f ? target : particle.velocity + (target - particle.velocity) * weight;
     } else {
-        // Native scalar arithmetic acts on current size/opacity/lifetime or longitudinal fraction.
-        // Do not clamp the operated result.
-        const float current = remap.mode == ControlPointRemap::Mode::PositionToSize ? particle.size
-                            : remap.mode == ControlPointRemap::Mode::PositionToOpacity ? particle.alpha
-                            : remap.mode == ControlPointRemap::Mode::PositionToLifetime ? particle.lifetime
-                            : tinyInitializer ? glm::dot (particle.position - start, delta) : fraction;
-        float result = mapped.x;
-        switch (remap.operation) {
-            case ControlPointRemap::Operation::Remap: break;
-            case ControlPointRemap::Operation::Multiply: result = current * mapped.x; break;
-            case ControlPointRemap::Operation::Add: result = current + mapped.x; break;
-            case ControlPointRemap::Operation::Subtract: result = current - mapped.x; break;
+        // Angular storage is allocated by angularvelocityrandom/angularmovement,
+        // not by remap. Native skips angular output when its storage bit is clear.
+        if (remap.output == ControlPointRemap::Output::AngularSpeed && !angularVelocityAvailable) return;
+        float* scalar = nullptr;
+        float* initial = nullptr;
+        switch (remap.output) {
+            case ControlPointRemap::Output::Size: scalar = &particle.size; initial = &particle.initial.size; break;
+            case ControlPointRemap::Output::Opacity: scalar = &particle.alpha; initial = &particle.initial.alpha; break;
+            case ControlPointRemap::Output::MaxLifetime: scalar = &particle.lifetime; initial = &particle.initial.lifetime; break;
+            case ControlPointRemap::Output::Rotation: scalar = &particle.rotation.z; break;
+            case ControlPointRemap::Output::AngularSpeed: scalar = &particle.angularVelocity.z; break;
+            default: break;
         }
-        if (remap.mode == ControlPointRemap::Mode::PositionToSize) {
-            particle.size = weight == 1.0f ? result : current + (result - current) * weight;
-            if (initializer) particle.initial.size = particle.size;
-        } else if (remap.mode == ControlPointRemap::Mode::PositionToOpacity) {
-            particle.alpha = weight == 1.0f ? result : current + (result - current) * weight;
-            if (initializer) particle.initial.alpha = particle.alpha;
-        } else if (remap.mode == ControlPointRemap::Mode::PositionToLifetime) {
-            particle.lifetime = weight == 1.0f ? result : current + (result - current) * weight;
-            if (initializer) particle.initial.lifetime = particle.lifetime;
+        const float current = scalar ? *scalar
+            : tinyInitializer ? glm::dot (particle.position - start, delta) : fraction;
+        const float result = operate (current);
+        if (scalar) {
+            *scalar = weight == 1.0f ? result : current + (result - current) * weight;
+            if (initializer && initial) *initial = *scalar;
         } else if (tinyInitializer) {
             // Native 14023e0f8..14023e1e4 keeps tiny directions unnormalized,
             // uses their raw projection for output arithmetic, and scales the
@@ -1679,13 +1689,13 @@ InitializerFunc CParticle::createControlPointRemapInitializer (const ControlPoin
     includeControlPoint (remap.outputControlPoint0);
     includeControlPoint (remap.outputControlPoint1);
     return [this, &remap] (ParticleInstance& particle) {
-        applyParticleControlPointRemap (particle, remap, m_controlPoints, true);
+        applyParticleControlPointRemap (particle, remap, m_controlPoints, true, m_hasAngularVelocity);
     };
 }
 
 OperatorFunc CParticle::createControlPointRemapOperator (const ControlPointRemapOperator& op) {
     const auto& remap = op.remap;
-    if (remap.mode == ControlPointRemap::Mode::PositionToOpacity) m_hasAlphaOperators = true;
+    if (remap.output == ControlPointRemap::Output::Opacity) m_hasAlphaOperators = true;
     includeControlPoint (remap.inputControlPoint0);
     includeControlPoint (remap.inputControlPoint1);
     includeControlPoint (remap.outputControlPoint0);
@@ -1694,11 +1704,11 @@ OperatorFunc CParticle::createControlPointRemapOperator (const ControlPointRemap
                      const std::vector<ControlPointData>& controlPoints, float, float) {
         for (uint32_t i = 0; i < count; ++i) {
             if (!particles[i].alive) continue;
-            if ((remap.mode == ControlPointRemap::Mode::LifetimeNoiseToVelocity
-                 || remap.mode == ControlPointRemap::Mode::LifetimeFbmToSpeed) && particles[i].oscillationRandom < 0.0f) {
+            if ((remap.transform == ControlPointRemap::Transform::SimplexNoise
+                 || remap.transform == ControlPointRemap::Transform::FbmNoise) && particles[i].oscillationRandom < 0.0f) {
                 particles[i].oscillationRandom = WallpaperEngine::Maths::randomFloat (m_rng, 0.0f, 1.0f);
             }
-            applyParticleControlPointRemap (particles[i], remap, controlPoints, false);
+            applyParticleControlPointRemap (particles[i], remap, controlPoints, false, m_hasAngularVelocity);
         }
     };
 }
@@ -1885,6 +1895,7 @@ InitializerFunc CParticle::createRotationRandomInitializer (const RotationRandom
 }
 
 InitializerFunc CParticle::createAngularVelocityRandomInitializer (const AngularVelocityRandomInitializer& init) {
+    m_hasAngularVelocity = true;
     DynamicValue* minValue = init.min->value.get ();
     DynamicValue* maxValue = init.max->value.get ();
     DynamicValue* exponentValue = init.exponent->value.get ();
@@ -2377,6 +2388,7 @@ void WallpaperEngine::Render::Objects::applyParticleAngularMovement (
 }
 
 OperatorFunc CParticle::createAngularMovementOperator (const AngularMovementOperator& op) {
+    m_hasAngularVelocity = true;
     return [this, &op] (
         std::vector<ParticleInstance>& particles, uint32_t count, const std::vector<ControlPointData>&,
         float, float dt
