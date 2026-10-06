@@ -1031,7 +1031,9 @@ static std::optional<ControlPointRemap> parseControlPointRemap (
         : input == "lifetimefraction" ? Input::LifetimeFraction
         : input == "size" ? Input::Size : input == "opacity" ? Input::Opacity
         : input == "speed" ? Input::Speed : input == "rotation" ? Input::Rotation
-        : input == "angularspeed" ? std::optional (Input::AngularSpeed) : std::nullopt;
+        : input == "angularspeed" ? Input::AngularSpeed : input == "runtime" ? Input::Runtime
+        : input == "timeofday" ? Input::TimeOfDay
+        : input == "particlesystemtime" ? std::optional (Input::ParticleSystemTime) : std::nullopt;
     const std::optional<Output> parsedOutput = output == "positionbetweentwocontrolpoints" ? Output::BetweenPoints
         : output == "maxlifetime" ? Output::MaxLifetime : output == "size" ? Output::Size
         : output == "opacity" ? Output::Opacity : output == "speed" ? Output::Speed
@@ -1042,7 +1044,7 @@ static std::optional<ControlPointRemap> parseControlPointRemap (
         : transform == "fbmnoise" ? std::optional (Transform::FbmNoise) : std::nullopt;
     const bool linearPair = (parsedInput == Input::BetweenPoints && parsedOutput.has_value ())
         || (parsedOutput == Output::BetweenPoints && parsedInput.has_value ()
-            && (!initializer || parsedInput != Input::LifetimeFraction));
+            && (!initializer || (parsedInput != Input::LifetimeFraction && parsedInput != Input::ParticleSystemTime)));
     const bool speedOutput = parsedOutput == Output::Speed;
     const bool arithmetic = linearPair
         && (operation == "multiply" || operation == "add" || operation == "subtract");

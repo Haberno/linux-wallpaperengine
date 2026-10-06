@@ -3521,3 +3521,57 @@ TEST_CASE ("two point angle outputs retain native radians and optional storage",
         }
     }
 }
+
+TEST_CASE ("owner clock remaps distinguish scene runtime daytime and particle age", "[particle][remap][remap-clocks]") {
+    using WallpaperEngine::Render::Objects::applyParticleControlPointRemap;
+    using WallpaperEngine::Render::Objects::ControlPointData;
+    std::vector<ControlPointData> points (4);
+    points[1].position = { -64, 0, 0 };
+    points[2].position = { 0, 0, 0 };
+    points[3].position = { 64, 0, 0 };
+    // Native raw clock controls: owner runtime4, day1/8, system-1/2, layer9.
+    // The operator's system-time selection is runtime4, not system-1/2.
+    const struct { const char* name; float input; } samples[] = {
+        { "runtime", 4 }, { "timeofday", .125f }, { "particlesystemtime", 4 }
+    };
+    for (const bool initializer : { true, false }) {
+        for (const auto& sample : samples) {
+            if (initializer && std::string_view (sample.name) == "particlesystemtime") continue;
+            for (const std::string operation : { "remap", "multiply", "add", "subtract" }) {
+                for (const float age : { 0.0f, 1.0f, 2.0f }) {
+                    INFO (sample.name << ", initializer=" << initializer << ", operation=" << operation << ", age=" << age);
+                    WallpaperEngine::Data::Model::Project project {};
+                    auto data = WallpaperEngine::Data::JSON::JSON::parse (R"({"id":435,"particle":{}})");
+                    auto node = WallpaperEngine::Data::JSON::JSON::parse (R"({
+                        "output":"positionbetweentwocontrolpoints","flags":0,"outputrangemax":2,
+                        "outputcontrolpoint0":2,"outputcontrolpoint1":3,"blendinend":0.5
+                    })");
+                    node["name"] = initializer ? "remapinitialvalue" : "remapvalue";
+                    node["input"] = sample.name;
+                    node["operation"] = operation;
+                    data["particle"][initializer ? "initializer" : "operator"] = { node };
+                    const auto object = WallpaperEngine::Data::Parsers::ObjectParser::parse (data, project);
+                    const auto* definition = object->as<Particle> ();
+                    REQUIRE ((initializer ? definition->initializers.size () : definition->operators.size ()) == 1);
+                    const auto& remap = initializer
+                        ? definition->initializers.front ()->as<ControlPointRemapInitializer> ()->remap
+                        : definition->operators.front ()->as<ControlPointRemapOperator> ()->remap;
+                    ParticleInstance particle;
+                    particle.position = { 32, 12, -8 };
+                    particle.velocity = { 7, -11, 13 };
+                    particle.lifetime = 4;
+                    particle.age = age;
+                    applyParticleControlPointRemap (particle, remap, points, initializer, false, 4, .125f);
+                    const float mapped = sample.input * 2;
+                    const float target = operation == "remap" ? mapped : operation == "multiply" ? .5f * mapped
+                        : operation == "add" ? .5f + mapped : .5f - mapped;
+                    const float weight = initializer ? 1 : age * .5f;
+                    CHECK (particle.position == glm::vec3 (32 + 64 * (target - .5f) * weight, 12, -8));
+                    CHECK (particle.velocity == glm::vec3 (7, -11, 13));
+                    CHECK (particle.lifetime == 4);
+                    CHECK (particle.age == age);
+                }
+            }
+        }
+    }
+}

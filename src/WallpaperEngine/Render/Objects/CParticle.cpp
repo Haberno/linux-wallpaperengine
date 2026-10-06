@@ -16,6 +16,7 @@
 #include <limits>
 
 extern float g_Time;
+extern float g_Daytime;
 
 using namespace WallpaperEngine::Render::Objects;
 using namespace WallpaperEngine::Render::Utils;
@@ -1532,7 +1533,8 @@ static float particleOperatorBlend (float lifetimePosition, glm::vec4 blendTimes
 
 void WallpaperEngine::Render::Objects::applyParticleControlPointRemap (
     ParticleInstance& particle, const ControlPointRemap& remap,
-    const std::vector<ControlPointData>& controlPoints, const bool initializer, const bool angularVelocityAvailable
+    const std::vector<ControlPointData>& controlPoints, const bool initializer, const bool angularVelocityAvailable,
+    const float runtime, const float timeOfDay
 ) {
     const float weight = initializer ? 1.0f : particleOperatorBlend (particle.getLifetimePos (), remap.blendTimes);
     if (remap.transform == ControlPointRemap::Transform::SimplexNoise
@@ -1592,6 +1594,11 @@ void WallpaperEngine::Render::Objects::applyParticleControlPointRemap (
         case ControlPointRemap::Input::Size: input = initializer ? particle.initial.size : particle.size; break;
         // Alpha arrays alias until an alpha-writing operator separates them.
         case ControlPointRemap::Input::Opacity: input = initializer ? particle.initial.alpha : particle.alpha; break;
+        // Ordinary and blended system-time inputs use the owner clock too.
+        // Initializer system time and layer time remain gated until their lifecycle is modeled.
+        case ControlPointRemap::Input::Runtime:
+        case ControlPointRemap::Input::ParticleSystemTime: input = runtime; break;
+        case ControlPointRemap::Input::TimeOfDay: input = timeOfDay; break;
         case ControlPointRemap::Input::Speed: input = glm::length (particle.velocity); break;
         case ControlPointRemap::Input::Rotation: input = particle.rotation.z; break;
         case ControlPointRemap::Input::AngularSpeed: input = angularVelocityAvailable ? particle.angularVelocity.z : 0.0f; break;
@@ -1689,7 +1696,7 @@ InitializerFunc CParticle::createControlPointRemapInitializer (const ControlPoin
     includeControlPoint (remap.outputControlPoint0);
     includeControlPoint (remap.outputControlPoint1);
     return [this, &remap] (ParticleInstance& particle) {
-        applyParticleControlPointRemap (particle, remap, m_controlPoints, true, m_hasAngularVelocity);
+        applyParticleControlPointRemap (particle, remap, m_controlPoints, true, m_hasAngularVelocity, getScene ().getTime (), g_Daytime);
     };
 }
 
@@ -1708,7 +1715,7 @@ OperatorFunc CParticle::createControlPointRemapOperator (const ControlPointRemap
                  || remap.transform == ControlPointRemap::Transform::FbmNoise) && particles[i].oscillationRandom < 0.0f) {
                 particles[i].oscillationRandom = WallpaperEngine::Maths::randomFloat (m_rng, 0.0f, 1.0f);
             }
-            applyParticleControlPointRemap (particles[i], remap, controlPoints, false, m_hasAngularVelocity);
+            applyParticleControlPointRemap (particles[i], remap, controlPoints, false, m_hasAngularVelocity, getScene ().getTime (), g_Daytime);
         }
     };
 }

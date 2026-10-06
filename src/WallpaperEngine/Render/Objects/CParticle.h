@@ -190,7 +190,8 @@ void applyParticleBetweenControlPointConstraint (
 
 void applyParticleControlPointRemap (
     ParticleInstance& particle, const ControlPointRemap& remap,
-    const std::vector<ControlPointData>& controlPoints, bool initializer, bool angularVelocityAvailable = false
+    const std::vector<ControlPointData>& controlPoints, bool initializer, bool angularVelocityAvailable = false,
+    float runtime = 0.0f, float timeOfDay = 0.0f
 );
 
 /**
