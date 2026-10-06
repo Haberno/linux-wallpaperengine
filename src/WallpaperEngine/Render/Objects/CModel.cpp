@@ -167,37 +167,48 @@ const char* ModelData::replaceData (std::vector<Scripting::ModelDataShape> repla
     if (replacements.size () != shapes.size ()) {
 	return "IModelData.replaceData currently requires the existing shape count";
     }
-    const bool dynamic = std::all_of (shapes.begin (), shapes.end (), [] (const Shape& shape) {
-	return shape.input.vertexDynamic && (shape.input.indexWidth == 0 || shape.input.indexDynamic);
-    });
-    const bool growing = dynamic && std::equal (shapes.begin (), shapes.end (), replacements.begin (),
-	[] (const Shape& shape, const Scripting::ModelDataShape& replacement) {
-	    return replacement.vertices.size () > shape.input.vertices.size ()
-		|| replacement.indices.size () > shape.input.indices.size ();
-	});
     for (size_t index = 0; index < replacements.size (); ++index) {
 	const auto& replacement = replacements[index];
 	const auto& original = shapes[index].input;
-	if ((original.vertexDynamic && !dynamic) || !replacement.hasVertices || replacement.vertices.empty ()
+	const bool dynamic = original.vertexDynamic && (original.indexWidth == 0 || original.indexDynamic);
+	if (!replacement.hasVertices || replacement.vertices.empty ()
 	    || replacement.deleteShape || replacement.deleteIndices
 	    || replacement.vertexFormat != original.vertexFormat || replacement.strideBytes != original.strideBytes
 	    || replacement.material != original.material || replacement.indexWidth != original.indexWidth
 	    || (original.indexWidth != 0 && replacement.indices.empty ())
-	    || (dynamic && !growing && (replacement.vertices.size () != original.vertices.size ()
-		|| replacement.indices.size () != original.indices.size ()))) {
-	    return "IModelData.replaceData currently requires unchanged material/layout and complete static, full-capacity dynamic, or uniformly growing dynamic shapes";
+	    || (dynamic && replacement.vertices.size () <= original.vertices.size ()
+		&& replacement.indices.size () <= original.indices.size ()
+		&& (replacement.vertices.size () != original.vertices.size ()
+		    || replacement.indices.size () != original.indices.size ()))) {
+	    return "IModelData.replaceData currently requires unchanged material/layout and complete static, full-capacity dynamic, or growing dynamic shapes";
 	}
-    }
-    if (dynamic && !growing) {
-	// With no native recreation trigger, replacement uses the same map/copy
-	// path and draw counts as applyData, retaining the original dynamic flags.
-	return applyData (replacements);
     }
     GLint previous = 0;
     glGetIntegerv (GL_ARRAY_BUFFER_BINDING, &previous);
     for (size_t index = 0; index < replacements.size (); ++index) {
 	auto& shape = shapes[index];
-	shape.input = std::move (replacements[index]);
+	auto& replacement = replacements[index];
+	const bool dynamic = shape.input.vertexDynamic && (shape.input.indexWidth == 0 || shape.input.indexDynamic);
+	if (dynamic && replacement.vertices.size () == shape.input.vertices.size ()
+	    && replacement.indices.size () == shape.input.indices.size ()) {
+	    // Native selects map/copy independently for each non-growing dynamic shape.
+	    // Keep its allocation flags and the applyData draw-count behavior.
+	    glBindBuffer (GL_ARRAY_BUFFER, shape.vertexBuffer);
+	    glBufferSubData (GL_ARRAY_BUFFER, 0, replacement.vertices.size () * sizeof (float), replacement.vertices.data ());
+	    if (shape.indexBuffer != GL_NONE) {
+		glBindBuffer (GL_ARRAY_BUFFER, shape.indexBuffer);
+		glBufferSubData (GL_ARRAY_BUFFER, 0, replacement.indices.size (), replacement.indices.data ());
+	    }
+	    const size_t count = shape.input.indexWidth == 0
+		? replacement.vertexFloatCount / shape.input.strideBytes : replacement.indexCount;
+	    if (shape.input.indexWidth != 0 || count > 0) {
+		shape.drawCount = static_cast<GLsizei> (count);
+	    }
+	    shape.input.vertices = std::move (replacement.vertices);
+	    shape.input.indices = std::move (replacement.indices);
+	    continue;
+	}
+	shape.input = std::move (replacement);
 	// Keep the names referenced by every live color/shadow VAO while replacing
 	// their storage. Static buffers or capacity growth recreate both complete buffers.
 	glBindBuffer (GL_ARRAY_BUFFER, shape.vertexBuffer);
