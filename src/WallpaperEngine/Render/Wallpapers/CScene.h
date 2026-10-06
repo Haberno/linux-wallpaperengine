@@ -113,8 +113,8 @@ public:
     [[nodiscard]] glm::ivec2 getFramebufferSize () const override;
     [[nodiscard]] WallpaperState::TextureUVs getPresentationUVs () const override;
 
-    // Scene-local time accessors used by property, model, and script animations.
-    // A newly loaded wallpaper starts at zero even when the engine process stays alive.
+    // Scene-owned projected clock shared by script runtime, shaders and particle noise.
+    // Native rollover resets this clock; newly loaded wallpapers start at zero.
     [[nodiscard]] float getTime () const;
     /** Scene-relative timestamp for subtracting animation intervals before narrowing. */
     [[nodiscard]] double getElapsedTime () const { return this->m_sceneElapsedTime; }
@@ -378,6 +378,7 @@ private:
     std::optional<double> m_previousSceneTime = std::nullopt;
     float m_sceneDeltaTime = 0.0f;
     double m_sceneElapsedTime = 0.0;
+    double m_sceneTime = 0.0;
     const CameraPathSource* m_activeCameraPathSource = nullptr;
     std::optional<size_t> m_activeCameraPathIndex = std::nullopt;
     float m_cameraPathElapsed = 0.0f;

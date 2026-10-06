@@ -319,6 +319,8 @@ private:
     glm::vec4 m_texture0Resolution = {};
     std::array<float, 10> m_textureMipMapCounts = {};
     glm::vec3 m_screen = { 1, 1, 1 };
+    /** Wallpaper-owned projected g_Time value retained for the uniform pointer. */
+    float m_sceneTime = 0.0f;
     /** Wallpaper Engine's g_Frametime global. Refresh this from the scene-local clock before
      * every draw so feedback effects advance correctly on independently paced outputs. */
     float m_frameTime = 0.0f;

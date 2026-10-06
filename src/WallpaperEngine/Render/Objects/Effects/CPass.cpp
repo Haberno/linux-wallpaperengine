@@ -31,7 +31,6 @@ using namespace WallpaperEngine::Render::Objects;
 using namespace WallpaperEngine::Render::Shaders::Variables;
 using namespace WallpaperEngine::Render::Objects::Effects;
 
-extern float g_Time;
 extern float g_Daytime;
 
 const TextureMap DEFAULT_BINDS = {};
@@ -732,6 +731,7 @@ void CPass::render () {
     // gives GLSL's zero default and freezes the simulation completely. Use CScene's
     // per-output delta so a slower monitor receives all elapsed time instead of only the
     // most recent application-loop interval.
+    this->m_sceneTime = this->m_renderable.getScene ().getTime ();
     this->m_frameTime = this->m_renderable.getScene ().getDeltaTime ();
     this->m_sceneTexelSize = 1.0f / glm::vec2 (this->m_renderable.getScene ().getFramebufferSize ());
     this->m_sceneTexelSizeHalf = this->m_sceneTexelSize * 0.5f;
@@ -1550,7 +1550,7 @@ void CPass::setupUniforms () {
 	this->addUniform ("g_CompositeColor", &renderable.getCompositeColor ());
     }
     // add some external variables
-    this->addUniform ("g_Time", &g_Time);
+    this->addUniform ("g_Time", &this->m_sceneTime);
     this->addUniform ("g_Frametime", &this->m_frameTime);
     this->addUniform ("g_Daytime", &g_Daytime);
     // add model-view-projection matrix

@@ -943,6 +943,10 @@ void CScene::renderFrame (const glm::ivec4& viewport) {
     this->m_sceneDeltaTime = calculateSceneDeltaTime (currentTime, this->m_previousSceneTime);
     this->m_previousSceneTime = currentTime;
     this->m_sceneElapsedTime += this->m_sceneDeltaTime;
+    // Native scene time resets after its float projection exceeds five days.
+    // Local animation anchors keep the stable elapsed clock above.
+    this->m_sceneTime += this->m_sceneDeltaTime;
+    if (static_cast<float> (this->m_sceneTime) > 432000.0f) this->m_sceneTime = 0.0;
 
     // Camera layers are ordinary scriptable objects. Resolve their parent chain
     // before paths and mouse projection so a scripted camera rig supplies the
@@ -1940,7 +1944,7 @@ int CScene::getWidth () const { return this->m_camera->getWidth (); }
 
 int CScene::getHeight () const { return this->m_camera->getHeight (); }
 
-float CScene::getTime () const { return static_cast<float> (this->m_sceneElapsedTime); }
+float CScene::getTime () const { return static_cast<float> (this->m_sceneTime); }
 
 float CScene::getDeltaTime () const { return this->m_sceneDeltaTime; }
 
