@@ -162,7 +162,7 @@ bool CVideo::setColorProperty (const std::string& key, const std::string& value)
     if (key != "alignmentfliph" && key != "wec_e" && key != "wec_brs" && key != "wec_con" && key != "wec_sa"
 	&& key != "wec_hue" && key != "wcc_v" && key != "wcc_amt")
 	return false;
-    if (key == "wcc_amt") {
+    if (key == "wcc_amt" || key == "wec_brs" || key == "wec_con" || key == "wec_sa" || key == "wec_hue") {
 	float parsed;
 	const auto result = std::from_chars (value.data (), value.data () + value.size (), parsed);
 	if (result.ec != std::errc {} || result.ptr != value.data () + value.size () || !std::isfinite (parsed))
