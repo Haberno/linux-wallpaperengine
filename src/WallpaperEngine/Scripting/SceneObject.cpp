@@ -580,9 +580,11 @@ static JSValue model_change_data (JSContext* ctx, JSValueConst self, int argc, J
 	return JS_UNDEFINED;
     }
     std::vector<std::pair<size_t, size_t>> capacities;
-    if (auto resource = handle->scene->getScene ().findModelData (handle->token); resource && !replace) {
+    if (auto resource = handle->scene->getScene ().findModelData (handle->token); resource) {
 	for (const auto& shape : resource->shapes) {
-	    capacities.emplace_back (shape.input.vertices.size () * sizeof (float), shape.input.indices.size ());
+	    const bool copyCapacity = !replace || (shape.input.vertexDynamic && (shape.input.indexWidth == 0 || shape.input.indexDynamic));
+	    capacities.emplace_back (copyCapacity ? shape.input.vertices.size () * sizeof (float) : 0,
+		copyCapacity ? shape.input.indices.size () : 0);
 	}
     }
     // Do not keep a resource lease across property getters invoked by parsing.

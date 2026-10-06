@@ -172,16 +172,16 @@ const char* ModelData::replaceData (std::vector<Scripting::ModelDataShape> repla
 	const auto& replacement = replacements[index];
 	const auto& original = shapes[index].input;
 	const bool dynamic = original.vertexDynamic && (original.indexWidth == 0 || original.indexDynamic);
+	const bool growing = replacement.vertexFloatCount > original.vertices.size ()
+	    || (original.indexWidth != 0 && replacement.indexCount > original.indices.size () / original.indexWidth);
 	if (!replacement.hasVertices || replacement.vertices.empty ()
 	    || replacement.deleteShape || replacement.deleteIndices
 	    || replacement.vertexFormat != original.vertexFormat || replacement.strideBytes != original.strideBytes
 	    || replacement.material != original.material || replacement.indexWidth != original.indexWidth
 	    || (original.indexWidth != 0 && replacement.indices.empty ())
-	    || (dynamic && replacement.vertices.size () <= original.vertices.size ()
-		&& replacement.indices.size () <= original.indices.size ()
-		&& (replacement.vertices.size () != original.vertices.size ()
+	    || (dynamic && !growing && (replacement.vertices.size () != original.vertices.size ()
 		    || replacement.indices.size () != original.indices.size ()))) {
-	    return "IModelData.replaceData currently requires unchanged material/layout and complete static, full-capacity dynamic, or growing dynamic shapes";
+	    return "IModelData.replaceData currently requires unchanged material/layout and complete static, safely backed dynamic, or growing dynamic shapes";
 	}
     }
     GLint previous = 0;
@@ -190,8 +190,8 @@ const char* ModelData::replaceData (std::vector<Scripting::ModelDataShape> repla
 	auto& shape = shapes[index];
 	auto& replacement = replacements[index];
 	const bool dynamic = shape.input.vertexDynamic && (shape.input.indexWidth == 0 || shape.input.indexDynamic);
-	if (dynamic && replacement.vertices.size () == shape.input.vertices.size ()
-	    && replacement.indices.size () == shape.input.indices.size ()) {
+	if (dynamic && replacement.vertexFloatCount <= shape.input.vertices.size ()
+	    && (shape.input.indexWidth == 0 || replacement.indexCount <= shape.input.indices.size () / shape.input.indexWidth)) {
 	    // Native selects map/copy independently for each non-growing dynamic shape.
 	    // Keep its allocation flags and the applyData draw-count behavior.
 	    glBindBuffer (GL_ARRAY_BUFFER, shape.vertexBuffer);
@@ -209,6 +209,10 @@ const char* ModelData::replaceData (std::vector<Scripting::ModelDataShape> repla
 	    shape.input.indices = std::move (replacement.indices);
 	    continue;
 	}
+	// Parsing may have captured dynamic capacities before a property getter
+	// changed the original flags. Recreated buffers use only their logical views.
+	replacement.vertices.resize (replacement.vertexFloatCount);
+	replacement.indices.resize (replacement.indexCount * replacement.indexWidth);
 	shape.input = std::move (replacement);
 	// Keep the names referenced by every live color/shadow VAO while replacing
 	// their storage. Static buffers or capacity growth recreate both complete buffers.

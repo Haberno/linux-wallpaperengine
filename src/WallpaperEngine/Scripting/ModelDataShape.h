@@ -84,7 +84,7 @@ namespace ModelDataInput {
 	}
 	if (JS_GetTypedArrayType (vertices.value) == JS_TYPED_ARRAY_FLOAT32) {
 	    parsed.hasVertices = true;
-	    if (!copyView (ctx, vertices.value, parsed.vertices, vertexCapacity, &parsed.vertexFloatCount)) {
+	    if (!copyView (ctx, vertices.value, parsed.vertices, creation ? 0 : vertexCapacity, &parsed.vertexFloatCount)) {
 		return false;
 	    }
 	} else if (creation) {
@@ -100,7 +100,7 @@ namespace ModelDataInput {
 	const int indexType = JS_GetTypedArrayType (indices.value);
 	if (indexType == JS_TYPED_ARRAY_UINT16 || indexType == JS_TYPED_ARRAY_UINT32) {
 	    parsed.indexWidth = indexType == JS_TYPED_ARRAY_UINT16 ? 2 : 4;
-	    if (!copyView (ctx, indices.value, parsed.indices, indexCapacity, &parsed.indexCount)) {
+	    if (!copyView (ctx, indices.value, parsed.indices, creation ? 0 : indexCapacity, &parsed.indexCount)) {
 		return false;
 	    }
 	}
@@ -180,6 +180,20 @@ namespace ModelDataInput {
 	if (creation && (parsed.vertices.size () * sizeof (float)) % parsed.strideBytes != 0) {
 	    JS_ThrowSyntaxError (ctx, "Inconsistent vertex buffer size");
 	    return false;
+	}
+	// Replacement retains a fully dynamic allocation only when neither logical
+	// view grows. A growing buffer recreates both buffers at their incoming sizes.
+	if (creation && vertexCapacity != 0 && parsed.vertexFloatCount != 0
+	    && (parsed.indexWidth == 0 || parsed.indexCount != 0)
+	    && parsed.vertices.size () * sizeof (float) <= vertexCapacity && parsed.indices.size () <= indexCapacity) {
+	    if (parsed.vertices.size () * sizeof (float) < vertexCapacity
+		&& !copyView (ctx, vertices.value, parsed.vertices, vertexCapacity)) {
+		return false;
+	    }
+	    if (parsed.indexWidth != 0 && parsed.indices.size () < indexCapacity
+		&& !copyView (ctx, indices.value, parsed.indices, indexCapacity)) {
+		return false;
+	    }
 	}
 	result = std::move (parsed);
 	return true;
