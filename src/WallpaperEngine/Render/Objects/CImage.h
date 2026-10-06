@@ -155,7 +155,7 @@ private:
 	bool visible = false;
 	uint32_t animation = 0;
 	float time = 0.0f;
-	float lastSceneTime = 0.0f;
+	double lastSceneTime = 0.0;
 	float visibilityWeight = 0.0f;
     };
 
@@ -164,7 +164,7 @@ private:
     void setupPuppetAlbedoPasses ();
     void renderPuppetAlbedo ();
     [[nodiscard]] const WallpaperEngine::Data::Model::MdlAnimationClip* findPuppetAnimationClip (uint32_t id) const;
-    void selectPuppetAnimations (float sceneTime);
+    void selectPuppetAnimations (double sceneTime);
     void updatePuppetPositionBuffer (const glm::vec2& size);
     void updatePuppetClippingCommands (const PuppetClippingPlan& plan);
     [[nodiscard]] std::optional<ResolvedTransform> puppetAttachmentTransform (const std::string& name) const;
@@ -223,7 +223,7 @@ private:
     std::vector<GLfloat> m_puppetBlendWeights = {};
     WallpaperEngine::Data::Model::MdlAnimationData m_puppetAnimation = {};
     WallpaperEngine::Data::Model::MdlPhysicsState m_puppetPhysics = {};
-    float m_puppetPhysicsTime = 0.0f;
+    double m_puppetPhysicsTime = 0.0;
     std::vector<glm::mat4> m_puppetWorldBones = {};
     std::vector<glm::mat4> m_puppetSkinBones = {};
     std::vector<GLfloat> m_puppetPositions = {};

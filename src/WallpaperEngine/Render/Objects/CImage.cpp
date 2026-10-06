@@ -766,7 +766,7 @@ const MdlAnimationClip* CImage::findPuppetAnimationClip (const uint32_t id) cons
     return found != this->m_puppetAnimation.animations.end () ? &*found : nullptr;
 }
 
-void CImage::selectPuppetAnimations (const float sceneTime) {
+void CImage::selectPuppetAnimations (const double sceneTime) {
     this->m_puppetActiveLayers.clear ();
 
     if (this->m_puppetAnimation.animations.empty ()) {
@@ -792,7 +792,7 @@ void CImage::selectPuppetAnimations (const float sceneTime) {
 	    playback.initialized = true;
 	    playback.animation = animationId;
 	    playback.visible = visible;
-	    playback.time = sceneTime * rate;
+	    playback.time = static_cast<float> (sceneTime) * rate;
 	    if (animation != nullptr && animation->fps > 0.0f && animation->frameCount > 0) {
 		const float duration = animation->frameCount / animation->fps;
 		if (animation->mode == "single") {
@@ -812,12 +812,12 @@ void CImage::selectPuppetAnimations (const float sceneTime) {
 	    playback.lastSceneTime = sceneTime;
 	    playback.visibilityWeight = visible && blendIn ? 0.0f : visible ? 1.0f : 0.0f;
 	} else {
-	    deltaTime = sceneTime - playback.lastSceneTime;
+	    deltaTime = static_cast<float> (sceneTime - playback.lastSceneTime);
 	    playback.lastSceneTime = sceneTime;
 
 	    // A timeline seek/reset should seek deterministic scene-driven layers too.
 	    if (deltaTime < 0.0f) {
-		playback.time = sceneTime * rate;
+		playback.time = static_cast<float> (sceneTime) * rate;
 		playback.reverse = playback.finished = false;
 		deltaTime = 0.0f;
 	    } else if (playback.playing && !playback.stopped && !playback.finished
@@ -896,7 +896,7 @@ void CImage::updatePuppetPositionBuffer (const glm::vec2& size) {
 	return;
     }
 
-    const float sceneTime = this->getScene ().getTime ();
+    const double sceneTime = this->getScene ().getElapsedTime ();
     this->selectPuppetAnimations (sceneTime);
 
     // Spring bones react to the layer's scene motion (scripted origin, parallax). Native steps
@@ -911,7 +911,7 @@ void CImage::updatePuppetPositionBuffer (const glm::vec2& size) {
 	    glm::vec3 ((this->m_pos.z - this->m_pos.x) / size.x, (this->m_pos.y - this->m_pos.w) / size.y, 1.0f)
 	),
 	// Re-skinning at an unchanged scene time must not advance the springs again.
-	.deltaTime = std::max (sceneTime - this->m_puppetPhysicsTime, 0.0f),
+	.deltaTime = static_cast<float> (std::max (sceneTime - this->m_puppetPhysicsTime, 0.0)),
     };
     this->m_puppetPhysicsTime = sceneTime;
 
@@ -2370,7 +2370,7 @@ void CImage::setPuppetAnimationLayerFrame (const size_t index, const float frame
     if (index >= this->m_image.animationLayers.size () || !std::isfinite (frame)) return;
     const auto& layer = this->m_image.animationLayers[index];
     if (!this->m_puppetLayerPlayback[layer->id].initialized) {
-	this->selectPuppetAnimations (this->getScene ().getTime ());
+	this->selectPuppetAnimations (this->getScene ().getElapsedTime ());
     }
     auto& playback = this->m_puppetLayerPlayback[layer->id];
     const auto* animation = this->findPuppetAnimationClip (playback.animation);

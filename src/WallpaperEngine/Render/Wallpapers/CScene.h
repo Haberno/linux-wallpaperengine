@@ -116,6 +116,8 @@ public:
     // Scene-local time accessors used by property, model, and script animations.
     // A newly loaded wallpaper starts at zero even when the engine process stays alive.
     [[nodiscard]] float getTime () const;
+    /** Scene-relative timestamp for subtracting animation intervals before narrowing. */
+    [[nodiscard]] double getElapsedTime () const { return this->m_sceneElapsedTime; }
     [[nodiscard]] float getDeltaTime () const;
     [[nodiscard]] float getFps () const;
 
