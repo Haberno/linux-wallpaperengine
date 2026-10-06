@@ -140,6 +140,8 @@ void CWallpaper::setupShaders () {
 		    "uniform float g_Contrast;\n"
 		    "uniform float g_Saturation;\n"
 		    "uniform vec4 g_ColorCorrection;\n"
+		    "uniform sampler3D g_ColorLut;\n"
+		    "uniform float g_ColorLutStrength;\n"
 		    "uniform float g_Fps;\n"
 		    "uniform vec3 g_FpsOutput;\n"
 		    "uniform float g_LoadTimes[7];\n"
@@ -310,6 +312,7 @@ void CWallpaper::setupShaders () {
 		    "void main () {\n"
 		    "vec3 sceneColor = texture (g_Texture0, v_TexCoord).rgb;\n"
 		    "sceneColor = nativeColorCorrection (sceneColor, g_ColorCorrection);\n"
+		    "if (g_ColorLutStrength > 0.0) sceneColor = mix (sceneColor, texture (g_ColorLut, sceneColor).rgb, g_ColorLutStrength);\n"
 		    // materials/util/fade.json uses the fade shader's default tint (0.315,
 		    // 0.135, 0.1125), multiplied by 0.7 in fade.frag. Scheme-color overrides
 		    // can replace this once Linux-side desktop scheme integration exists.
@@ -391,6 +394,8 @@ void CWallpaper::setupShaders () {
     this->g_Contrast = glGetUniformLocation (this->m_shader, "g_Contrast");
     this->g_Saturation = glGetUniformLocation (this->m_shader, "g_Saturation");
     this->g_ColorCorrection = glGetUniformLocation (this->m_shader, "g_ColorCorrection");
+    this->g_ColorLut = glGetUniformLocation (this->m_shader, "g_ColorLut");
+    this->g_ColorLutStrength = glGetUniformLocation (this->m_shader, "g_ColorLutStrength");
     this->g_Fps = glGetUniformLocation (this->m_shader, "g_Fps");
     this->g_FpsOutput = glGetUniformLocation (this->m_shader, "g_FpsOutput");
     this->g_LoadTimes = glGetUniformLocation (this->m_shader, "g_LoadTimes");
@@ -559,6 +564,12 @@ void CWallpaper::render (
     glUniform1f (this->g_Saturation, this->m_saturation);
     const auto correction = this->getColorCorrection ();
     glUniform4f (this->g_ColorCorrection, correction.x, correction.y, correction.z, correction.w);
+    const auto [lut, strength] = this->getColorLut ();
+    glActiveTexture (GL_TEXTURE1);
+    glBindTexture (GL_TEXTURE_3D, lut);
+    glActiveTexture (GL_TEXTURE0);
+    glUniform1i (this->g_ColorLut, 1);
+    glUniform1f (this->g_ColorLutStrength, strength);
     glUniform1f (this->g_Fps, this->m_fps);
     const float outputScale = logicalSize.x > 0 ? static_cast<float> (viewport.z) / logicalSize.x : 1.0f;
     glUniform3f (this->g_FpsOutput, viewport.z, viewport.w, outputScale);
@@ -578,6 +589,8 @@ void CWallpaper::setPause (bool newState) { }
 float CWallpaper::getSceneFadeAlpha () const { return 0.0f; }
 
 glm::vec4 CWallpaper::getColorCorrection () const { return { 1.0f, 1.0f, 1.0f, 0.0f }; }
+
+std::pair<GLuint, float> CWallpaper::getColorLut () const { return {}; }
 
 void CWallpaper::setupFramebuffers (bool sceneDepthBuffer, glm::vec2 size, uint32_t samples, TextureFormat format, bool reverseDepth) {
     this->setBackbufferFormat (format);

@@ -4,6 +4,7 @@
 #include <array>
 #include <GLFW/glfw3.h>
 #include <optional>
+#include <utility>
 
 #include "WallpaperEngine/Audio/AudioContext.h"
 
@@ -193,6 +194,7 @@ protected:
     /** Optional scene-local fade composited over the rendered wallpaper. */
     [[nodiscard]] virtual float getSceneFadeAlpha () const;
     [[nodiscard]] virtual glm::vec4 getColorCorrection () const;
+    [[nodiscard]] virtual std::pair<GLuint, float> getColorLut () const;
 
 private:
     /** The texture used for the scene output */
@@ -208,6 +210,8 @@ private:
     GLint g_Contrast = GL_NONE;
     GLint g_Saturation = GL_NONE;
     GLint g_ColorCorrection = GL_NONE;
+    GLint g_ColorLut = GL_NONE;
+    GLint g_ColorLutStrength = GL_NONE;
     GLint g_Fps = GL_NONE;
     GLint g_FpsOutput = GL_NONE;
     float m_fps = -1.0f;

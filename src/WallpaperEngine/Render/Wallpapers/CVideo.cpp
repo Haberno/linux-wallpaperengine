@@ -4,6 +4,7 @@
 #include "WallpaperEngine/Data/Model/Property.h"
 #include "WallpaperEngine/Data/Model/Wallpaper.h"
 #include "WallpaperEngine/VideoPlayback/MPV/GLPlayer.h"
+#include "WallpaperEngine/Logging/Log.h"
 
 #include <algorithm>
 #include <charconv>
@@ -20,6 +21,7 @@ CVideo::CVideo (
 ) : CWallpaper (wallpaper, context, audioContext, scalingMode, clampMode) {
     // setup framebuffers
     this->setupFramebuffers ();
+    this->setupColorLut ();
 
     const std::filesystem::path videopath
 	= this->getVideo ().project.assetLocator->physicalPath (this->getVideo ().filename);
@@ -39,6 +41,42 @@ CVideo::CVideo (
     this->m_player->setVolume (audioSettings.enabled ? audioSettings.volume * 100.0 / 128.0 : 0.0);
     // make sure the video has at least one usage marked, this ensures the video plays
     this->m_player->incrementUsageCount ();
+}
+
+void CVideo::setupColorLut () {
+    const auto& properties = this->getVideo ().project.properties;
+    const auto& overrides = this->getContext ().getApp ().getContext ().settings.general.properties;
+    std::string selection;
+    if (const auto property = properties.find ("wcc_v"); property != properties.end ()
+	&& property->second->getType () == Data::Model::DynamicValue::String) {
+	selection = property->second->getString ();
+    }
+    if (const auto override = overrides.find ("wcc_v"); override != overrides.end ()) {
+	selection = override->second;
+    }
+    float amount = 100.0f;
+    if (const auto property = properties.find ("wcc_amt"); property != properties.end ()) {
+	const auto type = property->second->getType ();
+	if (type == Data::Model::DynamicValue::Float || type == Data::Model::DynamicValue::Int)
+	    amount = property->second->getFloat ();
+    }
+    if (const auto override = overrides.find ("wcc_amt"); override != overrides.end ()) {
+	const auto& text = override->second;
+	float parsed;
+	const auto result = std::from_chars (text.data (), text.data () + text.size (), parsed);
+	if (result.ec == std::errc {} && result.ptr == text.data () + text.size () && std::isfinite (parsed))
+	    amount = parsed;
+    }
+    this->m_colorLutStrength = amount / 100.0f;
+    if (selection.empty () || this->m_colorLutStrength <= 0.0f) return;
+    this->m_colorLut = this->getContext ().resolveTexture ("lut/" + selection, this->getAssetLocator (), 1);
+    if (this->m_colorLut->getTextureTarget () != GL_TEXTURE_3D)
+	sLog.exception ("Video image filter requires a 3D texture");
+}
+
+std::pair<GLuint, float> CVideo::getColorLut () const {
+    if (!this->m_colorLut) return {};
+    return { this->m_colorLut->getTextureID (0), this->m_colorLutStrength };
 }
 
 CVideo::~CVideo () { this->m_player->decrementUsageCount (); }

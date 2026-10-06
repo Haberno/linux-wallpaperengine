@@ -31,11 +31,15 @@ public:
 protected:
     void renderFrame (const glm::ivec4& viewport) override;
     [[nodiscard]] glm::vec4 getColorCorrection () const override;
+    [[nodiscard]] std::pair<GLuint, float> getColorLut () const override;
 
     friend class CWallpaper;
 
 private:
+    void setupColorLut ();
     GLPlayerUniquePtr m_player;
+    std::shared_ptr<const TextureProvider> m_colorLut;
+    float m_colorLutStrength = 1.0f;
 
     bool m_muted = false;
     std::map<std::string, std::string> m_liveColorProperties;
