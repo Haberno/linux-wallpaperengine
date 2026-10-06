@@ -1589,6 +1589,7 @@ void WallpaperEngine::Render::Objects::applyParticleControlPointRemap (
                       || remap.mode == ControlPointRemap::Mode::PositionToPosition
                       || remap.mode == ControlPointRemap::Mode::PositionToSize
                       || remap.mode == ControlPointRemap::Mode::PositionToOpacity
+                      || remap.mode == ControlPointRemap::Mode::PositionToLifetime
                       || remap.mode == ControlPointRemap::Mode::PositionToSpeed ? fraction
                       : remap.mode == ControlPointRemap::Mode::LifetimeFractionToPosition ? particle.getLifetimePos ()
                       : particle.lifetime;
@@ -1630,10 +1631,11 @@ void WallpaperEngine::Render::Objects::applyParticleControlPointRemap (
         }
         particle.velocity = weight == 1.0f ? target : particle.velocity + (target - particle.velocity) * weight;
     } else {
-        // Native scalar arithmetic acts on current size/opacity or longitudinal fraction.
+        // Native scalar arithmetic acts on current size/opacity/lifetime or longitudinal fraction.
         // Do not clamp the operated result.
         const float current = remap.mode == ControlPointRemap::Mode::PositionToSize ? particle.size
                             : remap.mode == ControlPointRemap::Mode::PositionToOpacity ? particle.alpha
+                            : remap.mode == ControlPointRemap::Mode::PositionToLifetime ? particle.lifetime
                             : tinyInitializer ? glm::dot (particle.position - start, delta) : fraction;
         float result = mapped.x;
         switch (remap.operation) {
@@ -1648,6 +1650,9 @@ void WallpaperEngine::Render::Objects::applyParticleControlPointRemap (
         } else if (remap.mode == ControlPointRemap::Mode::PositionToOpacity) {
             particle.alpha = weight == 1.0f ? result : current + (result - current) * weight;
             if (initializer) particle.initial.alpha = particle.alpha;
+        } else if (remap.mode == ControlPointRemap::Mode::PositionToLifetime) {
+            particle.lifetime = weight == 1.0f ? result : current + (result - current) * weight;
+            if (initializer) particle.initial.lifetime = particle.lifetime;
         } else if (tinyInitializer) {
             // Native 14023e0f8..14023e1e4 keeps tiny directions unnormalized,
             // uses their raw projection for output arithmetic, and scales the

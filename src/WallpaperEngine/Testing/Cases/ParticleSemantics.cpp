@@ -2970,3 +2970,132 @@ TEST_CASE ("initializer tiny position output uses rounded length and independent
             CHECK (std::abs (particle.position[axis] - sample.expected[axis]) <= 0.000001f);
     }
 }
+
+TEST_CASE ("two-control-point remaps write maximum lifetime before subsequent age evaluation", "[particle][remap][remap-position-lifetime]") {
+    using WallpaperEngine::Render::Objects::applyParticleControlPointRemap;
+    using WallpaperEngine::Render::Objects::ControlPointData;
+    const struct { const char* operation; float full, half; } cases[] = {
+        { nullptr, 16, 12 }, { "remap", 2, 5 }, { "multiply", 16, 12 },
+        { "add", 10, 9 }, { "subtract", 6, 7 }
+    };
+    std::vector<ControlPointData> points (4);
+    points[0].position = { 1000, 0, 0 };
+    points[1].position = { 1100, 0, 0 };
+    points[2].position = { -12, 20, 7 };
+    points[3].position = { 20, 84, -25 };
+    for (const bool initializer : { true, false }) {
+        DYNAMIC_SECTION ("initializer=" << initializer) {
+            for (const auto& sample : cases) {
+                for (const float age : { 0.0f, 2.0f, 4.0f }) {
+                    INFO ("operation=" << (sample.operation ? sample.operation : "default") << ", age=" << age);
+                    WallpaperEngine::Data::Model::Project project {};
+                    auto data = WallpaperEngine::Data::JSON::JSON::parse (R"({"id":419,"particle":{}})");
+                    auto node = WallpaperEngine::Data::JSON::JSON::parse (R"({
+                        "input":"positionbetweentwocontrolpoints","output":"maxlifetime",
+                        "outputrangemax":8,"inputcontrolpoint0":0,"inputcontrolpoint1":1,
+                        "outputcontrolpoint0":2,"outputcontrolpoint1":3,
+                        "blendinstart":0,"blendinend":0.5
+                    })");
+                    node["name"] = initializer ? "remapinitialvalue" : "remapvalue";
+                    if (sample.operation) node["operation"] = sample.operation;
+                    data["particle"][initializer ? "initializer" : "operator"] = { node };
+                    const auto object = WallpaperEngine::Data::Parsers::ObjectParser::parse (data, project);
+                    const auto* definition = object->as<Particle> ();
+                    REQUIRE (definition != nullptr);
+                    REQUIRE ((initializer ? definition->initializers.size () : definition->operators.size ()) == 1);
+                    const auto& remap = initializer
+                        ? definition->initializers.front ()->as<ControlPointRemapInitializer> ()->remap
+                        : definition->operators.front ()->as<ControlPointRemapOperator> ()->remap;
+                    ParticleInstance particle;
+                    particle.position = { 2, 33, -1 }; // selected output-pair fraction .25
+                    particle.velocity = { 7, -11, 13 };
+                    particle.alpha = .75f;
+                    particle.lifetime = 8;
+                    particle.initial.lifetime = initializer ? 8 : 4;
+                    particle.age = age;
+                    particle.alive = true;
+                    applyParticleControlPointRemap (particle, remap, points, initializer);
+                    const float expected = initializer || age == 4 ? sample.full : age == 2 ? sample.half : 8;
+                    CHECK (particle.lifetime == expected);
+                    CHECK (particle.initial.lifetime == (initializer ? sample.full : 4));
+                    CHECK (particle.age == age);
+                    CHECK (particle.alive);
+                    CHECK (particle.isAlive () == (age < expected));
+                    CHECK (particle.getLifetimePos () == Catch::Approx (age / expected));
+                    CHECK (particle.position == glm::vec3 (2, 33, -1));
+                    CHECK (particle.velocity == glm::vec3 (7, -11, 13));
+                    CHECK (particle.alpha == .75f);
+                }
+            }
+        }
+    }
+}
+
+TEST_CASE ("two-control-point lifetime remaps clamp mapped values and retain signed output", "[particle][remap][remap-position-lifetime]") {
+    using WallpaperEngine::Render::Objects::applyParticleControlPointRemap;
+    using WallpaperEngine::Render::Objects::ControlPointData;
+    const struct { uint32_t flags; float full, half; } cases[] = {
+        { 0, -128, -60 }, { 1, -64, -28 }, { 2, 0, 4 }, { 3, 0, 4 }
+    };
+    std::vector<ControlPointData> points (2);
+    points[0].position = { -12, 20, 7 };
+    points[1].position = { 20, 84, -25 };
+    for (const bool initializer : { true, false }) {
+        DYNAMIC_SECTION ("initializer=" << initializer) {
+            for (const auto& sample : cases) {
+                INFO ("flags=" << sample.flags);
+                WallpaperEngine::Data::Model::Project project {};
+                auto data = WallpaperEngine::Data::JSON::JSON::parse (R"({"id":420,"particle":{}})");
+                auto node = WallpaperEngine::Data::JSON::JSON::parse (R"({
+                    "input":"positionbetweentwocontrolpoints","output":"maxlifetime",
+                    "outputrangemin":"-8 100 200","outputrangemax":"24 120 240",
+                    "blendinstart":0,"blendinend":0.5
+                })");
+                node["name"] = initializer ? "remapinitialvalue" : "remapvalue";
+                node["flags"] = sample.flags;
+                data["particle"][initializer ? "initializer" : "operator"] = { node };
+                const auto object = WallpaperEngine::Data::Parsers::ObjectParser::parse (data, project);
+                const auto* definition = object->as<Particle> ();
+                REQUIRE (definition != nullptr);
+                REQUIRE ((initializer ? definition->initializers.size () : definition->operators.size ()) == 1);
+                const auto& remap = initializer
+                    ? definition->initializers.front ()->as<ControlPointRemapInitializer> ()->remap
+                    : definition->operators.front ()->as<ControlPointRemapOperator> ()->remap;
+                ParticleInstance particle;
+                particle.position = { -14, 1, 15 }; // signed fraction -.25
+                particle.lifetime = 8;
+                particle.initial.lifetime = 3;
+                particle.age = 2;
+                applyParticleControlPointRemap (particle, remap, points, initializer);
+                CHECK (particle.lifetime == (initializer ? sample.full : sample.half));
+                CHECK (particle.initial.lifetime == (initializer ? sample.full : 3));
+                CHECK (particle.age == 2);
+                CHECK (particle.position == glm::vec3 (-14, 1, 15));
+            }
+        }
+    }
+}
+
+TEST_CASE ("lifetime remap operators retain prior lifetime writes across dispatches", "[particle][remap][remap-position-lifetime]") {
+    using WallpaperEngine::Render::Objects::applyParticleControlPointRemap;
+    using WallpaperEngine::Render::Objects::ControlPointData;
+    WallpaperEngine::Data::Model::Project project {};
+    const auto object = WallpaperEngine::Data::Parsers::ObjectParser::parse (
+        WallpaperEngine::Data::JSON::JSON::parse (R"({"id":421,"particle":{"operator":[{
+            "name":"remapvalue","input":"positionbetweentwocontrolpoints","output":"maxlifetime"
+        }]}})"), project);
+    const auto* definition = object->as<Particle> ();
+    REQUIRE (definition != nullptr);
+    REQUIRE (definition->operators.size () == 1);
+    const auto& remap = definition->operators.front ()->as<ControlPointRemapOperator> ()->remap;
+    std::vector<ControlPointData> points (2);
+    points[1].position = { 64, 0, 0 };
+    ParticleInstance particle;
+    particle.position = { 32, 12, -8 };
+    particle.lifetime = particle.initial.lifetime = 8;
+    applyParticleControlPointRemap (particle, remap, points, false);
+    CHECK (particle.lifetime == 4);
+    applyParticleControlPointRemap (particle, remap, points, false);
+    CHECK (particle.lifetime == 2);
+    CHECK (particle.initial.lifetime == 8);
+}

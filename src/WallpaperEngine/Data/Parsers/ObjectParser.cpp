@@ -1023,14 +1023,15 @@ static std::optional<ControlPointRemap> parseControlPointRemap (
     const auto operation = it.optional<std::string> ("operation", "multiply");
     const auto transform = it.optional<std::string> ("transformfunction", "none");
     const bool positionInput = input == "positionbetweentwocontrolpoints"
-        && (output == "velocity" || output == "positionbetweentwocontrolpoints" || output == "size" || output == "speed" || output == "opacity");
+        && (output == "velocity" || output == "positionbetweentwocontrolpoints" || output == "size" || output == "speed" || output == "opacity" || output == "maxlifetime");
     const bool fractionInput = !initializer && input == "lifetimefraction";
     const bool positionOutput = (input == "maxlifetime" || fractionInput || positionInput)
         && output == "positionbetweentwocontrolpoints";
     const bool sizeOutput = positionInput && output == "size";
     const bool speedOutput = positionInput && output == "speed";
     const bool opacityOutput = positionInput && output == "opacity";
-    const bool arithmetic = (positionOutput || sizeOutput || opacityOutput || (positionInput && output == "velocity"))
+    const bool lifetimeOutput = positionInput && output == "maxlifetime";
+    const bool arithmetic = (positionOutput || sizeOutput || opacityOutput || lifetimeOutput || (positionInput && output == "velocity"))
         && (operation == "multiply" || operation == "add" || operation == "subtract");
     const bool noiseVelocity = !initializer && input == "lifetimefraction" && output == "velocity"
         && transform == "simplexnoise";
@@ -1060,6 +1061,7 @@ static std::optional<ControlPointRemap> parseControlPointRemap (
                               : noiseSpeed ? ControlPointRemap::Mode::LifetimeFbmToSpeed
                               : speedOutput ? ControlPointRemap::Mode::PositionToSpeed
                               : opacityOutput ? ControlPointRemap::Mode::PositionToOpacity
+                              : lifetimeOutput ? ControlPointRemap::Mode::PositionToLifetime
                               : sizeOutput ? ControlPointRemap::Mode::PositionToSize
                               : positionInput && positionOutput ? ControlPointRemap::Mode::PositionToPosition
                               : positionInput ? ControlPointRemap::Mode::PositionToVelocity
