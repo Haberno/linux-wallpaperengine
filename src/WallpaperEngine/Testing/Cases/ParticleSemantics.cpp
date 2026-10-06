@@ -3575,3 +3575,193 @@ TEST_CASE ("owner clock remaps distinguish scene runtime daytime and particle ag
         }
     }
 }
+
+TEST_CASE ("two point remaps admit only the measured radial counterpart pairs", "[particle][remap][remap-radial]") {
+    for (const bool initializer : { true, false }) {
+        for (const bool distanceInput : { true, false }) {
+            WallpaperEngine::Data::Model::Project project {};
+            auto data = WallpaperEngine::Data::JSON::JSON::parse (R"({"id":436,"particle":{}})");
+            auto node = WallpaperEngine::Data::JSON::JSON::parse (R"({"operation":"remap"})");
+            node["name"] = initializer ? "remapinitialvalue" : "remapvalue";
+            node["input"] = distanceInput ? "distancetocontrolpoint" : "positionbetweentwocontrolpoints";
+            node["output"] = distanceInput ? "positionbetweentwocontrolpoints" : "distancetocontrolpoint";
+            data["particle"][initializer ? "initializer" : "operator"] = { node };
+            const auto object = WallpaperEngine::Data::Parsers::ObjectParser::parse (data, project);
+            const auto* particle = object->as<Particle> ();
+            CHECK ((initializer ? particle->initializers.size () : particle->operators.size ()) == 1);
+            node[distanceInput ? "output" : "input"] = "size";
+            data["particle"][initializer ? "initializer" : "operator"] = { node };
+            const auto unsupported = WallpaperEngine::Data::Parsers::ObjectParser::parse (data, project);
+            CHECK ((initializer ? unsupported->as<Particle> ()->initializers.size ()
+                                : unsupported->as<Particle> ()->operators.size ()) == 0);
+        }
+    }
+}
+
+TEST_CASE ("radial input reads selected input control point before two point mapping", "[particle][remap][remap-radial]") {
+    using WallpaperEngine::Render::Objects::applyParticleControlPointRemap;
+    using WallpaperEngine::Render::Objects::ControlPointData;
+    std::vector<ControlPointData> points (6);
+    points[0].position = { 100, 200, 300 };
+    points[2].position = { 2, 6, 4 };
+    points[3].position = { -32, -16, 8 };
+    points[5].position = { 64, 0, 0 };
+    // Native radial getter reads distance5 from P(5,10,4) to input CP0(2,6,4).
+    for (const bool initializer : { true, false }) {
+        for (const std::string operation : { "remap", "multiply", "add", "subtract" }) {
+            for (const float age : { 0.0f, 1.0f, 2.0f }) {
+                INFO ("initializer=" << initializer << ", operation=" << operation << ", age=" << age);
+                WallpaperEngine::Data::Model::Project project {};
+                auto data = WallpaperEngine::Data::JSON::JSON::parse (R"({"id":437,"particle":{}})");
+                auto node = WallpaperEngine::Data::JSON::JSON::parse (R"({
+                    "input":"distancetocontrolpoint","output":"positionbetweentwocontrolpoints",
+                    "inputcontrolpoint0":2,"inputcontrolpoint1":3,"outputcontrolpoint0":4,"outputcontrolpoint1":5,
+                    "inputrangemax":10,"flags":0,"blendinend":0.5
+                })");
+                node["name"] = initializer ? "remapinitialvalue" : "remapvalue";
+                node["operation"] = operation;
+                data["particle"][initializer ? "initializer" : "operator"] = { node };
+                const auto object = WallpaperEngine::Data::Parsers::ObjectParser::parse (data, project);
+                const auto* definition = object->as<Particle> ();
+                REQUIRE ((initializer ? definition->initializers.size () : definition->operators.size ()) == 1);
+                const auto& remap = initializer
+                    ? definition->initializers.front ()->as<ControlPointRemapInitializer> ()->remap
+                    : definition->operators.front ()->as<ControlPointRemapOperator> ()->remap;
+                for (const bool coincident : { false, true }) {
+                    ParticleInstance particle;
+                    particle.position = coincident ? points[2].position : glm::vec3 (5, 10, 4);
+                    particle.velocity = { 7, 9, -11 };
+                    particle.lifetime = 4;
+                    particle.age = age;
+                    const glm::vec3 before = particle.position;
+                    const float fraction = before.x / 64;
+                    const float mapped = coincident ? 0 : .5f;
+                    const float target = operation == "remap" ? mapped : operation == "multiply" ? fraction * mapped
+                        : operation == "add" ? fraction + mapped : fraction - mapped;
+                    const float weight = initializer ? 1 : age * .5f;
+                    applyParticleControlPointRemap (particle, remap, points, initializer);
+                    CHECK (particle.position == before + glm::vec3 (64 * (target - fraction) * weight, 0, 0));
+                    CHECK (particle.velocity == glm::vec3 (7, 9, -11));
+                }
+            }
+        }
+    }
+}
+
+TEST_CASE ("radial output follows native signed radius and initializer tiny distance rules", "[particle][remap][remap-radial]") {
+    using WallpaperEngine::Render::Objects::applyParticleControlPointRemap;
+    using WallpaperEngine::Render::Objects::ControlPointData;
+    // Literal readbacks from unchanged native initializer/ordinary/blended output
+    // slices14023de79/140245c9e/1402483bc. SIMD reciprocal-square-root approximation
+    // accounts for the small difference from the portable scalar normalization.
+    const struct {
+        int kind;
+        const char* operation;
+        glm::vec3 position, center;
+        float mapped, weight;
+        glm::vec3 expected;
+    } samples[] = {
+        { 0, "remap", { 5.0f, 10.0f, 4.0f }, { 2.0f, 6.0f, 4.0f }, -2.0f, 1.0f, { 0.799999952f, 4.4000001f, 4.0f } },
+        { 0, "multiply", { 5.0f, 10.0f, 4.0f }, { 2.0f, 6.0f, 4.0f }, -2.0f, 1.0f, { -4.0f, -2.0f, 4.0f } },
+        { 0, "add", { 5.0f, 10.0f, 4.0f }, { 2.0f, 6.0f, 4.0f }, -2.0f, 1.0f, { 3.80000019f, 8.39999962f, 4.0f } },
+        { 0, "subtract", { 5.0f, 10.0f, 4.0f }, { 2.0f, 6.0f, 4.0f }, -2.0f, 1.0f, { 6.20000029f, 11.6000004f, 4.0f } },
+        { 0, "remap", { 2.0f, 6.0f, 4.0f }, { 2.0f, 6.0f, 4.0f }, 8.0f, 1.0f, { 2.0f, 6.0f, 4.0f } },
+        { 0, "multiply", { 2.0f, 6.0f, 4.0f }, { 2.0f, 6.0f, 4.0f }, 8.0f, 1.0f, { 2.0f, 6.0f, 4.0f } },
+        { 0, "add", { 2.0f, 6.0f, 4.0f }, { 2.0f, 6.0f, 4.0f }, 8.0f, 1.0f, { 2.0f, 6.0f, 4.0f } },
+        { 0, "subtract", { 2.0f, 6.0f, 4.0f }, { 2.0f, 6.0f, 4.0f }, 8.0f, 1.0f, { 2.0f, 6.0f, 4.0f } },
+        { 0, "remap", { 5.96046448e-08f, 0.0f, 0.0f }, { 0.0f, 0.0f, 0.0f }, 8.0f, 1.0f, { 8.0f, 0.0f, 0.0f } },
+        { 0, "multiply", { 5.96046448e-08f, 0.0f, 0.0f }, { 0.0f, 0.0f, 0.0f }, 8.0f, 1.0f, { 4.76837158e-07f, 0.0f, 0.0f } },
+        { 0, "add", { 5.96046448e-08f, 0.0f, 0.0f }, { 0.0f, 0.0f, 0.0f }, 8.0f, 1.0f, { 8.0f, 0.0f, 0.0f } },
+        { 0, "subtract", { 5.96046448e-08f, 0.0f, 0.0f }, { 0.0f, 0.0f, 0.0f }, 8.0f, 1.0f, { -8.0f, 0.0f, 0.0f } },
+        { 0, "remap", { 8.47032947e-22f, 0.0f, 0.0f }, { 0.0f, 0.0f, 0.0f }, 8.0f, 1.0f, { 8.0f, 0.0f, 0.0f } },
+        { 0, "multiply", { 8.47032947e-22f, 0.0f, 0.0f }, { 0.0f, 0.0f, 0.0f }, 8.0f, 1.0f, { 6.77626358e-21f, 0.0f, 0.0f } },
+        { 0, "add", { 8.47032947e-22f, 0.0f, 0.0f }, { 0.0f, 0.0f, 0.0f }, 8.0f, 1.0f, { 8.0f, 0.0f, 0.0f } },
+        { 0, "subtract", { 8.47032947e-22f, 0.0f, 0.0f }, { 0.0f, 0.0f, 0.0f }, 8.0f, 1.0f, { -8.0f, 0.0f, 0.0f } },
+        { 0, "remap", { 8.27180613e-25f, 0.0f, 0.0f }, { 0.0f, 0.0f, 0.0f }, 8.0f, 1.0f, { 6.6174449e-24f, 0.0f, 0.0f } },
+        { 0, "multiply", { 8.27180613e-25f, 0.0f, 0.0f }, { 0.0f, 0.0f, 0.0f }, 8.0f, 1.0f, { 0.0f, 0.0f, 0.0f } },
+        { 0, "add", { 8.27180613e-25f, 0.0f, 0.0f }, { 0.0f, 0.0f, 0.0f }, 8.0f, 1.0f, { 6.6174449e-24f, 0.0f, 0.0f } },
+        { 0, "subtract", { 8.27180613e-25f, 0.0f, 0.0f }, { 0.0f, 0.0f, 0.0f }, 8.0f, 1.0f, { -6.6174449e-24f, 0.0f, 0.0f } },
+        { 1, "remap", { 5.0f, 10.0f, 4.0f }, { 2.0f, 6.0f, 4.0f }, -2.0f, 1.0f, { 0.800109863f, 4.40014648f, 4.0f } },
+        { 1, "multiply", { 5.0f, 10.0f, 4.0f }, { 2.0f, 6.0f, 4.0f }, -2.0f, 1.0f, { -3.99890137f, -1.99853516f, 4.0f } },
+        { 1, "add", { 5.0f, 10.0f, 4.0f }, { 2.0f, 6.0f, 4.0f }, -2.0f, 1.0f, { 3.79956055f, 8.39941406f, 4.0f } },
+        { 1, "subtract", { 5.0f, 10.0f, 4.0f }, { 2.0f, 6.0f, 4.0f }, -2.0f, 1.0f, { 6.19934082f, 11.5991211f, 4.0f } },
+        { 2, "remap", { 5.0f, 10.0f, 4.0f }, { 2.0f, 6.0f, 4.0f }, -2.0f, 1.0f, { 0.800109863f, 4.40014648f, 4.0f } },
+        { 2, "remap", { 5.0f, 10.0f, 4.0f }, { 2.0f, 6.0f, 4.0f }, 8.0f, 0.0f, { 4.99945068f, 9.99926758f, 4.0f } },
+        { 2, "remap", { 5.0f, 10.0f, 4.0f }, { 2.0f, 6.0f, 4.0f }, 8.0f, 0.5f, { 5.89950562f, 11.1993408f, 4.0f } },
+        { 2, "multiply", { 5.0f, 10.0f, 4.0f }, { 2.0f, 6.0f, 4.0f }, -2.0f, 1.0f, { -3.99890137f, -1.99853516f, 4.0f } },
+        { 2, "multiply", { 5.0f, 10.0f, 4.0f }, { 2.0f, 6.0f, 4.0f }, 8.0f, 0.0f, { 4.99945068f, 9.99926758f, 4.0f } },
+        { 2, "multiply", { 5.0f, 10.0f, 4.0f }, { 2.0f, 6.0f, 4.0f }, 8.0f, 0.5f, { 15.4975281f, 23.9967041f, 4.0f } },
+        { 2, "add", { 5.0f, 10.0f, 4.0f }, { 2.0f, 6.0f, 4.0f }, -2.0f, 1.0f, { 3.79956055f, 8.39941406f, 4.0f } },
+        { 2, "add", { 5.0f, 10.0f, 4.0f }, { 2.0f, 6.0f, 4.0f }, 8.0f, 0.0f, { 4.99945068f, 9.99926758f, 4.0f } },
+        { 2, "add", { 5.0f, 10.0f, 4.0f }, { 2.0f, 6.0f, 4.0f }, 8.0f, 0.5f, { 7.39923096f, 13.1989746f, 4.0f } },
+        { 2, "subtract", { 5.0f, 10.0f, 4.0f }, { 2.0f, 6.0f, 4.0f }, -2.0f, 1.0f, { 6.19934082f, 11.5991211f, 4.0f } },
+        { 2, "subtract", { 5.0f, 10.0f, 4.0f }, { 2.0f, 6.0f, 4.0f }, 8.0f, 0.0f, { 4.99945068f, 9.99926758f, 4.0f } },
+        { 2, "subtract", { 5.0f, 10.0f, 4.0f }, { 2.0f, 6.0f, 4.0f }, 8.0f, 0.5f, { 2.59967041f, 6.79956055f, 4.0f } },
+    };
+    for (const auto& sample : samples) {
+        INFO ("kind=" << sample.kind << ", operation=" << sample.operation << ", weight=" << sample.weight
+              << ", position=" << sample.position.x << "," << sample.position.y << "," << sample.position.z);
+        const bool initializer = sample.kind == 0;
+        std::vector<ControlPointData> points (6);
+        points[0].position = { 100, 200, 300 };
+        points[2].position = { -32, -16, 8 };
+        points[4].position = sample.center;
+        points[5].position = sample.center + glm::vec3 (64, 0, 0);
+        WallpaperEngine::Data::Model::Project project {};
+        auto data = WallpaperEngine::Data::JSON::JSON::parse (R"({"id":438,"particle":{}})");
+        auto node = WallpaperEngine::Data::JSON::JSON::parse (R"({
+            "input":"positionbetweentwocontrolpoints","output":"distancetocontrolpoint",
+            "inputcontrolpoint0":2,"outputcontrolpoint0":4,"outputcontrolpoint1":5,"flags":0
+        })");
+        node["name"] = initializer ? "remapinitialvalue" : "remapvalue";
+        node["operation"] = sample.operation;
+        node["outputrangemin"] = sample.mapped;
+        node["outputrangemax"] = sample.mapped;
+        if (sample.kind == 2) node["blendinend"] = .5;
+        data["particle"][initializer ? "initializer" : "operator"] = { node };
+        const auto object = WallpaperEngine::Data::Parsers::ObjectParser::parse (data, project);
+        const auto* definition = object->as<Particle> ();
+        REQUIRE ((initializer ? definition->initializers.size () : definition->operators.size ()) == 1);
+        const auto& remap = initializer
+            ? definition->initializers.front ()->as<ControlPointRemapInitializer> ()->remap
+            : definition->operators.front ()->as<ControlPointRemapOperator> ()->remap;
+        ParticleInstance particle;
+        particle.position = sample.position;
+        particle.velocity = { 7, 9, -11 };
+        particle.lifetime = 4;
+        particle.age = sample.weight * 2;
+        applyParticleControlPointRemap (particle, remap, points, initializer);
+        for (int axis = 0; axis < 3; ++axis)
+            CHECK (particle.position[axis] == Catch::Approx (sample.expected[axis]).epsilon (.0007)
+                .margin (sample.kind == 0 ? 1e-30 : .003));
+        CHECK (particle.velocity == glm::vec3 (7, 9, -11));
+    }
+}
+
+TEST_CASE ("radial operator leaves native nonfinite distance cases outside finite output support", "[particle][remap][remap-radial]") {
+    using WallpaperEngine::Render::Objects::applyParticleControlPointRemap;
+    using WallpaperEngine::Render::Objects::ControlPointData;
+    // Native rsqrtps produces nonfinite coordinates for these cases even at
+    // blend weight0. Keep the existing finite-particle scope explicit.
+    for (const float distance : { 0.0f, 8.470329473e-22f, 8.271806126e-25f }) {
+        for (const float age : { 0.0f, 1.0f, 2.0f }) {
+            WallpaperEngine::Data::Model::Project project {};
+            auto data = WallpaperEngine::Data::JSON::JSON::parse (R"({"id":439,"particle":{"operator":[{
+                "name":"remapvalue","input":"positionbetweentwocontrolpoints","output":"distancetocontrolpoint",
+                "operation":"remap","flags":0,"outputrangemin":8,"outputrangemax":8,"blendinend":0.5
+            }]}})");
+            const auto object = WallpaperEngine::Data::Parsers::ObjectParser::parse (data, project);
+            const auto* definition = object->as<Particle> ();
+            REQUIRE (definition->operators.size () == 1);
+            const auto& remap = definition->operators.front ()->as<ControlPointRemapOperator> ()->remap;
+            std::vector<ControlPointData> points (2);
+            points[1].position = { 64, 0, 0 };
+            ParticleInstance particle;
+            particle.position = { distance, 0, 0 };
+            particle.lifetime = 4;
+            particle.age = age;
+            applyParticleControlPointRemap (particle, remap, points, false);
+            CHECK (particle.position == glm::vec3 (distance, 0, 0));
+        }
+    }
+}

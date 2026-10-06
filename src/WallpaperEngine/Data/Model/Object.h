@@ -254,8 +254,8 @@ public:
 
 // The measured two-control-point and lifetime-noise subsets of native remaps.
 struct ControlPointRemap {
-    enum class Input { BetweenPoints, MaxLifetime, LifetimeFraction, Size, Opacity, Speed, Rotation, AngularSpeed, Runtime, TimeOfDay, ParticleSystemTime };
-    enum class Output { BetweenPoints, MaxLifetime, Size, Opacity, Speed, Velocity, Rotation, AngularSpeed };
+    enum class Input { BetweenPoints, DistanceToPoint, MaxLifetime, LifetimeFraction, Size, Opacity, Speed, Rotation, AngularSpeed, Runtime, TimeOfDay, ParticleSystemTime };
+    enum class Output { BetweenPoints, DistanceToPoint, MaxLifetime, Size, Opacity, Speed, Velocity, Rotation, AngularSpeed };
     enum class Transform { Identity, SimplexNoise, FbmNoise };
     enum class Operation { Remap, Multiply, Add, Subtract };
     Input input;

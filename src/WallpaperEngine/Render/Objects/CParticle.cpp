@@ -1588,6 +1588,9 @@ void WallpaperEngine::Render::Objects::applyParticleControlPointRemap (
     float input = 0.0f;
     switch (remap.input) {
         case ControlPointRemap::Input::BetweenPoints: input = fraction; break;
+        case ControlPointRemap::Input::DistanceToPoint:
+            input = glm::length (particle.position - controlPoints[remap.inputControlPoint0].position);
+            break;
         case ControlPointRemap::Input::MaxLifetime: input = particle.lifetime; break;
         case ControlPointRemap::Input::LifetimeFraction: input = particle.getLifetimePos (); break;
         // Native size input reads birth +0x278 or working +0x270.
@@ -1632,6 +1635,19 @@ void WallpaperEngine::Render::Objects::applyParticleControlPointRemap (
             // Native scales the existing direction, including when its length is zero.
             particle.velocity *= speed > 0.0f ? blended / speed : blended;
         }
+    } else if (remap.output == ControlPointRemap::Output::DistanceToPoint) {
+        glm::vec3 direction = particle.position - start;
+        const float distanceSquared = glm::dot (direction, direction);
+        // Native operator rsqrtps produces nonfinite positions for zero/subnormal
+        // squared distances; those remain outside the finite output subset.
+        if (!initializer && distanceSquared < std::numeric_limits<float>::min ()) return;
+        const float distance = glm::length (direction);
+        // Initializers normalize every nonzero length, even below FLT_EPSILON.
+        // A squared-underflow direction remains unnormalized, as in native.
+        if (distance != 0.0f) direction /= distance;
+        const float result = operate (distance);
+        const float blended = weight == 1.0f ? result : distance + (result - distance) * weight;
+        particle.position = start + direction * blended;
     } else if (remap.output == ControlPointRemap::Output::Velocity) {
         // Authored velocity uses the same Y-up coordinates as velocityrandom.
         glm::vec3 target = mapped * glm::vec3 (1.0f, -1.0f, 1.0f);

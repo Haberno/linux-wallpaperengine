@@ -1027,6 +1027,7 @@ static std::optional<ControlPointRemap> parseControlPointRemap (
     using Output = ControlPointRemap::Output;
     using Transform = ControlPointRemap::Transform;
     const std::optional<Input> parsedInput = input == "positionbetweentwocontrolpoints" ? Input::BetweenPoints
+        : input == "distancetocontrolpoint" ? Input::DistanceToPoint
         : input == "maxlifetime" ? Input::MaxLifetime
         : input == "lifetimefraction" ? Input::LifetimeFraction
         : input == "size" ? Input::Size : input == "opacity" ? Input::Opacity
@@ -1035,6 +1036,7 @@ static std::optional<ControlPointRemap> parseControlPointRemap (
         : input == "timeofday" ? Input::TimeOfDay
         : input == "particlesystemtime" ? std::optional (Input::ParticleSystemTime) : std::nullopt;
     const std::optional<Output> parsedOutput = output == "positionbetweentwocontrolpoints" ? Output::BetweenPoints
+        : output == "distancetocontrolpoint" ? Output::DistanceToPoint
         : output == "maxlifetime" ? Output::MaxLifetime : output == "size" ? Output::Size
         : output == "opacity" ? Output::Opacity : output == "speed" ? Output::Speed
         : output == "velocity" ? Output::Velocity : output == "rotation" ? Output::Rotation
