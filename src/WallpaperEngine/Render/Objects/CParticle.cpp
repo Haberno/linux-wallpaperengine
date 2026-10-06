@@ -2997,8 +2997,7 @@ void CParticle::setupPass () {
 	m_passOverride->shaderOverride = "genericropeparticle";
 	const auto& orientation = m_particle.renderers[0].orientation;
 	m_passOverride->combos["LWE_ROPE_SCREEN_FACING"]
-	    = (getScene ().getScene ().camera.projection.isPerspective || (m_particle.flags & 4) == 0)
-	    && orientation != "fixed" && orientation != "upright";
+	    = orientation != "fixed" && orientation != "upright";
     }
     if (const auto texture = getTexture (); texture && texture->isAnimated ()) {
 	m_passOverride->combos["SPRITESHEET"] = 1;
@@ -3339,6 +3338,9 @@ void CParticle::applyParallaxToModelMatrix () {
 void CParticle::updateParticleViewProjection () {
     const auto& camera = getScene ().getCamera ();
     const bool perspective = getScene ().getScene ().camera.projection.isPerspective;
+    const bool facesEye = m_useRopeRenderer
+        ? m_particle.renderers[0].orientation != "fixed" && m_particle.renderers[0].orientation != "upright"
+        : m_useTrailRenderer;
     if ((m_particle.flags & 4) != 0) {
 	// Native flag-4 draws replace the projection in both scene modes. The
 	// perspective producer derives its virtual FOV from the ordinary Y scale.
@@ -3356,8 +3358,10 @@ void CParticle::updateParticleViewProjection () {
 	    : glm::perspective (fov, output.x / output.y, 5.0f, farZ);
 	if (perspective && camera.isYFlipped ()) projection[1][1] *= -1.0f;
 	m_viewProjectionMatrix = projection * view;
-	// The native override preserves the authored eye used by screen-facing ropes.
-	m_eyePosition = perspective ? camera.getEye () : glm::vec3 (glm::inverse (view)[3]);
+	// Native virtual projection preserves the scene eye used by ribbons.
+	m_eyePosition = perspective ? camera.getEye ()
+	    : facesEye ? glm::vec3 (camera.getEye ().x, -camera.getEye ().y, 2000.0f)
+	    : glm::vec3 (glm::inverse (view)[3]);
     } else if (perspective) {
 	m_viewProjectionMatrix = camera.getRasterProjection () * camera.getLookAt ();
 	m_eyePosition = camera.getEye ();
@@ -3366,9 +3370,6 @@ void CParticle::updateParticleViewProjection () {
 	m_viewProjectionMatrix = getScene ().getCamera ().getProjection () * getScene ().getCamera ().getLookAt ();
 	// Native ordinary 2D ribbons use the scene eye at Z2000. Reflect its
 	// authored Y into the centered particle render basis. Preserve other eyes.
-	const bool facesEye = m_useRopeRenderer
-	    ? m_particle.renderers[0].orientation != "fixed" && m_particle.renderers[0].orientation != "upright"
-	    : m_useTrailRenderer;
 	m_eyePosition = facesEye ? glm::vec3 (camera.getEye ().x, -camera.getEye ().y, 2000.0f)
 	    : glm::vec3 (0.0f, 0.0f, 1000.0f);
     }
