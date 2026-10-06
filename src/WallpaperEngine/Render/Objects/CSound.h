@@ -68,7 +68,7 @@ private:
     bool m_waiting = false;
     bool m_started = false;
     double m_nextStartRemaining = 0.0;
-    float m_previousTime = 0.0f;
+    double m_previousTime = 0.0;
     /** OpenAL retains each handle's attenuation settings until the next playback. */
     float m_attenuation = 1.0f;
     float m_minDistance = 1.0f;

@@ -166,8 +166,8 @@ void CSound::unload (const bool recordSingleCompletion) {
 
 void CSound::render () {
     if (this->getScene ().isLoading ()) return;
-    const float time = this->getScene ().getTime ();
-    const float delta = std::max (0.0f, time - this->m_previousTime);
+    const double time = this->getScene ().getElapsedTime ();
+    const double delta = std::max (0.0, time - this->m_previousTime);
     this->m_previousTime = time;
     if (!this->m_registered) {
 	return;
@@ -252,7 +252,7 @@ void CSound::render () {
 }
 
 void CSound::play () {
-    this->m_previousTime = this->getScene ().getTime ();
+    this->m_previousTime = this->getScene ().getElapsedTime ();
     this->m_playing = true;
     if (!this->m_paused) {
 	// A playing single/loop layer restarts on play. Random mode keeps its
@@ -271,7 +271,7 @@ void CSound::play () {
 }
 
 void CSound::pause () {
-    this->m_previousTime = this->getScene ().getTime ();
+    this->m_previousTime = this->getScene ().getElapsedTime ();
     if (this->m_playing) {
 	this->m_paused = true;
     }
