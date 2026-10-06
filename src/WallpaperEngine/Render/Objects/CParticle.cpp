@@ -2957,7 +2957,7 @@ void CParticle::setupPass () {
 	m_passOverride->shaderOverride = "genericropeparticle";
 	const auto& orientation = m_particle.renderers[0].orientation;
 	m_passOverride->combos["LWE_ROPE_SCREEN_FACING"]
-	    = getScene ().getScene ().camera.projection.isPerspective
+	    = (getScene ().getScene ().camera.projection.isPerspective || (m_particle.flags & 4) == 0)
 	    && orientation != "fixed" && orientation != "upright";
     }
     if (const auto texture = getTexture (); texture && texture->isAnimated ()) {
@@ -3324,13 +3324,13 @@ void CParticle::updateParticleViewProjection () {
     } else {
 	// Orthographic projection from scene camera
 	m_viewProjectionMatrix = getScene ().getCamera ().getProjection () * getScene ().getCamera ().getLookAt ();
-	// For 2D/orthographic scenes the camera eye is at (0,0,0). The shader's
-	// ComputeParticleTrailTangents uses cross(eyeDirection, velocity) to
-	// compute the trail ribbon width. With eye at z=0 and particles at z=0,
-	// eyeDirection is purely in XY — the cross product yields a Z-only vector
-	// that is invisible under orthographic projection. Place the eye at z=1000
-	// so the cross product produces a visible XY perpendicular direction.
-	m_eyePosition = glm::vec3 (0.0f, 0.0f, 1000.0f);
+	// Native ordinary 2D ribbons use the scene eye at Z2000. Reflect its
+	// authored Y into the centered particle render basis. Preserve other eyes.
+	const bool facesEye = m_useRopeRenderer
+	    ? m_particle.renderers[0].orientation != "fixed" && m_particle.renderers[0].orientation != "upright"
+	    : m_useTrailRenderer;
+	m_eyePosition = facesEye ? glm::vec3 (camera.getEye ().x, -camera.getEye ().y, 2000.0f)
+	    : glm::vec3 (0.0f, 0.0f, 1000.0f);
     }
 }
 
