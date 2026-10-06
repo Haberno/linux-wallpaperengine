@@ -872,6 +872,8 @@ struct TextData {
     std::vector<ImageEffectUniquePtr> effects;
     /** Blend the finished glyph/effect surface with the scene behind it. */
     UserSettingUniquePtr colorBlendMode;
+    /** Native ledsource retains a padded text composite even without effects. */
+    UserSettingUniquePtr ledSource;
     UserSettingUniquePtr limitWidth;
     UserSettingUniquePtr maxWidth;
     UserSettingUniquePtr limitRows;

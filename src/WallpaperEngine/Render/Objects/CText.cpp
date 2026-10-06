@@ -348,6 +348,7 @@ CText::CText (Wallpapers::CScene& scene, const Text& text) :
     this->registerProperty ("color", *text.color);
     this->registerProperty ("alpha", *text.alpha);
     this->registerProperty ("colorBlendMode", *text.colorBlendMode);
+    this->registerProperty ("ledsource", *text.ledSource);
     this->registerProperty ("origin", *text.origin);
     this->registerProperty ("scale", *text.scale);
     this->registerProperty ("visible", *text.visible);
@@ -450,7 +451,7 @@ void CText::setupEffectChain () {
     });
     const auto& fog = getScene ().getScene ().fog;
     const bool sceneForcesOffscreen = fog.distance.enabled->value->getBool () || fog.height.enabled->value->getBool ();
-    if (m_text.effects.empty () && !sampledByLayer && !sceneForcesOffscreen
+    if (m_text.effects.empty () && !sampledByLayer && !sceneForcesOffscreen && !m_text.ledSource->value->getBool ()
         && (m_colorBlendMode == 0 || m_colorBlendMode == 31)) return;
 
     // wallpaper64.exe sizes this surface from the generated font line box plus the
@@ -1132,7 +1133,7 @@ glm::vec2 CText::getSize () {
         // direct text ignores padding. Keep the cached line box unpadded.
         const auto& fog = getScene ().getScene ().fog;
         const glm::vec2 padding = m_effectsEnabled || !m_text.effects.empty () || m_text.opaqueBackground->value->getBool ()
-            || fog.distance.enabled->value->getBool () || fog.height.enabled->value->getBool ()
+            || fog.distance.enabled->value->getBool () || fog.height.enabled->value->getBool () || m_text.ledSource->value->getBool ()
             ? glm::min (currentPadding (), glm::vec2 (512.0f)) : glm::vec2 (0);
         return m_scriptSize + padding * 2.0f;
     };

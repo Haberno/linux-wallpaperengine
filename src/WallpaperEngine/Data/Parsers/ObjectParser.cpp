@@ -257,6 +257,7 @@ TextUniquePtr ObjectParser::parseText (const JSON& it, const Project& project, O
 	    .brightness = it.user ("brightness", project.properties, 1.0f),
 	    .effects = effects.has_value () ? parseEffects (*effects, project) : std::vector<ImageEffectUniquePtr> {},
 	    .colorBlendMode = it.user ("colorBlendMode", project.properties, 0),
+	    .ledSource = it.user ("ledsource", project.properties, false),
 	    .limitWidth = it.user ("limitwidth", project.properties, false),
 	    .maxWidth = it.user ("maxwidth", project.properties, 500.0f),
 	    .limitRows = it.user ("limitrows", project.properties, false),
