@@ -1,4 +1,6 @@
 #include "CModel.h"
+#include "ModelAnimationVolume.h"
+#include "WallpaperEngine/Data/Model/MdlAnimationBounds.h"
 
 #include <algorithm>
 #include <array>
@@ -802,8 +804,11 @@ void CModel::updateAnimationPose () const {
         }
 	activeAnimations.push_back ({ .animation = layer->clip, .weight = weight,
 	    .additive = settings != nullptr && settings->additive->value->getBool (),
-	    .frame = layer->timeline.frameAt (sceneTime) });
+	    .frame = layer->timeline.frameAt (sceneTime), .enabled = visible });
     }
+
+    m_animationBounds = evaluateMdlAnimationBounds (activeAnimations,
+        { m_model.mesh.boundingBoxMin, m_model.mesh.boundingBoxMax });
 
     if (m_morphingEnabled) {
         auto morphs = MdlAnimationEvaluator::evaluateModelMorphs (activeAnimations);
@@ -936,6 +941,12 @@ void CModel::prepareRender () {
     if (!this->m_frameVisible) return;
     this->updateMatrices ();
     this->updateMorphBuffers ();
+    const auto& mesh = m_modelData ? m_modelData->mesh : m_model.mesh;
+    const auto bounds = m_modelData ? std::optional<MdlAnimationBounds> {} : m_animationBounds;
+    const auto volume = bounds.value_or (MdlAnimationBounds { mesh.boundingBoxMin, mesh.boundingBoxMax });
+    const auto& camera = getScene ().getCamera ();
+    m_mainViewVisible = !(bounds || mesh.hasBoundingBox) || volume.minimum.x >= volume.maximum.x
+        || modelAnimationVolumeIntersects (volume, m_modelMatrix, camera.getProjection () * camera.getLookAt ());
     this->m_posedShadowBounds = this->m_shadowBounds.evaluate (this->m_gpuSkinBones);
     // Rest-pose bounds cannot reject geometry displaced by an active morph.
     if (m_morphActive) m_posedShadowBounds = {};
@@ -946,7 +957,7 @@ void CModel::prepareRender () {
 }
 
 void CModel::renderPasses (const std::optional<RenderSortClass> renderClass) {
-    if (!this->m_frameVisible) return;
+    if (!this->m_frameVisible || !m_mainViewVisible) return;
 
 #if !NDEBUG
     const std::string debugName

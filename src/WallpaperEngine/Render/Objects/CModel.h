@@ -116,6 +116,7 @@ private:
     /** Packed affine matrices uploaded to the shader's mat4x3 g_Bones array. */
     mutable std::vector<glm::mat4x3> m_gpuSkinBones = {};
     mutable float m_poseTime = std::numeric_limits<float>::quiet_NaN ();
+    mutable std::optional<Data::Model::MdlAnimationBounds> m_animationBounds;
     bool m_skinningEnabled = false;
     bool m_morphingEnabled = false;
     bool m_morphActive = false;
@@ -137,6 +138,7 @@ private:
     ModelBounds m_shadowBounds;
     ModelBounds::Box m_posedShadowBounds;
     bool m_frameVisible = false;
+    bool m_mainViewVisible = true;
     GLint m_shadowLightViewProjection = -1;
     GLint m_shadowModel = -1;
     GLint m_shadowBones = -1;

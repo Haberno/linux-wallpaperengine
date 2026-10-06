@@ -1,4 +1,5 @@
 #include "WallpaperEngine/Data/Model/MdlAnimationBounds.h"
+#include "WallpaperEngine/Render/Objects/ModelAnimationVolume.h"
 #include "WallpaperEngine/Render/Objects/ModelBounds.h"
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/catch_approx.hpp>
@@ -74,4 +75,54 @@ TEST_CASE ("Installed Octillery clip volumes retain independent subclip bounds",
             CHECK (parsed.animations[clip].bounds.maximum[axis] == Catch::Approx (expected[clip][axis + 3]));
         }
     }
+}
+
+TEST_CASE ("Model submission retains native sphere and reverse-depth plane decisions", "[animation-volume-sphere]") {
+    using WallpaperEngine::Render::Objects::modelAnimationVolumeIntersects;
+    using WallpaperEngine::Render::Objects::ModelBounds;
+    const glm::mat4 identity (1);
+    const MdlAnimationBounds volume { glm::vec3 (-1), glm::vec3 (1) };
+    const auto edge = glm::translate (identity, glm::vec3 (2.5f, 0, 0));
+    ModelBounds::Box box; box.include (volume.minimum); box.include (volume.maximum);
+    CHECK_FALSE (box.intersects (edge));
+    CHECK (modelAnimationVolumeIntersects (volume, edge, identity));
+    CHECK_FALSE (modelAnimationVolumeIntersects (volume,
+        glm::translate (identity, glm::vec3 (3, 0, 0)), identity));
+    const MdlAnimationBounds flat { { -1, 0, 0 }, { 1, 0, 0 } };
+    CHECK (modelAnimationVolumeIntersects (flat,
+        glm::translate (identity, glm::vec3 (2, 0, 0)), identity));
+    CHECK_FALSE (modelAnimationVolumeIntersects (flat,
+        glm::translate (identity, glm::vec3 (2.01f, 0, 0)), identity));
+    const auto transformed = glm::translate (identity, glm::vec3 (4, 0, 0))
+        * glm::scale (identity, glm::vec3 (3, 1, 1))
+        * glm::rotate (identity, glm::radians (45.0f), glm::vec3 (0, 0, 1));
+    CHECK_FALSE (modelAnimationVolumeIntersects (volume, transformed, identity));
+
+    const auto perspective = glm::perspective (glm::radians (60.0f), 320.0f / 180.0f, 5.0f, 1000.0f);
+    CHECK (modelAnimationVolumeIntersects (volume,
+        glm::translate (identity, glm::vec3 (0, 0, -100)), perspective));
+    CHECK_FALSE (modelAnimationVolumeIntersects (volume,
+        glm::translate (identity, glm::vec3 (0, 0, 100)), perspective));
+    // Native extracts +/-w planes from reverse [0,1] depth. The far-side test
+    // therefore admits this volume even though rasterization clips its geometry.
+    const auto beyondFar = glm::translate (identity, glm::vec3 (0, 0, -2000));
+    CHECK_FALSE (box.intersects (perspective * beyondFar));
+    CHECK (modelAnimationVolumeIntersects (volume, beyondFar, perspective));
+    const auto orthogonal = glm::ortho (-160.0f, 160.0f, -90.0f, 90.0f, -1000.0f, 1000.0f);
+    CHECK (modelAnimationVolumeIntersects (volume,
+        glm::translate (identity, glm::vec3 (0, 0, -2500)), orthogonal));
+    CHECK_FALSE (modelAnimationVolumeIntersects (volume,
+        glm::translate (identity, glm::vec3 (0, 0, -3100)), orthogonal));
+}
+
+TEST_CASE ("Model culling precedes its virtual perspective projection", "[animation-volume-sphere]") {
+    using WallpaperEngine::Render::Objects::modelAnimationVolumeIntersects;
+    const glm::mat4 identity (1);
+    const MdlAnimationBounds volume { { 396, -3, -1000 }, { 404, 3, -1000 } };
+    const auto model = glm::translate (identity, glm::vec3 (-120, 0, 0));
+    const auto scene = glm::ortho (-160.0f, 160.0f, -90.0f, 90.0f, -1000.0f, 1000.0f);
+    const auto virtualDraw = glm::perspective (glm::radians (60.0f), 320.0f / 180.0f, 5.0f, 15000.0f)
+        * glm::translate (identity, glm::vec3 (0, 0, -155.88457f));
+    CHECK_FALSE (modelAnimationVolumeIntersects (volume, model, scene));
+    CHECK (modelAnimationVolumeIntersects (volume, model, virtualDraw));
 }
