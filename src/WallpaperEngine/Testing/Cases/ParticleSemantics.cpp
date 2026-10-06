@@ -2871,3 +2871,102 @@ TEST_CASE ("degenerate two-control-point inputs still map scalar and velocity ou
         }
     }
 }
+
+TEST_CASE ("tiny initializer position outputs retain native unnormalized reconstruction", "[particle][remap][remap-position-tiny-output]") {
+    using WallpaperEngine::Render::Objects::applyParticleControlPointRemap;
+    using WallpaperEngine::Render::Objects::ControlPointData;
+    // Native instruction readbacks amplify the tiny displacement with finite
+    // mapped values, distinguishing reconstruction from the previous skip.
+    const struct { const char* name; float distance, mapped, multiplier; float replace, subtract; } cases[] = {
+        { "epsilon", 0x1p-23f, 0x1p46f, 0x1p69f, 1.25f, -.75f },
+        { "below epsilon", 0x1p-24f, 0x1p48f, 0x1p72f, 1.25f, -.75f },
+        { "reversed epsilon", -0x1p-23f, 0x1p46f, 0x1p69f, -.75f, 1.25f },
+        { "coincident", 0, .5f, .5f, .25f, .25f }
+    };
+    for (const auto& sample : cases) {
+        for (const char* input : { "positionbetweentwocontrolpoints", "maxlifetime" }) {
+            for (const char* operation : { "remap", "multiply", "add", "subtract" }) {
+                INFO (sample.name << ", input=" << input << ", operation=" << operation);
+                const bool multiply = std::string_view (operation) == "multiply";
+                const float mapped = multiply ? sample.multiplier : sample.mapped;
+                WallpaperEngine::Data::Model::Project project {};
+                auto data = WallpaperEngine::Data::JSON::JSON::parse (R"({"id":417,"particle":{}})");
+                auto node = WallpaperEngine::Data::JSON::JSON::parse (R"({
+                    "name":"remapinitialvalue","output":"positionbetweentwocontrolpoints",
+                    "inputcontrolpoint0":0,"inputcontrolpoint1":1,
+                    "outputcontrolpoint0":2,"outputcontrolpoint1":3,"flags":0
+                })");
+                node["input"] = input;
+                node["operation"] = operation;
+                node["outputrangemin"] = mapped;
+                node["outputrangemax"] = mapped;
+                data["particle"]["initializer"] = { node };
+                const auto object = WallpaperEngine::Data::Parsers::ObjectParser::parse (data, project);
+                const auto* definition = object->as<Particle> ();
+                REQUIRE (definition != nullptr);
+                REQUIRE (definition->initializers.size () == 1);
+                const auto& remap = definition->initializers.front ()->as<ControlPointRemapInitializer> ()->remap;
+                std::vector<ControlPointData> points (4);
+                points[0].position = { 1024, 512, -256 };
+                points[1].position = { 1088, 512, -256 };
+                points[2].position = { 0, 8, -3 };
+                points[3].position = { sample.distance, 8, -3 };
+                ParticleInstance particle;
+                particle.position = { .25f, 12, -8 };
+                particle.velocity = { 4, -8, 12 };
+                particle.size = particle.alpha = .8f;
+                particle.lifetime = 8;
+                applyParticleControlPointRemap (particle, remap, points, true);
+                const float expected = sample.distance == 0 ? .25f : multiply ? .5f
+                    : std::string_view (operation) == "subtract" ? sample.subtract : sample.replace;
+                CHECK (particle.position == glm::vec3 (expected, 12, -8));
+                CHECK (particle.velocity == glm::vec3 (4, -8, 12));
+                CHECK (particle.size == .8f);
+                CHECK (particle.alpha == .8f);
+                CHECK (particle.lifetime == 8);
+            }
+        }
+    }
+}
+
+TEST_CASE ("initializer tiny position output uses rounded length and independent zero input", "[particle][remap][remap-position-tiny-output]") {
+    using WallpaperEngine::Render::Objects::applyParticleControlPointRemap;
+    using WallpaperEngine::Render::Objects::ControlPointData;
+    const struct { const char* name; glm::vec3 start, end, position, expected; float minimum, maximum; } cases[] = {
+        { "rounded epsilon", { 0, 0, 0 }, { 0x1p-23f, 3 * 0x1p-36f, 0 }, { 0, 0, 12 },
+          { 1, 3 * 0x1p-13f, 12 }, 0x1p46f, 0x1p46f },
+        { "translated oblique", { 0, 0, 8 }, { 3 * 0x1p-27f, 4 * 0x1p-27f, 8 }, { .25f, -.1875f, 12 },
+          { .85f, .6125f, 12 }, 0x1p54f / 25, 0x1p54f / 25 },
+        { "above epsilon", { 0, 0, 0 }, { 0x1p-22f, 0, 0 }, { .25f, 12, -8 },
+          { 0x1p-23f, 12, -8 }, .5f, .5f },
+        { "zero input differs from output projection", { 0, 0, 0 }, { 0x1p-23f, 0, 0 }, { 0x1p23f, 12, -8 },
+          { 0x1p23f + 1, 12, -8 }, 0x1p46f, 0x1p47f }
+    };
+    for (const auto& sample : cases) {
+        INFO (sample.name);
+        WallpaperEngine::Data::Model::Project project {};
+        auto data = WallpaperEngine::Data::JSON::JSON::parse (R"({"id":418,"particle":{}})");
+        auto node = WallpaperEngine::Data::JSON::JSON::parse (R"({
+            "name":"remapinitialvalue","input":"positionbetweentwocontrolpoints",
+            "output":"positionbetweentwocontrolpoints","operation":"remap","flags":0
+        })");
+        node["outputrangemin"] = sample.minimum;
+        node["outputrangemax"] = sample.maximum;
+        data["particle"]["initializer"] = { node };
+        const auto object = WallpaperEngine::Data::Parsers::ObjectParser::parse (data, project);
+        const auto* definition = object->as<Particle> ();
+        REQUIRE (definition != nullptr);
+        REQUIRE (definition->initializers.size () == 1);
+        const auto& remap = definition->initializers.front ()->as<ControlPointRemapInitializer> ()->remap;
+        std::vector<ControlPointData> points (2);
+        points[0].position = sample.start;
+        points[1].position = sample.end;
+        ParticleInstance particle;
+        particle.position = sample.position;
+        applyParticleControlPointRemap (particle, remap, points, true);
+        // An absolute tolerance keeps both tiny and million-unit controls
+        // discriminating; relative error would hide a whole-unit missed move.
+        for (int axis = 0; axis < 3; ++axis)
+            CHECK (std::abs (particle.position[axis] - sample.expected[axis]) <= 0.000001f);
+    }
+}

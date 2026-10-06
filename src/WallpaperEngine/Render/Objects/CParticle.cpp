@@ -1577,11 +1577,13 @@ void WallpaperEngine::Render::Objects::applyParticleControlPointRemap (
     const bool positionOutput = remap.mode == ControlPointRemap::Mode::PositionToPosition
         || remap.mode == ControlPointRemap::Mode::LifetimeToPosition
         || remap.mode == ControlPointRemap::Mode::LifetimeFractionToPosition;
-    // Degenerate position output remains outside the measured subset. Scalar
-    // input instead selects zero and still runs mapping/output (14023d1ff /
+    const float length = initializer ? glm::length (delta) : 0.0f;
+    const bool tinyInitializer = initializer && length <= epsilon;
+    // Operator position-output degeneracy remains outside the measured subset.
+    // Scalar input selects zero and still runs mapping/output (14023d1ff /
     // 140244d85); initializer input uses the native FLT_EPSILON length boundary.
-    if (positionOutput && lengthSquared <= (initializer ? epsilon * epsilon : 0.0f)) return;
-    const bool zeroInput = !positionOutput && (initializer ? glm::length (delta) <= epsilon : lengthSquared <= 0.0f);
+    if (positionOutput && !initializer && lengthSquared <= 0.0f) return;
+    const bool zeroInput = tinyInitializer || (!positionOutput && lengthSquared <= 0.0f);
     const float fraction = zeroInput ? 0.0f : glm::dot (particle.position - start, delta) / lengthSquared;
     const float input = remap.mode == ControlPointRemap::Mode::PositionToVelocity
                       || remap.mode == ControlPointRemap::Mode::PositionToPosition
@@ -1631,7 +1633,8 @@ void WallpaperEngine::Render::Objects::applyParticleControlPointRemap (
         // Native scalar arithmetic acts on current size/opacity or longitudinal fraction.
         // Do not clamp the operated result.
         const float current = remap.mode == ControlPointRemap::Mode::PositionToSize ? particle.size
-                            : remap.mode == ControlPointRemap::Mode::PositionToOpacity ? particle.alpha : fraction;
+                            : remap.mode == ControlPointRemap::Mode::PositionToOpacity ? particle.alpha
+                            : tinyInitializer ? glm::dot (particle.position - start, delta) : fraction;
         float result = mapped.x;
         switch (remap.operation) {
             case ControlPointRemap::Operation::Remap: break;
@@ -1645,6 +1648,12 @@ void WallpaperEngine::Render::Objects::applyParticleControlPointRemap (
         } else if (remap.mode == ControlPointRemap::Mode::PositionToOpacity) {
             particle.alpha = weight == 1.0f ? result : current + (result - current) * weight;
             if (initializer) particle.initial.alpha = particle.alpha;
+        } else if (tinyInitializer) {
+            // Native 14023e0f8..14023e1e4 keeps tiny directions unnormalized,
+            // uses their raw projection for output arithmetic, and scales the
+            // reconstructed displacement by the original length.
+            const glm::vec3 residual = (particle.position - start) - delta * current;
+            particle.position = start + residual + (delta * result) * length;
         } else {
             // Keep the position offset perpendicular to the segment.
             particle.position += delta * ((result - fraction) * weight);
