@@ -1,5 +1,6 @@
 #include "VolumetricLights.h"
 #include "CScene.h"
+#include "WallpaperEngine/Render/Depth.h"
 #include "WallpaperEngine/Data/Utils/ScopeGuard.h"
 #include "WallpaperEngine/Render/Objects/CLight.h"
 #include "WallpaperEngine/Render/Shaders/Shader.h"
@@ -21,8 +22,10 @@ GLuint compile (CScene& scene, const std::string& name, const ComboMap& combos, 
     if (volume) {
         const auto main = vertex.find ("main", vertex.find ("void main"));
         vertex.replace (main, 4, "volumeMain");
-        vertex += "\nvoid main() { volumeMain(); gl_Position.y = -gl_Position.y;"
-                  " gl_Position.z = gl_Position.z * 2.0 - gl_Position.w; }\n";
+        vertex += "\nvoid main() { volumeMain(); gl_Position.y = -gl_Position.y;";
+        if (!scene.getCamera ().usesReverseDepth ())
+            vertex += " gl_Position.z = gl_Position.z * 2.0 - gl_Position.w;";
+        vertex += " }\n";
     }
     std::string fragment = shader.fragment ();
     if (combos.contains ("COOKIE") && combos.at ("SHADOW") != 0) {
@@ -51,11 +54,11 @@ GLuint compile (CScene& scene, const std::string& name, const ComboMap& combos, 
     return scene.getContext ().getShaderProgramCache ().createProgram (vert, frag);
 }
 
-glm::mat4 nativeClip () {
+glm::mat4 nativeClip (bool reverse = false) {
     glm::mat4 matrix (1.0f);
     matrix[1][1] = -1.0f;
-    matrix[2][2] = 0.5f;
-    matrix[3][2] = 0.5f;
+    matrix[2][2] = reverse ? 1.0f : 0.5f;
+    matrix[3][2] = reverse ? 0.0f : 0.5f;
     return matrix;
 }
 
@@ -121,14 +124,14 @@ void VolumetricLights::resize () {
         m_lightBuffer->resize (reduced.x, reduced.y);
     } else {
         m_back = std::make_shared<CFBO> ("_rt_volumetricsSingle", TextureFormat_ARGB8888,
-            TextureFlags_ClampUVs, 1, reduced.x, reduced.y, reduced.x, reduced.y, false, true);
+            TextureFlags_ClampUVs, 1, reduced.x, reduced.y, reduced.x, reduced.y, false, true, 1, m_scene.getCamera ().usesReverseDepth ());
         m_lightBuffer = std::make_shared<CFBO> ("_rt_volumetricsLightBuffer", m_scene.getColorFormat (),
             TextureFlags_ClampUVs, 1, reduced.x, reduced.y, reduced.x, reduced.y);
     }
     // A depth blit requires exactly the source attachment's storage format.
     glBindTexture (GL_TEXTURE_2D, m_depthTexture);
     glTexImage2D (GL_TEXTURE_2D, 0,
-        m_scene.getFBO ()->getSamples () > 1 ? GL_DEPTH_COMPONENT32F : GL_DEPTH_COMPONENT24,
+        m_scene.getFBO ()->getDepthInternalFormat (),
         size.x, size.y, 0, GL_DEPTH_COMPONENT, GL_FLOAT, nullptr);
 }
 
@@ -141,6 +144,7 @@ GLuint VolumetricLights::frontProgram (bool shadow, bool fullscreen, bool cookie
         { "SHADOW", shadow }, { "FULLSCREEN", fullscreen }, { "QUALITY", 4 },
         { "FOG", 1 }, { "FOG_DIST", fog.distanceEnabled }, { "FOG_HEIGHT", fog.heightEnabled }
     };
+    combos.emplace ("REVERSEDEPTH", m_scene.getCamera ().usesReverseDepth () ? 1 : 0);
     // The stock sampler declaration uses #ifdef COOKIE, so omit disabled keys.
     if (cookie) combos.emplace ("COOKIE", 1);
     if (point) {
@@ -170,6 +174,7 @@ void VolumetricLights::draw (GLuint program, bool fullscreen, bool cookie, bool 
 void VolumetricLights::render (
     const std::vector<Objects::CLight*>& lightObjects, const std::vector<Objects::CLight*>& batch
 ) {
+    const ClipDepthScope clipDepth (m_scene.getCamera ().usesReverseDepth ());
     resize ();
     const auto target = m_scene.find ("_rt_FullFrameBuffer");
     if (m_vertexArray == GL_NONE) {
@@ -255,7 +260,7 @@ void VolumetricLights::render (
     const float black[] = { 0, 0, 0, 0 };
     glClearBufferfv (GL_COLOR, 0, black);
     const auto& camera = m_scene.getCamera ();
-    const auto viewProjection = nativeClip () * camera.getProjection () * camera.getLookAt ();
+    const auto viewProjection = nativeClip (camera.usesReverseDepth ()) * camera.getRasterProjection () * camera.getLookAt ();
     const auto& lights = m_scene.getLights ();
     const float time = m_scene.getTime ();
     size_t spot = 0, pointIndex = 0;
@@ -284,10 +289,10 @@ void VolumetricLights::render (
         glViewport (0, 0, m_back->getRealWidth (), m_back->getRealHeight ());
         glBindFramebuffer (GL_FRAMEBUFFER, m_back->getFramebuffer ());
         glDepthMask (GL_TRUE);
-        glClearDepth (1.0);
+        glClearDepth (m_back->getFarDepth ());
         glClear (GL_DEPTH_BUFFER_BIT);
         glEnable (GL_DEPTH_TEST);
-        glDepthFunc (GL_LESS);
+        glDepthFunc (m_back->usesReverseDepth () ? GL_GREATER : GL_LESS);
         glEnable (GL_CULL_FACE);
         glFrontFace (camera.isYFlipped () ? GL_CW : GL_CCW);
         glCullFace (GL_FRONT);
@@ -370,6 +375,7 @@ void VolumetricLights::render (
     glBindSampler (0, m_sampler);
     glActiveTexture (GL_TEXTURE0);
     glBindTexture (GL_TEXTURE_2D, m_lightBuffer->getTextureID (0));
+    const ClipDepthScope combineDepth (false);
     glUseProgram (m_combineProgram);
     glUniform1i (glGetUniformLocation (m_combineProgram, "g_Texture0"), 0);
     draw (m_combineProgram, true);

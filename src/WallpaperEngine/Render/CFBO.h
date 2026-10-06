@@ -14,7 +14,7 @@ public:
     CFBO (
 	std::string name, const TextureFormat format, const uint32_t flags, const float scale, uint32_t realWidth,
 	uint32_t realHeight, uint32_t textureWidth, uint32_t textureHeight, bool withDepthBuffer = false,
-	bool depthTexture = false, uint32_t requestedSamples = 1
+	bool depthTexture = false, uint32_t requestedSamples = 1, bool reverseDepth = false
     );
     ~CFBO () override;
 
@@ -26,6 +26,9 @@ public:
     [[nodiscard]] GLuint getDrawFramebuffer () const;
     [[nodiscard]] GLuint getDepthbuffer () const;
     [[nodiscard]] uint32_t getSamples () const;
+    [[nodiscard]] bool usesReverseDepth () const { return m_reverseDepth; }
+    [[nodiscard]] float getFarDepth () const { return m_reverseDepth ? 0.0f : 1.0f; }
+    [[nodiscard]] GLenum getDepthInternalFormat () const { return m_reverseDepth || m_samples > 1 ? GL_DEPTH_COMPONENT32F : GL_DEPTH_COMPONENT24; }
     void setMultisampleRendering (bool enabled);
     /**
      * Regenerates the mip chain from level 0 for Wallpaper Engine's dedicated
@@ -93,6 +96,7 @@ private:
     /** The main texture is a sampleable depth-comparison attachment, not RGBA color. */
     bool m_depthTexture = false;
     bool m_withDepthBuffer = false;
+    bool m_reverseDepth = false;
     bool m_multisampleRendering = false;
     glm::vec4 m_resolution = {};
     float m_scale = 0;

@@ -111,14 +111,14 @@ std::shared_ptr<CFBO> FBOProvider::create (const FBO& base, const glm::vec2 size
 
 std::shared_ptr<CFBO> FBOProvider::create (
     const std::string& name, TextureFormat format, uint32_t flags, float scale, glm::vec2 realSize,
-    glm::vec2 textureSize, bool withDepthBuffer, bool depthTexture, uint32_t samples
+    glm::vec2 textureSize, bool withDepthBuffer, bool depthTexture, uint32_t samples, bool reverseDepth
 ) {
     const bool scalable = !isFixedSizeTarget (name);
     const auto scaledRealSize = calculateTargetSize (realSize, this->m_renderScale, scalable);
     const auto scaledTextureSize = calculateTargetSize (textureSize, this->m_renderScale, scalable);
     return this->m_fbos[name] = std::make_shared<CFBO> (
 	       name, format, flags, scale, scaledRealSize.x, scaledRealSize.y, scaledTextureSize.x,
-	       scaledTextureSize.y, withDepthBuffer, depthTexture, samples
+	       scaledTextureSize.y, withDepthBuffer, depthTexture, samples, reverseDepth
 	   );
 }
 

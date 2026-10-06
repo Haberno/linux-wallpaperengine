@@ -1,4 +1,5 @@
 #include "CParticle.h"
+#include "WallpaperEngine/Render/Depth.h"
 
 #include "WallpaperEngine/Data/Model/Property.h"
 #include "WallpaperEngine/Data/Parsers/ObjectParser.h"
@@ -2917,7 +2918,7 @@ void CParticle::setupPass () {
     m_pass->setInput (getTexture ());
 
     // Set matrix pointers - CPass will dereference these each frame
-    m_pass->setModelViewProjectionMatrix (&m_mvpMatrix);
+    m_pass->setModelViewProjectionMatrix (&m_mvpMatrix, getScene ().getCamera ().usesReverseDepth ());
     m_pass->setModelViewProjectionMatrixInverse (&m_mvpMatrixInverse);
     m_pass->setModelMatrix (&m_modelMatrix);
     m_pass->setViewProjectionMatrix (&m_viewProjectionMatrix);
@@ -3218,14 +3219,16 @@ void CParticle::updateParticleViewProjection () {
 	glm::mat4 view = camera.getLookAt ();
 	view[3][2] = -distance;
 	const auto& output = getScene ().getOutputSize ();
-	glm::mat4 projection = glm::perspective (fov, output.x / output.y, 5.0f,
-	    glm::max (15000.0f, distance + 1000.0f));
+	const float farZ = glm::max (15000.0f, distance + 1000.0f);
+	glm::mat4 projection = camera.usesReverseDepth ()
+	    ? reversePerspective (fov, output.x / output.y, 5.0f, farZ)
+	    : glm::perspective (fov, output.x / output.y, 5.0f, farZ);
 	if (perspective && camera.isYFlipped ()) projection[1][1] *= -1.0f;
 	m_viewProjectionMatrix = projection * view;
 	// The native override preserves the authored eye used by screen-facing ropes.
 	m_eyePosition = perspective ? camera.getEye () : glm::vec3 (glm::inverse (view)[3]);
     } else if (perspective) {
-	m_viewProjectionMatrix = camera.getProjection () * camera.getLookAt ();
+	m_viewProjectionMatrix = camera.getRasterProjection () * camera.getLookAt ();
 	m_eyePosition = camera.getEye ();
     } else {
 	// Orthographic projection from scene camera

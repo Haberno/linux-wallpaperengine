@@ -579,7 +579,7 @@ float CWallpaper::getSceneFadeAlpha () const { return 0.0f; }
 
 glm::vec4 CWallpaper::getColorCorrection () const { return { 1.0f, 1.0f, 1.0f, 0.0f }; }
 
-void CWallpaper::setupFramebuffers (bool sceneDepthBuffer, glm::vec2 size, uint32_t samples, TextureFormat format) {
+void CWallpaper::setupFramebuffers (bool sceneDepthBuffer, glm::vec2 size, uint32_t samples, TextureFormat format, bool reverseDepth) {
     this->setBackbufferFormat (format);
     if (size.x <= 0 || size.y <= 0) {
 	size = { this->getWidth (), this->getHeight () };
@@ -589,7 +589,7 @@ void CWallpaper::setupFramebuffers (bool sceneDepthBuffer, glm::vec2 size, uint3
     // create framebuffer for the scene
     this->m_sceneFBO = this->create (
 	"_rt_FullFrameBuffer", format, clamp, 1.0, size, size,
-	sceneDepthBuffer, false, samples
+	sceneDepthBuffer, false, samples, reverseDepth
     );
 
 }

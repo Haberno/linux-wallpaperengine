@@ -144,6 +144,7 @@ protected:
     localTransform (const WallpaperEngine::Data::Model::Object& object, float time);
 
 private:
+    [[nodiscard]] bool usesReverseProjection (const glm::mat4* projection) const;
     struct PuppetLayerPlayback {
 	bool initialized = false;
 	bool playing = true;

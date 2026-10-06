@@ -178,7 +178,7 @@ protected:
      * Setups OpenGL's framebuffers for ping-pong and scene rendering
      */
     void setupFramebuffers (bool sceneDepthBuffer = false, glm::vec2 size = { 0, 0 }, uint32_t samples = 1,
-	TextureFormat format = TextureFormat_ARGB8888);
+	TextureFormat format = TextureFormat_ARGB8888, bool reverseDepth = false);
 
     const Wallpaper& m_wallpaperData;
 

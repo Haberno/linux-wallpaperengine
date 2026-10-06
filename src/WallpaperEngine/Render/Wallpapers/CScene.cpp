@@ -14,6 +14,7 @@
 #include "WallpaperEngine/Data/Parsers/TextureParser.h"
 #include "HdrBloom.h"
 #include "VolumetricLights.h"
+#include "WallpaperEngine/Render/Depth.h"
 #include "WallpaperEngine/Logging/Log.h"
 
 #include "WallpaperEngine/Data/Model/Wallpaper.h"
@@ -367,9 +368,10 @@ CScene::CScene (
 	    break;
 	}
     }
+    m_camera->setReverseDepth (isPerspective && ClipDepthScope::supported ());
     const auto requestedSamples = context.getApp ().getContext ().settings.render.msaaSamples;
     const auto samples = scene->hasModelLayer ? requestedSamples : 1;
-    this->setupFramebuffers (isPerspective || hasModels || samples > 1, this->m_outputSize, samples, this->getColorFormat ());
+    this->setupFramebuffers (isPerspective || hasModels || samples > 1, this->m_outputSize, samples, this->getColorFormat (), m_camera->usesReverseDepth ());
     if (this->m_hdrEnabled) {
         const auto size = glm::max (glm::uvec2 (this->getFramebufferSize ()), glm::uvec2 (2));
         this->find ("_rt_FullFrameBuffer")->resize (size.x, size.y);
@@ -1012,6 +1014,7 @@ void CScene::renderFrame (const glm::ivec4& viewport) {
     const glm::vec3 clearColor = this->getScene ().colors.clear->evaluateVec3 (this->getTime ());
     glClearColor (clearColor.r, clearColor.g, clearColor.b, 1.0f);
     const GLbitfield colorClear = this->getScene ().clearEnabled->value->getBool () ? GL_COLOR_BUFFER_BIT : 0;
+    glClearDepth (m_sceneFBO->getFarDepth ());
     glClear (colorClear | GL_DEPTH_BUFFER_BIT);
 
     // Discover newly enabled shader inputs before an earlier hidden source is
@@ -1099,6 +1102,7 @@ void CScene::renderFrame (const glm::ivec4& viewport) {
 	glColorMask (true, true, true, true);
 	glDepthMask (true);
 	glClearColor (0.0f, 0.0f, 0.0f, 0.0f);
+	glClearDepth (target->getFarDepth ());
 	glClear (GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 	glClearColor (
 	    previousClearColor[0], previousClearColor[1], previousClearColor[2], previousClearColor[3]
@@ -1804,6 +1808,7 @@ void CScene::renderShadowAtlas () {
     glPushDebugGroup (GL_DEBUG_SOURCE_APPLICATION, 0, -1, "Scene shadow atlas");
 #endif
 
+    const ClipDepthScope clipDepth (false);
     glBindFramebuffer (GL_FRAMEBUFFER, this->_rt_shadowAtlas->getFramebuffer ());
     glViewport (0, 0, SHADOW_ATLAS_SIZE, SHADOW_ATLAS_SIZE);
     glColorMask (false, false, false, false);

@@ -50,7 +50,7 @@ public:
     void setPreviousInput (std::shared_ptr<const TextureProvider> input);
     void setTexCoord (GLuint texcoord);
     void setPosition (GLuint position);
-    void setModelViewProjectionMatrix (const glm::mat4* projection);
+    void setModelViewProjectionMatrix (const glm::mat4* projection, bool reverseDepth = false);
     void setModelViewProjectionMatrixInverse (const glm::mat4* projection);
     void setModelMatrix (const glm::mat4* model);
     void setViewProjectionMatrix (const glm::mat4* viewProjection);
@@ -89,6 +89,7 @@ public:
     void addUniform (const std::string& name, const glm::mat4x3* value, int count = 1);
 
 private:
+    bool m_reverseDepth = false;
     [[nodiscard]] std::shared_ptr<const TextureProvider> resolveUserTexture (int index) const;
     void setupUserTexture (int index, const std::string& entry);
     struct TextureChainEntry {

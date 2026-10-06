@@ -1,4 +1,5 @@
 #include "CPass.h"
+#include "WallpaperEngine/Render/Depth.h"
 #include <sstream>
 #include <utility>
 
@@ -199,7 +200,7 @@ void CPass::setupRenderFramebuffer (const std::shared_ptr<const CFBO>& drawTo) c
 	    // Native uses strict GREATER with reversed depth. In our conventional
 	    // depth buffer the equivalent is LESS: coplanar additive surfaces must
 	    // not brighten an opaque surface that already wrote the same depth.
-	    glDepthFunc (GL_LESS);
+	    glDepthFunc (drawTo->usesReverseDepth () ? GL_GREATER : GL_LESS);
 	    break;
 	case DepthtestMode_Disabled:
 	default:
@@ -714,6 +715,7 @@ void CPass::render () {
     if (!this->m_programSharingChecked) {
 	this->setupProgramSharing ();
     }
+    const ClipDepthScope clipDepth (m_reverseDepth);
     this->setupRenderFramebuffer (drawTo);
     this->setupRenderTexture ();
     // genericimage3/4 (and VERSION-enabled genericimage2) encode object opacity in
@@ -758,7 +760,8 @@ void CPass::setPreviousInput (std::shared_ptr<const TextureProvider> input) {
     this->m_previousInput = std::move (input);
 }
 
-void CPass::setModelViewProjectionMatrix (const glm::mat4* projection) {
+void CPass::setModelViewProjectionMatrix (const glm::mat4* projection, const bool reverseDepth) {
+    m_reverseDepth = reverseDepth;
     this->m_modelViewProjectionMatrix = projection;
 }
 

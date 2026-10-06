@@ -17,7 +17,7 @@ public:
     std::shared_ptr<CFBO> create (const FBO& base, glm::vec2 size, bool fullscreen = false);
     std::shared_ptr<CFBO> create (
 	const std::string& name, TextureFormat format, uint32_t flags, float scale, glm::vec2 realSize,
-	glm::vec2 textureSize, bool withDepthBuffer = false, bool depthTexture = false, uint32_t samples = 1
+	glm::vec2 textureSize, bool withDepthBuffer = false, bool depthTexture = false, uint32_t samples = 1, bool reverseDepth = false
     );
     std::shared_ptr<CFBO> alias (const std::string& newName, const std::string& original);
     std::shared_ptr<CFBO> alias (const std::string& newName, std::shared_ptr<CFBO> original);

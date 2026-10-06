@@ -2,6 +2,7 @@
 #include <glm/gtc/matrix_transform.hpp>
 
 #include "Camera.h"
+#include "Depth.h"
 
 #include <cmath>
 
@@ -30,6 +31,12 @@ const glm::vec3& Camera::getEye () const { return this->m_transform.eye; }
 const glm::vec3& Camera::getUp () const { return this->m_transform.up; }
 
 const glm::mat4& Camera::getProjection () const { return this->m_projection; }
+
+const glm::mat4& Camera::getRasterProjection () const { return this->m_rasterProjection; }
+
+bool Camera::usesReverseDepth () const { return m_reverseDepth && !m_isOrthogonal; }
+
+void Camera::setReverseDepth (const bool enabled) { m_reverseDepth = enabled; updateMatrices (); }
 
 const glm::mat4& Camera::getLookAt () const { return this->m_lookat; }
 
@@ -209,6 +216,7 @@ void Camera::updateMatrices () {
 	    // lookAt translation as before; authored camera layers and paths are real.
 	    this->m_projection = glm::translate (this->m_projection, this->getEye ());
 	}
+	m_rasterProjection = m_projection;
 	return;
     }
 
@@ -218,9 +226,14 @@ void Camera::updateMatrices () {
 	glm::radians (glm::clamp (this->getFov (), 1.0f, 179.0f)), this->m_width / this->m_height, nearz, farz
     );
 
+    m_rasterProjection = usesReverseDepth ()
+	? reversePerspective (glm::radians (glm::clamp (getFov (), 1.0f, 179.0f)), m_width / m_height, nearz, farz)
+	: m_projection;
+
     // Native perspective framing uses FOV alone. The separate zoom channel is
     // orthographic; legacy 3D paths can retain large editor zoom values.
     if (this->m_isYFlipped) {
 	this->m_projection[1][1] *= -1.0f;
+	m_rasterProjection[1][1] *= -1.0f;
     }
 }

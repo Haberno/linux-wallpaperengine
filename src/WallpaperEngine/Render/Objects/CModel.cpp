@@ -404,7 +404,7 @@ void CModel::setup () {
 
 	    pass->setDestination (this->getScene ().getFBO ());
 	    pass->setInput (this->m_texture);
-	    pass->setModelViewProjectionMatrix (&this->m_modelViewProjectionMatrix);
+	    pass->setModelViewProjectionMatrix (&this->m_modelViewProjectionMatrix, getScene ().getCamera ().usesReverseDepth ());
 	    pass->setModelViewProjectionMatrixInverse (&this->m_modelViewProjectionMatrixInverse);
 	    pass->setModelMatrix (&this->m_modelMatrix);
 	    pass->setViewProjectionMatrix (&this->m_viewProjectionMatrix);
@@ -804,7 +804,7 @@ void CModel::updateMatrices () {
     const auto& camera = this->getScene ().getCamera ();
 
     this->m_modelMatrix = this->resolveModelMatrix ();
-    this->m_viewProjectionMatrix = camera.getProjection () * camera.getLookAt ();
+    this->m_viewProjectionMatrix = camera.getRasterProjection () * camera.getLookAt ();
     const bool perspective = camera.isOrthogonal () && this->m_model.perspective->value->getBool ();
     if (perspective) {
 	// Native derives the virtual eye from the current orthographic scale,

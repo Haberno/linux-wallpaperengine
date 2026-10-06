@@ -223,7 +223,7 @@ CImage::CImage (Wallpapers::CScene& scene, const Image& image) :
 	const glm::vec2 compositionSize = scene.getOutputSize ();
 	this->m_compositionFBO = scene.create (
 	    "_rt_compositionLayer_" + std::to_string (image.id), scene.getColorFormat (),
-	    TextureFlags_ClampUVs | interpolationFlags, 1.0f, compositionSize, compositionSize, true
+	    TextureFlags_ClampUVs | interpolationFlags, 1.0f, compositionSize, compositionSize, true, false, 1, scene.getCamera ().usesReverseDepth ()
 	);
 	// Every pass created for this image receives an FBOProvider parented to the
 	// image, so this alias also redirects an authored texture slot named
@@ -453,7 +453,7 @@ CImage::CImage (Wallpapers::CScene& scene, const Image& image) :
 	= glm::vec3 ((this->m_pos.x + this->m_pos.z) / 2.0f, (this->m_pos.y + this->m_pos.w) / 2.0f, 0.0f);
 
     this->m_modelViewProjectionScreen
-	= this->getScene ().getCamera ().getProjection () * this->getScene ().getCamera ().getLookAt ();
+	= this->getScene ().getCamera ().getRasterProjection () * this->getScene ().getCamera ().getLookAt ();
 
     if (this->getImage ().model->passthrough) {
 	this->m_modelViewProjectionCopy = this->m_modelViewProjectionScreen;
@@ -1117,7 +1117,7 @@ void CImage::setupPuppetAlbedoPasses () {
 	// pixels using g_BlendMap, directly into the local albedo target.
 	this->m_puppetOverlayPass->setDestination (this->m_puppetAlbedoFBO);
 	this->m_puppetOverlayPass->setInput (this->getTexture ());
-	this->m_puppetOverlayPass->setModelViewProjectionMatrix (&this->m_modelViewProjectionCopy);
+	this->m_puppetOverlayPass->setModelViewProjectionMatrix (&this->m_modelViewProjectionCopy, usesReverseProjection (&m_modelViewProjectionCopy));
 	this->m_puppetOverlayPass->setModelViewProjectionMatrixInverse (&this->m_modelViewProjectionCopyInverse);
 	this->m_puppetOverlayPass->setModelMatrix (&this->m_modelMatrix);
 	this->m_puppetOverlayPass->setViewProjectionMatrix (&this->m_viewProjectionMatrix);
@@ -1383,7 +1383,7 @@ bool CImage::setupPuppetClippingPasses (
 	const auto configurePass = [this, &input, &destination, projection, inverseProjection] (Effects::CPass& pass) {
 	    pass.setDestination (destination);
 	    pass.setInput (input);
-	    pass.setModelViewProjectionMatrix (projection);
+	    pass.setModelViewProjectionMatrix (projection, usesReverseProjection (projection));
 	    pass.setModelViewProjectionMatrixInverse (inverseProjection);
 	    pass.setModelMatrix (&this->m_modelMatrix);
 	    pass.setViewProjectionMatrix (&this->m_viewProjectionMatrix);
@@ -1414,7 +1414,7 @@ bool CImage::setupPuppetClippingPasses (
 	    this->m_puppetMaskPasses.push_back (pass);
 	    pass->setDestination (this->m_puppetClippingFBO);
 	    pass->setInput (input);
-	    pass->setModelViewProjectionMatrix (projection);
+	    pass->setModelViewProjectionMatrix (projection, usesReverseProjection (projection));
 	    pass->setModelViewProjectionMatrixInverse (inverseProjection);
 	    pass->setModelMatrix (&this->m_modelMatrix);
 	    pass->setViewProjectionMatrix (&this->m_viewProjectionMatrix);
@@ -1894,6 +1894,12 @@ void CImage::updateEffectVisibility () {
     setupPasses ();
 }
 
+bool CImage::usesReverseProjection (const glm::mat4* projection) const {
+    return getScene ().getCamera ().usesReverseDepth ()
+	&& (projection == &m_modelViewProjectionScreen || projection == &m_effectSceneProjection
+	    || (projection == &m_modelViewProjectionCopy && getImage ().model->passthrough));
+}
+
 void CImage::setupPasses () {
     m_currentMainFBO = m_mainFBO;
     m_currentSubFBO = m_subFBO;
@@ -1965,7 +1971,7 @@ void CImage::setupPasses () {
 	pass->setPreviousInput (inTargetEffectSequence ? effectInput : nullptr);
 	pass->setPosition (spacePosition);
 	pass->setTexCoord (texcoord);
-	pass->setModelViewProjectionMatrix (projection);
+	pass->setModelViewProjectionMatrix (projection, usesReverseProjection (projection));
 	pass->setModelViewProjectionMatrixInverse (inverseProjection);
 	if (this->m_finalPassRouting.has_value () && this->m_finalPassRouting->pass == pass) {
 	    this->updateFinalPassVisibility (true);
@@ -2028,7 +2034,7 @@ void CImage::updateFinalPassVisibility (const bool force) {
     if (!visible) {
 	pass->setDestination (route.offscreenTarget);
 	pass->setPosition (route.offscreenPosition);
-	pass->setModelViewProjectionMatrix (route.offscreenProjection);
+	pass->setModelViewProjectionMatrix (route.offscreenProjection, usesReverseProjection (route.offscreenProjection));
 	pass->setModelViewProjectionMatrixInverse (route.offscreenProjectionInverse);
 	pass->addUniform ("g_EffectModelViewProjectionMatrix",
 	    route.offscreenPosition == this->getPassSpacePosition ()
@@ -2060,7 +2066,7 @@ void CImage::updateFinalPassVisibility (const bool force) {
 	pass->addUniform ("g_NormalModelMatrix", &this->m_sceneNormalModelMatrix);
     }
     pass->setDestination (destination);
-    pass->setModelViewProjectionMatrix (projection);
+    pass->setModelViewProjectionMatrix (projection, usesReverseProjection (projection));
     pass->setModelViewProjectionMatrixInverse (inverseProjection);
 
     if (!route.samplesSourceTexture && !this->m_hasPuppetMesh && !this->getImage ().model->passthrough) {
@@ -2068,7 +2074,7 @@ void CImage::updateFinalPassVisibility (const bool force) {
 	// Scene-space vertices bake those transforms too early and reverse Y offsets.
 	pass->setPosition (this->m_effectSpacePosition);
 	pass->setModelMatrix (&this->m_effectSceneModel);
-	pass->setModelViewProjectionMatrix (&this->m_effectSceneProjection);
+	pass->setModelViewProjectionMatrix (&this->m_effectSceneProjection, usesReverseProjection (&m_effectSceneProjection));
 	pass->setModelViewProjectionMatrixInverse (&this->m_effectSceneProjectionInverse);
 	projection = &this->m_effectSceneProjection;
     }
@@ -2652,7 +2658,7 @@ void CImage::updateScreenSpacePosition () {
     if (this->getScene ().getScene ().camera.projection.isPerspective) {
 	const glm::mat4 world = this->resolveWorldMatrix ();
 	const glm::mat4 viewProjection
-	    = this->getScene ().getCamera ().getProjection () * this->getScene ().getCamera ().getLookAt ();
+	    = this->getScene ().getCamera ().getRasterProjection () * this->getScene ().getCamera ().getLookAt ();
 	const PerspectiveSceneMatrices matrices = calculatePerspectiveSceneMatrices (world, viewProjection);
 
 	this->m_sceneModelMatrix = matrices.model;

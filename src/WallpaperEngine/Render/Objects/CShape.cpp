@@ -70,7 +70,7 @@ void CShape::setup () {
 		pass->setInput (m_texture);
 		pass->setModelMatrix (&m_model);
 		pass->setViewProjectionMatrix (&m_viewProjection);
-		pass->setModelViewProjectionMatrix (&m_mvp);
+		pass->setModelViewProjectionMatrix (&m_mvp, getScene ().getCamera ().usesReverseDepth ());
 		pass->setModelViewProjectionMatrixInverse (&m_mvpInverse);
 		pass->setGeometryCallback (
 		    [this, pass] {
@@ -171,7 +171,7 @@ void CShape::render () {
     glBufferData (GL_ARRAY_BUFFER, sizeof (vertices), vertices.data (), GL_DYNAMIC_DRAW);
     m_model = resolveWorldMatrix ();
     const auto& camera = getScene ().getCamera ();
-    m_viewProjection = camera.getProjection () * camera.getLookAt ();
+    m_viewProjection = camera.getRasterProjection () * camera.getLookAt ();
     if (!getScene ().getScene ().camera.projection.isPerspective) {
 	m_model = glm::translate (glm::mat4 (1), glm::vec3 (resolveParallaxOffset (), 0))
 	    * glm::scale (glm::mat4 (1), glm::vec3 (1, -1, 1))

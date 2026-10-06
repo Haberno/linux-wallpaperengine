@@ -1,6 +1,7 @@
 #include "WallpaperEngine/Application/ApplicationContext.h"
 #include "WallpaperEngine/Data/Assets/Texture.h"
 #include "WallpaperEngine/Render/CFBO.h"
+#include "WallpaperEngine/Render/Depth.h"
 #include "WallpaperEngine/Render/CTexture.h"
 #include "WallpaperEngine/Render/FBOProvider.h"
 #include "WallpaperEngine/Render/Shaders/ShaderProgramCache.h"
@@ -852,4 +853,85 @@ TEST_CASE ("declared effect storage shares per scene and releases with its last 
     // The root registry holds weak references, so even a live scene pins no storage.
     CHECK (CFBO::getLiveCount () == count);
     CHECK (CFBO::getLiveGpuBytes () == bytes);
+}
+
+TEST_CASE ("Reverse depth storage survives resize and MSAA fallback without leaking clip state", "[.][gl][reverse-depth-storage]") {
+    TextureGLContext context;
+    using WallpaperEngine::Render::ClipDepthScope;
+    if (!ClipDepthScope::supported ()) SKIP ("Reverse depth needs OpenGL clip control");
+    GLint originalOrigin = 0, originalDepth = 0;
+    glGetIntegerv (GL_CLIP_ORIGIN, &originalOrigin);
+    glGetIntegerv (GL_CLIP_DEPTH_MODE, &originalDepth);
+    {
+        const ClipDepthScope reversed (true);
+        GLint depth = 0;
+        glGetIntegerv (GL_CLIP_DEPTH_MODE, &depth);
+        CHECK (depth == GL_ZERO_TO_ONE);
+        {
+            const ClipDepthScope ordinary (false);
+            glGetIntegerv (GL_CLIP_DEPTH_MODE, &depth);
+            CHECK (depth == GL_NEGATIVE_ONE_TO_ONE);
+        }
+        glGetIntegerv (GL_CLIP_DEPTH_MODE, &depth);
+        CHECK (depth == GL_ZERO_TO_ONE);
+    }
+    GLint origin = 0, depth = 0;
+    glGetIntegerv (GL_CLIP_ORIGIN, &origin);
+    glGetIntegerv (GL_CLIP_DEPTH_MODE, &depth);
+    CHECK (origin == originalOrigin);
+    CHECK (depth == originalDepth);
+    for (const uint32_t samples : { 1u, 3u, 4u }) {
+        CAPTURE (samples);
+        CFBO target ("reverse_depth", TextureFormat_ARGB8888, TextureFlags_ClampUVs,
+            1, 8, 8, 8, 8, true, false, samples, true);
+        for (const uint32_t size : { 8u, 11u }) {
+            if (size != 8) target.resize (size, size);
+            const GLuint draw = target.getDrawFramebuffer ();
+            glBindFramebuffer (GL_FRAMEBUFFER, draw);
+            REQUIRE (glCheckFramebufferStatus (GL_FRAMEBUFFER) == GL_FRAMEBUFFER_COMPLETE);
+            glBindRenderbuffer (GL_RENDERBUFFER, target.getDepthbuffer ());
+            GLint format = 0;
+            glGetRenderbufferParameteriv (GL_RENDERBUFFER, GL_RENDERBUFFER_INTERNAL_FORMAT, &format);
+            CHECK (format == GL_DEPTH_COMPONENT32F);
+            if (target.getSamples () == 1) target.clear (glm::vec4 (0));
+            CFBO readback ("reverse_readback", TextureFormat_ARGB8888, TextureFlags_ClampUVs,
+                1, size, size, size, size, true, false, 1, true);
+            const GLuint destination = readback.getDrawFramebuffer ();
+            glBindFramebuffer (GL_READ_FRAMEBUFFER, draw);
+            glBindFramebuffer (GL_DRAW_FRAMEBUFFER, destination);
+            glBlitFramebuffer (0, 0, size, size, 0, 0, size, size, GL_DEPTH_BUFFER_BIT, GL_NEAREST);
+            glBindFramebuffer (GL_FRAMEBUFFER, destination);
+            float value = -1;
+            glReadPixels (0, 0, 1, 1, GL_DEPTH_COMPONENT, GL_FLOAT, &value);
+            CHECK (value == 0.0f);
+            CHECK (glGetError () == GL_NO_ERROR);
+        }
+    }
+    CFBO volume ("reverse_volume", TextureFormat_ARGB8888, TextureFlags_ClampUVs,
+        1, 8, 8, 8, 8, false, true, 1, true);
+    // Construction leaves its shared texture bound, before lazy framebuffer setup.
+    GLint volumeTexture = 0;
+    glGetIntegerv (GL_TEXTURE_BINDING_2D, &volumeTexture);
+    REQUIRE (volumeTexture != 0);
+    const std::array<float, 64> occupiedDepth = [] { std::array<float, 64> value; value.fill (1.0f); return value; } ();
+    glTexSubImage2D (GL_TEXTURE_2D, 0, 0, 0, 8, 8, GL_DEPTH_COMPONENT, GL_FLOAT, occupiedDepth.data ());
+    glDepthMask (GL_FALSE);
+    glEnable (GL_SCISSOR_TEST);
+    glScissor (0, 0, 0, 0);
+    glBindFramebuffer (GL_FRAMEBUFFER, volume.getFramebuffer ());
+    REQUIRE (volume.getTextureID (0) == static_cast<GLuint> (volumeTexture));
+    GLboolean depthMask = GL_TRUE;
+    glGetBooleanv (GL_DEPTH_WRITEMASK, &depthMask);
+    CHECK (depthMask == GL_FALSE);
+    CHECK (glIsEnabled (GL_SCISSOR_TEST) == GL_TRUE);
+    glDepthMask (GL_TRUE);
+    glDisable (GL_SCISSOR_TEST);
+    GLint format = 0;
+    glGetTexLevelParameteriv (GL_TEXTURE_2D, 0, GL_TEXTURE_INTERNAL_FORMAT, &format);
+    CHECK (format == GL_DEPTH_COMPONENT32F);
+    glBindFramebuffer (GL_FRAMEBUFFER, volume.getFramebuffer ());
+    float value = -1;
+    glReadPixels (0, 0, 1, 1, GL_DEPTH_COMPONENT, GL_FLOAT, &value);
+    CHECK (value == 0.0f);
+    CHECK (glGetError () == GL_NO_ERROR);
 }

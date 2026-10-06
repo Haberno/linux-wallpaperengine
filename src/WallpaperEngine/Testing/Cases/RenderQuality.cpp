@@ -1,6 +1,8 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include "WallpaperEngine/Render/FBOProvider.h"
+#include "WallpaperEngine/Render/Depth.h"
+#include <glm/gtc/matrix_transform.hpp>
 #include "WallpaperEngine/Render/FrameRateCounter.h"
 #include "WallpaperEngine/Render/WallpaperState.h"
 #include <catch2/catch_approx.hpp>
@@ -126,4 +128,25 @@ TEST_CASE ("authored zero fit uses raw zero extents and native minimum storage",
     CHECK (FBOProvider::calculateEffectTargetSize (target, { 320, 180 }, 1) == glm::uvec2 (2, 2));
     // The generic helper still uses zero to mean no fit cap.
     CHECK (FBOProvider::calculateTargetSize ({ 320, 180 }, 1, true, 0) == glm::uvec2 (320, 180));
+}
+
+TEST_CASE ("Finite reverse perspective preserves framing and near-to-far precision", "[reverse-depth]") {
+    using WallpaperEngine::Render::reversePerspective;
+    for (const float nearZ : { 0.1f, 1.0f, 5.0f }) {
+        for (const float farZ : { 10000.0f, 1000000.0f }) {
+            const auto projection = reversePerspective (glm::radians (60.0f), 16.0f / 9.0f, nearZ, farZ);
+            const auto conventional = glm::perspective (glm::radians (60.0f), 16.0f / 9.0f, nearZ, farZ);
+            CHECK (projection[0][0] == conventional[0][0]);
+            CHECK (projection[1][1] == conventional[1][1]);
+            double previous = 2.0;
+            for (const float distance : { nearZ, nearZ * 2, nearZ * 100, farZ * 0.999f, farZ }) {
+                const auto clip = projection * glm::vec4 (0, 0, -distance, 1);
+                const double expected = double (nearZ) * (double (farZ) / distance - 1) / (farZ - nearZ);
+                const double actual = clip.z / clip.w;
+                CHECK (actual == Catch::Approx (expected).margin (2e-7));
+                CHECK (actual < previous);
+                previous = actual;
+            }
+        }
+    }
 }

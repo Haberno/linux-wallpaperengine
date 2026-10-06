@@ -1,4 +1,5 @@
 #include "CText.h"
+#include "WallpaperEngine/Render/Depth.h"
 #include "CImage.h"
 
 #include <algorithm>
@@ -764,6 +765,7 @@ void CText::destroyEffectChain () {
 }
 
 void CText::renderEffectChain (const glm::mat4& mvp, const float brightness, const float alpha, const bool drawToScene) {
+    const ClipDepthScope localDepth (false);
     updateEffectVisibility ();
     const glm::vec4 color = m_text.color->value->getVec4 ();
 
@@ -870,6 +872,7 @@ void CText::renderEffectChain (const glm::mat4& mvp, const float brightness, con
     glViewport (0, 0, sceneTarget->getRealWidth (), sceneTarget->getRealHeight ());
     glColorMask (GL_TRUE, GL_TRUE, GL_TRUE, getScene ().isRenderingToComposition () ? GL_TRUE : GL_FALSE);
     glBlendEquationSeparate (GL_FUNC_ADD, getScene ().usesCompositionAlphaMax () ? GL_MAX : GL_FUNC_ADD);
+    const ClipDepthScope sceneDepth (getScene ().getCamera ().usesReverseDepth ());
     if (drawToScene && m_colorBlendPass) {
 	const auto width = sceneTarget->getRealWidth ();
 	const auto height = sceneTarget->getRealHeight ();
@@ -885,12 +888,13 @@ void CText::renderEffectChain (const glm::mat4& mvp, const float brightness, con
 	// Only the forced color-blend passthrough has this legacy version gate.
 	m_colorBlendPass->setDepthtestMode (depthTestEnabled () && getScene ().getScene ().version > 1
 	    ? DepthtestMode_Enabled : DepthtestMode_Disabled);
+	m_colorBlendPass->setModelViewProjectionMatrix (&m_colorBlendMVP, getScene ().getCamera ().usesReverseDepth ());
 	m_colorBlendPass->setDepthwriteMode (DepthwriteMode_Disabled);
 	m_colorBlendPass->render ();
     } else if (drawToScene) {
         if (depthTestEnabled ()) glEnable (GL_DEPTH_TEST);
         else glDisable (GL_DEPTH_TEST);
-        glDepthFunc (GL_LESS);
+        glDepthFunc (sceneTarget->usesReverseDepth () ? GL_GREATER : GL_LESS);
         glDepthMask (GL_FALSE);
         glEnable (GL_BLEND);
         glBlendFunc (GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
@@ -1629,9 +1633,11 @@ void CText::render () {
     glBlendEquationSeparate (GL_FUNC_ADD, getScene ().usesCompositionAlphaMax () ? GL_MAX : GL_FUNC_ADD);
     if (depthTestEnabled ()) glEnable (GL_DEPTH_TEST);
     else glDisable (GL_DEPTH_TEST);
-    glDepthFunc (GL_LESS);
+    glDepthFunc (sceneTarget->usesReverseDepth () ? GL_GREATER : GL_LESS);
     // Native font materials are translucent: they read depth but never write it.
     glDepthMask (GL_FALSE);
+
+    const ClipDepthScope clipDepth (getScene ().getCamera ().usesReverseDepth ());
 
     // 3D scenes: no screen-space centering or parallax; the world matrix carries the
     // transform chain (origin, parents, text scale)
@@ -1640,7 +1646,7 @@ void CText::render () {
 	// space is y-up, so mirror the centered quad back around its own center
 	const glm::mat4 model
 	    = this->resolveWorldMatrix () * glm::scale (glm::mat4 (1.0f), glm::vec3 (1.0f, -1.0f, 1.0f));
-	const glm::mat4 mvp = getScene ().getCamera ().getProjection () * getScene ().getCamera ().getLookAt () * model;
+	const glm::mat4 mvp = getScene ().getCamera ().getRasterProjection () * getScene ().getCamera ().getLookAt () * model;
 
 	if (m_effectsEnabled) {
 	    renderEffectChain (mvp, brightness, alpha, compositeEffects && drawToScene);

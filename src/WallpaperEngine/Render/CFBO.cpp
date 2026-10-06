@@ -96,9 +96,10 @@ uint32_t supportedSampleCount (const uint32_t requested, const bool withDepth, c
 CFBO::CFBO (
     std::string name, const TextureFormat format, const uint32_t flags, const float scale, uint32_t realWidth,
     uint32_t realHeight, uint32_t textureWidth, uint32_t textureHeight, bool withDepthBuffer, bool depthTexture,
-    uint32_t requestedSamples
+    uint32_t requestedSamples, bool reverseDepth
 ) : m_depthTexture (depthTexture), m_withDepthBuffer (withDepthBuffer), m_scale (scale), m_name (std::move (name)),
     m_format (format), m_flags (flags) {
+    m_reverseDepth = reverseDepth;
     // Hidden effect inputs can have an authored zero dimension (for example a
     // 64x0 audio buffer). Keep their logical size, but allocate complete GL storage.
     textureWidth = std::max (textureWidth, 1u);
@@ -119,14 +120,14 @@ CFBO::CFBO (
     glBindTexture (GL_TEXTURE_2D, this->m_texture);
     if (this->m_depthTexture) {
 	glTexImage2D (
-	    GL_TEXTURE_2D, 0, GL_DEPTH_COMPONENT24, textureWidth, textureHeight, 0, GL_DEPTH_COMPONENT,
-	    GL_UNSIGNED_INT, nullptr
+	    GL_TEXTURE_2D, 0, getDepthInternalFormat (), textureWidth, textureHeight, 0, GL_DEPTH_COMPONENT,
+	    GL_FLOAT, nullptr
 	);
 	// Stock scene shaders declare the shadow atlas as sampler2DComparison. Hardware
 	// comparison also lets their 9-tap PCF path work without a custom sampler object.
 	glTexParameteri (GL_TEXTURE_2D, GL_TEXTURE_COMPARE_MODE, GL_COMPARE_REF_TO_TEXTURE);
-	glTexParameteri (GL_TEXTURE_2D, GL_TEXTURE_COMPARE_FUNC, GL_LEQUAL);
-	const GLfloat borderDepth[] = { 1.0f, 1.0f, 1.0f, 1.0f };
+	glTexParameteri (GL_TEXTURE_2D, GL_TEXTURE_COMPARE_FUNC, m_reverseDepth ? GL_GEQUAL : GL_LEQUAL);
+	const GLfloat borderDepth[] = { getFarDepth (), getFarDepth (), getFarDepth (), getFarDepth () };
 	glTexParameterfv (GL_TEXTURE_2D, GL_TEXTURE_BORDER_COLOR, borderDepth);
     } else {
 	glTexImage2D (
@@ -175,7 +176,7 @@ CFBO::CFBO (
     if (withDepthBuffer && !this->m_depthTexture && this->m_samples == 1) {
 	glGenRenderbuffers (1, &this->m_depthbuffer);
 	glBindRenderbuffer (GL_RENDERBUFFER, this->m_depthbuffer);
-	glRenderbufferStorage (GL_RENDERBUFFER, GL_DEPTH_COMPONENT24, textureWidth, textureHeight);
+	glRenderbufferStorage (GL_RENDERBUFFER, getDepthInternalFormat (), textureWidth, textureHeight);
     }
     if (this->m_samples > 1) {
 	glGenRenderbuffers (1, &this->m_multisampleColor);
@@ -206,7 +207,7 @@ CFBO::CFBO (
 	    if (withDepthBuffer) {
 		glGenRenderbuffers (1, &this->m_depthbuffer);
 		glBindRenderbuffer (GL_RENDERBUFFER, this->m_depthbuffer);
-		glRenderbufferStorage (GL_RENDERBUFFER, GL_DEPTH_COMPONENT24, textureWidth, textureHeight);
+		glRenderbufferStorage (GL_RENDERBUFFER, getDepthInternalFormat (), textureWidth, textureHeight);
 	    }
 	}
     }
@@ -256,14 +257,14 @@ void CFBO::resize (uint32_t width, uint32_t height) {
     }
     glBindTexture (GL_TEXTURE_2D, m_texture);
     glTexImage2D (
-	GL_TEXTURE_2D, 0, m_depthTexture ? GL_DEPTH_COMPONENT24 : colorInternalFormat (m_format), width, height, 0,
-	m_depthTexture ? GL_DEPTH_COMPONENT : GL_RGBA, m_depthTexture ? GL_UNSIGNED_INT : colorUploadType (m_format),
+	GL_TEXTURE_2D, 0, m_depthTexture ? getDepthInternalFormat () : colorInternalFormat (m_format), width, height, 0,
+	m_depthTexture ? GL_DEPTH_COMPONENT : GL_RGBA, m_depthTexture ? GL_FLOAT : colorUploadType (m_format),
 	nullptr
     );
     this->configureMipmaps (width, height);
     if (m_depthbuffer != GL_NONE) {
 	glBindRenderbuffer (GL_RENDERBUFFER, m_depthbuffer);
-	glRenderbufferStorage (GL_RENDERBUFFER, GL_DEPTH_COMPONENT24, width, height);
+	glRenderbufferStorage (GL_RENDERBUFFER, getDepthInternalFormat (), width, height);
     }
     if (m_multisampleColor != GL_NONE) {
 	glBindRenderbuffer (GL_RENDERBUFFER, m_multisampleColor);
@@ -295,7 +296,7 @@ void CFBO::resize (uint32_t width, uint32_t height) {
 	    if (m_withDepthBuffer) {
 		glGenRenderbuffers (1, &m_depthbuffer);
 		glBindRenderbuffer (GL_RENDERBUFFER, m_depthbuffer);
-		glRenderbufferStorage (GL_RENDERBUFFER, GL_DEPTH_COMPONENT24, width, height);
+		glRenderbufferStorage (GL_RENDERBUFFER, getDepthInternalFormat (), width, height);
 		if (m_framebuffer != GL_NONE) {
 		    GLint previousDraw = GL_NONE, previousRead = GL_NONE;
 		    glGetIntegerv (GL_DRAW_FRAMEBUFFER_BINDING, &previousDraw);
@@ -325,7 +326,7 @@ void CFBO::resize (uint32_t width, uint32_t height) {
 	glColorMask (GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
 	glDepthMask (GL_TRUE);
 	const GLfloat zero[4] = {};
-	const GLfloat farDepth = 1.0f;
+	const GLfloat farDepth = getFarDepth ();
 	glClearBufferfv (GL_COLOR, 0, zero);
 	if (this->m_multisampleDepth != GL_NONE) glClearBufferfv (GL_DEPTH, 0, &farDepth);
 	glColorMask (colorMask[0], colorMask[1], colorMask[2], colorMask[3]);
@@ -411,7 +412,7 @@ void CFBO::clearTextureStorage (const glm::vec4& color) const {
     glDisable (GL_SCISSOR_TEST);
     glColorMask (GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
     glDepthMask (GL_TRUE);
-    const GLfloat farDepth = 1.0f;
+    const GLfloat farDepth = getFarDepth ();
     if (!this->m_depthTexture) glClearBufferfv (GL_COLOR, 0, &color.x);
     if (this->m_depthTexture || this->m_depthbuffer != GL_NONE) glClearBufferfv (GL_DEPTH, 0, &farDepth);
     glColorMask (colorMask[0], colorMask[1], colorMask[2], colorMask[3]);
@@ -530,8 +531,7 @@ void CFBO::ensureFramebuffer () const {
 
     if (this->m_depthTexture) {
 	// Unrendered atlas texels represent the far plane and therefore compare as lit.
-	glClearDepth (1.0);
-	glClear (GL_DEPTH_BUFFER_BIT);
+	this->clearTextureStorage ();
     } else if (!this->hasMipmaps () && !m_storageCleared) {
 	// Layer framebuffers must start transparent. The scene clear color is often opaque,
 	// and using it here makes empty layer areas render as solid rectangles.
@@ -569,7 +569,7 @@ void CFBO::ensureMultisampleFramebuffer () const {
     glColorMask (GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
     glDepthMask (GL_TRUE);
     const GLfloat zero[4] = {};
-    const GLfloat farDepth = 1.0f;
+    const GLfloat farDepth = getFarDepth ();
     glClearBufferfv (GL_COLOR, 0, zero);
     if (this->m_multisampleDepth != GL_NONE) glClearBufferfv (GL_DEPTH, 0, &farDepth);
     glColorMask (colorMask[0], colorMask[1], colorMask[2], colorMask[3]);

@@ -29,6 +29,9 @@ public:
     [[nodiscard]] const glm::vec3& getEye () const;
     [[nodiscard]] const glm::vec3& getUp () const;
     [[nodiscard]] const glm::mat4& getProjection () const;
+    [[nodiscard]] const glm::mat4& getRasterProjection () const;
+    [[nodiscard]] bool usesReverseDepth () const;
+    void setReverseDepth (bool enabled);
     [[nodiscard]] const glm::mat4& getLookAt () const;
     [[nodiscard]] Wallpapers::CScene& getScene () const;
     [[nodiscard]] bool isOrthogonal () const;
@@ -70,6 +73,8 @@ private:
     bool m_isOrthogonal = false;
     bool m_isYFlipped = false;
     glm::mat4 m_projection = {};
+    glm::mat4 m_rasterProjection = {};
+    bool m_reverseDepth = false;
     glm::mat4 m_lookat = {};
     CameraTransform m_defaultTransform = {};
     CameraTransform m_transform = {};
