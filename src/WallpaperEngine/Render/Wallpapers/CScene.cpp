@@ -107,6 +107,10 @@ CScene::CScene (
 		if (name.empty () || name.starts_with ("_rt_") || name.starts_with ("_alias_")
 		    || name.starts_with ('$') || !precachedTextures.insert (name).second) continue;
 		try {
+		    // Shader-only defaults are discovered after the initial texture batch.
+		    const auto prepared = context.prepareTextureFallbacks (
+			{ name }, this->getAssetLocator (), scene->project.properties, this->m_textureReduction
+		    );
 		    auto texture = this->resolveTexture (name);
 		    precachedTextureMetadata.emplace (
 			name, std::pair { static_cast<int> (texture->getFormat ()),

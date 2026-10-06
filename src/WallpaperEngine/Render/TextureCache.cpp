@@ -321,11 +321,14 @@ PreparedTextureFallbacks TextureCache::prepareFallbacks (
 	    boundKey += ':' + std::to_string (reinterpret_cast<uintptr_t> (property.get ()));
 	auto cached = name.starts_with ('$') ? m_textureCache.find (name) : m_textureCache.end ();
 	if (cached == m_textureCache.end ()) cached = m_textureCache.find (key);
+	const auto cachedBase = cached;
 	if (cached != m_textureCache.end ()) {
 	    const auto texture = std::dynamic_pointer_cast<const CTexture> (cached->second.texture);
 	    if (texture && texture->getHeader ().variantSource) cached = m_textureCache.end ();
 	}
 	if (cached == m_textureCache.end ()) cached = m_textureCache.find (boundKey);
+	// A still-unbound conditional base is reusable; resolve will create its property binding.
+	if (cached == m_textureCache.end ()) cached = cachedBase;
 	if (cached != m_textureCache.end ()) {
 	    cached->second.lastUsed = ++m_useCounter;
 	    result.textures.push_back (cached->second.texture);
@@ -333,8 +336,8 @@ PreparedTextureFallbacks TextureCache::prepareFallbacks (
 	}
 	try {
 	    auto parsed = TextureParser::load (locator, name, true);
-	    // Conditional selection retains its existing property-owned resolver semantics.
-	    if (!parsed->variantSource) pending.emplace_back (name, std::move (parsed));
+	    // Conditional bases remain eager and unbound for the ordinary property resolver.
+	    pending.emplace_back (name, std::move (parsed));
 	} catch (const std::runtime_error& error) {
 	    sLog.error ("Cannot prepare material fallback ", name, ": ", error.what ());
 	}
