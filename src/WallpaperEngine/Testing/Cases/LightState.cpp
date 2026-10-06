@@ -260,3 +260,72 @@ TEST_CASE ("Tube control point follows the full world transform") {
     CHECK (endpoint.y == Catch::Approx (4.0f));
     CHECK (endpoint.z == Catch::Approx (3.0f));
 }
+
+TEST_CASE ("Reverse point shadows retain unbiased receivers and native caster clipping", "[lighting][reverse-shadow]") {
+    const glm::vec3 origin (3, -2, 5);
+    const auto matrices = CLight::calculatePointShadowViewProjections (origin, 10000, 1, false, true);
+    const auto info = CLight::calculatePointShadowProjectionInfo (10000, 1, false, true);
+    CHECK (info.x == Catch::Approx (0.0001000100019f));
+    CHECK (info.y == Catch::Approx (1.0001000166f));
+    CHECK (info.z == -1.0f);
+    CHECK (info.w == 0.0f);
+    const std::array<glm::vec3, 6> directions = {
+        glm::vec3 (1, 0, 0), glm::vec3 (-1, 0, 0), glm::vec3 (0, 1, 0),
+        glm::vec3 (0, -1, 0), glm::vec3 (0, 0, 1), glm::vec3 (0, 0, -1)
+    };
+    for (size_t face = 0; face < matrices.size (); ++face) {
+        for (float distance : { 100.0f, 9000.0f, 9990.0f }) {
+            const auto clip = matrices[face] * glm::vec4 (origin + directions[face] * distance, 1);
+            const float receiver = (-distance * info.x + info.y) / distance;
+            CHECK (clip.x / clip.w == Catch::Approx (0).margin (1e-6));
+            CHECK (clip.y / clip.w == Catch::Approx (0).margin (1e-6));
+            CHECK (clip.z / clip.w == Catch::Approx (receiver - .00333f / distance).margin (1e-9));
+            CHECK ((clip.z > 0) == (distance < 9966.7f));
+        }
+    }
+    // Match the quality-2 helper's widened face; compact Z stays independent of FOV.
+    const auto offAxis = matrices[4] * glm::vec4 (origin + glm::vec3 (9000, 0, 9000), 1);
+    CHECK (std::abs (offAxis.x / offAxis.w) == Catch::Approx (1.0f / std::tan (glm::radians (47.0f))));
+}
+
+TEST_CASE ("Reverse spot projection matches native fast basis and legal far caster", "[lighting][reverse-shadow]") {
+    const glm::mat4 world = glm::rotate (glm::mat4 (1), -glm::half_pi<float> (), glm::vec3 (0, 1, 0));
+    const auto sampling = CLight::calculateSpotProjection (world, 45, 10000, false, true);
+    const auto two = sampling * glm::vec4 (0, 0, 2, 1);
+    // Native04 numeric readback .0250374094, with transport quantization 2.4e-7.
+    CHECK (two.z / two.w == Catch::Approx (.0250374094f).margin (2.4e-7));
+    auto caster = sampling;
+    caster[3][2] -= .0005f;
+    for (float distance : { 100.0f, 9000.0f, 9990.0f }) {
+        const auto receiver = sampling * glm::vec4 (0, 0, distance, 1);
+        const auto clip = caster * glm::vec4 (0, 0, distance, 1);
+        CHECK (receiver.z > 0);
+        CHECK ((clip.z > 0) == (distance < 9916.7f));
+        CHECK ((receiver.z - clip.z) == Catch::Approx (.0005f).margin (1e-8));
+    }
+    // Authored roll and non-uniform scale still preserve the forward axis.
+    const glm::mat4 rolled = glm::rotate (world, .7f, glm::vec3 (1, 0, 0))
+        * glm::scale (glm::mat4 (1), glm::vec3 (2, 3, 4));
+    const auto projected = CLight::calculateSpotProjection (rolled, 45, 10000, false, true)
+        * glm::vec4 (0, 0, 2, 1);
+    CHECK (std::abs (projected.x / projected.w) < 1e-5f);
+    CHECK (std::abs (projected.y / projected.w) < 1e-5f);
+}
+
+TEST_CASE ("Reverse directional cascades preserve XY fitting and reverse finite depth", "[lighting][reverse-shadow]") {
+    const auto projection = [] (bool reverse) {
+        return CLight::calculateDirectionalShadowViewProjection (
+            glm::vec3 (0, 0, 5), glm::vec3 (0), glm::vec3 (0, 1, 0), 60,
+            16.0f / 9.0f, 1, .1f, 10000, glm::normalize (glm::vec3 (-1, -1, -1)), 512, reverse);
+    };
+    const auto ordinary = projection (false), reversed = projection (true);
+    for (const auto point : { glm::vec3 (0), glm::vec3 (50, -20, -100), glm::vec3 (0, 0, -9990) }) {
+        const auto a = ordinary * glm::vec4 (point, 1), b = reversed * glm::vec4 (point, 1);
+        CHECK (a.x == b.x);
+        CHECK (a.y == b.y);
+        CHECK (a.w == b.w);
+        CHECK (b.z == Catch::Approx ((a.w - a.z) * .5f).margin (1e-6));
+        CHECK (b.z > 0);
+        CHECK (b.z < b.w);
+    }
+}

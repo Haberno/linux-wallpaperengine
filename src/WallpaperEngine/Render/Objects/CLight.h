@@ -22,7 +22,7 @@ public:
     /** Resolve after layer composites exist; retain video and dynamic providers. */
     void initializeCookie ();
     [[nodiscard]] const std::shared_ptr<const TextureProvider>& getCookie () const { return m_cookie; }
-    [[nodiscard]] glm::mat4 getCookieProjection () const;
+    [[nodiscard]] glm::mat4 getCookieProjection (bool reverseDepth = false) const;
 
     [[nodiscard]] const Light& getLight () const;
 
@@ -37,7 +37,11 @@ public:
 
     /** Native spot uniform packing: cos(inner degrees), cos(outer degrees). */
     [[nodiscard]] static glm::vec2 calculateSpotConeCosines (float innerDegrees, float outerDegrees);
-    /** OpenGL light-space matrix spanning the authored outer cone and radius. */
+    /** Shared spot/cookie projection retaining authored roll and scale-independent axes. */
+    [[nodiscard]] static glm::mat4 calculateSpotProjection (
+        const glm::mat4& world, float outerDegrees, float radius, bool orthographic, bool reverseDepth
+    );
+    /** Conventional light-space matrix used to construct the volumetric cone. */
     [[nodiscard]] static glm::mat4 calculateSpotShadowViewProjection (
 	const glm::vec3& origin, const glm::vec3& direction, float outerDegrees, float radius
     );
@@ -45,15 +49,15 @@ public:
     [[nodiscard]] static glm::mat4 calculateDirectionalShadowViewProjection (
 	const glm::vec3& cameraEye, const glm::vec3& cameraCenter, const glm::vec3& cameraUp,
 	float fieldOfViewDegrees, float aspectRatio, float zoom, float nearDistance, float farDistance,
-	const glm::vec3& lightDirection, int shadowResolution
+	const glm::vec3& lightDirection, int shadowResolution, bool reverseDepth = false
     );
     /** Six +X/-X/+Y/-Y/+Z/-Z view-projections used by the native 2x3 point atlas block. */
     [[nodiscard]] static std::array<glm::mat4, 6>
     calculatePointShadowViewProjections (const glm::vec3& origin, float radius, float sourceSize = 0.0f,
-	bool orthographic = false);
+	bool orthographic = false, bool reverseDepth = false);
     /** Compact perspective coefficients consumed by CalculateProjectedCoordsPoint. */
     [[nodiscard]] static glm::vec4 calculatePointShadowProjectionInfo (float radius, float sourceSize = 0.0f,
-	bool orthographic = false);
+	bool orthographic = false, bool reverseDepth = false);
     /** Transform a tube's authored local control point into its world-space endpoint. */
     [[nodiscard]] static glm::vec3
     calculateTubeEndPosition (const glm::mat4& worldMatrix, const glm::vec3& controlPoint);

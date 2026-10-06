@@ -384,7 +384,8 @@ CScene::CScene (
     if (this->m_lights.shadowViewCount > 0) {
 	this->_rt_shadowAtlas = this->create (
 	    "_rt_shadowAtlas", TextureFormat_ARGB8888, TextureFlags_ClampUVsBorder, 1.0,
-	    { SHADOW_ATLAS_SIZE, SHADOW_ATLAS_SIZE }, { SHADOW_ATLAS_SIZE, SHADOW_ATLAS_SIZE }, false, true
+	    { SHADOW_ATLAS_SIZE, SHADOW_ATLAS_SIZE }, { SHADOW_ATLAS_SIZE, SHADOW_ATLAS_SIZE }, false, true,
+            1, this->getCamera ().usesReverseDepth ()
 	);
     } else {
 	// Keep the legacy placeholder available for shaders that declare the atlas but
@@ -1680,6 +1681,7 @@ void CScene::updateMouse (const glm::ivec4& viewport) {
 const CScene::SceneLights& CScene::getLights () const { return this->m_lights; }
 
 void CScene::updateLightState () {
+    const bool reverseDepth = this->getCamera ().usesReverseDepth ();
     int directional = 0;
     int point = 0;
     int spot = 0;
@@ -1719,7 +1721,7 @@ void CScene::updateLightState () {
 			    camera.getEye (), camera.getCenter (), camera.getUp (), camera.getFov (),
 			    camera.getWidth () / std::max (camera.getHeight (), 1.0f), 1.0f, cameraNear,
 			    cascadeFar[cascade], light->getWorldDirection (),
-			    this->m_lights.shadowViewports[feature].z
+			    this->m_lights.shadowViewports[feature].z, reverseDepth
 			);
 		    this->m_lights.shadowFeatureEnabled[feature] = enabled;
 		}
@@ -1736,9 +1738,9 @@ void CScene::updateLightState () {
 		const float sourceSize = data.sourceSize->evaluateFloat (this->getTime ());
 		const bool orthographic = this->getCamera ().isOrthogonal ();
 		this->m_lights.pointShadowProjections[point]
-		    = Objects::CLight::calculatePointShadowProjectionInfo (radius, sourceSize, orthographic);
+		    = Objects::CLight::calculatePointShadowProjectionInfo (radius, sourceSize, orthographic, reverseDepth);
 		this->m_lights.pointShadowMatrices[point]
-		    = Objects::CLight::calculatePointShadowViewProjections (light->getWorldPosition (), radius, sourceSize, orthographic);
+		    = Objects::CLight::calculatePointShadowViewProjections (light->getWorldPosition (), radius, sourceSize, orthographic, reverseDepth);
 		this->m_lights.pointShadowEnabled[point]
 		    = data.groupVisible->value->getBool () && light->isVisibleThroughParents () ? 1.0f : 0.0f;
 	    }
@@ -1761,7 +1763,7 @@ void CScene::updateLightState () {
 
 	    const int feature = this->m_lights.spotShadowFeatures[spot];
 	    if (data.castShadow && feature >= 0) {
-		this->m_lights.shadowMatrices[feature] = data.useCookie ? light->getCookieProjection ()
+		this->m_lights.shadowMatrices[feature] = (reverseDepth || data.useCookie) ? light->getCookieProjection (reverseDepth)
 		    : Objects::CLight::calculateSpotShadowViewProjection (
 		    light->getWorldPosition (), light->getWorldDirection (), data.outerCone->value->getFloat (),
 		    data.radius->value->getFloat ()
@@ -1814,18 +1816,19 @@ void CScene::renderShadowAtlas () {
     glPushDebugGroup (GL_DEBUG_SOURCE_APPLICATION, 0, -1, "Scene shadow atlas");
 #endif
 
-    const ClipDepthScope clipDepth (false);
+    const bool reverseDepth = this->_rt_shadowAtlas->usesReverseDepth ();
+    const ClipDepthScope clipDepth (reverseDepth);
     glBindFramebuffer (GL_FRAMEBUFFER, this->_rt_shadowAtlas->getFramebuffer ());
     glViewport (0, 0, SHADOW_ATLAS_SIZE, SHADOW_ATLAS_SIZE);
     glColorMask (false, false, false, false);
     glDisable (GL_BLEND);
     glEnable (GL_DEPTH_TEST);
-    glDepthFunc (GL_LESS);
+    glDepthFunc (reverseDepth ? GL_GREATER : GL_LESS);
     glDepthMask (true);
-    glClearDepth (1.0);
+    glClearDepth (this->_rt_shadowAtlas->getFarDepth ());
     glClear (GL_DEPTH_BUFFER_BIT);
     glEnable (GL_POLYGON_OFFSET_FILL);
-    glPolygonOffset (2.0f, 4.0f);
+    glPolygonOffset (reverseDepth ? -4.0f : 2.0f, reverseDepth ? 0.0f : 4.0f);
 
     for (int feature = 0; feature < this->m_lights.shadowFeatureCount; feature++) {
 	if (this->m_lights.shadowFeatureEnabled[feature] < 0.5f) {
@@ -1834,10 +1837,13 @@ void CScene::renderShadowAtlas () {
 
 	const glm::ivec4& viewport = this->m_lights.shadowViewports[feature];
 	glViewport (viewport.x, viewport.y, viewport.z, viewport.w);
+        // Native biases only the caster matrix; receivers use the original VP.
+        glm::mat4 casterProjection = this->m_lights.shadowMatrices[feature];
+        if (reverseDepth) casterProjection[3][2] -= 0.0005f;
 
 	for (auto* object : this->m_objectsByRenderOrder) {
 	    if (auto* model = dynamic_cast<Objects::CModel*> (object); model != nullptr) {
-		model->renderShadow (this->m_lights.shadowMatrices[feature]);
+		model->renderShadow (casterProjection);
 		this->loadingCheckpoint ();
 	    }
 	}

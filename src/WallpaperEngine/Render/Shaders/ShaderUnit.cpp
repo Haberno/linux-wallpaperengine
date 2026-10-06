@@ -964,7 +964,9 @@ std::string ShaderUnit::generateLightingV1 () const {
 		      "            float pointRow = floor(clamp(pointRelativeY / pointCellHeight, 0.0, 2.999));\n"
 		      "            float pointRowY = pointAtlasTransform.y + pointRow * pointCellHeight;\n"
 		      "            projectedCoords.y = pointRowY + pointCellHeight - (projectedCoords.y - pointRowY);\n"
+		      "#if !REVERSEDEPTH\n"
 		      "            projectedCoords.z = projectedCoords.z * 0.5 + 0.5 - 0.0015;\n"
+		      "#endif\n"
 		      "            shadowFactor = PerformPointShadowMapping(projectedCoords);\n"
 		      "        }\n";
 	} else {
@@ -999,9 +1001,11 @@ std::string ShaderUnit::generateLightingV1 () const {
 		    "            vec3 projectedCoords = CalculateProjectedCoords(worldPos,\n"
 		    "                g_LFeature_ShadowProjection[" + featureIndex + "]);\n"
 		    // CalculateProjectedCoords follows Direct3D texture orientation and depth.
-		    // The atlas is rasterized by OpenGL, so restore bottom-left Y and [0,1] Z.
+		    // The atlas uses bottom-left Y; conventional fallback also remaps Z.
 		    "            projectedCoords.y = 1.0 - projectedCoords.y;\n"
+		    "#if !REVERSEDEPTH\n"
 		    "            projectedCoords.z = projectedCoords.z * 0.5 + 0.5 - 0.0015;\n"
+		    "#endif\n"
 		    "            if (all(greaterThanEqual(projectedCoords, vec3(0.0))) &&\n"
 		    "                all(lessThanEqual(projectedCoords, vec3(1.0)))) {\n"
 		    "                shadowFactor = PerformShadowMapping(projectedCoords,\n"
@@ -1060,7 +1064,9 @@ std::string ShaderUnit::generateLightingV1 () const {
 		      // CalculateProjectedCoordsCascades uses Direct3D texture Y while preserving
 		      // clip-space Z for its cascade bounds test. Convert only after selection.
 		      "            projectedCoords1.y = 1.0 - projectedCoords1.y;\n"
+		      "#if !REVERSEDEPTH\n"
 		      "            projectedCoords1.z = projectedCoords1.z * 0.5 + 0.5 - 0.0015;\n"
+		      "#endif\n"
 		      "            shadowFactor = max(projectedCoords3.w,\n"
 		      "                PerformShadowMapping(projectedCoords1.xyz, uvTransforms));\n"
 		      "        }\n";

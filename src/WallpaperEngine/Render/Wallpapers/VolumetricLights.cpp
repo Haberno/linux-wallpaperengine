@@ -48,7 +48,7 @@ GLuint compile (CScene& scene, const std::string& name, const ComboMap& combos, 
             "float pointRow = floor(clamp(pointRelativeY / pointCellHeight, 0.0, 2.999));\n"
             "float pointRowY = VAR_SHADOWMAP_TRANSFORMS.y + pointRow * pointCellHeight;\n"
             "uvs.y = pointRowY + pointCellHeight - (uvs.y - pointRowY);\n"
-            "uvs.z = uvs.z * 0.5 + 0.5;\n");
+            "#if !REVERSEDEPTH\nuvs.z = uvs.z * 0.5 + 0.5;\n#endif\n");
     }
     const auto [vert, frag] = Shaders::GLSLContext::get ().toGlsl (vertex, fragment);
     return scene.getContext ().getShaderProgramCache ().createProgram (vert, frag);
@@ -94,8 +94,9 @@ VolumetricLights::VolumetricLights (CScene& scene) : m_scene (scene) {
     glSamplerParameteri (m_shadowSampler, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_BORDER);
     glSamplerParameteri (m_shadowSampler, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_BORDER);
     glSamplerParameteri (m_shadowSampler, GL_TEXTURE_COMPARE_MODE, GL_COMPARE_REF_TO_TEXTURE);
-    glSamplerParameteri (m_shadowSampler, GL_TEXTURE_COMPARE_FUNC, GL_LEQUAL);
-    const float border[] = { 1, 1, 1, 1 };
+    glSamplerParameteri (m_shadowSampler, GL_TEXTURE_COMPARE_FUNC, m_scene.getCamera ().usesReverseDepth () ? GL_GREATER : GL_LEQUAL);
+    const float farDepth = m_scene.getCamera ().usesReverseDepth () ? 0.0f : 1.0f;
+    const float border[] = { farDepth, farDepth, farDepth, farDepth };
     glSamplerParameterfv (m_shadowSampler, GL_TEXTURE_BORDER_COLOR, border);
     resize ();
     cleanup.cancel ();
@@ -328,7 +329,7 @@ void VolumetricLights::render (
         matrix (program, "g_ViewProjectionMatrix", viewProjection);
         matrix (program, "g_AltViewProjectionMatrix", volumeTransform);
         matrix (program, "g_EffectModelMatrix", glm::inverse (viewProjection));
-        auto samplingProjection = shadow && !point ? nativeClip () * lights.shadowMatrices[feature] : lightProjection;
+        auto samplingProjection = shadow && !point ? nativeClip (camera.usesReverseDepth ()) * lights.shadowMatrices[feature] : lightProjection;
         // Raster/depth reconstruction uses flipped clip Y, image cookies do not.
         if (cookie) for (int column = 0; column < 4; ++column) samplingProjection[column][1] *= -1;
         matrix (program, "g_AltModelMatrix", samplingProjection);

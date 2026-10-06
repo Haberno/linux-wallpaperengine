@@ -901,6 +901,7 @@ void CPass::setupShaders () {
     if (lights.shadowViewCount > 0) {
 	this->m_combos.insert_or_assign ("LIGHTS_SHADOW_FEATURES", lights.shadowFeatureCount);
 	this->m_combos.insert_or_assign ("LIGHTS_SHADOW_MAPPING", 1);
+        this->m_combos.insert_or_assign ("REVERSEDEPTH", this->m_renderable.getScene ().getCamera ().usesReverseDepth () ? 1 : 0);
 	this->m_combos.insert_or_assign ("LIGHTS_SHADOW_MAPPING_QUALITY", 2);
     }
 

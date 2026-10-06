@@ -126,7 +126,7 @@ CFBO::CFBO (
 	// Stock scene shaders declare the shadow atlas as sampler2DComparison. Hardware
 	// comparison also lets their 9-tap PCF path work without a custom sampler object.
 	glTexParameteri (GL_TEXTURE_2D, GL_TEXTURE_COMPARE_MODE, GL_COMPARE_REF_TO_TEXTURE);
-	glTexParameteri (GL_TEXTURE_2D, GL_TEXTURE_COMPARE_FUNC, m_reverseDepth ? GL_GEQUAL : GL_LEQUAL);
+	glTexParameteri (GL_TEXTURE_2D, GL_TEXTURE_COMPARE_FUNC, m_reverseDepth ? GL_GREATER : GL_LEQUAL);
 	const GLfloat borderDepth[] = { getFarDepth (), getFarDepth (), getFarDepth (), getFarDepth () };
 	glTexParameterfv (GL_TEXTURE_2D, GL_TEXTURE_BORDER_COLOR, borderDepth);
     } else {

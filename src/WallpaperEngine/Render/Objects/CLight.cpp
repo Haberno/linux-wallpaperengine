@@ -1,8 +1,10 @@
 #include "CLight.h"
 #include "WallpaperEngine/Render/CTexture.h"
+#include "WallpaperEngine/Render/Depth.h"
 
 #include <algorithm>
 #include <array>
+#include <bit>
 #include <cmath>
 #include <limits>
 #include <glm/geometric.hpp>
@@ -74,20 +76,38 @@ void CLight::initializeCookie () {
     m_cookie->incrementUsageCount ();
 }
 
-glm::mat4 CLight::getCookieProjection () const {
-    const glm::mat4 world = resolveLightMatrix ();
-    const glm::vec3 right = glm::normalize (glm::vec3 (world[2]));
-    const glm::vec3 up = glm::normalize (glm::vec3 (world[1]));
-    const glm::vec3 back = -glm::normalize (glm::vec3 (world[0]));
+glm::mat4 CLight::getCookieProjection (const bool reverseDepth) const {
+    return calculateSpotProjection (resolveLightMatrix (), m_light.outerCone->value->getFloat (),
+        m_light.radius->value->getFloat (), getScene ().getCamera ().isOrthogonal (), reverseDepth);
+}
+
+glm::mat4 CLight::calculateSpotProjection (
+    const glm::mat4& world, const float outerDegrees, const float radius,
+    const bool orthographic, const bool reverseDepth
+) {
+    const auto normalize = [reverseDepth] (const glm::vec3& axis) {
+        if (!reverseDepth) return glm::normalize (axis);
+        // Native14025d420 uses this inverse-square-root approximation once,
+        // even for unit axes; exact normalization changes spot shadow depth.
+        const float squaredLength = glm::dot (axis, axis);
+        float inverse = std::bit_cast<float> (0x5f375a86u - (std::bit_cast<uint32_t> (squaredLength) >> 1));
+        inverse *= 1.5f - squaredLength * 0.5f * inverse * inverse;
+        return axis * inverse;
+    };
+    const glm::vec3 right = normalize (glm::vec3 (world[2]));
+    const glm::vec3 up = normalize (glm::vec3 (world[1]));
+    const glm::vec3 back = -normalize (glm::vec3 (world[0]));
     const glm::vec3 origin (world[3]);
     const glm::mat4 view (
 	glm::vec4 (right.x, up.x, back.x, 0), glm::vec4 (right.y, up.y, back.y, 0),
 	glm::vec4 (right.z, up.z, back.z, 0),
 	glm::vec4 (-glm::dot (right, origin), -glm::dot (up, origin), -glm::dot (back, origin), 1)
     );
-    const float nearPlane = getScene ().getCamera ().isOrthogonal () ? 1.0f : 0.05f;
-    return glm::perspective (glm::radians (2.0f * m_light.outerCone->value->getFloat ()),
-	1.0f, nearPlane, std::max (m_light.radius->value->getFloat (), nearPlane + 0.01f)) * view;
+    const float nearPlane = orthographic ? 1.0f : 0.05f;
+    const float farPlane = std::max (radius, nearPlane + 0.01f);
+    const float fieldOfView = glm::radians (2.0f * outerDegrees);
+    return (reverseDepth ? reversePerspective (fieldOfView, 1.0f, nearPlane, farPlane)
+        : glm::perspective (fieldOfView, 1.0f, nearPlane, farPlane)) * view;
 }
 
 glm::mat4 CLight::resolveLightMatrix () const {
@@ -155,7 +175,7 @@ glm::mat4 CLight::calculateSpotShadowViewProjection (
 glm::mat4 CLight::calculateDirectionalShadowViewProjection (
     const glm::vec3& cameraEye, const glm::vec3& cameraCenter, const glm::vec3& cameraUp,
     const float fieldOfViewDegrees, const float aspectRatio, const float zoom, const float nearDistance,
-    const float farDistance, const glm::vec3& lightDirection, const int shadowResolution
+    const float farDistance, const glm::vec3& lightDirection, const int shadowResolution, const bool reverseDepth
 ) {
     const auto normalizedOr = [] (const glm::vec3& value, const glm::vec3& fallback) {
 	const float length = glm::length (value);
@@ -240,6 +260,11 @@ glm::mat4 CLight::calculateDirectionalShadowViewProjection (
 	centerX - halfWidth, centerX + halfWidth, centerY - halfHeight, centerY + halfHeight, lightNear,
 	lightFar
     );
+    if (reverseDepth) {
+        // Retain cascade fitting/texel snapping; form reverse Z directly.
+        lightProjection[2][2] = 1.0f / (lightFar - lightNear);
+        lightProjection[3][2] = lightFar / (lightFar - lightNear);
+    }
     // Snap a fixed world-space origin to the shadow texel grid. Snapping only
     // the light-space bounds is insufficient because lightView follows the
     // camera and would otherwise reintroduce sub-texel projection movement.
@@ -254,12 +279,18 @@ glm::mat4 CLight::calculateDirectionalShadowViewProjection (
 
 std::array<glm::mat4, 6>
 CLight::calculatePointShadowViewProjections (
-    const glm::vec3& origin, const float radius, const float sourceSize, const bool orthographic
+    const glm::vec3& origin, const float radius, const float sourceSize, const bool orthographic, const bool reverseDepth
 ) {
     // Native excludes geometry within the point source from its shadow map.
     const float nearPlane = orthographic ? 1.0f : std::max (sourceSize, 0.05f);
     const float farPlane = std::max (radius, nearPlane + 0.01f);
-    const glm::mat4 projection = glm::perspective (glm::half_pi<float> (), 1.0f, nearPlane, farPlane);
+    // LIGHTS_SHADOW_MAPPING_QUALITY is 2: native uses a 94 degree face.
+    glm::mat4 projection = reverseDepth
+        ? reversePerspective (glm::radians (94.0f), 1.0f, nearPlane, farPlane)
+        : glm::perspective (glm::half_pi<float> (), 1.0f, nearPlane, farPlane);
+    // Native140190c80 biases caster clip Z before constructing all six faces.
+    // The compact sampling coefficients below remain unbiased.
+    if (reverseDepth) projection[3][2] -= 0.00333f;
 
     // This is the face order hard-coded by CalculateProjectedCoordsPoint:
     // +X/-X on row 0, +Y/-Y on row 1, and +Z/-Z on row 2.
@@ -282,11 +313,13 @@ CLight::calculatePointShadowViewProjections (
 }
 
 glm::vec4 CLight::calculatePointShadowProjectionInfo (
-    const float radius, const float sourceSize, const bool orthographic
+    const float radius, const float sourceSize, const bool orthographic, const bool reverseDepth
 ) {
     const float nearPlane = orthographic ? 1.0f : std::max (sourceSize, 0.05f);
     const float farPlane = std::max (radius, nearPlane + 0.01f);
-    const glm::mat4 projection = glm::perspective (glm::half_pi<float> (), 1.0f, nearPlane, farPlane);
+    const glm::mat4 projection = reverseDepth
+        ? reversePerspective (glm::radians (94.0f), 1.0f, nearPlane, farPlane)
+        : glm::perspective (glm::half_pi<float> (), 1.0f, nearPlane, farPlane);
     return glm::vec4 (projection[2][2], projection[3][2], projection[2][3], projection[3][3]);
 }
 

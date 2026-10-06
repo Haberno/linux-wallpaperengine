@@ -935,3 +935,47 @@ TEST_CASE ("Reverse depth storage survives resize and MSAA fallback without leak
     CHECK (value == 0.0f);
     CHECK (glGetError () == GL_NO_ERROR);
 }
+
+TEST_CASE ("Reverse shadow atlas uses strict comparisons and a zero border", "[.][gl][reverse-shadow]") {
+    TextureGLContext context;
+    ShaderProgramCache cache;
+    const ShaderProgramCache::SharedProgram program (cache.createProgram (
+        "#version 330 core\nvoid main() { vec2 p=vec2((gl_VertexID<<1)&2,gl_VertexID&2);"
+        "gl_Position=vec4(p*2.0-1.0,0,1); }\n",
+        "#version 330 core\nuniform sampler2DShadow atlas; out vec4 color;\n"
+        "void main() { int cell=int(gl_FragCoord.x); float depth=0.000010742223;"
+        "vec2 uv=cell<2?vec2(-1):vec2(.5);"
+        "float reference=cell==0?0.0:cell==1?.5:cell==2?depth:cell==3?depth+1e-9:depth-1e-9;"
+        "color=vec4(texture(atlas,vec3(uv,reference))); }\n"
+    ));
+    CFBO atlas ("reverse_shadow", TextureFormat_ARGB8888, TextureFlags_ClampUVs,
+        1, 4, 4, 4, 4, false, true, 1, true);
+    glBindFramebuffer (GL_FRAMEBUFFER, atlas.getFramebuffer ());
+    glDepthMask (GL_TRUE);
+    glClearDepth (0.000010742223f);
+    glClear (GL_DEPTH_BUFFER_BIT);
+    CFBO output ("reverse_shadow_output", TextureFormat_ARGB8888, TextureFlags_ClampUVs,
+        1, 5, 1, 5, 1);
+    glBindFramebuffer (GL_FRAMEBUFFER, output.getFramebuffer ());
+    glViewport (0, 0, 5, 1);
+    glDisable (GL_DEPTH_TEST);
+    glDisable (GL_BLEND);
+    glUseProgram (program.id);
+    GLuint vao = 0;
+    glGenVertexArrays (1, &vao);
+    glBindVertexArray (vao);
+    glActiveTexture (GL_TEXTURE0);
+    glBindTexture (GL_TEXTURE_2D, atlas.getTextureID (0));
+    glUniform1i (glGetUniformLocation (program.id, "atlas"), 0);
+    glDrawArrays (GL_TRIANGLES, 0, 3);
+    std::array<unsigned char, 20> pixels {};
+    glReadPixels (0, 0, 5, 1, GL_RGBA, GL_UNSIGNED_BYTE, pixels.data ());
+    // Native strict GREATER: zero border equality fails, positive border passes;
+    // equality with an occupied far texel fails while its nearer neighbor passes.
+    for (int index = 0; index < 5; ++index) {
+        CAPTURE (index);
+        CHECK (pixels[index * 4] == (index == 1 || index == 3 ? 255 : 0));
+    }
+    CHECK (glGetError () == GL_NO_ERROR);
+    glDeleteVertexArrays (1, &vao);
+}
