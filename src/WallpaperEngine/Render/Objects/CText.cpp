@@ -1209,7 +1209,6 @@ std::optional<glm::mat3> CText::transformAttachmentToTexture (
 ) {
     const auto& camera = getScene ().getCamera ();
     const Object& object = source.getObject ();
-    if (!camera.isOrthogonal ()) return std::nullopt;
     const bool virtualReceiver = m_text.perspective->value->getBool ();
     bool virtualSource = false;
     if (object.is<Image> ()) {
@@ -1225,6 +1224,14 @@ std::optional<glm::mat3> CText::transformAttachmentToTexture (
     // Native text vtable+0x80 includes the generated font-mesh alignment.
     // Measure on the CPU so a text write does not depend on a later GL rebuild.
     const glm::mat4 receiverWorld = glm::translate (resolveWorldMatrix (), glm::vec3 (m_scriptAlignmentOffset, 0));
+    if (!camera.isOrthogonal ()) {
+        const glm::mat4 viewProjection = camera.getProjection () * camera.getLookAt ();
+        const glm::vec3 receiverEye = virtualReceiver
+            ? glm::vec3 (glm::inverse (camera.getLookAt ())[3]) : camera.getEye ();
+        return CImage::calculateOrthographicAttachmentTextureMatrix (
+            attachmentWorld, receiverWorld, viewProjection, viewProjection,
+            camera.getEye ().z, size, receiverEye, virtualReceiver ? 1.0f : 0.0f);
+    }
     const glm::mat4 sceneToRender = glm::translate (glm::mat4 (1),
         glm::vec3 (-camera.getWidth () * .5f, camera.getHeight () * .5f, 0))
         * glm::scale (glm::mat4 (1), glm::vec3 (1, -1, 1));

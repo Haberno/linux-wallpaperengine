@@ -73,14 +73,15 @@ public:
 	const glm::vec2& normalizedPosition, bool projectionYFlipped
     );
 
-    /** Ordinary orthographic image receiver; unsupported projection modes return nullopt. */
+    /** Projects model/puppet attachments onto nonfullscreen image receivers. */
     [[nodiscard]] std::optional<glm::mat3> transformAttachmentToTexture (
         const CObject& source, const glm::mat4& attachmentWorld
     ) const;
     [[nodiscard]] static glm::mat3 calculateOrthographicAttachmentTextureMatrix (
         const glm::mat4& attachmentWorld, const glm::mat4& receiverWorld,
         const glm::mat4& sourceViewProjection, const glm::mat4& receiverViewProjection,
-        float cameraZ, const glm::vec2& size, std::optional<glm::vec3> receiverEye = std::nullopt
+        float cameraZ, const glm::vec2& size, std::optional<glm::vec3> receiverEye = std::nullopt,
+        float receiverClipDepth = 1.0f
     );
 
     /** Split a perspective image transform into the matrices consumed by genericimage3/4.

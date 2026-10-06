@@ -2875,17 +2875,18 @@ std::optional<glm::mat4> CImage::getBoneTransform (const size_t index) const {
 glm::mat3 CImage::calculateOrthographicAttachmentTextureMatrix (
     const glm::mat4& attachmentWorld, const glm::mat4& receiverWorld,
     const glm::mat4& sourceViewProjection, const glm::mat4& receiverViewProjection,
-    const float cameraZ, const glm::vec2& size, const std::optional<glm::vec3> receiverEye
+    const float cameraZ, const glm::vec2& size, const std::optional<glm::vec3> receiverEye,
+    const float receiverClipDepth
 ) {
     const glm::mat4 sourceClip = sourceViewProjection * attachmentWorld;
     const glm::mat4 unproject = glm::inverse (receiverViewProjection);
     const glm::mat4 receiverInverse = glm::inverse (receiverWorld);
     const auto project = [&] (const float x) {
         const glm::vec4 clip = sourceClip * glm::vec4 (x, 0, 0, 1);
-        const glm::vec4 screen = unproject * glm::vec4 (glm::vec2 (clip) / clip.w, receiverEye ? 1 : 0, 1);
+        const glm::vec4 screen = unproject * glm::vec4 (glm::vec2 (clip) / clip.w, receiverEye ? receiverClipDepth : 0, 1);
         const glm::vec3 screenWorld = glm::vec3 (screen) / screen.w;
-        // Native virtual receivers cast from their inverse-view eye through
-        // unprojected depth1; ordinary receivers retain the parallel +Z ray.
+        // Perspective receivers cast from their eye; ordinary orthographic
+        // receivers retain the parallel +Z ray.
         const glm::vec3 rayOrigin = receiverEye.value_or (glm::vec3 (screenWorld.x, screenWorld.y, cameraZ - 2000.0f));
         const glm::vec3 rayDirection = receiverEye ? glm::normalize (screenWorld - *receiverEye) : glm::vec3 (0, 0, 1);
         const glm::vec3 origin = glm::vec3 (receiverInverse * glm::vec4 (rayOrigin, 1));
@@ -2908,8 +2909,8 @@ std::optional<glm::mat3> CImage::transformAttachmentToTexture (
 ) const {
     const auto& camera = this->getScene ().getCamera ();
     const Object& object = source.getObject ();
-    // Perspective scenes and fullscreen composition retain separate contracts.
-    if (!camera.isOrthogonal () || this->m_image.model->fullscreen) return std::nullopt;
+    // Fullscreen composition retains a separate contract.
+    if (this->m_image.model->fullscreen) return std::nullopt;
     const bool virtualReceiver = this->m_image.perspective->value->getBool ();
     bool virtualSource = false;
     if (object.is<Image> ()) {
@@ -2920,6 +2921,15 @@ std::optional<glm::mat3> CImage::transformAttachmentToTexture (
         virtualSource = object.as<Model3D> ()->perspective->value->getBool ();
     } else {
         return std::nullopt;
+    }
+    if (!camera.isOrthogonal ()) {
+        const glm::mat4 viewProjection = camera.getProjection () * camera.getLookAt ();
+        const glm::vec3 receiverEye = virtualReceiver
+            ? glm::vec3 (glm::inverse (camera.getLookAt ())[3]) : camera.getEye ();
+        // Native depth .5 / 1 maps to conventional GL clip depth 0 / 1.
+        return calculateOrthographicAttachmentTextureMatrix (
+            attachmentWorld, this->resolveWorldMatrix (), viewProjection, viewProjection,
+            camera.getEye ().z, this->getSize (), receiverEye, virtualReceiver ? 1.0f : 0.0f);
     }
     const glm::mat4 sceneToRender = glm::translate (glm::mat4 (1),
         glm::vec3 (-camera.getWidth () * .5f, camera.getHeight () * .5f, 0))
