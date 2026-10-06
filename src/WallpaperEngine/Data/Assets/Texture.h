@@ -119,6 +119,12 @@ struct DecodedPixelsDeleter {
 /** Owning pointer to stbi-decoded RGBA pixel data */
 using DecodedPixelsPtr = std::unique_ptr<unsigned char[], DecodedPixelsDeleter>;
 
+struct TextureVariantPatch {
+    uint32_t flags = 0;
+    uint32_t x = 0, y = 0, width = 0, height = 0;
+    std::string payload;
+};
+
 struct Mipmap {
     /** Width of the mipmap */
     uint32_t width = 0;
@@ -141,6 +147,9 @@ struct Mipmap {
     /** Dimensions of the pre-decoded pixel data */
     int decodedWidth = 0;
     int decodedHeight = 0;
+    /** Selected conditional work, owned by this mip until decoding completes. */
+    std::vector<TextureVariantPatch> variantPatches;
+    TextureFormat variantFormat = TextureFormat_UNKNOWN;
     /** JSON data */
     std::string json {};
 };
@@ -205,6 +214,8 @@ struct Texture {
     std::vector<TextureVariant> variants;
     /** Original packed bytes, retained only for textures that can change variants. */
     std::shared_ptr<const std::string> variantSource;
+    /** Selected static image patches were retained for required/optional preparation. */
+    bool variantSelectionPrepared = false;
     /** List of animation frames */
     std::vector<FrameSharedPtr> frames {};
 

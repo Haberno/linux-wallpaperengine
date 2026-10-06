@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstring>
+#include <cstdlib>
 #include <ranges>
 #include <lz4.h>
 
@@ -520,6 +521,12 @@ void CTexture::refreshVariant () {
     try {
 	auto parsed = Data::Parsers::TextureParser::selectVariants (*this->m_header, this->m_variantSelector);
 	CTexture replacement (this->getContext (), std::move (parsed), this->m_textureReduction);
+	// A completed new selection owns the display; an older worker may finish but
+	// can no longer publish its optional levels over this replacement.
+	if (this->m_mipStream) this->m_mipStream->cancelled.store (true, std::memory_order_relaxed);
+	this->m_mipStream.reset ();
+	this->m_streamCpuBytes = 0;
+	this->m_streamingTemporary = false;
 	std::swap (this->m_header, replacement.m_header);
 	std::swap (this->m_textureID, replacement.m_textureID);
 	std::swap (this->m_resolution, replacement.m_resolution);
@@ -537,10 +544,11 @@ bool CTexture::isReady () const { return true; }
 
 std::shared_ptr<CTexture> CTexture::createStreaming (
     RenderContext& context, TextureUniquePtr header, const uint32_t textureReduction,
-    std::vector<std::shared_ptr<MipStream>>& streams
+    std::vector<std::shared_ptr<MipStream>>& streams,
+    Data::Parsers::TextureParser::VariantSelector selector
 ) {
     if (!Data::Parsers::TextureParser::canStreamMipmaps (*header)) {
-	return std::make_shared<CTexture> (context, std::move (header), textureReduction);
+	return std::make_shared<CTexture> (context, std::move (header), textureReduction, std::move (selector));
     }
     const auto& mipmaps = header->images.at (0);
     const auto& required = mipmaps[std::min<size_t> (2, mipmaps.size () - 1)];
@@ -564,7 +572,16 @@ std::shared_ptr<CTexture> CTexture::createStreaming (
     mipmap->decodedWidth = required->decodedWidth;
     mipmap->decodedHeight = required->decodedHeight;
     if (imageFormat) {
-	mipmap->decodedData = std::move (required->decodedData);
+	if (header->variantSelectionPrepared) {
+	    // The required mip already includes selected patches. Keep those pixels
+	    // in the worker-owned full chain instead of decoding its unpatched base again.
+	    const size_t size = size_t (required->decodedWidth) * required->decodedHeight * 4;
+	    mipmap->decodedData.reset (static_cast<unsigned char*> (std::malloc (size)));
+	    if (!mipmap->decodedData) throw std::bad_alloc ();
+	    std::memcpy (mipmap->decodedData.get (), required->decodedData.get (), size);
+	} else {
+	    mipmap->decodedData = std::move (required->decodedData);
+	}
     } else {
 	// The complete raw chain still needs this level; copy only the small required mip.
 	mipmap->uncompressedSize = required->uncompressedSize;
@@ -576,16 +593,20 @@ std::shared_ptr<CTexture> CTexture::createStreaming (
 
     // Rendering keeps authored dimensions, while the worker owns all mutable pixel data.
     auto metadata = std::make_unique<Texture> (*header);
-    size_t bytes = 0;
+    size_t bytes = header->variantSource ? header->variantSource->size () : 0;
     for (auto& entry : metadata->images.at (0)) {
 	bytes += size_t (entry->uncompressedSize) + (entry->compressedData ? entry->compressedSize : 0)
 	    + (imageFormat ? size_t (entry->width) * entry->height * 4 : 0);
+	for (const auto& patch : entry->variantPatches) bytes += patch.payload.size ();
 	auto dimensions = std::make_shared<Mipmap> ();
 	dimensions->width = entry->width;
 	dimensions->height = entry->height;
 	entry = std::move (dimensions);
     }
     texture->m_header = std::move (metadata);
+    texture->m_variantSelector = std::move (selector);
+    if (texture->m_variantSelector)
+	texture->m_variantSelection = Data::Parsers::TextureParser::selectedVariants (*texture->m_header, texture->m_variantSelector);
     texture->setupResolution ();
     texture->m_streamingTemporary = true;
     texture->m_streamCpuBytes = bytes;
@@ -621,7 +642,14 @@ void CTexture::refreshMipStream () {
 	[imageFormat] (const auto& mipmap) { return imageFormat ? !mipmap->decodedData : !mipmap->uncompressedData; });
     if (failed) {
 	// Native 1400eef70 publishes a 6x6 yellow/black error texture on a failed result.
+	auto source = std::move (header);
 	header = std::make_unique<Texture> ();
+	header->variants = std::move (source->variants);
+	header->variantSource = std::move (source->variantSource);
+	header->spritesheetCols = source->spritesheetCols;
+	header->spritesheetRows = source->spritesheetRows;
+	header->spritesheetFrames = source->spritesheetFrames;
+	header->spritesheetDuration = source->spritesheetDuration;
 	header->imageCount = 1;
 	header->width = header->height = header->textureWidth = header->textureHeight = 6;
 	header->format = TextureFormat_ARGB8888;

@@ -254,8 +254,9 @@ void checkPayloadSize (const BinaryReader& file, int stored, int unpacked) {
     }
 }
 
-void decodeMipmap (Mipmap& mipmap, const bool imageFormat = true) {
-    if (mipmap.compressedData && !mipmap.uncompressedData) {
+void decodeMipmap (Mipmap& mipmap, const bool imageFormat = true, const bool toleratePatchErrors = true) {
+    const auto decodeBase = [&] {
+	if (mipmap.compressedData && !mipmap.uncompressedData) {
 	// Publish only complete output. Optional LZ4/allocation failure leaves this
 	// record incomplete for the render-thread error resource, never a null upload.
 	try {
@@ -267,22 +268,128 @@ void decodeMipmap (Mipmap& mipmap, const bool imageFormat = true) {
 	} catch (const std::bad_alloc&) {
 	    return;
 	}
-    }
-    if (!imageFormat || !mipmap.uncompressedData || mipmap.decodedData) return;
-    int width = 0, height = 0, fileChannels = 0;
-    stbi_uc* pixels = stbi_load_from_memory (
+	}
+	if (!imageFormat || !mipmap.uncompressedData || mipmap.decodedData) return;
+	int width = 0, height = 0, fileChannels = 0;
+	stbi_uc* pixels = stbi_load_from_memory (
 	reinterpret_cast<unsigned char*> (mipmap.uncompressedData.get ()), mipmap.uncompressedSize, &width, &height,
 	&fileChannels, 4
-    );
+	);
 
-    // on failure leave the mipmap untouched, the render thread will retry and report
-    if (pixels == nullptr) {
+	// on failure leave the mipmap untouched, the render thread will retry and report
+	if (pixels == nullptr) {
 	return;
-    }
+	}
 
-    mipmap.decodedData.reset (pixels);
-    mipmap.decodedWidth = width;
-    mipmap.decodedHeight = height;
+	mipmap.decodedData.reset (pixels);
+	mipmap.decodedWidth = width;
+	mipmap.decodedHeight = height;
+    };
+    decodeBase ();
+    if (mipmap.variantPatches.empty ()) return;
+    // Move work off the record while applying it: replacement images can decode
+    // their base without recursively applying the same patch list.
+    auto patches = std::move (mipmap.variantPatches);
+    try {
+	for (const auto& patch : patches) {
+	    const auto& payload = patch.payload;
+	    const auto x = patch.x, y = patch.y, width = patch.width, height = patch.height;
+	    const auto size = static_cast<int> (payload.size ());
+	    if (patch.flags & 2) {
+		// A replacement payload discards the base and earlier patches.
+		mipmap.decodedData.reset ();
+		mipmap.uncompressedSize = size;
+		mipmap.uncompressedData = std::make_unique<char[]> (size);
+		std::memcpy (mipmap.uncompressedData.get (), payload.data (), size);
+		continue;
+	    }
+
+	    const bool blocks = !imageFormat
+		&& (mipmap.variantFormat == TextureFormat_DXT1 || mipmap.variantFormat == TextureFormat_DXT3
+		    || mipmap.variantFormat == TextureFormat_DXT5 || mipmap.variantFormat == TextureFormat_BC7)
+		&& static_cast<size_t> (mipmap.uncompressedSize)
+		    != static_cast<size_t> (mipmap.width) * mipmap.height * 4;
+	    const size_t unit = blocks                ? (mipmap.variantFormat == TextureFormat_DXT1 ? 8 : 16)
+		: imageFormat                         ? 4
+		: mipmap.variantFormat == TextureFormat_R8   ? 1
+		: mipmap.variantFormat == TextureFormat_RG88 ? 2
+						      : 4;
+	    const size_t columns = blocks ? (width + 3) / 4 : width;
+	    const size_t rows = blocks ? (height + 3) / 4 : height;
+	    const size_t stride = (blocks ? (mipmap.width + 3) / 4 : mipmap.width) * unit;
+	    const size_t patchSize = columns * rows * unit;
+	    if (patchSize > (1 << 30) || (blocks && (x % 4 != 0 || y % 4 != 0))) {
+		throw std::runtime_error ("Invalid texture variant block layout");
+	    }
+	    std::vector<char> unpacked;
+	    DecodedPixelsPtr decoded;
+	    const char* source = payload.data ();
+	    size_t sourceSize = payload.size ();
+	    if (mipmap.compression == 1) {
+		unpacked.resize (patchSize);
+		const int bytes
+		    = LZ4_decompress_safe (payload.data (), unpacked.data (), size, static_cast<int> (patchSize));
+		if (bytes != static_cast<int> (patchSize)) {
+		    throw std::runtime_error ("Cannot decompress texture variant data");
+		}
+		source = unpacked.data ();
+		sourceSize = unpacked.size ();
+	    } else if (imageFormat) {
+		int decodedWidth = 0, decodedHeight = 0, channels = 0;
+		decoded.reset (stbi_load_from_memory (
+		    reinterpret_cast<const unsigned char*> (source), size, &decodedWidth, &decodedHeight, &channels, 4
+		));
+		if (!decoded || decodedWidth != static_cast<int> (width)
+		    || decodedHeight != static_cast<int> (height)) {
+		    throw std::runtime_error ("Invalid texture variant image");
+		}
+		source = reinterpret_cast<const char*> (decoded.get ());
+		sourceSize = patchSize;
+	    }
+	    char* target = mipmap.uncompressedData.get ();
+	    size_t targetSize = mipmap.uncompressedSize;
+	    if (imageFormat) {
+		if (!mipmap.decodedData) {
+		    decodeBase ();
+		}
+		if (!mipmap.decodedData || mipmap.decodedWidth != static_cast<int> (mipmap.width)
+		    || mipmap.decodedHeight != static_cast<int> (mipmap.height)) {
+		    throw std::runtime_error ("Invalid base image for texture variant");
+		}
+		target = reinterpret_cast<char*> (mipmap.decodedData.get ());
+		targetSize = static_cast<size_t> (mipmap.width) * mipmap.height * 4;
+	    }
+	    const size_t offset = (blocks ? y / 4 : y) * stride + (blocks ? x / 4 : x) * unit;
+	    if (sourceSize != patchSize || offset + (rows - 1) * stride + columns * unit > targetSize) {
+		throw std::runtime_error ("Texture variant payload size does not match its rectangle");
+	    }
+	    for (size_t row = 0; row < rows; ++row) {
+		auto* destination = reinterpret_cast<unsigned char*> (target + offset + row * stride);
+		const auto* pixels = reinterpret_cast<const unsigned char*> (source + row * columns * unit);
+		if (patch.flags & 1) {
+		    if (unit != 4 || blocks) {
+			throw std::runtime_error ("Texture variant blending requires RGBA pixels");
+		    }
+		    for (size_t pixel = 0; pixel < columns; ++pixel) {
+			const int alpha = pixels[pixel * 4 + 3];
+			for (size_t channel = 0; channel < 3; ++channel) {
+			    const size_t at = pixel * 4 + channel;
+			    destination[at] = destination[at] + ((pixels[at] - destination[at]) * alpha >> 8);
+			}
+			destination[pixel * 4 + 3] = std::max (destination[pixel * 4 + 3], pixels[pixel * 4 + 3]);
+		    }
+		} else {
+		    std::memcpy (destination, pixels, columns * unit);
+		}
+	    }
+	}
+	decodeBase ();
+    } catch (const std::exception&) {
+	if (!toleratePatchErrors) throw;
+	// Optional failure must leave an incomplete record for the error resource.
+	mipmap.decodedData.reset ();
+	mipmap.variantPatches = std::move (patches);
+    }
 }
 
 /** Every mipmap of the texture that still has to be decoded, appended to out */
@@ -315,7 +422,10 @@ void TextureParser::decodeMipmaps (Texture& texture) {
 bool TextureParser::canStreamMipmaps (const Texture& texture) {
     return texture.containerVersion != ContainerVersion_UNKNOWN
 	&& !texture.isVideoMp4 && !(texture.flags & TextureFlags_Video) && !texture.isAnimated ()
-	&& !texture.isVolume () && texture.variants.empty () && !texture.variantSource && texture.imageCount == 1
+	&& !texture.isVolume () && texture.imageCount == 1
+	&& ((texture.variants.empty () && !texture.variantSource)
+	    || (texture.variantSelectionPrepared && texture.freeImageFormat != FIF_UNKNOWN
+		&& std::ranges::none_of (texture.variants, [] (const auto& variant) { return variant.flags & 2; })))
 	&& texture.images.contains (0) && texture.images.at (0).size () > 1
 	// Native reader 14015c8d0 queues encoded/LZ4 work; plain raw chains are immediate.
 	// Keep mixed raw chains eager until their partial-result installation is established.
@@ -400,7 +510,10 @@ TextureUniquePtr TextureParser::parse (const BinaryReader& file, const VariantSe
 	    }
 
 	    if (!result->variants.empty ()) {
-		parseVariantPatches (*parsed, *result, file, selected);
+		const bool deferPatches = deferMipmaps && result->freeImageFormat != FIF_UNKNOWN
+		    && !result->isVideoMp4 && !(result->flags & TextureFlags_Video) && !result->isAnimated ()
+		    && !result->isVolume () && result->imageCount == 1 && mipmapCount > 1;
+		parseVariantPatches (*parsed, *result, file, selected, deferPatches);
 	    }
 	    mipmaps.emplace_back (std::move (parsed));
 	}
@@ -913,7 +1026,7 @@ std::vector<uint32_t> TextureParser::selectedVariants (const Texture& texture, c
 }
 
 void TextureParser::parseVariantPatches (
-    Mipmap& mipmap, const Texture& header, const BinaryReader& file, const std::vector<uint32_t>& selected
+    Mipmap& mipmap, const Texture& header, const BinaryReader& file, const std::vector<uint32_t>& selected, const bool deferPatches
 ) {
     // TEXB4: base mip payload, group count, then a patch count per group.
     // Each patch has version/id/x/y/width/height/FIF/byte count, followed by bytes.
@@ -953,110 +1066,29 @@ void TextureParser::parseVariantPatches (
 	    }
 	    std::string payload (size, '\0');
 	    file.next (payload.data (), payload.size ());
-	    if (variant->flags & 2) {
-		// A replacement payload discards the base and earlier patches.
-		mipmap.decodedData.reset ();
-		mipmap.uncompressedSize = size;
-		mipmap.uncompressedData = std::make_unique<char[]> (size);
-		std::memcpy (mipmap.uncompressedData.get (), payload.data (), size);
-		continue;
-	    }
-
-	    const bool imageFormat = header.freeImageFormat != FIF_UNKNOWN;
-	    const bool blocks = !imageFormat
-		&& (header.format == TextureFormat_DXT1 || header.format == TextureFormat_DXT3
-		    || header.format == TextureFormat_DXT5 || header.format == TextureFormat_BC7)
-		&& static_cast<size_t> (mipmap.uncompressedSize)
-		    != static_cast<size_t> (mipmap.width) * mipmap.height * 4;
-	    const size_t unit = blocks                ? (header.format == TextureFormat_DXT1 ? 8 : 16)
-		: imageFormat                         ? 4
-		: header.format == TextureFormat_R8   ? 1
-		: header.format == TextureFormat_RG88 ? 2
-						      : 4;
-	    const size_t columns = blocks ? (width + 3) / 4 : width;
-	    const size_t rows = blocks ? (height + 3) / 4 : height;
-	    const size_t stride = (blocks ? (mipmap.width + 3) / 4 : mipmap.width) * unit;
-	    const size_t patchSize = columns * rows * unit;
-	    if (patchSize > (1 << 30) || (blocks && (x % 4 != 0 || y % 4 != 0))) {
-		throw std::runtime_error ("Invalid texture variant block layout");
-	    }
-	    std::vector<char> unpacked;
-	    DecodedPixelsPtr decoded;
-	    const char* source = payload.data ();
-	    size_t sourceSize = payload.size ();
-	    if (mipmap.compression == 1) {
-		unpacked.resize (patchSize);
-		const int bytes
-		    = LZ4_decompress_safe (payload.data (), unpacked.data (), size, static_cast<int> (patchSize));
-		if (bytes != static_cast<int> (patchSize)) {
-		    throw std::runtime_error ("Cannot decompress texture variant data");
-		}
-		source = unpacked.data ();
-		sourceSize = unpacked.size ();
-	    } else if (imageFormat) {
-		int decodedWidth = 0, decodedHeight = 0, channels = 0;
-		decoded.reset (stbi_load_from_memory (
-		    reinterpret_cast<const unsigned char*> (source), size, &decodedWidth, &decodedHeight, &channels, 4
-		));
-		if (!decoded || decodedWidth != static_cast<int> (width)
-		    || decodedHeight != static_cast<int> (height)) {
-		    throw std::runtime_error ("Invalid texture variant image");
-		}
-		source = reinterpret_cast<const char*> (decoded.get ());
-		sourceSize = patchSize;
-	    }
-	    char* target = mipmap.uncompressedData.get ();
-	    size_t targetSize = mipmap.uncompressedSize;
-	    if (imageFormat) {
-		if (!mipmap.decodedData) {
-		    decodeMipmap (mipmap);
-		}
-		if (!mipmap.decodedData || mipmap.decodedWidth != static_cast<int> (mipmap.width)
-		    || mipmap.decodedHeight != static_cast<int> (mipmap.height)) {
-		    throw std::runtime_error ("Invalid base image for texture variant");
-		}
-		target = reinterpret_cast<char*> (mipmap.decodedData.get ());
-		targetSize = static_cast<size_t> (mipmap.width) * mipmap.height * 4;
-	    }
-	    const size_t offset = (blocks ? y / 4 : y) * stride + (blocks ? x / 4 : x) * unit;
-	    if (sourceSize != patchSize || offset + (rows - 1) * stride + columns * unit > targetSize) {
-		throw std::runtime_error ("Texture variant payload size does not match its rectangle");
-	    }
-	    for (size_t row = 0; row < rows; ++row) {
-		auto* destination = reinterpret_cast<unsigned char*> (target + offset + row * stride);
-		const auto* pixels = reinterpret_cast<const unsigned char*> (source + row * columns * unit);
-		if (variant->flags & 1) {
-		    if (unit != 4 || blocks) {
-			throw std::runtime_error ("Texture variant blending requires RGBA pixels");
-		    }
-		    for (size_t pixel = 0; pixel < columns; ++pixel) {
-			const int alpha = pixels[pixel * 4 + 3];
-			for (size_t channel = 0; channel < 3; ++channel) {
-			    const size_t at = pixel * 4 + channel;
-			    destination[at] = destination[at] + ((pixels[at] - destination[at]) * alpha >> 8);
-			}
-			destination[pixel * 4 + 3] = std::max (destination[pixel * 4 + 3], pixels[pixel * 4 + 3]);
-		    }
-		} else {
-		    std::memcpy (destination, pixels, columns * unit);
-		}
-	    }
+	    mipmap.variantPatches.push_back ({ variant->flags, x, y, width, height, std::move (payload) });
 	}
     }
+    mipmap.variantFormat = header.format;
+    if (!deferPatches && !mipmap.variantPatches.empty ())
+	decodeMipmap (mipmap, header.freeImageFormat != FIF_UNKNOWN, false);
 }
 
-TextureUniquePtr TextureParser::selectVariants (const Texture& texture, const VariantSelector& selector) {
+TextureUniquePtr TextureParser::selectVariants (
+    const Texture& texture, const VariantSelector& selector, const bool deferMipmaps
+) {
     if (!texture.variantSource) {
 	throw std::runtime_error ("Texture has no retained variant source");
     }
     const auto input = std::make_shared<std::istringstream> (*texture.variantSource, std::ios::binary);
-    auto result = parse (BinaryReader (input), selector);
+    auto result = parse (BinaryReader (input), selector, deferMipmaps);
+    result->variantSelectionPrepared = deferMipmaps;
     result->variantSource = texture.variantSource;
     result->spritesheetCols = texture.spritesheetCols;
     result->spritesheetRows = texture.spritesheetRows;
     result->spritesheetFrames = texture.spritesheetFrames;
     result->spritesheetDuration = texture.spritesheetDuration;
-    decodeMipmaps (*result);
+    if (!deferMipmaps || !canStreamMipmaps (*result)) decodeMipmaps (*result);
     return result;
 }
 

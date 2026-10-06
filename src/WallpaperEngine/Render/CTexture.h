@@ -41,7 +41,8 @@ public:
     using MipStream = TextureMipStream;
     static std::shared_ptr<CTexture> createStreaming (
 	RenderContext& context, TextureUniquePtr header, uint32_t textureReduction,
-	std::vector<std::shared_ptr<MipStream>>& streams
+	std::vector<std::shared_ptr<MipStream>>& streams,
+	Data::Parsers::TextureParser::VariantSelector selector = {}
     );
     static void completeMipStreams (const std::vector<std::shared_ptr<MipStream>>& streams);
 

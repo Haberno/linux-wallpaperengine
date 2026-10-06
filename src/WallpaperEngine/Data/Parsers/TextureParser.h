@@ -26,7 +26,7 @@ public:
     /** Prepared loads may retain static raw LZ4 until the required/optional decode batches. */
     static TextureUniquePtr load (const WallpaperEngine::Assets::AssetLocator& locator, const std::string& filename, bool deferMipmaps = false);
     static TextureUniquePtr parseImage (const std::string& contents, const JSON& metadata);
-    static TextureUniquePtr selectVariants (const Texture& texture, const VariantSelector& selector);
+    static TextureUniquePtr selectVariants (const Texture& texture, const VariantSelector& selector, bool deferMipmaps = false);
     static std::vector<uint32_t> selectedVariants (const Texture& texture, const VariantSelector& selector);
     static bool matchesCondition (const JSON& condition, const Properties& properties);
     static TextureUniquePtr parse (
@@ -45,7 +45,7 @@ public:
      * the cores: a single texture holds 3.4 on average and its level 0 is most of the work
      */
     static void decodeMipmaps (const std::vector<Texture*>& textures, bool initialMipOnly = false);
-    /** Bounded startup streaming: compiled static 2D images without variants. */
+    /** Bounded startup streaming: compiled static 2D images and explicitly prepared image variants. */
     static bool canStreamMipmaps (const Texture& texture);
     static FrameSharedPtr parseFrame (const BinaryReader& file);
     static FrameSharedPtr parseFrameV1 (const BinaryReader& file);
@@ -55,7 +55,7 @@ private:
     static void parseTextureHeader (Texture& header, const BinaryReader& file);
     static void parseContainer (Texture& header, const BinaryReader& file);
     static void parseVariantPatches (
-	Mipmap& mipmap, const Texture& header, const BinaryReader& file, const std::vector<uint32_t>& selected
+	Mipmap& mipmap, const Texture& header, const BinaryReader& file, const std::vector<uint32_t>& selected, bool deferPatches = false
     );
     static void parseAnimations (Texture& header, const BinaryReader& file);
     static void parseSpritesheetMetadata (

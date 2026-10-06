@@ -313,6 +313,9 @@ PreparedTextureFallbacks TextureCache::prepareFallbacks (
 ) {
     PreparedTextureFallbacks result;
     std::vector<std::pair<std::string, TextureUniquePtr>> pending;
+    const auto selector = [properties] (const Data::JSON::JSON& condition) {
+	return TextureParser::matchesCondition (condition, properties);
+    };
     for (const auto& name : names) {
 	const auto key = scopedKey (name, locator, textureReduction);
 	// Match resolve's retained property-binding lookup before touching an evicted base.
@@ -327,17 +330,30 @@ PreparedTextureFallbacks TextureCache::prepareFallbacks (
 	    if (texture && texture->getHeader ().variantSource) cached = m_textureCache.end ();
 	}
 	if (cached == m_textureCache.end ()) cached = m_textureCache.find (boundKey);
-	// A still-unbound conditional base is reusable; resolve will create its property binding.
-	if (cached == m_textureCache.end ()) cached = cachedBase;
 	if (cached != m_textureCache.end ()) {
 	    cached->second.lastUsed = ++m_useCounter;
 	    result.textures.push_back (cached->second.texture);
 	    continue;
 	}
 	try {
-	    auto parsed = TextureParser::load (locator, name, true);
-	    // Conditional bases remain eager and unbound for the ordinary property resolver.
-	    pending.emplace_back (name, std::move (parsed));
+	    auto parsed = cachedBase == m_textureCache.end () ? TextureParser::load (locator, name, true)
+		: std::make_unique<Texture> (std::dynamic_pointer_cast<const CTexture> (cachedBase->second.texture)->getHeader ());
+	    if (parsed->variantSource) {
+		// A conditional temporary must contain this project's selection. The base
+		// provider remains immutable and is never used as an unbound placeholder.
+		parsed->variantSelectionPrepared = true;
+		if (TextureParser::canStreamMipmaps (*parsed)) {
+		    pending.emplace_back (boundKey, TextureParser::selectVariants (*parsed, selector, true));
+		    continue;
+		}
+		parsed->variantSelectionPrepared = false;
+	    }
+	    if (cachedBase != m_textureCache.end ()) {
+		cachedBase->second.lastUsed = ++m_useCounter;
+		result.textures.push_back (cachedBase->second.texture);
+	    } else {
+		pending.emplace_back (key, std::move (parsed));
+	    }
 	} catch (const std::runtime_error& error) {
 	    sLog.error ("Cannot prepare material fallback ", name, ": ", error.what ());
 	}
@@ -352,9 +368,10 @@ PreparedTextureFallbacks TextureCache::prepareFallbacks (
     }
     for (auto& [name, parsed] : pending) {
 	try {
-	    auto texture = CTexture::createStreaming (getContext (), std::move (parsed), textureReduction, result.streams);
+	    const auto binding = parsed->variantSelectionPrepared ? selector : TextureParser::VariantSelector {};
+	    auto texture = CTexture::createStreaming (getContext (), std::move (parsed), textureReduction, result.streams, binding);
 	    result.textures.push_back (texture);
-	    store (name, locator, std::move (texture), textureReduction);
+	    store (name, std::move (texture));
 	} catch (const std::exception& error) {
 	    sLog.error ("Cannot upload material fallback ", name, ": ", error.what ());
 	}
