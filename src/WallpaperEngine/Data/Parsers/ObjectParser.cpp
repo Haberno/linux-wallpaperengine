@@ -1061,6 +1061,17 @@ static std::optional<ControlPointRemap> parseControlPointRemap (
         && parsedOutput == Output::Velocity && parsedTransform == Transform::SimplexNoise;
     const bool noiseSpeed = !initializer && parsedInput == Input::LifetimeFraction
         && speedOutput && parsedTransform == Transform::FbmNoise && it.optional ("transformoctaves", 3) == 3;
+    const auto inputComponent = it.optional<std::string> ("inputcomponent", "all");
+    const auto outputComponent = it.optional<std::string> ("outputcomponent", "all");
+    const auto knownComponent = [] (const std::string& component) {
+        return component == "all" || component == "x" || component == "y" || component == "z"
+            || component == "sum" || component == "average" || component == "max" || component == "min";
+    };
+    // Native scalar inputs bypass selectors, and scalar outputs ignore them.
+    // Vector output selection and the separate noise modes keep their existing gates.
+    const bool supportedInputComponent = inputComponent == "all" || (linearPair && knownComponent (inputComponent));
+    const bool supportedOutputComponent = outputComponent == "all"
+        || (linearPair && parsedOutput != Output::Velocity && knownComponent (outputComponent));
     const auto flags = it.optional ("flags", 1u);
     const bool supportedFlags = noiseVelocity ? flags == 1u : noiseSpeed ? flags == 3u : flags <= 3u;
     const glm::vec4 blendTimes = initializer ? glm::vec4 (0.0f, 0.0f, 1.0f, 1.0f) : glm::vec4 (
@@ -1068,8 +1079,7 @@ static std::optional<ControlPointRemap> parseControlPointRemap (
         it.optional ("blendoutstart", 1.0f), it.optional ("blendoutend", 1.0f));
     if ((!noiseVelocity && !noiseSpeed && (!linearPair || !linearTransform))
         || (operation != (noiseSpeed ? "multiply" : "remap") && !arithmetic)
-        || it.optional<std::string> ("inputcomponent", "all") != "all"
-        || it.optional<std::string> ("outputcomponent", "all") != "all"
+        || !supportedInputComponent || !supportedOutputComponent
         || !supportedFlags) {
         // Keep unmeasured pairs, transforms, flags and octave counts explicit.
         sLog.error ("Unsupported particle ", initializer ? "remapinitialvalue" : "remapvalue",

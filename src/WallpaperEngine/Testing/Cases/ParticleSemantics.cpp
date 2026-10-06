@@ -1449,7 +1449,7 @@ TEST_CASE ("two-control-point position arithmetic rejects unmeasured settings", 
             {"name":"remapvalue","input":"maxlifetime","output":"positionbetweentwocontrolpoints","operation":"add","flags":4},
             {"name":"remapvalue","input":"maxlifetime","output":"positionbetweentwocontrolpoints","operation":"add","transformfunction":"simplexnoise"},
             {"name":"remapvalue","input":"lifetimefraction","output":"speed","operation":"multiply","transformfunction":"fbmnoise","flags":3,"transformoctaves":2},
-            {"name":"remapvalue","input":"maxlifetime","output":"positionbetweentwocontrolpoints","operation":"add","outputcomponent":"x"},
+            {"name":"remapvalue","input":"maxlifetime","output":"positionbetweentwocontrolpoints","operation":"add","outputcomponent":"w"},
             {"name":"remapvalue","input":"positionbetweentwocontrolpoints","output":"velocity","operation":"divide"},
             {"name":"remapvalue","input":"color","output":"positionbetweentwocontrolpoints","operation":"add"}
         ]}})"), project);
@@ -3956,4 +3956,92 @@ TEST_CASE ("periodic mapping clamps on each side before arithmetic and position 
             }
         }
     }
+}
+
+TEST_CASE ("scalar remap selectors admit native ignored component names", "[particle][remap][remap-scalar-selector-admission]") {
+    for (const bool initializer : { true, false }) {
+        for (const bool positionInput : { true, false }) {
+            for (const auto component : { "all", "x", "y", "z", "sum", "average", "max", "min" }) {
+                for (const auto field : { "inputcomponent", "outputcomponent" }) {
+                    INFO (initializer << ", " << positionInput << ", " << field << ", " << component);
+                    WallpaperEngine::Data::Model::Project project {};
+                    auto data = WallpaperEngine::Data::JSON::JSON::parse (R"({"id":443,"particle":{}})");
+                    auto node = WallpaperEngine::Data::JSON::JSON::parse (R"({"operation":"remap"})");
+                    node["name"] = initializer ? "remapinitialvalue" : "remapvalue";
+                    node["input"] = positionInput ? "positionbetweentwocontrolpoints" : "size";
+                    node["output"] = positionInput ? "size" : "positionbetweentwocontrolpoints";
+                    node[field] = component;
+                    data["particle"][initializer ? "initializer" : "operator"] = { node };
+                    const auto object = WallpaperEngine::Data::Parsers::ObjectParser::parse (data, project);
+                    const auto* definition = object->as<Particle> ();
+                    CHECK ((initializer ? definition->initializers.size () : definition->operators.size ()) == 1);
+                }
+            }
+        }
+    }
+}
+
+TEST_CASE ("scalar selectors preserve mapping and leave vector output selectors gated", "[particle][remap][remap-scalar-selectors]") {
+    using WallpaperEngine::Render::Objects::applyParticleControlPointRemap;
+    using WallpaperEngine::Render::Objects::ControlPointData;
+    const std::vector<std::string> components { "all", "x", "y", "z", "sum", "average", "max", "min" };
+    std::vector<ControlPointData> points (2);
+    points[1].position = { 64, 0, 0 };
+    for (const bool initializer : { true, false }) {
+        for (const std::string output : { "size", "positionbetweentwocontrolpoints", "velocity" }) {
+            for (size_t index = 0; index < components.size (); ++index) {
+                for (const std::string transform : { "none", "saw" }) {
+                    if (output == "velocity" && transform != "none") continue;
+                    INFO (initializer << ", " << output << ", " << components[index] << ", " << transform);
+                    WallpaperEngine::Data::Model::Project project {};
+                    auto data = WallpaperEngine::Data::JSON::JSON::parse (R"({"id":444,"particle":{}})");
+                    auto node = WallpaperEngine::Data::JSON::JSON::parse (R"({"operation":"remap","flags":0})");
+                    node["name"] = initializer ? "remapinitialvalue" : "remapvalue";
+                    node["input"] = output == "positionbetweentwocontrolpoints" ? "size" : "positionbetweentwocontrolpoints";
+                    node["output"] = output;
+                    node["inputcomponent"] = components[index];
+                    node["outputcomponent"] = output == "velocity" ? "all" : components[(index + 3) % components.size ()];
+                    node["transformfunction"] = transform;
+                    data["particle"][initializer ? "initializer" : "operator"] = { node };
+                    const auto object = WallpaperEngine::Data::Parsers::ObjectParser::parse (data, project);
+                    const auto* definition = object->as<Particle> ();
+                    REQUIRE ((initializer ? definition->initializers.size () : definition->operators.size ()) == 1);
+                    const auto& remap = initializer ? definition->initializers.front ()->as<ControlPointRemapInitializer> ()->remap
+                        : definition->operators.front ()->as<ControlPointRemapOperator> ()->remap;
+                    ParticleInstance particle;
+                    particle.position = { 16, 12, -8 };
+                    particle.velocity = { 7, -11, 13 };
+                    particle.size = particle.initial.size = .25f;
+                    particle.lifetime = 4;
+                    particle.age = 1;
+                    applyParticleControlPointRemap (particle, remap, points, initializer);
+                    const float mapped = transform == "none" ? .25f : .5f;
+                    CHECK (particle.position == (output == "positionbetweentwocontrolpoints"
+                        ? glm::vec3 (mapped * 64, 12, -8) : glm::vec3 (16, 12, -8)));
+                    CHECK (particle.size == (output == "size" ? mapped : .25f));
+                    CHECK (particle.velocity == (output == "velocity" ? glm::vec3 (mapped, -mapped, mapped) : glm::vec3 (7, -11, 13)));
+                    if (output == "velocity" && index != 0) {
+                        node["outputcomponent"] = components[index];
+                        data["particle"][initializer ? "initializer" : "operator"] = { node };
+                        const auto unsupported = WallpaperEngine::Data::Parsers::ObjectParser::parse (data, project);
+                        CHECK ((initializer ? unsupported->as<Particle> ()->initializers.size ()
+                            : unsupported->as<Particle> ()->operators.size ()) == 0);
+                    }
+                }
+            }
+        }
+    }
+}
+
+TEST_CASE ("scalar selector admission preserves unknown names and unrelated noise gates", "[particle][remap][remap-scalar-selectors]") {
+    WallpaperEngine::Data::Model::Project project {};
+    const auto object = WallpaperEngine::Data::Parsers::ObjectParser::parse (
+        WallpaperEngine::Data::JSON::JSON::parse (R"({"id":445,"particle":{"operator":[
+            {"name":"remapvalue","input":"size","output":"positionbetweentwocontrolpoints","inputcomponent":"w"},
+            {"name":"remapvalue","input":"size","output":"positionbetweentwocontrolpoints","outputcomponent":"magnitude"},
+            {"name":"remapvalue","input":"color","output":"positionbetweentwocontrolpoints","inputcomponent":"x"},
+            {"name":"remapvalue","input":"lifetimefraction","output":"velocity","transformfunction":"simplexnoise","inputcomponent":"x"},
+            {"name":"remapvalue","input":"lifetimefraction","output":"speed","operation":"multiply","transformfunction":"fbmnoise","flags":3,"outputcomponent":"sum"}
+        ]}})"), project);
+    CHECK (object->as<Particle> ()->operators.empty ());
 }
