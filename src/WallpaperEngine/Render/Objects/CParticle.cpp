@@ -3195,8 +3195,14 @@ void CParticle::updateMatrices () {
 	    glm::mat3 authoredModel = glm::mat3 (m_modelMatrix * flipY);
 	    if (!is3D) authoredModel = glm::mat3 (flipY) * authoredModel;
 	    const glm::vec3 cameraForward (glm::inverse (getScene ().getCamera ().getLookAt ())[2]);
-	    m_orientationForward = glm::mat3 (flipY)
-		* calculateUprightRopeForward (renderer.axis, authoredModel, cameraForward, (renderer.flags & 1) != 0);
+	    const glm::vec3 forward = calculateUprightRopeForward (
+		renderer.axis, authoredModel, cameraForward, (renderer.flags & 1) != 0
+	    );
+	    m_orientationForward = is3D ? forward : glm::mat3 (flipY) * forward;
+	} else if (renderer.orientation == "fixed" && is3D) {
+	    // Rope shaders transform the authored forward through the inverse model;
+	    // the sprite-local Y reflection would otherwise be applied a second time.
+	    m_orientationForward = glm::mat3 (flipY) * m_orientationForward;
 	} else if (renderer.orientation != "fixed") {
 	    // Sprite tangents are local already, but the stock rope vertex shader
 	    // applies g_ModelMatrixInverse itself. Supply the world-facing vector.
