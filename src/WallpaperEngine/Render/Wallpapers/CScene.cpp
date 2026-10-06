@@ -11,6 +11,7 @@
 #include "CScene.h"
 #include "WallpaperEngine/Render/CTexture.h"
 #include "WallpaperEngine/Render/Shaders/Shader.h"
+#include "WallpaperEngine/Render/Shaders/GLSLContext.h"
 #include "WallpaperEngine/Data/Parsers/TextureParser.h"
 #include "HdrBloom.h"
 #include "VolumetricLights.h"
@@ -75,17 +76,30 @@ CScene::CScene (
     const ComboMap noCombos;
     const TextureMap noTextures;
     std::set<std::string> precachedTextures;
+    std::map<std::string, std::pair<int, int>> precachedTextureMetadata;
     for (const auto& material : scene->precachedMaterials) {
 	for (const auto& pass : material->passes) {
 	    TextureMap textures = pass->textures;
+	    std::set<int> formatRequests;
+	    bool shaderMetadataReady = false;
+	    bool shaderFogEnabled = false;
 	    try {
-		// Preprocessing reads sampler defaults without compiling a GL program.
+		// Discover file dependencies before selecting the load-time shader variant.
 		const Shaders::Shader shader (
 		    this->getAssetLocator (), pass->shader, pass->combos, noCombos, pass->textures, noTextures, pass->constants
 		);
 		TextureMap defaults = shader.getVertex ().getTextures ();
 		for (const auto& [slot, name] : shader.getFragment ().getTextures ()) defaults[slot] = name;
 		for (const auto& [slot, name] : defaults) textures.try_emplace (slot, name);
+		for (const auto& [slot, name] : textures) {
+		    if (shader.getVertex ().requestsTextureFormat (slot)
+			|| shader.getFragment ().requestsTextureFormat (slot)) formatRequests.insert (slot);
+		}
+		ComboMap discovered = shader.getVertex ().getDiscoveredCombos ();
+		for (const auto& [name, value] : shader.getFragment ().getDiscoveredCombos ()) discovered[name] = value;
+		for (const auto& [name, value] : pass->combos) discovered[name] = value;
+		if (const auto fog = discovered.find ("FOG"); fog != discovered.end ()) shaderFogEnabled = fog->second != 0;
+		shaderMetadataReady = true;
 	    } catch (const std::exception& error) {
 		sLog.error ("Cannot precache shader defaults for ", pass->shader, ": ", error.what ());
 	    }
@@ -93,11 +107,47 @@ CScene::CScene (
 		if (name.empty () || name.starts_with ("_rt_") || name.starts_with ("_alias_")
 		    || name.starts_with ('$') || !precachedTextures.insert (name).second) continue;
 		try {
-		    this->m_precachedTextures.emplace_back (this->resolveTexture (name));
+		    auto texture = this->resolveTexture (name);
+		    precachedTextureMetadata.emplace (
+			name, std::pair { static_cast<int> (texture->getFormat ()),
+			    static_cast<int> ((texture->getFlags () & TextureFlags_ComponentMask) >> 20) }
+		    );
+		    this->m_precachedTextures.emplace_back (std::move (texture));
 		} catch (const std::exception& error) {
 		    sLog.error ("Cannot precache texture ", name, ": ", error.what ());
 		}
 		// Service outgoing frames between dependencies, including cache misses.
+		this->loadingCheckpoint (true);
+	    }
+	    // Native material acquisition selects only pass zero and retains its shader resource.
+	    if (pass == material->passes.front () && shaderMetadataReady) {
+		try {
+		    ComboMap combos = pass->combos;
+		    combos.insert_or_assign ("HDR", this->isHdr () ? 1 : 0);
+		    combos.insert_or_assign ("SCENE_ORTHO", isPerspective ? 0 : 1);
+		    combos.insert_or_assign ("ALPHATOCOVERAGE", pass->blending == BlendingMode_AlphaToCoverage ? 1 : 0);
+		    combos.insert_or_assign (
+			"FOG_DIST", isPerspective && shaderFogEnabled && scene->fog.distance.enabled->value->getBool ()
+		    );
+		    combos.insert_or_assign (
+			"FOG_HEIGHT", isPerspective && shaderFogEnabled && scene->fog.height.enabled->value->getBool ()
+		    );
+		    for (const auto& [slot, name] : textures) {
+			if (const auto metadata = precachedTextureMetadata.find (name); metadata != precachedTextureMetadata.end ()) {
+			    const std::string prefix = "TEX" + std::to_string (slot);
+			    combos.insert_or_assign (prefix + "COMPONENTS", metadata->second.second);
+			    if (formatRequests.contains (slot)) combos.insert_or_assign (prefix + "FORMAT", metadata->second.first);
+			}
+		    }
+		    Shaders::Shader shader (
+			this->getAssetLocator (), pass->shader, combos, noCombos, pass->textures, noTextures, pass->constants
+		    );
+		    const auto [vertex, fragment] = Shaders::GLSLContext::get ().toGlsl (shader.vertex (), shader.fragment ());
+		    std::shared_ptr<Shaders::ShaderProgramCache::SharingGroup> group;
+		    this->m_precachedPrograms.emplace_back (context.getShaderProgramCache ().interfaceProgram (vertex, fragment, group));
+		} catch (const std::exception& error) {
+		    sLog.error ("Cannot precache shader program ", pass->shader, ": ", error.what ());
+		}
 		this->loadingCheckpoint (true);
 	    }
 	}

@@ -344,6 +344,8 @@ private:
     uint32_t m_textureReduction = 1;
     /** Keep explicit material dependencies alive for later runtime-created layers. */
     std::vector<std::shared_ptr<const TextureProvider>> m_precachedTextures;
+    /** Keep the native-selected material shader resources alive until this scene unloads. */
+    std::vector<std::shared_ptr<const Shaders::ShaderProgramCache::SharedProgram>> m_precachedPrograms;
     std::unique_ptr<HdrBloom> m_hdrBloom;
     ObjectUniquePtr m_bloomObjectData;
     CObject* m_bloomObject = nullptr;
