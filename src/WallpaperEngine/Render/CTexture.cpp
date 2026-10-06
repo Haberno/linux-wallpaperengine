@@ -220,6 +220,7 @@ CTexture::CTexture (
 }
 
 CTexture::~CTexture () {
+    if (this->m_mipStream) this->m_mipStream->cancelled.store (true, std::memory_order_relaxed);
     // first release the player to prevent using null references
     this->m_player.reset ();
 
@@ -429,6 +430,7 @@ glm::vec2 CTexture::getAnimationUVSize (const uint32_t imageIndex) const {
 }
 
 uint32_t CTexture::getMipMapCount (const uint32_t imageIndex) const {
+    if (this->m_streamingTemporary) return 1;
     if (this->m_player != nullptr) {
 	return 1;
     }
@@ -467,6 +469,7 @@ uint32_t CTexture::getSpritesheetFrames () const { return this->getHeader ().spr
 float CTexture::getSpritesheetDuration () const { return this->getHeader ().spritesheetDuration; }
 
 size_t CTexture::getRetainedCpuBytes () const {
+    if (this->m_mipStream) return this->m_streamCpuBytes;
     // image textures free their CPU-side buffers after the GL upload in the constructor,
     // but the video path keeps the whole file pinned so mpv can stream from memory
     size_t bytes = this->m_header->variantSource ? this->m_header->variantSource->size () : 0;
@@ -495,6 +498,7 @@ void CTexture::decrementUsageCount () const {
 }
 
 void CTexture::update () const {
+    if (this->m_mipStream) const_cast<CTexture*> (this)->refreshMipStream ();
     // Providers are exposed as const to render passes; mutation stays on the GL
     // thread, just as it does for the video player below.
     if (this->m_variantSelector) {
@@ -528,3 +532,102 @@ void CTexture::refreshVariant () {
 
 // CTextures are always ready to be rendered at all times
 bool CTexture::isReady () const { return true; }
+
+std::shared_ptr<CTexture> CTexture::createStreaming (
+    RenderContext& context, TextureUniquePtr header, const uint32_t textureReduction,
+    std::vector<std::shared_ptr<MipStream>>& streams
+) {
+    if (!Data::Parsers::TextureParser::canStreamMipmaps (*header)) {
+	return std::make_shared<CTexture> (context, std::move (header), textureReduction);
+    }
+    const auto& mipmaps = header->images.at (0);
+    const auto& required = mipmaps[std::min<size_t> (2, mipmaps.size () - 1)];
+    if (!required->decodedData) sLog.exception ("Cannot decode required texture mip");
+
+    auto temporary = std::make_unique<Texture> (*header);
+    auto mipmap = std::make_shared<Mipmap> ();
+    mipmap->width = required->width;
+    mipmap->height = required->height;
+    mipmap->decodedWidth = required->decodedWidth;
+    mipmap->decodedHeight = required->decodedHeight;
+    mipmap->decodedData = std::move (required->decodedData);
+    temporary->images[0] = { mipmap };
+    auto texture = std::make_shared<CTexture> (context, std::move (temporary), textureReduction);
+
+    // Rendering keeps authored dimensions, while the worker owns all mutable pixel data.
+    auto metadata = std::make_unique<Texture> (*header);
+    size_t bytes = 0;
+    for (auto& entry : metadata->images.at (0)) {
+	bytes += entry->uncompressedSize + size_t (entry->width) * entry->height * 4;
+	auto dimensions = std::make_shared<Mipmap> ();
+	dimensions->width = entry->width;
+	dimensions->height = entry->height;
+	entry = std::move (dimensions);
+    }
+    texture->m_header = std::move (metadata);
+    texture->setupResolution ();
+    texture->m_streamingTemporary = true;
+    texture->m_streamCpuBytes = bytes;
+    texture->m_mipStream = std::make_shared<MipStream> ();
+    texture->m_mipStream->texture = std::move (header);
+    streams.push_back (texture->m_mipStream);
+    Debug::RenderHealth::record ("texture.stream_temporary", std::to_string (required->width));
+    return texture;
+}
+
+void CTexture::completeMipStreams (const std::vector<std::shared_ptr<MipStream>>& streams) {
+    try {
+	std::vector<Texture*> textures;
+	for (const auto& stream : streams) {
+	    if (!stream->cancelled.load (std::memory_order_relaxed)) textures.push_back (stream->texture.get ());
+	}
+	Data::Parsers::TextureParser::decodeMipmaps (textures);
+    } catch (const std::exception& error) {
+	// Decode-pool setup can fail too. Publish after its workers have joined so
+	// incomplete mip chains reach the same fallback as a failed image decode.
+	sLog.error ("Cannot decode texture stream: ", error.what ());
+    }
+    for (const auto& stream : streams) stream->ready.store (true, std::memory_order_release);
+}
+
+void CTexture::refreshMipStream () {
+    if (!this->m_mipStream->ready.load (std::memory_order_acquire)) return;
+    auto header = std::move (this->m_mipStream->texture);
+    const auto& mipmaps = header->images.at (0);
+    const size_t first = this->m_reduceMipmaps && mipmaps.size () > 1 ? 1 : 0;
+    const bool failed = std::ranges::any_of (mipmaps | std::views::drop (first),
+	[] (const auto& mipmap) { return !mipmap->decodedData; });
+    if (failed) {
+	// Native 1400eef70 publishes a 6x6 yellow/black error texture on a failed result.
+	header = std::make_unique<Texture> ();
+	header->imageCount = 1;
+	header->width = header->height = header->textureWidth = header->textureHeight = 6;
+	header->format = TextureFormat_ARGB8888;
+	header->flags = TextureFlags_NoInterpolation;
+	auto mipmap = std::make_shared<Mipmap> ();
+	mipmap->width = mipmap->height = 6;
+	mipmap->uncompressedSize = 6 * 6 * 4;
+	mipmap->uncompressedData = std::make_unique<char[]> (mipmap->uncompressedSize);
+	for (size_t pixel = 0; pixel < 36; ++pixel) {
+	    const char value = (pixel / 6 + pixel) % 2 ? char (255) : 0;
+	    auto* rgba = mipmap->uncompressedData.get () + pixel * 4;
+	    rgba[0] = value; rgba[1] = value; rgba[2] = 0; rgba[3] = char (255);
+	}
+	header->images[0] = { mipmap };
+    }
+    // Construction owns cleanup on failure; only replace the displayed object after upload.
+    try {
+	CTexture replacement (this->getContext (), std::move (header), this->m_textureReduction);
+	std::swap (this->m_header, replacement.m_header);
+	std::swap (this->m_textureID, replacement.m_textureID);
+	std::swap (this->m_resolution, replacement.m_resolution);
+	std::swap (this->m_reduceMipmaps, replacement.m_reduceMipmaps);
+	std::swap (this->m_approximateGpuBytes, replacement.m_approximateGpuBytes);
+	this->m_streamingTemporary = false;
+	Debug::RenderHealth::record (failed ? "texture.stream_failed" : "texture.stream_complete", "");
+    } catch (const std::exception& error) {
+	sLog.error ("Cannot complete texture stream: ", error.what ());
+    }
+    this->m_mipStream.reset ();
+    this->m_streamCpuBytes = 0;
+}

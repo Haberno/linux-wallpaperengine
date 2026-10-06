@@ -195,6 +195,12 @@ void TextureCache::updateAll () {
 		it = this->m_liveTextures.erase (it);
 	    }
 	}
+	// A streaming provider replaces its temporary allocation and releases CPU staging.
+	for (auto& entry : this->m_textureCache | std::views::values) {
+	    const size_t bytes = estimateTextureBytes (*entry.texture);
+	    this->m_cacheBytes = this->m_cacheBytes - entry.approximateBytes + bytes;
+	    entry.approximateBytes = bytes;
+	}
     }
 
     // A store performed while the outgoing wallpaper is still crossfading can

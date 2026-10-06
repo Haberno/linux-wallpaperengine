@@ -41,7 +41,9 @@ public:
      * Mipmaps are independent, so a batch is the only place with enough of them to fill
      * the cores: a single texture holds 3.4 on average and its level 0 is most of the work
      */
-    static void decodeMipmaps (const std::vector<Texture*>& textures);
+    static void decodeMipmaps (const std::vector<Texture*>& textures, bool initialMipOnly = false);
+    /** Bounded startup streaming: compiled encoded static 2D images without variants. */
+    static bool canStreamMipmaps (const Texture& texture);
     static FrameSharedPtr parseFrame (const BinaryReader& file);
     static FrameSharedPtr parseFrameV1 (const BinaryReader& file);
     static TextureMap parseTextureMap (const JSON& it);

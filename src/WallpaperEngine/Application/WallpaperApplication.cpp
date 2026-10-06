@@ -887,12 +887,12 @@ std::set<std::string> collectProjectTextures (const Project& project) {
 }
 
 /**
- * Reads, decompresses and decodes every texture a project references, leaving the caller
- * with nothing but the GL upload to do. Textures that fail to parse are dropped so the
- * render thread falls back to loading them synchronously.
+ * Reads every texture a project references. Switches can decode only the required
+ * startup mip of eligible textures; ordinary startup still prepares every mip.
+ * Parse failures fall back to loading synchronously on the render thread.
  */
 std::vector<std::pair<std::string, WallpaperEngine::Data::Assets::TextureUniquePtr>>
-parseProjectTextures (const Project& project) {
+parseProjectTextures (const Project& project, const bool initialMipOnly = false) {
     std::vector<std::pair<std::string, WallpaperEngine::Data::Assets::TextureUniquePtr>> textures {};
 
     for (const auto& name : collectProjectTextures (project)) {
@@ -905,9 +905,8 @@ parseProjectTextures (const Project& project) {
 	}
     }
 
-    // decode image-format textures here as well so the render thread skips the stbi work
-    // entirely and only does the GL upload. One batch for the whole wallpaper, since that
-    // is what gives the pool enough independent mipmaps to be worth spawning
+    // Batch the required image-format decoding across the wallpaper. Optional switch
+    // mips finish on this same loader worker after its temporary textures are published.
     std::vector<WallpaperEngine::Data::Assets::Texture*> decodable;
     decodable.reserve (textures.size ());
 
@@ -915,7 +914,7 @@ parseProjectTextures (const Project& project) {
 	decodable.emplace_back (texture.get ());
     }
 
-    WallpaperEngine::Data::Parsers::TextureParser::decodeMipmaps (decodable);
+    WallpaperEngine::Data::Parsers::TextureParser::decodeMipmaps (decodable, initialMipOnly);
 
     return textures;
 }
@@ -1049,6 +1048,7 @@ uint64_t WallpaperApplication::requestBackgroundSwitch (
 void WallpaperApplication::switchWorkerMain () {
     while (true) {
 	PreparedSwitch job {};
+	std::vector<std::shared_ptr<Render::CTexture::MipStream>> mipStreams;
 
 	{
 	    std::unique_lock lock (this->m_switchMutex);
@@ -1085,7 +1085,7 @@ void WallpaperApplication::switchWorkerMain () {
 
 	    // Read, decompress and decode textures away from the render loop first.
 	    const auto textureStart = std::chrono::steady_clock::now ();
-	    job.textures = parseProjectTextures (*job.project);
+	    job.textures = parseProjectTextures (*job.project, true);
 	    textureMs = std::chrono::steady_clock::now () - textureStart;
 
 	    {
@@ -1115,7 +1115,9 @@ void WallpaperApplication::switchWorkerMain () {
 		    try {
 			job.readyTextures.emplace_back (
 			    std::move (name),
-			    std::make_shared<Render::CTexture> (*this->m_renderContext, std::move (texture), job.textureReduction)
+			    Render::CTexture::createStreaming (
+				*this->m_renderContext, std::move (texture), job.textureReduction, mipStreams
+			    )
 			);
 		    } catch (const std::exception& e) {
 			// resolveTexture will load this asset normally during the scene build.
@@ -1124,6 +1126,13 @@ void WallpaperApplication::switchWorkerMain () {
 		}
 
 		job.textures = std::move (fallbackTextures);
+	    } else {
+		// Drivers without a shared build context publish CPU-ready textures.
+		// Keep their remaining image decoding off the render thread too.
+		std::vector<Data::Assets::Texture*> decodable;
+		for (const auto& [name, texture] : job.textures) decodable.push_back (texture.get ());
+		Data::Parsers::TextureParser::decodeMipmaps (decodable);
+		textureMs = std::chrono::steady_clock::now () - textureStart;
 	    }
 	} catch (const std::exception& e) {
 	    job.error = e.what ();
@@ -1145,6 +1154,8 @@ void WallpaperApplication::switchWorkerMain () {
 	    std::lock_guard lock (this->m_switchMutex);
 	    this->m_switchResults.emplace_back (std::move (job));
 	}
+	// Optional mips remain CPU-only until the render thread observes the complete batch.
+	Render::CTexture::completeMipStreams (mipStreams);
     }
 }
 

@@ -298,10 +298,23 @@ void TextureParser::decodeMipmaps (Texture& texture) {
     }
 }
 
-void TextureParser::decodeMipmaps (const std::vector<Texture*>& textures) {
+bool TextureParser::canStreamMipmaps (const Texture& texture) {
+    return texture.containerVersion != ContainerVersion_UNKNOWN && texture.freeImageFormat != FIF_UNKNOWN
+	&& !texture.isVideoMp4 && !(texture.flags & TextureFlags_Video) && !texture.isAnimated ()
+	&& !texture.isVolume () && !texture.variantSource && texture.imageCount == 1
+	&& texture.images.contains (0) && texture.images.at (0).size () > 1;
+}
+
+void TextureParser::decodeMipmaps (const std::vector<Texture*>& textures, const bool initialMipOnly) {
     std::vector<Mipmap*> pending;
     for (Texture* texture : textures) {
-	collectDecodable (*texture, pending);
+	if (initialMipOnly && canStreamMipmaps (*texture)) {
+	    const auto& mipmaps = texture->images.at (0);
+	    const auto& mipmap = mipmaps[std::min<size_t> (2, mipmaps.size () - 1)];
+	    if (!mipmap->decodedData && mipmap->uncompressedData) pending.push_back (mipmap.get ());
+	} else {
+	    collectDecodable (*texture, pending);
+	}
     }
 
     if (pending.empty ()) {

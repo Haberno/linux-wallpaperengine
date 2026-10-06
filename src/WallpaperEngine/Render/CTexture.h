@@ -8,6 +8,7 @@
 
 #include <GL/glew.h>
 #include <cstddef>
+#include <atomic>
 #include <glm/vec4.hpp>
 #include <memory>
 #include <optional>
@@ -30,6 +31,18 @@ public:
 	Data::Parsers::TextureParser::VariantSelector selector = {}
     );
     ~CTexture () override;
+
+    /** CPU-only ownership shared with the existing switch worker; never owns GL resources. */
+    struct MipStream {
+	TextureUniquePtr texture;
+	std::atomic<bool> ready = false;
+	std::atomic<bool> cancelled = false;
+    };
+    static std::shared_ptr<CTexture> createStreaming (
+	RenderContext& context, TextureUniquePtr header, uint32_t textureReduction,
+	std::vector<std::shared_ptr<MipStream>>& streams
+    );
+    static void completeMipStreams (const std::vector<std::shared_ptr<MipStream>>& streams);
 
     /**
      * TEXI records the authored/target texture format, but newer TEXB containers
@@ -121,6 +134,10 @@ private:
     Data::Parsers::TextureParser::VariantSelector m_variantSelector;
     std::vector<uint32_t> m_variantSelection;
     void refreshVariant ();
+    void refreshMipStream ();
+    std::shared_ptr<MipStream> m_mipStream;
+    size_t m_streamCpuBytes = 0;
+    bool m_streamingTemporary = false;
     struct UserAnimation {
 	uint32_t frame = 0;
 	uint32_t update = 0;
