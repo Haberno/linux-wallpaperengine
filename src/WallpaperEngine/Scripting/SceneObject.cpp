@@ -579,12 +579,12 @@ static JSValue model_change_data (JSContext* ctx, JSValueConst self, int argc, J
     if (argc < 1) {
 	return JS_UNDEFINED;
     }
-    std::vector<std::pair<size_t, size_t>> capacities;
+    struct Capacity { size_t vertexBytes; size_t indexBytes; uint8_t indexWidth; };
+    std::vector<Capacity> capacities;
     if (auto resource = handle->scene->getScene ().findModelData (handle->token); resource) {
 	for (const auto& shape : resource->shapes) {
-	    const bool copyCapacity = !replace || (shape.input.vertexDynamic && (shape.input.indexWidth == 0 || shape.input.indexDynamic));
-	    capacities.emplace_back (copyCapacity ? shape.input.vertices.size () * sizeof (float) : 0,
-		copyCapacity ? shape.input.indices.size () : 0);
+	    capacities.push_back ({ !replace || shape.input.vertexDynamic ? shape.input.vertices.size () * sizeof (float) : 0,
+		!replace || shape.input.indexDynamic ? shape.input.indices.size () : 0, shape.input.indexWidth });
 	}
     }
     // Do not keep a resource lease across property getters invoked by parsing.
@@ -603,17 +603,17 @@ static JSValue model_change_data (JSContext* ctx, JSValueConst self, int argc, J
 	for (uint32_t index = 0; index < count; ++index) {
 	    ModelDataInput::Value input (ctx, JS_GetPropertyUint32 (ctx, shapeArray.value, index));
 	    ModelDataShape update;
-	    if (JS_IsException (input.value) || !ModelDataInput::readShape (ctx, input.value, update, replace,
-		    index < capacities.size () ? capacities[index].first : 0,
-		    index < capacities.size () ? capacities[index].second : 0)) {
+	    if (JS_IsException (input.value) || !ModelDataInput::readShape (ctx, input.value, update, false,
+		    index < capacities.size () ? capacities[index].vertexBytes : 0,
+		    index < capacities.size () ? capacities[index].indexBytes : 0, replace, index < capacities.size () ? capacities[index].indexWidth : 0)) {
 		return JS_EXCEPTION;
 	    }
 	    updates.push_back (std::move (update));
 	}
     } else {
 	ModelDataShape update;
-	if (!ModelDataInput::readShape (ctx, argv[0], update, replace,
-		capacities.empty () ? 0 : capacities[0].first, capacities.empty () ? 0 : capacities[0].second)) {
+	if (!ModelDataInput::readShape (ctx, argv[0], update, false,
+		capacities.empty () ? 0 : capacities[0].vertexBytes, capacities.empty () ? 0 : capacities[0].indexBytes, replace, capacities.empty () ? 0 : capacities[0].indexWidth)) {
 	    return JS_EXCEPTION;
 	}
 	updates.push_back (std::move (update));

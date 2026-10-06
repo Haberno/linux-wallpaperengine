@@ -163,25 +163,34 @@ const char* ModelData::applyData (const std::vector<Scripting::ModelDataShape>& 
 }
 
 const char* ModelData::replaceData (std::vector<Scripting::ModelDataShape> replacements) {
-    // Native also supports changing materials/layouts and adding/removing shapes.
-    // Those changes require rebuilding every retained layer's material passes.
-    if (replacements.size () != shapes.size ()) {
+    // Material/layout changes and added/deleted shapes require rebuilding every
+    // retained layer's material passes. Prefix replacements leave trailing shapes.
+    if (replacements.size () > shapes.size ()) {
 	return "IModelData.replaceData currently requires the existing shape count";
     }
     for (size_t index = 0; index < replacements.size (); ++index) {
 	const auto& replacement = replacements[index];
 	const auto& original = shapes[index].input;
-	const bool dynamic = original.vertexDynamic && (original.indexWidth == 0 || original.indexDynamic);
-	const bool growing = replacement.vertexFloatCount > original.vertices.size ()
-	    || (original.indexWidth != 0 && replacement.indexCount > original.indices.size () / original.indexWidth);
-	if (!replacement.hasVertices || replacement.vertices.empty ()
-	    || replacement.deleteShape || replacement.deleteIndices
-	    || replacement.vertexFormat != original.vertexFormat || replacement.strideBytes != original.strideBytes
-	    || replacement.material != original.material || replacement.indexWidth != original.indexWidth
-	    || (original.indexWidth != 0 && replacement.indices.empty ())
-	    || (dynamic && !growing && (replacement.vertices.size () != original.vertices.size ()
-		    || replacement.indices.size () != original.indices.size ()))) {
-	    return "IModelData.replaceData currently requires unchanged material/layout and complete static, safely backed dynamic, or growing dynamic shapes";
+	const bool recreate = (replacement.hasVertices && (!original.vertexDynamic || replacement.vertexFloatCount > original.vertices.size ()))
+	    || (replacement.indexWidth != 0 && (!original.indexDynamic || original.indexWidth == 0
+		|| replacement.indexCount > original.indices.size () / original.indexWidth));
+	if (replacement.deleteShape || replacement.deleteIndices
+	    || (!replacement.material.empty () && replacement.material != original.material)
+	    || (replacement.vertexFormat != 0 && (replacement.vertexFormat != original.vertexFormat || replacement.strideBytes != original.strideBytes))
+	    || (original.indexWidth == 0 && replacement.indexWidth != 0)
+	    || (recreate && (!replacement.hasVertices || replacement.vertices.empty ()
+		|| replacement.vertexFormat != original.vertexFormat || replacement.strideBytes != original.strideBytes
+		|| replacement.material != original.material || replacement.indexWidth != original.indexWidth
+		|| (original.indexWidth != 0 && replacement.indices.empty ())))) {
+	    return "IModelData.replaceData currently requires unchanged material/layout and complete recreated shapes";
+	}
+	if (!recreate && ((replacement.hasVertices && replacement.vertices.size () != original.vertices.size ())
+	    || (replacement.indexWidth != 0 && replacement.indexWidth == original.indexWidth
+		&& replacement.indices.size () != original.indices.size ()))) {
+	    return "Model replacement backing copy does not match the original allocation";
+	}
+	if (recreate && (replacement.vertexFloatCount * sizeof (float)) % original.strideBytes != 0) {
+	    return "Inconsistent vertex buffer size";
 	}
     }
     GLint previous = 0;
@@ -189,24 +198,32 @@ const char* ModelData::replaceData (std::vector<Scripting::ModelDataShape> repla
     for (size_t index = 0; index < replacements.size (); ++index) {
 	auto& shape = shapes[index];
 	auto& replacement = replacements[index];
-	const bool dynamic = shape.input.vertexDynamic && (shape.input.indexWidth == 0 || shape.input.indexDynamic);
-	if (dynamic && replacement.vertexFloatCount <= shape.input.vertices.size ()
-	    && (shape.input.indexWidth == 0 || replacement.indexCount <= shape.input.indices.size () / shape.input.indexWidth)) {
-	    // Native selects map/copy independently for each non-growing dynamic shape.
-	    // Keep its allocation flags and the applyData draw-count behavior.
-	    glBindBuffer (GL_ARRAY_BUFFER, shape.vertexBuffer);
-	    glBufferSubData (GL_ARRAY_BUFFER, 0, replacement.vertices.size () * sizeof (float), replacement.vertices.data ());
-	    if (shape.indexBuffer != GL_NONE) {
+	const bool recreate = (replacement.hasVertices && (!shape.input.vertexDynamic || replacement.vertexFloatCount > shape.input.vertices.size ()))
+	    || (replacement.indexWidth != 0 && (!shape.input.indexDynamic || shape.input.indexWidth == 0
+		|| replacement.indexCount > shape.input.indices.size () / shape.input.indexWidth));
+	if (!recreate) {
+	    // Native maps only supplied buffers and retains original flags. Its vertex
+	    // write/count change survives a subsequently rejected index buffer type.
+	    if (replacement.hasVertices) {
+		glBindBuffer (GL_ARRAY_BUFFER, shape.vertexBuffer);
+		glBufferSubData (GL_ARRAY_BUFFER, 0, replacement.vertices.size () * sizeof (float), replacement.vertices.data ());
+		const size_t count = shape.input.indexWidth == 0
+		    ? replacement.vertexFloatCount / shape.input.strideBytes : replacement.indexCount;
+		if (count > 0) {
+		    shape.drawCount = static_cast<GLsizei> (count);
+		}
+		shape.input.vertices = std::move (replacement.vertices);
+	    }
+	    if (replacement.indexWidth != 0) {
+		if (replacement.indexWidth != shape.input.indexWidth) {
+		    glBindBuffer (GL_ARRAY_BUFFER, static_cast<GLuint> (previous));
+		    return "Incorrect index buffer type";
+		}
 		glBindBuffer (GL_ARRAY_BUFFER, shape.indexBuffer);
 		glBufferSubData (GL_ARRAY_BUFFER, 0, replacement.indices.size (), replacement.indices.data ());
+		shape.drawCount = static_cast<GLsizei> (replacement.indexCount);
+		shape.input.indices = std::move (replacement.indices);
 	    }
-	    const size_t count = shape.input.indexWidth == 0
-		? replacement.vertexFloatCount / shape.input.strideBytes : replacement.indexCount;
-	    if (shape.input.indexWidth != 0 || count > 0) {
-		shape.drawCount = static_cast<GLsizei> (count);
-	    }
-	    shape.input.vertices = std::move (replacement.vertices);
-	    shape.input.indices = std::move (replacement.indices);
 	    continue;
 	}
 	// Parsing may have captured dynamic capacities before a property getter
