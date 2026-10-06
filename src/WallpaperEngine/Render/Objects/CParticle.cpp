@@ -2864,6 +2864,10 @@ void CParticle::setupPass () {
     m_passOverride->combos["THICKFORMAT"] = 1;
     if (m_useRopeRenderer) {
 	m_passOverride->shaderOverride = "genericropeparticle";
+	const auto& orientation = m_particle.renderers[0].orientation;
+	m_passOverride->combos["LWE_ROPE_SCREEN_FACING"]
+	    = getScene ().getScene ().camera.projection.isPerspective
+	    && orientation != "fixed" && orientation != "upright";
     }
     if (const auto texture = getTexture (); texture && texture->isAnimated ()) {
 	m_passOverride->combos["SPRITESHEET"] = 1;
@@ -3196,21 +3200,28 @@ void CParticle::applyParallaxToModelMatrix () {
 }
 
 void CParticle::updateParticleViewProjection () {
-    if (getScene ().getScene ().camera.projection.isPerspective) {
-	const auto& camera = getScene ().getCamera ();
-	m_viewProjectionMatrix = camera.getProjection () * camera.getLookAt ();
-	m_eyePosition = camera.getEye ();
-    } else if ((m_particle.flags & 4) != 0) {
-	// Native flag-4 draws use the same virtual camera as mixed image/model layers.
-	const auto& camera = getScene ().getCamera ();
-	const float fov = glm::radians (glm::clamp (camera.getFov (), 0.1f, 179.9f));
-	const float distance = 1.0f / (std::tan (fov * 0.5f) * camera.getProjection ()[1][1]);
+    const auto& camera = getScene ().getCamera ();
+    const bool perspective = getScene ().getScene ().camera.projection.isPerspective;
+    if ((m_particle.flags & 4) != 0) {
+	// Native flag-4 draws replace the projection in both scene modes. The
+	// perspective producer derives its virtual FOV from the ordinary Y scale.
+	const float projectionY = perspective ? glm::abs (camera.getProjection ()[1][1])
+	    : camera.getProjection ()[1][1];
+	const float fov = perspective ? 2.0f * std::atan (1.0f / (projectionY * 2000.0f))
+	    : glm::radians (glm::clamp (camera.getFov (), 0.1f, 179.9f));
+	const float distance = 1.0f / (std::tan (fov * 0.5f) * projectionY);
 	glm::mat4 view = camera.getLookAt ();
 	view[3][2] = -distance;
 	const auto& output = getScene ().getOutputSize ();
-	m_viewProjectionMatrix = glm::perspective (fov, output.x / output.y, 5.0f,
-	    glm::max (15000.0f, distance + 1000.0f)) * view;
-	m_eyePosition = glm::vec3 (glm::inverse (view)[3]);
+	glm::mat4 projection = glm::perspective (fov, output.x / output.y, 5.0f,
+	    glm::max (15000.0f, distance + 1000.0f));
+	if (perspective && camera.isYFlipped ()) projection[1][1] *= -1.0f;
+	m_viewProjectionMatrix = projection * view;
+	// The native override preserves the authored eye used by screen-facing ropes.
+	m_eyePosition = perspective ? camera.getEye () : glm::vec3 (glm::inverse (view)[3]);
+    } else if (perspective) {
+	m_viewProjectionMatrix = camera.getProjection () * camera.getLookAt ();
+	m_eyePosition = camera.getEye ();
     } else {
 	// Orthographic projection from scene camera
 	m_viewProjectionMatrix = getScene ().getCamera ().getProjection () * getScene ().getCamera ().getLookAt ();

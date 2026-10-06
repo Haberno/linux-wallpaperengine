@@ -2312,6 +2312,16 @@ const std::string& ShaderUnit::compile () {
 		R"(\bposition\s*\+=\s*right\s*\*\s*uvs\.x\s*\*\s*2\.0\s*-\s*1\.0\s*;)"
 	    );
 	    compatResult = std::regex_replace (compatResult, offsetRope, "position += right * (uvs.x * 2.0 - 1.0);");
+	    // Native screen ropes face from each segment midpoint toward the eye.
+	    // Preserve uniform facing for fixed/upright and orthographic draws.
+	    static const std::regex screenRope (
+		R"((^|\n)[ \t]*(vec3\s+eyeDirection\s*=\s*mul\s*\(\s*g_OrientationForward\s*,\s*CAST3X3\s*\(\s*g_ModelMatrixInverse\s*\)\s*\)\s*;))"
+	    );
+	    compatResult = std::regex_replace (compatResult, screenRope,
+		"$1#if LWE_ROPE_SCREEN_FACING\n"
+		"vec3 eyeModel = mul(vec4(g_EyePosition, 1.0), g_ModelMatrixInverse).xyz;\n"
+		"vec3 eyeDirection = normalize((endPosition + startPosition) * 0.5 - eyeModel);\n"
+		"#else\n$2\n#endif\n");
 	}
 	compatResult = this->applyLinkedVaryingCompatibility (std::move (compatResult));
 	compatResult = this->applyMissingFragmentVaryingCompatibility (std::move (compatResult));

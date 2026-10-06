@@ -937,3 +937,31 @@ TEST_CASE ("CPU puppet mask alpha precedes coverage multiplication and inversion
         }
     }
 }
+
+TEST_CASE ("perspective screen ropes use the native segment midpoint facing", "[shader][rope-facing]") {
+    const std::string source = R"(
+uniform mat4 g_ModelMatrixInverse;
+uniform vec3 g_OrientationForward;
+uniform vec3 g_EyePosition;
+attribute vec4 a_PositionVec4;
+attribute vec4 a_TexCoordVec4;
+#define in_ParticleTrailLength a_TexCoordVec4.w
+void main() {
+    vec3 startPosition = a_PositionVec4.xyz;
+    vec3 endPosition = a_TexCoordVec4.xyz;
+    vec3 eyeDirection = mul(g_OrientationForward, CAST3X3(g_ModelMatrixInverse));
+    vec3 trailRightStart = normalize(cross(eyeDirection, endPosition - startPosition));
+    gl_Position = vec4(startPosition + trailRightStart, 1.0);
+}
+)";
+    for (const int facing : { 0, 1, 0 }) {
+        CAPTURE (facing);
+        const auto shaders = compileLinked (source, "void main() { gl_FragColor = vec4(1.0); }",
+            { { "LWE_ROPE_SCREEN_FACING", facing } });
+        const auto preprocessed = GLSLContext::get ().preprocess (GLSLContext::UnitType_Vertex, shaders.first);
+        CHECK ((preprocessed.find ("eyeModel") != std::string::npos) == (facing != 0));
+        const auto translated = GLSLContext::get ().toGlsl (shaders.first, shaders.second);
+        REQUIRE_FALSE (translated.first.empty ());
+        REQUIRE_FALSE (translated.second.empty ());
+    }
+}
