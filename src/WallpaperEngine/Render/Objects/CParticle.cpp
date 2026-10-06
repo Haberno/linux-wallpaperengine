@@ -1576,7 +1576,8 @@ void WallpaperEngine::Render::Objects::applyParticleControlPointRemap (
     constexpr float epsilon = std::numeric_limits<float>::epsilon ();
     const bool positionOutput = remap.mode == ControlPointRemap::Mode::PositionToPosition
         || remap.mode == ControlPointRemap::Mode::LifetimeToPosition
-        || remap.mode == ControlPointRemap::Mode::LifetimeFractionToPosition;
+        || remap.mode == ControlPointRemap::Mode::LifetimeFractionToPosition
+        || remap.mode == ControlPointRemap::Mode::SizeToPosition;
     const float length = initializer ? glm::length (delta) : 0.0f;
     const bool tinyInitializer = initializer && length <= epsilon;
     // Operator position-output degeneracy remains outside the measured subset.
@@ -1592,6 +1593,8 @@ void WallpaperEngine::Render::Objects::applyParticleControlPointRemap (
                       || remap.mode == ControlPointRemap::Mode::PositionToLifetime
                       || remap.mode == ControlPointRemap::Mode::PositionToSpeed ? fraction
                       : remap.mode == ControlPointRemap::Mode::LifetimeFractionToPosition ? particle.getLifetimePos ()
+                      // Native size input reads birth +0x278 or working +0x270.
+                      : remap.mode == ControlPointRemap::Mode::SizeToPosition ? (initializer ? particle.initial.size : particle.size)
                       : particle.lifetime;
     const glm::vec3 minimum = remap.inputRangeMin->value->getVec3 ();
     glm::vec3 span = remap.inputRangeMax->value->getVec3 () - minimum;
