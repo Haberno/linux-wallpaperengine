@@ -13,6 +13,7 @@ class ModelData {
 public:
     struct Shape {
 	Scripting::ModelDataShape input;
+	std::string geometryMaterial;
 	Data::Model::MdlMesh layout;
 	uint32_t colorOffset = Data::Model::MdlMesh::AttributeAbsent;
 	GLuint vertexBuffer = GL_NONE;
@@ -28,6 +29,7 @@ public:
     const char* replaceData (std::vector<Scripting::ModelDataShape> replacements);
     std::vector<Shape> shapes;
     Data::Model::MdlMesh mesh;
+    uint64_t materialRevision = 0;
 
 private:
     static void updateLayout (Shape& shape);

@@ -16,8 +16,10 @@ using namespace WallpaperEngine::Data::Builders;
 CRenderable::CRenderable (Wallpapers::CScene& scene, const Object& object, const Material& material) :
     CObject (scene, object), Render::FBOProvider (&scene), m_material (material) { }
 
-void CRenderable::detectTexture () {
-    if (TextureMap* textures = &(*this->m_material.passes.begin ())->textures; !textures->empty ()) {
+void CRenderable::detectTexture () { detectTexture (m_material); }
+
+void CRenderable::detectTexture (const Material& material) {
+    if (TextureMap* textures = &(*material.passes.begin ())->textures; !textures->empty ()) {
 	std::string textureName = textures->begin ()->second;
 
 	if (textureName.find ("_rt_") == 0 || textureName.find ("_alias_") == 0) {

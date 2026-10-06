@@ -806,15 +806,15 @@ JSValue ScriptEngine::call (JSValue module, int argc, JSValue argv[], const char
     return JS_Call (this->m_context, function, module, argc, argv);
 }
 
-void ScriptEngine::queueScript (const std::string& key, DynamicValue& currentValue, ScriptableObject& object) {
-    this->queueScript (key, currentValue, &object);
+void ScriptEngine::queueScript (const std::string& key, DynamicValue& currentValue, ScriptableObject& object, bool deferInitialization) {
+    this->queueScript (key, currentValue, &object, deferInitialization);
 }
 
 void ScriptEngine::queueSceneScript (const std::string& key, DynamicValue& currentValue) {
     this->queueScript (key, currentValue, nullptr);
 }
 
-void ScriptEngine::queueScript (const std::string& key, DynamicValue& currentValue, ScriptableObject* object) {
+void ScriptEngine::queueScript (const std::string& key, DynamicValue& currentValue, ScriptableObject* object, bool deferInitialization) {
     const auto source = currentValue.getScriptSource ();
 
     static const bool traceScripts = std::getenv ("WPE_SCRIPT_TRACE") != nullptr;
@@ -963,7 +963,8 @@ void ScriptEngine::queueScript (const std::string& key, DynamicValue& currentVal
     this->m_scriptModuleOrder.emplace_back (&inserted.first->first, &inserted.first->second);
 
     // Constructor registrations must wait until the complete renderer is in the scene.
-    if (this->m_sceneLayersReady && (object == nullptr || this->m_scene.getObject (object->getId ()) == object)) {
+    if (!deferInitialization && this->m_sceneLayersReady
+        && (object == nullptr || this->m_scene.getObject (object->getId ()) == object)) {
 	this->initializeModule (key, inserted.first->second);
     }
 }
@@ -1041,6 +1042,14 @@ void ScriptEngine::unregisterScriptable (const ScriptableObject* object) {
 	JS_FreeValue (this->m_context, it->second.module);
 	it = this->m_scriptModules.erase (it);
     }
+}
+
+void ScriptEngine::unregisterPropertyScript (const std::string& key, const ScriptableObject* object) {
+    const auto found = m_scriptModules.find (key);
+    if (found == m_scriptModules.end () || found->second.object != object) return;
+    std::erase_if (m_scriptModuleOrder, [&] (const auto& entry) { return entry.second == &found->second; });
+    JS_FreeValue (m_context, found->second.module);
+    m_scriptModules.erase (found);
 }
 
 void ScriptEngine::initializeQueuedScripts (ScriptableObject* target) {
@@ -1236,6 +1245,8 @@ void ScriptEngine::tick () {
 	if (!module.initialized || !module.updateEnabled) {
 	    continue;
 	}
+	auto* previousModule = this->m_runningModule;
+	ScopeGuard restoreModule ([&] { this->m_runningModule = previousModule; });
 	this->m_runningModule = &module;
 
 	const bool angles = isAnglesProperty (key);

@@ -16,6 +16,8 @@
 #include "WallpaperEngine/Data/Model/MdlAnimation.h"
 #include "WallpaperEngine/Data/Model/MdlMorph.h"
 #include "WallpaperEngine/Logging/Log.h"
+#include "WallpaperEngine/Data/Parsers/MaterialParser.h"
+#include "WallpaperEngine/Scripting/ScriptEngine.h"
 
 using namespace WallpaperEngine;
 using namespace WallpaperEngine::Render::Objects;
@@ -51,6 +53,7 @@ ModelData::ModelData (std::vector<Scripting::ModelDataShape> input) {
     for (auto& source : input) {
 	Shape shape;
 	shape.input = std::move (source);
+	shape.geometryMaterial = shape.input.material;
 	shape.drawCount = static_cast<GLsizei> (shape.input.indexWidth == 0
 	    ? shape.input.vertices.size () * sizeof (float) / shape.input.strideBytes
 	    : shape.input.indices.size () / shape.input.indexWidth);
@@ -177,8 +180,8 @@ const char* ModelData::applyData (const std::vector<Scripting::ModelDataShape>& 
 }
 
 const char* ModelData::replaceData (std::vector<Scripting::ModelDataShape> replacements) {
-    // The same shader remains compatible when every original semantic is kept.
-    // Material changes and semantic removals still require shader validation.
+    // Retained material changes bypass native shader validation. Recreated
+    // material/layout combinations still require its compiled input signature.
     if (replacements.size () > shapes.size ()) {
 	return "IModelData.replaceData currently requires the existing shape count";
     }
@@ -190,8 +193,11 @@ const char* ModelData::replaceData (std::vector<Scripting::ModelDataShape> repla
 	const bool recreate = layoutChanged || (replacement.deleteIndices && original.indexWidth != 0)
 	    || (replacement.hasVertices && (!original.vertexDynamic || replacement.vertexFloatCount > original.vertices.size ()))
 	    || (replacement.indexWidth != 0 && (!original.indexDynamic || replacement.indexCount > originalIndexCount));
+	if (recreate && original.material != shapes[index].geometryMaterial) {
+	    return "IModelData.replaceData requires compiled shader validation after retained material changes";
+	}
 	if (replacement.deleteShape
-	    || (!replacement.material.empty () && replacement.material != original.material)
+	    || (recreate && !replacement.material.empty () && replacement.material != original.material)
 	    || (layoutChanged && ((replacement.vertexFormat & original.vertexFormat) != original.vertexFormat
 		|| (replacement.vertexFormat & ~0x800fu) != 0))
 	    || (!layoutChanged && replacement.vertexFormat != 0 && replacement.strideBytes != original.strideBytes)
@@ -234,6 +240,10 @@ const char* ModelData::replaceData (std::vector<Scripting::ModelDataShape> repla
 	    || (replacement.hasVertices && (!shape.input.vertexDynamic || replacement.vertexFloatCount > shape.input.vertices.size ()))
 	    || (replacement.indexWidth != 0 && (!shape.input.indexDynamic || replacement.indexCount > originalIndexCount));
 	if (!recreate) {
+	    if (!replacement.material.empty () && replacement.material != shape.input.material) {
+		shape.input.material = std::move (replacement.material);
+		++materialRevision;
+	    }
 	    // Native maps only supplied buffers and retains original flags. Its vertex
 	    // write/count change survives a subsequently rejected index buffer type.
 	    if (replacement.hasVertices) {
@@ -317,16 +327,9 @@ CModel::CModel (Wallpapers::CScene& scene, const Model3D& model) :
     this->registerProperty ("size", this->m_size);
     this->registerProperty ("castshadow", *model.castShadow->value);
     this->registerProperty ("perspective", *model.perspective->value);
-    for (size_t materialIndex = 0; materialIndex < model.materials.size (); ++materialIndex) {
-	const auto& material = *model.materials[materialIndex];
-	for (size_t passIndex = 0; passIndex < material.passes.size (); ++passIndex) {
-	    const auto scope = "material_" + std::to_string (materialIndex) + "_pass_" + std::to_string (passIndex) + "_";
-	    for (const auto& [name, setting] : material.passes[passIndex]->constants) {
-		if (setting->animation != nullptr || setting->value->getScriptSource ().has_value ()) {
-		    registerProperty (scope + name, *setting, scope);
-		}
-	    }
-	}
+    if (m_modelData) m_materialRevision = m_modelData->materialRevision;
+    for (size_t index = 0; index < model.materials.size (); ++index) {
+        registerMaterialProperties (index, *model.materials[index]);
     }
     const auto addLayer = [&] (const ImageAnimationLayer* settings, const MdlAnimationClip* clip) {
 	auto layer = std::make_unique<AnimationLayer> ();
@@ -363,6 +366,10 @@ CModel::CModel (Wallpapers::CScene& scene, const Model3D& model) :
 }
 
 CModel::~CModel () {
+    for (size_t index = 0; index < m_runtimeMaterials.size (); ++index) {
+        if (m_runtimeMaterials[index]) unregisterMaterialProperties (index, *m_runtimeMaterials[index]);
+    }
+
     for (const auto& pass : this->m_passes) {
 	delete pass;
     }
@@ -440,15 +447,31 @@ void CModel::setup () {
 		? static_cast<GLsizei> (submesh.indices.size ())
 		: 0;
 	}
-	const auto& material = this->m_model.materials[submeshIndex];
+        this->m_submeshes.push_back (std::move (buffers));
+    }
+    std::vector<const Material*> materials;
+    for (const auto& material : m_model.materials) materials.push_back (material.get ());
+    setupMaterialPasses (materials);
+
+    if (this->getScene ().getLights ().shadowViewCount > 0) {
+	this->setupShadowProgram ();
+	this->m_shadowBounds = ModelBounds (this->m_model.mesh, this->m_skinningEnabled ? this->m_gpuSkinBones.size () : 0);
+    }
+
+    this->m_initialized = true;
+}
+
+void CModel::setupMaterialPasses (const std::vector<const Material*>& materials) {
+    m_renderSortClasses.clear ();
+    for (size_t submeshIndex = 0; submeshIndex < materials.size (); ++submeshIndex) {
+	const auto& material = materials[submeshIndex];
 	const auto opaquePass = std::find_if (material->passes.begin (), material->passes.end (), [] (const auto& pass) {
 	    return pass->blending == BlendingMode_Normal;
 	});
-	buffers.castsShadow = opaquePass != material->passes.end ();
-	buffers.shadowCulling = buffers.castsShadow && (*opaquePass)->cullmode == CullingMode_Normal;
-	this->m_submeshes.push_back (buffers);
+	m_submeshes[submeshIndex].castsShadow = opaquePass != material->passes.end ();
+	m_submeshes[submeshIndex].shadowCulling = m_submeshes[submeshIndex].castsShadow && (*opaquePass)->cullmode == CullingMode_Normal;
 
-	for (const auto& cur : this->m_model.materials[submeshIndex]->passes) {
+	for (const auto& cur : materials[submeshIndex]->passes) {
 	    ComboMap runtimeCombos;
 	    // Thin translucent model surfaces must receive light from either side of
 	    // their authored normal. Otherwise a back-lit sheet collapses to black
@@ -469,10 +492,11 @@ void CModel::setup () {
 		runtimeCombos.insert_or_assign ("BONECOUNT", static_cast<int> (this->m_gpuSkinBones.size ()));
 	    }
 
-	    auto* pass = new Effects::CPass (
+	    auto pass = std::make_unique<Effects::CPass> (
 		*this, std::make_shared<FBOProvider> (this), *cur, std::nullopt, std::nullopt, std::nullopt,
-		std::move (runtimeCombos)
+		std::move (runtimeCombos), true
 	    );
+	    pass->initialize ();
 
 	    pass->setDestination (this->getScene ().getFBO ());
 	    pass->setInput (this->m_texture);
@@ -487,13 +511,12 @@ void CModel::setup () {
 		    "g_Bones", this->m_gpuSkinBones.data (), static_cast<int> (this->m_gpuSkinBones.size ())
 		);
 	    }
-	    this->setupGeometryCallback (pass, submeshIndex);
+	    this->setupGeometryCallback (pass.get (), submeshIndex);
 
-	    this->m_passes.push_back (pass);
+	    this->m_passes.push_back (pass.release ());
 	    this->getScene ().loadingCheckpoint ();
 	}
     }
-
     std::vector<BlendingMode> passModes;
     passModes.reserve (this->m_passes.size ());
     for (const auto* pass : this->m_passes) {
@@ -514,12 +537,93 @@ void CModel::setup () {
 	}
     }
 
-    if (this->getScene ().getLights ().shadowViewCount > 0) {
-	this->setupShadowProgram ();
-	this->m_shadowBounds = ModelBounds (this->m_model.mesh, this->m_skinningEnabled ? this->m_gpuSkinBones.size () : 0);
-    }
+}
 
-    this->m_initialized = true;
+void CModel::registerMaterialProperties (size_t index, const Material& material, bool deferInitialization) {
+    for (size_t passIndex = 0; passIndex < material.passes.size (); ++passIndex) {
+        const auto scope = "material_" + std::to_string (index) + "_pass_" + std::to_string (passIndex) + "_";
+        for (const auto& [name, setting] : material.passes[passIndex]->constants) {
+            if (setting->animation != nullptr || setting->value->getScriptSource ().has_value ()) {
+                registerProperty (scope + name, *setting, scope, deferInitialization);
+            }
+        }
+    }
+}
+
+void CModel::unregisterMaterialProperties (size_t index, const Material& material) {
+    for (size_t passIndex = 0; passIndex < material.passes.size (); ++passIndex) {
+        const auto scope = "material_" + std::to_string (index) + "_pass_" + std::to_string (passIndex) + "_";
+        for (const auto& [name, setting] : material.passes[passIndex]->constants) {
+            if (setting->animation != nullptr || setting->value->getScriptSource ().has_value ()) {
+                unregisterProperty (scope + name);
+            }
+        }
+    }
+}
+
+void CModel::syncModelDataMaterials () {
+    if (!m_modelData || !m_initialized || m_materialRevision == m_modelData->materialRevision
+        || getScene ().getScriptEngine ().getRunningModule () != nullptr) return;
+    // Synchronize after hooks, including hidden consumers, before shadow/sort.
+    // New material init hooks may publish another revision for the next frame.
+    m_materialRevision = m_modelData->materialRevision;
+    m_runtimeMaterials.resize (m_modelData->shapes.size ());
+    std::vector<MaterialUniquePtr> replacements (m_runtimeMaterials.size ());
+    std::vector<const Material*> materials;
+    try {
+        for (size_t index = 0; index < m_runtimeMaterials.size (); ++index) {
+            const auto& current = m_runtimeMaterials[index] ? m_runtimeMaterials[index] : m_model.materials[index];
+            const auto& path = m_modelData->shapes[index].input.material;
+            if (path != current->filename) {
+                replacements[index] = Data::Parsers::MaterialParser::load (getScene ().getScene ().project, path, true);
+                if (replacements[index]->passes.empty ()) throw std::runtime_error ("Model material has no passes");
+            }
+            materials.push_back (replacements[index] ? replacements[index].get () : current.get ());
+        }
+    } catch (const std::exception& error) {
+        sLog.error ("Model material replacement failed: ", error.what ());
+        return;
+    }
+    if (std::ranges::none_of (replacements, [] (const auto& material) { return material != nullptr; })) return;
+    const auto previousTexture = m_texture;
+    const auto previousAnimationTime = m_animationTime;
+    auto previousClasses = std::move (m_renderSortClasses);
+    auto previousPasses = std::move (m_passes);
+    std::vector<std::pair<bool, bool>> previousShadow;
+    for (const auto& buffers : m_submeshes) previousShadow.emplace_back (buffers.castsShadow, buffers.shadowCulling);
+    try {
+        if (replacements[0]) {
+            m_texture.reset ();
+            detectTexture (*replacements[0]);
+            if (!m_texture) m_texture = std::make_shared<CFBO> ("", TextureFormat_ARGB8888, TextureFlags_NoFlags, 1, 1, 1, 1, 1);
+            m_animationTime = 0.0;
+            for (const auto& frame : m_texture->getFrames ()) m_animationTime += frame->frametime;
+        }
+        setupMaterialPasses (materials);
+    } catch (const std::exception& error) {
+        for (auto* pass : m_passes) delete pass;
+        m_passes = std::move (previousPasses);
+        m_renderSortClasses = std::move (previousClasses);
+        for (size_t index = 0; index < m_submeshes.size (); ++index) {
+            m_submeshes[index].castsShadow = previousShadow[index].first;
+            m_submeshes[index].shadowCulling = previousShadow[index].second;
+        }
+        m_texture = previousTexture;
+        m_animationTime = previousAnimationTime;
+        sLog.error ("Model material replacement failed: ", error.what ());
+        return;
+    }
+    // Passes and queued scripts retain references into material constants.
+    // Retire them before replacing their owners, preserving unrelated keys.
+    for (auto* pass : previousPasses) delete pass;
+    for (size_t index = 0; index < replacements.size (); ++index) {
+        if (!replacements[index]) continue;
+        const auto& current = m_runtimeMaterials[index] ? m_runtimeMaterials[index] : m_model.materials[index];
+        unregisterMaterialProperties (index, *current);
+        m_runtimeMaterials[index] = std::move (replacements[index]);
+        registerMaterialProperties (index, *m_runtimeMaterials[index], true);
+    }
+    getScene ().getScriptEngine ().initializeQueuedScripts (this);
 }
 
 std::vector<size_t> CModel::calculatePassRenderPermutation (const std::vector<BlendingMode>& modes) {
@@ -925,6 +1029,7 @@ void CModel::render () { this->renderPasses (std::nullopt); }
 void CModel::render (const RenderSortClass renderClass) { this->renderPasses (renderClass); }
 
 void CModel::prepareRender () {
+    syncModelDataMaterials ();
     // Publish script-controlled poses after callbacks, including hidden attachment sources.
     this->updateAnimationPose ();
     // Material sorting may prepare an attached model before its parent.

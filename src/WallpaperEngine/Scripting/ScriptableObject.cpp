@@ -77,14 +77,14 @@ const UserSetting* ScriptableObject::getPropertySetting (const std::string& name
 }
 
 void ScriptableObject::registerProperty (
-    const std::string& name, const UserSetting& setting, const std::string& animationScope
+    const std::string& name, const UserSetting& setting, const std::string& animationScope, bool deferInitialization
 ) {
     if (setting.animation != nullptr) {
 	m_animations.insert_or_assign (name, setting.animation.get ());
 	if (!setting.animation->name.empty ())
 	    m_animations.insert_or_assign (animationScope + setting.animation->name, setting.animation.get ());
     }
-    registerProperty (name, *setting.value, animationScope, &setting);
+    registerProperty (name, *setting.value, animationScope, &setting, deferInitialization);
     // Resolve after each registration: a child can precede its clock property
     // in both serialized data and a derived renderer's registration order.
     for (const auto& [property, entry] : m_properties) {
@@ -103,7 +103,8 @@ void ScriptableObject::registerProperty (
 }
 
 void ScriptableObject::registerProperty (
-    const std::string& name, DynamicValue& value, const std::string& animationScope, const UserSetting* setting
+    const std::string& name, DynamicValue& value, const std::string& animationScope, const UserSetting* setting,
+    bool deferInitialization
 ) {
     // Derived renderers repeat some common registrations and add their own
     // properties. Both this map and the queued script must refer to the final
@@ -118,5 +119,22 @@ void ScriptableObject::registerProperty (
 
     // Re-registering the same value is safe: the keyed module is initialized only
     // once. The constructor must select the final value before its first queue.
-    this->getScene ().getScriptEngine ().queueScript (it->second.key, it->second.value, *this);
+    this->getScene ().getScriptEngine ().queueScript (it->second.key, it->second.value, *this, deferInitialization);
+}
+
+void ScriptableObject::unregisterProperty (const std::string& name) {
+    const auto found = m_properties.find (name);
+    if (found == m_properties.end ()) return;
+    getScene ().getScriptEngine ().unregisterPropertyScript (found->second.key, this);
+    if (found->second.setting != nullptr && found->second.setting->animation != nullptr) {
+        const auto* animation = found->second.setting->animation.get ();
+        std::erase_if (m_animations, [animation] (const auto& entry) { return entry.second == animation; });
+        for (const auto& [property, entry] : m_properties) {
+            if (entry.setting != nullptr && entry.setting->animation != nullptr
+                && entry.setting->animation->timelineParent == animation) {
+                entry.setting->animation->timelineParent = nullptr;
+            }
+        }
+    }
+    m_properties.erase (found);
 }

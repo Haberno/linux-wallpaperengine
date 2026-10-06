@@ -1030,8 +1030,10 @@ void CScene::renderFrame (const glm::ivec4& viewport) {
     // refresh light uniform state after scripts have moved the lights
     this->updateLightState ();
 
-    // Pose, visibility and model transforms are shared by every light and material pass.
-    for (const auto& object : this->m_objectsByRenderOrder) {
+    // Material init hooks can append or reorder layers; destruction waits for the next frame.
+    // Prepare this frame's existing models once. Init-created models join the next preparation.
+    const auto modelsToPrepare = this->m_objectsByRenderOrder;
+    for (const auto& object : modelsToPrepare) {
 	if (auto* model = dynamic_cast<Objects::CModel*> (object)) model->prepareRender ();
     }
 

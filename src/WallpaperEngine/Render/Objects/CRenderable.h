@@ -54,6 +54,7 @@ public:
 
 protected:
     void detectTexture ();
+    void detectTexture (const Material& material);
 
     double m_animationTime = 0.0;
 

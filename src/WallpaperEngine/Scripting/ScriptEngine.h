@@ -104,7 +104,8 @@ public:
      * @param currentValue The current value to pass to update()
      * @return The modified value from update(), or a copy of currentValue on error
      */
-    void queueScript (const std::string& key, DynamicValue& currentValue, ScriptableObject& object);
+    void queueScript (const std::string& key, DynamicValue& currentValue, ScriptableObject& object,
+        bool deferInitialization = false);
 
     /** Queue a script-backed scene setting such as fog color. Scene settings have
      * thisScene/engine globals but intentionally no thisLayer object. */
@@ -123,6 +124,8 @@ public:
      * setup() throws — so without this the engine keeps running scripts against freed memory.
      */
     void unregisterScriptable (const ScriptableObject* object);
+    /** Retire one material property between hooks without invalidating its layer. */
+    void unregisterPropertyScript (const std::string& key, const ScriptableObject* object);
 
     /**
      * Runs a frame tick in the javascript engine. Dispatches any pending events,
@@ -191,7 +194,8 @@ public:
 
 private:
     JSValue call (JSValue module, int argc, JSValueConst argv[], const char* name);
-    void queueScript (const std::string& key, DynamicValue& currentValue, ScriptableObject* object);
+    void queueScript (const std::string& key, DynamicValue& currentValue, ScriptableObject* object,
+        bool deferInitialization = false);
     void callLifecycleHook (const std::string& key, LoadedModule& module, const char* hook);
     void initializeModule (const std::string& key, LoadedModule& module);
     void dispatchScreenResize ();

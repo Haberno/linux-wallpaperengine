@@ -93,6 +93,10 @@ private:
     };
 
     void setupGeometryCallback (Effects::CPass* pass, size_t submeshIndex);
+    void registerMaterialProperties (size_t index, const Material& material, bool deferInitialization = false);
+    void unregisterMaterialProperties (size_t index, const Material& material);
+    void setupMaterialPasses (const std::vector<const Material*>& materials);
+    void syncModelDataMaterials ();
     void setupShadowProgram ();
     void renderPasses (std::optional<RenderSortClass> renderClass);
     void updateAnimationPose () const;
@@ -103,6 +107,8 @@ private:
 
     const Model3D& m_model;
     std::shared_ptr<ModelData> m_modelData;
+    std::vector<MaterialUniquePtr> m_runtimeMaterials;
+    uint64_t m_materialRevision = 0;
     /** Legacy SceneScript compatibility: published model layers read thisLayer.size. */
     Data::Model::DynamicValue m_size;
     // Stable addresses for the timelines registered with SceneScript. Controllers

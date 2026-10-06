@@ -29,10 +29,12 @@ public:
     virtual void prepareAnimationEvents () { }
 
 protected:
+    void unregisterProperty (const std::string& name);
     void registerProperty (const std::string& name, DynamicValue& value, const std::string& animationScope = {},
-	const UserSetting* setting = nullptr);
+	const UserSetting* setting = nullptr, bool deferInitialization = false);
     void registerProperty (
-	const std::string& name, const UserSetting& setting, const std::string& animationScope = {}
+	const std::string& name, const UserSetting& setting, const std::string& animationScope = {},
+        bool deferInitialization = false
     );
     void registerAnimation (const std::string& key, PropertyAnimation& animation) {
 	m_animations.insert_or_assign (key, &animation);
