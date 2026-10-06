@@ -78,7 +78,7 @@ CScene::CScene (
     std::set<std::string> precachedTextures;
     std::map<std::string, std::pair<int, int>> precachedTextureMetadata;
     for (const auto& material : scene->precachedMaterials) {
-	for (const auto& pass : material->passes) {
+	for (const auto& pass : material->passes | std::views::take (1)) {
 	    TextureMap textures = pass->textures;
 	    std::set<int> formatRequests;
 	    bool shaderMetadataReady = false;

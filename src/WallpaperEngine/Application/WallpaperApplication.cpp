@@ -858,7 +858,9 @@ std::set<std::string> collectProjectTextures (const Project& project) {
     }
 
     for (const auto& material : project.wallpaper->as<Scene> ()->precachedMaterials) {
-	collectMaterialTextures (*material, result);
+	if (material->passes.empty ()) continue;
+	collectTextureNames (material->passes.front ()->textures, result);
+	collectTextureNames (material->passes.front ()->usertextures, result);
     }
 
     for (const auto& object : project.wallpaper->as<Scene> ()->objects) {
