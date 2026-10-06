@@ -736,7 +736,7 @@ static JSValue property_animation_command (
 	return JS_UNDEFINED;
     }
     auto& animation = *found->second;
-    const float time = container->object.getScene ().getTime ();
+    const double time = container->object.getScene ().getElapsedTime ();
     double value = 0.0;
     switch (magic) {
 	case AnimationCommand_Play: animation.play (time); break;
@@ -1057,7 +1057,7 @@ scriptable_object_animation_command (JSContext* ctx, JSValueConst this_val, int 
     auto* container = scriptable_container (this_val);
     if (auto* model = scriptable_model (this_val)) {
 	bool playing = false;
-	const float time = model->getScene ().getTime ();
+	const double time = model->getScene ().getElapsedTime ();
 	for (size_t i = 0; i < model->getAnimationLayerCount (); ++i) {
 	    auto& animation = model->getAnimationLayer (i)->timeline;
 	    switch (magic) {

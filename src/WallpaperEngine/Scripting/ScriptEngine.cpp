@@ -1216,7 +1216,7 @@ void ScriptEngine::tick () {
     for (auto* object : animatedObjects) object->prepareAnimationEvents ();
     for (auto* object : animatedObjects) {
 	for (const auto& [name, animation] : object->getAnimations ()) {
-	    for (const auto& event : animation->takeEvents (m_scene.getTime ())) {
+	    for (const auto& event : animation->takeEvents (m_scene.getElapsedTime ())) {
 		std::string scope;
 		for (const auto& [propertyName, property] : object->getProperties ()) {
 		    if (property.setting != nullptr && property.setting->animation.get () == animation) {

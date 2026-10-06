@@ -678,7 +678,7 @@ void CModel::setupGeometryCallback (Effects::CPass* pass, size_t submeshIndex) {
 }
 
 void CModel::syncAnimationLayers () const {
-    const float time = getScene ().getTime ();
+    const double time = getScene ().getElapsedTime ();
     for (const auto& layer : m_animationLayers) {
 	if (layer->settings == nullptr) continue;
 	const auto& settings = *layer->settings;
@@ -697,7 +697,7 @@ void CModel::syncAnimationLayers () const {
 	    } else {
 		layer->timeline.events.clear ();
 	    }
-	    m_poseTime = std::numeric_limits<float>::quiet_NaN ();
+	    m_poseTime = std::numeric_limits<double>::quiet_NaN ();
 	}
 	const float rate = settings.rate->value->getFloat ();
 	if (rate != layer->timeline.rate) layer->timeline.setRate (rate, time);
@@ -706,7 +706,7 @@ void CModel::syncAnimationLayers () const {
 
 void CModel::prepareAnimationEvents () {
     syncAnimationLayers ();
-    const float time = getScene ().getTime ();
+    const double time = getScene ().getElapsedTime ();
     // Keep a completed clip until its last event interval has been dispatched.
     // Retire only here, never from a callback while ScriptEngine iterates events.
     std::erase_if (m_animationLayers, [&] (const auto& layer) {
@@ -752,7 +752,7 @@ CModel::AnimationLayer* CModel::playSingleAnimation (const std::string& name, co
     layer->timeline.mode = "single";
     layer->timeline.name = found->name;
     layer->timeline.events = found->events;
-    layer->timeline.setFrame (0.0f, getScene ().getTime ());
+    layer->timeline.setFrame (0.0f, getScene ().getElapsedTime ());
     registerAnimation (layer->key, layer->timeline);
     auto* result = layer.get ();
     // Native one-shot layers blend over the base animation, before additive detail.
@@ -760,7 +760,7 @@ CModel::AnimationLayer* CModel::playSingleAnimation (const std::string& name, co
 	return other->settings != nullptr && other->settings->additive->value->getBool ();
     });
     m_animationLayers.insert (position, std::move (layer));
-    m_poseTime = std::numeric_limits<float>::quiet_NaN ();
+    m_poseTime = std::numeric_limits<double>::quiet_NaN ();
     return result;
 }
 
@@ -771,7 +771,7 @@ void CModel::animationControlsChanged (PropertyAnimation& animation) {
 	    layer->settings->rate->value->update (animation.rate, DynamicValue::UpdateSource::User);
 	}
     }
-    m_poseTime = std::numeric_limits<float>::quiet_NaN ();
+    m_poseTime = std::numeric_limits<double>::quiet_NaN ();
 }
 
 void CModel::updateAnimationPose () const {
@@ -781,7 +781,7 @@ void CModel::updateAnimationPose () const {
     }
 
     std::vector<MdlActiveAnimation> activeAnimations;
-    const float sceneTime = this->getScene ().getTime ();
+    const double sceneTime = this->getScene ().getElapsedTime ();
     syncAnimationLayers ();
     if (sceneTime == this->m_poseTime) {
 	return;

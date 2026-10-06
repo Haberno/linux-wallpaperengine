@@ -45,9 +45,9 @@ struct PropertyAnimation {
     std::vector<Event> events;
     float rate = 1.0f;
     bool playing = true;
-    float anchorTime = 0.0f;
-    float anchorFrame = 0.0f;
-    float previousEventFrame = -0.0001f;
+    double anchorTime = 0.0;
+    double anchorFrame = 0.0;
+    double previousEventFrame = -0.0001f;
     /** A linked property uses its parent's playback clock, retaining its own curves. */
     std::string parentKey;
     PropertyAnimation* timelineParent = nullptr;
@@ -55,16 +55,16 @@ struct PropertyAnimation {
 	return timelineParent != nullptr ? timelineParent->playbackClock () : *this;
     }
 
-    [[nodiscard]] float elapsedFrame (float time) const;
-    [[nodiscard]] float frameAt (float time) const;
-    [[nodiscard]] bool isPlaying (float time) const;
-    void play (float time);
-    void pause (float time);
-    void stop (float time);
-    void setFrame (float frame, float time);
-    void setRate (float value, float time);
+    [[nodiscard]] double elapsedFrame (double time) const;
+    [[nodiscard]] float frameAt (double time) const;
+    [[nodiscard]] bool isPlaying (double time) const;
+    void play (double time);
+    void pause (double time);
+    void stop (double time);
+    void setFrame (float frame, double time);
+    void setRate (float value, double time);
     /** Events crossed since the previous tick, including loop and mirror boundaries. */
-    [[nodiscard]] std::vector<Event> takeEvents (float time);
+    [[nodiscard]] std::vector<Event> takeEvents (double time);
 
     /**
      * Samples one channel at the given time (in seconds), using the authored
