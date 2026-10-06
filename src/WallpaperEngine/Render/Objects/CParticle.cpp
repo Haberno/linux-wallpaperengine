@@ -14,6 +14,9 @@
 #include <glm/gtc/constants.hpp>
 #include <glm/gtc/matrix_transform.hpp>
 #include <limits>
+#if defined(__SSE__)
+#include <xmmintrin.h>
+#endif
 
 extern float g_Time;
 extern float g_Daytime;
@@ -1587,6 +1590,9 @@ void WallpaperEngine::Render::Objects::applyParticleControlPointRemap (
     const float fraction = zeroInput ? 0.0f : glm::dot (particle.position - start, delta) / lengthSquared;
     float input = 0.0f;
     switch (remap.input) {
+        case ControlPointRemap::Input::ControlPoint:
+        case ControlPointRemap::Input::DeltaToPoint:
+        case ControlPointRemap::Input::DirectionToPoint:
         case ControlPointRemap::Input::Color:
         case ControlPointRemap::Input::Position:
         case ControlPointRemap::Input::Velocity: break;
@@ -1609,15 +1615,39 @@ void WallpaperEngine::Render::Objects::applyParticleControlPointRemap (
         case ControlPointRemap::Input::Rotation: input = particle.rotation.z; break;
         case ControlPointRemap::Input::AngularSpeed: input = angularVelocityAvailable ? particle.angularVelocity.z : 0.0f; break;
     }
-    const bool vectorInput = remap.input == ControlPointRemap::Input::Position
+    const bool pointInput = remap.input == ControlPointRemap::Input::ControlPoint
+        || remap.input == ControlPointRemap::Input::DeltaToPoint || remap.input == ControlPointRemap::Input::DirectionToPoint;
+    const bool vectorInput = pointInput || remap.input == ControlPointRemap::Input::Position
         || remap.input == ControlPointRemap::Input::Velocity || remap.input == ControlPointRemap::Input::Color;
     glm::vec3 inputValue (input);
     if (vectorInput) {
-        // Particle storage is reflected Y; remap components use authored coordinates.
-        inputValue = remap.input == ControlPointRemap::Input::Color
-            ? (initializer ? particle.initial.color : particle.color)
-            : (remap.input == ControlPointRemap::Input::Position ? particle.position : particle.velocity)
-                * glm::vec3 (1.0f, -1.0f, 1.0f);
+        if (pointInput) {
+            inputValue = controlPoints[remap.inputControlPoint0].position;
+            if (remap.input != ControlPointRemap::Input::ControlPoint) inputValue -= particle.position;
+            if (remap.input == ControlPointRemap::Input::DirectionToPoint) {
+                const float squared = glm::dot (inputValue, inputValue);
+                // Native masks exact zero before rsqrt; nonzero subnormal squared
+                // distances produce nonfinite values and remain outside this subset.
+                if (squared > 0.0f && squared < std::numeric_limits<float>::min ()) return;
+                if (squared > 0.0f) {
+#if defined(__SSE__)
+                    // Preserve the native estimate: exact normalization can cross
+                    // a following saw/square phase boundary even on axis vectors.
+                    const float inverseLength = _mm_cvtss_f32 (_mm_rsqrt_ss (_mm_set_ss (squared)));
+#else
+                    const float inverseLength = 1.0f / std::sqrt (squared);
+#endif
+                    inputValue *= inverseLength;
+                } else inputValue = glm::vec3 (0.0f);
+            }
+            inputValue *= glm::vec3 (1.0f, -1.0f, 1.0f);
+        } else {
+            // Particle storage is reflected Y; remap components use authored coordinates.
+            inputValue = remap.input == ControlPointRemap::Input::Color
+                ? (initializer ? particle.initial.color : particle.color)
+                : (remap.input == ControlPointRemap::Input::Position ? particle.position : particle.velocity)
+                    * glm::vec3 (1.0f, -1.0f, 1.0f);
+        }
         using Component = ControlPointRemap::Component;
         switch (remap.inputComponent) {
             case Component::All: break;

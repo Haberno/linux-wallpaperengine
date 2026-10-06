@@ -1036,6 +1036,8 @@ static std::optional<ControlPointRemap> parseControlPointRemap (
         : input == "angularspeed" ? Input::AngularSpeed : input == "runtime" ? Input::Runtime
         : input == "timeofday" ? Input::TimeOfDay
         : input == "particlesystemtime" ? Input::ParticleSystemTime
+        : input == "controlpoint" ? Input::ControlPoint : input == "deltatocontrolpoint" ? Input::DeltaToPoint
+        : input == "directiontocontrolpoint" ? Input::DirectionToPoint
         : input == "color" ? Input::Color : input == "position" ? Input::Position : input == "velocity" ? std::optional (Input::Velocity) : std::nullopt;
     const std::optional<Output> parsedOutput = output == "positionbetweentwocontrolpoints" ? Output::BetweenPoints
         : output == "distancetocontrolpoint" ? Output::DistanceToPoint
@@ -1048,9 +1050,12 @@ static std::optional<ControlPointRemap> parseControlPointRemap (
         : transform == "saw" ? Transform::Saw : transform == "triangle" ? Transform::Triangle
         : transform == "simplexnoise" ? Transform::SimplexNoise
         : transform == "fbmnoise" ? std::optional (Transform::FbmNoise) : std::nullopt;
+    const bool pointInput = parsedInput == Input::ControlPoint || parsedInput == Input::DeltaToPoint
+        || parsedInput == Input::DirectionToPoint;
+    // These initializer getters mutate the selected CP; operator getters only read it.
     const bool linearPair = (parsedInput == Input::BetweenPoints && parsedOutput.has_value ())
         || (parsedOutput == Output::BetweenPoints && parsedInput.has_value ()
-            && (!initializer || (parsedInput != Input::LifetimeFraction && parsedInput != Input::ParticleSystemTime)));
+            && (!initializer || (parsedInput != Input::LifetimeFraction && parsedInput != Input::ParticleSystemTime && !pointInput)));
     const bool periodic = parsedTransform == Transform::Sine || parsedTransform == Transform::Square
         || parsedTransform == Transform::Saw || parsedTransform == Transform::Triangle;
     const bool linearTransform = parsedTransform == Transform::Identity || periodic;
