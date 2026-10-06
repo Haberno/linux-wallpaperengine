@@ -1825,6 +1825,8 @@ void WallpaperApplication::prepareOutputs () {
     // Stage every texture before the scene build asks for them. Without this the first
     // wallpaper of a session decodes lazily, one texture at a time, inside CTexture on this
     // thread; batching them hands the whole set to the decode pool at once (6x on heavy ones)
+    // Keep prepared providers alive until their initial scenes have bound them.
+    std::vector<std::shared_ptr<Render::CTexture>> stagedTextures;
     if (this->makeAnyViewportCurrent ()) {
 	const auto prefetchStart = std::chrono::steady_clock::now ();
 	auto readMs = std::chrono::duration<double, std::milli>::zero ();
@@ -1832,18 +1834,21 @@ void WallpaperApplication::prepareOutputs () {
 
 	for (const auto& [background, info] : this->m_backgrounds) {
 	    const auto readStart = std::chrono::steady_clock::now ();
-	    auto textures = parseProjectTextures (*info);
+	    auto textures = parseProjectTextures (*info, true);
 	    const uint32_t textureReduction = m_renderContext->getTextureReduction (
 		*info->wallpaper, m_renderContext->getTextureQualityOutputSize (background)
 	    );
 	    readMs += std::chrono::steady_clock::now () - readStart;
 
+	    std::vector<std::shared_ptr<Render::CTexture::MipStream>> mipStreams;
 	    for (auto& [name, texture] : textures) {
 		try {
+		    auto prepared = Render::CTexture::createStreaming (
+			*m_renderContext, std::move (texture), textureReduction, mipStreams
+		    );
+		    stagedTextures.push_back (prepared);
 		    m_renderContext->storeTexture (
-			name, *info->assetLocator,
-			std::make_shared<Render::CTexture> (*m_renderContext, std::move (texture), textureReduction),
-			textureReduction
+			name, *info->assetLocator, std::move (prepared), textureReduction
 		    );
 		    staged++;
 		} catch (const std::exception& e) {
@@ -1851,6 +1856,7 @@ void WallpaperApplication::prepareOutputs () {
 		    sLog.error ("Texture prefetch failed for ", name, ": ", e.what ());
 		}
 	    }
+	    queueTextureStreams (std::move (mipStreams));
 	}
 
 	if (Debug::RenderHealth::enabled ()) {
