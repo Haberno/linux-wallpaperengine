@@ -306,3 +306,55 @@ std::shared_ptr<const TextureProvider> TextureCache::resolve (
     this->store (key, bound);
     return bound;
 }
+
+PreparedTextureFallbacks TextureCache::prepareFallbacks (
+    const std::set<std::string>& names, const AssetLocator& locator,
+    const Data::Model::Properties& properties, const uint32_t textureReduction
+) {
+    PreparedTextureFallbacks result;
+    std::vector<std::pair<std::string, TextureUniquePtr>> pending;
+    for (const auto& name : names) {
+	const auto key = scopedKey (name, locator, textureReduction);
+	// Match resolve's retained property-binding lookup before touching an evicted base.
+	std::string boundKey = key + '\x1f' + "properties";
+	for (const auto& [propertyName, property] : properties)
+	    boundKey += ':' + std::to_string (reinterpret_cast<uintptr_t> (property.get ()));
+	auto cached = name.starts_with ('$') ? m_textureCache.find (name) : m_textureCache.end ();
+	if (cached == m_textureCache.end ()) cached = m_textureCache.find (key);
+	if (cached != m_textureCache.end ()) {
+	    const auto texture = std::dynamic_pointer_cast<const CTexture> (cached->second.texture);
+	    if (texture && texture->getHeader ().variantSource) cached = m_textureCache.end ();
+	}
+	if (cached == m_textureCache.end ()) cached = m_textureCache.find (boundKey);
+	if (cached != m_textureCache.end ()) {
+	    cached->second.lastUsed = ++m_useCounter;
+	    result.textures.push_back (cached->second.texture);
+	    continue;
+	}
+	try {
+	    auto parsed = TextureParser::load (locator, name);
+	    // Conditional selection retains its existing property-owned resolver semantics.
+	    if (!parsed->variantSource) pending.emplace_back (name, std::move (parsed));
+	} catch (const std::runtime_error& error) {
+	    sLog.error ("Cannot prepare material fallback ", name, ": ", error.what ());
+	}
+    }
+    std::vector<Texture*> decodable;
+    for (const auto& [name, texture] : pending) decodable.push_back (texture.get ());
+    try {
+	TextureParser::decodeMipmaps (decodable, true);
+    } catch (const std::exception& error) {
+	sLog.error ("Cannot decode material fallbacks: ", error.what ());
+	return result;
+    }
+    for (auto& [name, parsed] : pending) {
+	try {
+	    auto texture = CTexture::createStreaming (getContext (), std::move (parsed), textureReduction, result.streams);
+	    result.textures.push_back (texture);
+	    store (name, locator, std::move (texture), textureReduction);
+	} catch (const std::exception& error) {
+	    sLog.error ("Cannot upload material fallback ", name, ": ", error.what ());
+	}
+    }
+    return result;
+}

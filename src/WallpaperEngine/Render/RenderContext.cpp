@@ -232,6 +232,15 @@ std::shared_ptr<const TextureProvider> RenderContext::resolveTexture (
     return this->m_textureCache->resolve (name, assetLocator, properties, textureReduction);
 }
 
+std::vector<std::shared_ptr<const TextureProvider>> RenderContext::prepareTextureFallbacks (
+    const std::set<std::string>& names, const Assets::AssetLocator& locator,
+    const Data::Model::Properties& properties, const uint32_t textureReduction
+) const {
+    auto prepared = m_textureCache->prepareFallbacks (names, locator, properties, textureReduction);
+    m_app.queueTextureStreams (std::move (prepared.streams));
+    return std::move (prepared.textures);
+}
+
 void RenderContext::storeTexture (const std::string& name, std::shared_ptr<const TextureProvider> texture) const {
     this->m_textureCache->store (name, std::move (texture));
 }

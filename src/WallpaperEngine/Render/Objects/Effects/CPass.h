@@ -42,6 +42,8 @@ public:
     void render ();
     /** Refresh initialized user-image materials, including currently hidden passes. */
     bool updateUserTextures ();
+    /** Cold authored dependencies needed when an initialized selection is cleared. */
+    void collectUserTextureFallbacks (std::set<std::string>& names) const;
 
     /** Copy commands remap their explicit source together with effect binds. */
     void setCopySource (const std::string& source);
@@ -90,7 +92,7 @@ public:
 
 private:
     bool m_reverseDepth = false;
-    [[nodiscard]] std::shared_ptr<const TextureProvider> resolveUserTexture (int index) const;
+    [[nodiscard]] std::shared_ptr<const TextureProvider> resolveUserTexture (int index);
     void setupUserTexture (int index, const std::string& entry);
     struct TextureChainEntry {
 	std::shared_ptr<const TextureProvider> texture;
@@ -231,6 +233,7 @@ private:
     const ImageEffectPassOverride& m_override;
     const TextureMap m_userTextureEntries;
     TextureMap m_userTextureValues;
+    std::map<int, std::shared_ptr<const TextureProvider>> m_userTextureProviders;
     std::map<int, int> m_userTextureFormats;
     ComboMap m_runtimeCombos = {};
     std::optional<std::reference_wrapper<std::string>> m_target;

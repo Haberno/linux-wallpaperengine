@@ -91,6 +91,10 @@ namespace Render {
 	 * of loading the file synchronously. Used by asynchronous background switches to
 	 * pre-stage textures that were parsed off the render thread.
 	 */
+	std::vector<std::shared_ptr<const TextureProvider>> prepareTextureFallbacks (
+	    const std::set<std::string>& names, const Assets::AssetLocator& locator,
+	    const Data::Model::Properties& properties, uint32_t textureReduction
+	) const;
 	void storeTexture (const std::string& name, std::shared_ptr<const TextureProvider> texture) const;
 	void storeTexture (
 	    const std::string& name, const Assets::AssetLocator& assetLocator,

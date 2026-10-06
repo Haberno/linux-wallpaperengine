@@ -1131,6 +1131,16 @@ TextureUniquePtr TextureParser::parseImage (const std::string& contents, const J
     return result;
 }
 
+TextureUniquePtr TextureParser::loadHeader (const WallpaperEngine::Assets::AssetLocator& locator, const std::string& filename) {
+    auto input = locator.texture (filename);
+    const auto exceptions = input->exceptions ();
+    input->exceptions (std::ios::failbit | std::ios::badbit);
+    const ScopeGuard restoreExceptions ([&] { input->exceptions (exceptions); });
+    auto result = std::make_unique<Texture> ();
+    parseTextureHeader (*result, BinaryReader (input));
+    return result;
+}
+
 TextureUniquePtr
 TextureParser::load (const WallpaperEngine::Assets::AssetLocator& locator, const std::string& filename) {
     const auto metadataLoader = [&locator] (const std::string& name) {

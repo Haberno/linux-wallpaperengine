@@ -5,6 +5,8 @@
 #include <map>
 #include <memory>
 #include <string>
+#include <set>
+#include <vector>
 
 #include "TextureProvider.h"
 #include "WallpaperEngine/Assets/AssetLocator.h"
@@ -19,6 +21,11 @@ namespace Helpers {
 }
 
 class RenderContext;
+struct TextureMipStream;
+struct PreparedTextureFallbacks {
+    std::vector<std::shared_ptr<const TextureProvider>> textures;
+    std::vector<std::shared_ptr<TextureMipStream>> streams;
+};
 
 struct TextureCacheStats {
     size_t entries = 0;
@@ -46,6 +53,12 @@ public:
     std::shared_ptr<const TextureProvider> resolve (
 	const std::string& filename, const Assets::AssetLocator& assetLocator, const Data::Model::Properties& properties,
 	uint32_t textureReduction
+    );
+
+    /** Prepare cold compiled defaults needed by a material selection-clear batch. */
+    PreparedTextureFallbacks prepareFallbacks (
+	const std::set<std::string>& names, const Assets::AssetLocator& locator,
+	const Data::Model::Properties& properties, uint32_t textureReduction
     );
 
     /**

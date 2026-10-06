@@ -956,6 +956,12 @@ void CScene::renderFrame (const glm::ivec4& viewport) {
     // Refresh all initialized materials before drawing, so hidden consumers and
     // shared user images observe the same selection. Retire old images only
     // after every affected pass has rebound; sampling stays first-load-wins.
+    std::set<std::string> fallbackNames;
+    for (const auto* pass : m_userTexturePasses) pass->collectUserTextureFallbacks (fallbackNames);
+    // Hold prepared providers through all rebindings, even if cache pressure trims other entries.
+    const auto preparedFallbacks = getContext ().prepareTextureFallbacks (
+	fallbackNames, getAssetLocator (), getScene ().project.properties, m_textureReduction
+    );
     bool changedUserTextures = false;
     // Resolving a newly selected layer target can create/register its material.
     for (size_t index = 0; index < m_userTexturePasses.size (); ++index) {

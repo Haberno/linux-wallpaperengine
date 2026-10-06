@@ -21,6 +21,8 @@ public:
     using VariantSelector = std::function<bool (const JSON&)>;
     static TextureUniquePtr parse (const BinaryReader& file);
     static TextureUniquePtr parse (const BinaryReader& file, const VariantSelector& selector);
+    /** Compiled reference dimensions/flags without acquiring or decoding pixel payloads. */
+    static TextureUniquePtr loadHeader (const WallpaperEngine::Assets::AssetLocator& locator, const std::string& filename);
     static TextureUniquePtr load (const WallpaperEngine::Assets::AssetLocator& locator, const std::string& filename);
     static TextureUniquePtr parseImage (const std::string& contents, const JSON& metadata);
     static TextureUniquePtr selectVariants (const Texture& texture, const VariantSelector& selector);

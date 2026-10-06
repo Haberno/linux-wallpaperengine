@@ -29,6 +29,7 @@
 #include <thread>
 
 namespace WallpaperEngine::Render {
+struct TextureMipStream;
 class CWallpaper;
 }
 
@@ -83,6 +84,8 @@ public:
      * Renders a frame
      */
     void update (Render::Drivers::Output::OutputViewport* viewport);
+    /** Finish owned CPU mip records on the existing loader; never submits GL work. */
+    void queueTextureStreams (std::vector<std::shared_ptr<Render::TextureMipStream>> streams);
     /**
      * Gets the output
      */
@@ -299,6 +302,7 @@ private:
     std::condition_variable m_switchCv {};
     /** Switches waiting to be loaded by the worker */
     std::deque<PreparedSwitch> m_switchRequests {};
+    std::vector<std::shared_ptr<Render::TextureMipStream>> m_pendingTextureStreams {};
     /** Switches loaded by the worker, waiting to be applied on the render thread */
     std::deque<PreparedSwitch> m_switchResults {};
     /** Latest switch request id per screen, used to drop superseded work */

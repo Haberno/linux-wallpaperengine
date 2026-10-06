@@ -808,9 +808,18 @@ void collectTextureNames (const TextureMap& textures, std::set<std::string>& out
     }
 }
 
-void collectMaterialTextures (const Material& material, std::set<std::string>& out) {
+void collectMaterialTextures (const Material& material, std::set<std::string>& out, const Properties* properties = nullptr) {
     for (const auto& pass : material.passes) {
-	collectTextureNames (pass->textures, out);
+	TextureMap required = pass->textures;
+	if (properties) {
+	    for (const auto& [index, entry] : pass->usertextures) {
+		const auto property = properties->find (entry);
+		const std::string selection = property == properties->end () ? entry
+		    : property->second->getType () == DynamicValue::String ? property->second->getString () : "";
+		if (std::filesystem::path (selection).is_absolute ()) required.erase (index);
+	    }
+	}
+	collectTextureNames (required, out);
 	collectTextureNames (pass->usertextures, out);
     }
 }
@@ -857,7 +866,7 @@ std::set<std::string> collectProjectTextures (const Project& project) {
 	    const auto* image = object->as<Image> ();
 
 	    if (image->model != nullptr && image->model->material != nullptr) {
-		collectMaterialTextures (*image->model->material, result);
+		collectMaterialTextures (*image->model->material, result, &project.properties);
 	    }
 	    if (image->model != nullptr && image->model->puppetMesh.has_value ()) {
 		for (const auto& descriptor : image->model->puppetMesh->clippingDescriptors) {
@@ -869,14 +878,14 @@ std::set<std::string> collectProjectTextures (const Project& project) {
 	} else if (object->is<Model3D> ()) {
 	    for (const auto& material : object->as<Model3D> ()->materials) {
 		if (material != nullptr) {
-		    collectMaterialTextures (*material, result);
+		    collectMaterialTextures (*material, result, &project.properties);
 		}
 	    }
 	} else if (object->is<Particle> ()) {
 	    const auto* particle = object->as<Particle> ();
 
 	    if (particle->material != nullptr && particle->material->material != nullptr) {
-		collectMaterialTextures (*particle->material->material, result);
+		collectMaterialTextures (*particle->material->material, result, &project.properties);
 	    }
 	} else if (object->is<Text> ()) {
 	    collectImageEffectTextures (object->as<Text> ()->effects, result);
@@ -1045,6 +1054,23 @@ uint64_t WallpaperApplication::requestBackgroundSwitch (
     return id;
 }
 
+void WallpaperApplication::queueTextureStreams (std::vector<std::shared_ptr<Render::TextureMipStream>> streams) {
+    if (streams.empty ()) return;
+    try {
+	std::lock_guard lock (m_switchMutex);
+	if (!m_switchWorker.joinable ()) {
+	    m_switchWorkerStop = false;
+	    m_switchWorker = std::thread (&WallpaperApplication::switchWorkerMain, this);
+	}
+	m_pendingTextureStreams.insert (m_pendingTextureStreams.end (), streams.begin (), streams.end ());
+    } catch (const std::exception& error) {
+	sLog.error ("Cannot queue material texture decoding: ", error.what ());
+	Render::CTexture::completeMipStreams (streams);
+	return;
+    }
+    m_switchCv.notify_one ();
+}
+
 void WallpaperApplication::switchWorkerMain () {
     while (true) {
 	PreparedSwitch job {};
@@ -1053,13 +1079,19 @@ void WallpaperApplication::switchWorkerMain () {
 	{
 	    std::unique_lock lock (this->m_switchMutex);
 	    this->m_switchCv.wait (lock, [this] {
-		return this->m_switchWorkerStop || !this->m_switchRequests.empty ();
+		return this->m_switchWorkerStop || !this->m_switchRequests.empty () || !m_pendingTextureStreams.empty ();
 	    });
 
 	    if (this->m_switchWorkerStop) {
 		return;
 	    }
 
+	    if (m_switchRequests.empty ()) {
+		mipStreams.swap (m_pendingTextureStreams);
+		lock.unlock ();
+		Render::CTexture::completeMipStreams (mipStreams);
+		continue;
+	    }
 	    job = std::move (this->m_switchRequests.front ());
 	    this->m_switchRequests.pop_front ();
 
@@ -1477,6 +1509,9 @@ void WallpaperApplication::stopSwitchWorker () {
 
     this->m_switchCv.notify_all ();
     this->m_switchWorker.join ();
+    // Cache-held providers may outlive their scene. Leave no pending record nonterminal.
+    Render::CTexture::completeMipStreams (m_pendingTextureStreams);
+    m_pendingTextureStreams.clear ();
 }
 
 void WallpaperApplication::advancePlaylist (

@@ -1,5 +1,6 @@
 #include "CPass.h"
 #include "WallpaperEngine/Render/Depth.h"
+#include <filesystem>
 #include <sstream>
 #include <utility>
 
@@ -9,6 +10,7 @@
 #include "WallpaperEngine/Data/Model/Material.h"
 // usertextures name user properties, so the pass needs the full Property definition to read them
 #include "WallpaperEngine/Data/Model/Property.h"
+#include "WallpaperEngine/Data/Parsers/TextureParser.h"
 
 #include "WallpaperEngine/Render/CFBO.h"
 #include "WallpaperEngine/Render/Objects/CImage.h"
@@ -83,6 +85,7 @@ CPass::CPass (
 void CPass::initialize () {
     if (m_shaderInitialized) return;
     m_userTextureValues = userTextureValues ();
+    m_userTextureProviders.clear ();
     setupShaders ();
     m_shaderInitialized = true;
     ++m_shaderRevision;
@@ -948,7 +951,12 @@ void CPass::setupShaders () {
 		  }
 
 		  try {
-		      registerTextureMetadata (index, this->m_renderable.getScene ().resolveTexture (name), overwrite);
+		      std::shared_ptr<const TextureProvider> selected;
+		      if (m_userTextureEntries.contains (index)) {
+			  try { selected = resolveUserTexture (index); }
+			  catch (const std::runtime_error&) { }
+		      }
+		      registerTextureMetadata (index, selected ? selected : this->m_renderable.getScene ().resolveTexture (name), overwrite);
 		  } catch (const std::runtime_error&) {
 		      // setupTextureUniforms reports unresolved authored textures later;
 		      // metadata discovery should not turn that recoverable path into a fatal one.
@@ -1115,6 +1123,17 @@ TextureMap CPass::userTextureValues () const {
     return values;
 }
 
+void CPass::collectUserTextureFallbacks (std::set<std::string>& names) const {
+    if (!m_shaderInitialized) return;
+    for (const auto& [index, entry] : m_userTextureEntries) {
+	if (!userTextureValue (entry).empty () || m_userTextureValues.at (index).empty ()) continue;
+	const auto& originals = m_override.textures.contains (index) ? m_override.textures : m_pass.textures;
+	const auto authored = originals.find (index);
+	if (authored != originals.end () && !authored->second.empty () && !authored->second.starts_with ("_rt_")
+	    && !authored->second.starts_with ("_alias_") && !authored->second.starts_with ('$')) names.insert (authored->second);
+    }
+}
+
 bool CPass::updateUserTextures () {
     // Deferred effects read the latest selection when first initialized. Equal
     // paths do not reload changed file contents, matching native property updates.
@@ -1187,7 +1206,8 @@ void CPass::leaveProgramSharing () {
     this->m_programSharingGroup.reset ();
 }
 
-std::shared_ptr<const TextureProvider> CPass::resolveUserTexture (int index) const {
+std::shared_ptr<const TextureProvider> CPass::resolveUserTexture (int index) {
+    if (const auto cached = m_userTextureProviders.find (index); cached != m_userTextureProviders.end ()) return cached->second;
     const auto& scene = m_renderable.getScene ();
     const auto& name = m_userTextureValues.at (index);
     if (name.empty ()) return nullptr;
@@ -1199,13 +1219,31 @@ std::shared_ptr<const TextureProvider> CPass::resolveUserTexture (int index) con
     const bool reference = size.x > 0.0f && size.y > 0.0f;
     uint32_t flags = 0;
     if (!reference) {
-	const auto original = authored->second.starts_with ("_rt_") || authored->second.starts_with ("_alias_")
-	    ? resolveFBO (authored->second) : scene.resolveTexture (authored->second);
-	size = glm::vec2 (original->getRealWidth (), original->getRealHeight ());
-	flags = original->getFlags ();
+	Data::Assets::TextureUniquePtr header;
+	if (!authored->second.starts_with ("_rt_") && !authored->second.starts_with ("_alias_")
+	    && !authored->second.starts_with ('$')) {
+	    try {
+		header = Data::Parsers::TextureParser::loadHeader (m_renderable.getAssetLocator (), authored->second);
+	    } catch (const std::runtime_error&) {
+		// Source-import compatibility and runtime aliases retain the ordinary resolver.
+	    }
+	}
+	if (header && !header->isAnimated () && header->variants.empty ()) {
+	    size = glm::vec2 (header->width, header->height);
+	    flags = header->flags;
+	} else {
+	    const auto original = authored->second.starts_with ("_rt_") || authored->second.starts_with ("_alias_")
+		? resolveFBO (authored->second) : scene.resolveTexture (authored->second);
+	    size = glm::vec2 (original->getRealWidth (), original->getRealHeight ());
+	    flags = original->getFlags ();
+	}
     }
-    return name.starts_with ("_rt_") || name.starts_with ("_alias_") ? resolveFBO (name)
+    auto texture = name.starts_with ("_rt_") || name.starts_with ("_alias_") ? resolveFBO (name)
 	: scene.resolveUserTexture (name, flags, size.y > 0.0f ? size.x / size.y : 0.0f);
+    // Only raw absolute selections suppress the authored chain. Relative/runtime
+    // compatibility providers can become unready and keep their existing fallback.
+    if (texture && std::filesystem::path (name).is_absolute ()) m_userTextureProviders.emplace (index, texture);
+    return texture;
 }
 
 void CPass::setupUserTexture (int index, const std::string& entry) {
@@ -1228,6 +1266,7 @@ void CPass::setupTextureUniforms () {
     // but for now just set first vertex's textures
     // and then try with fragment's and override any existing
     for (const auto& [index, textureName] : this->m_shader->getVertex ().getTextures ()) {
+	if (m_userTextureProviders.contains (index)) continue;
 	// Shader metadata includes disabled #if branches. They must not request a
 	// reflection snapshot when the compiled material has no reflection sampler.
 	if ((textureName == "_rt_MipMappedFrameBuffer" || textureName == "_rt_Reflection")
@@ -1250,6 +1289,7 @@ void CPass::setupTextureUniforms () {
     }
 
     for (const auto& [index, textureName] : this->m_shader->getFragment ().getTextures ()) {
+	if (m_userTextureProviders.contains (index)) continue;
 	if ((textureName == "_rt_MipMappedFrameBuffer" || textureName == "_rt_Reflection")
 	    && glGetUniformLocation (this->m_programID, ("g_Texture" + std::to_string (index)).c_str ()) < 0) {
 	    continue;
@@ -1272,6 +1312,7 @@ void CPass::setupTextureUniforms () {
     }
 
     for (const auto& [index, textureName] : mergedTextures (m_pass.textures, m_override.textures)) {
+	if (m_userTextureProviders.contains (index)) continue;
 	try {
 	    auto texture = textureName.find ("_rt_") == 0 || textureName.find ("_alias_") == 0
 		? this->resolveFBO (textureName)

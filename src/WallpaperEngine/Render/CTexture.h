@@ -20,6 +20,12 @@
 namespace WallpaperEngine::Render {
 class RenderContext;
 using namespace WallpaperEngine::Data::Assets;
+/** CPU-only source/results passed to the application loader; never owns GL resources. */
+struct TextureMipStream {
+    TextureUniquePtr texture;
+    std::atomic<bool> ready = false;
+    std::atomic<bool> cancelled = false;
+};
 using namespace WallpaperEngine::VideoPlayback::MPV;
 /**
  * A normal texture file in WallpaperEngine's format
@@ -32,12 +38,7 @@ public:
     );
     ~CTexture () override;
 
-    /** CPU-only ownership shared with the existing switch worker; never owns GL resources. */
-    struct MipStream {
-	TextureUniquePtr texture;
-	std::atomic<bool> ready = false;
-	std::atomic<bool> cancelled = false;
-    };
+    using MipStream = TextureMipStream;
     static std::shared_ptr<CTexture> createStreaming (
 	RenderContext& context, TextureUniquePtr header, uint32_t textureReduction,
 	std::vector<std::shared_ptr<MipStream>>& streams
