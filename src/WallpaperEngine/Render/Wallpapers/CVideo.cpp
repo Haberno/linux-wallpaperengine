@@ -86,6 +86,10 @@ WallpaperState::TextureUVs CVideo::getPresentationUVs () const {
     if (const auto override = overrides.find ("alignmentfliph"); override != overrides.end ()) {
 	flip = override->second == "true" || override->second == "1";
     }
+    if (const auto live = this->m_liveColorProperties.find ("alignmentfliph");
+	live != this->m_liveColorProperties.end ()) {
+	flip = live->second == "true" || live->second == "1";
+    }
     if (flip) {
 	std::swap (uvs.ustart, uvs.uend);
     }
@@ -93,7 +97,8 @@ WallpaperState::TextureUVs CVideo::getPresentationUVs () const {
 }
 
 bool CVideo::setColorProperty (const std::string& key, const std::string& value) {
-    if (key != "wec_e" && key != "wec_brs" && key != "wec_con" && key != "wec_sa" && key != "wec_hue")
+    if (key != "alignmentfliph" && key != "wec_e" && key != "wec_brs" && key != "wec_con" && key != "wec_sa"
+	&& key != "wec_hue")
 	return false;
     this->m_liveColorProperties.insert_or_assign (key, value);
     return true;
