@@ -5234,3 +5234,81 @@ TEST_CASE ("initializer simplex shares vector selectors and preserves reflected 
     applyParticleControlPointRemap(p,object->as<Particle>()->initializers[0]->as<ControlPointRemapInitializer>()->remap,points,true);
     CHECK(p.position.x==Catch::Approx((.437431663f*.5f+.5f)*64).margin(.00004f));CHECK(p.position.y==-4);
 }
+
+TEST_CASE ("initializer control-point output admits only the recovered B input", "[particle][remap][remap-initializer-cp-output-admission]") {
+    for (const bool initializer : {false, true}) for (const auto input : {"positionbetweentwocontrolpoints", "size"}) {
+        auto data = WallpaperEngine::Data::JSON::JSON::parse (R"({"id":940,"particle":{}})");
+        data["particle"][initializer ? "initializer" : "operator"] = WallpaperEngine::Data::JSON::JSON::parse (
+            R"([{"name":"remapinitialvalue","output":"controlpoint","operation":"remap"}])");
+        auto& item = data["particle"][initializer ? "initializer" : "operator"][0];
+        item["name"] = initializer ? "remapinitialvalue" : "remapvalue";
+        item["input"] = input;
+        WallpaperEngine::Data::Model::Project project {};
+        const auto object = WallpaperEngine::Data::Parsers::ObjectParser::parse (data, project);
+        const auto* particle = object->as<Particle> ();
+        const auto count = initializer ? particle->initializers.size () : particle->operators.size ();
+        CHECK (count == (initializer && std::string (input) == "positionbetweentwocontrolpoints" ? 1 : 0));
+    }
+}
+
+TEST_CASE ("initializer control-point output matches scalar native selectors and operations", "[particle][remap][remap-initializer-cp-output]") {
+    using WallpaperEngine::Render::Objects::applyParticleControlPointRemap;
+    using WallpaperEngine::Render::Objects::ControlPointData;
+    // Native 14023eac2..14023edbb: retained 32 controls, with mapped (2,-3,4)
+    // and current (11,13,17) in native coordinates; stored Y is reflected here.
+    const char* components[] = {"all", "x", "y", "z", "sum", "average", "max", "min"};
+    const char* operations[] = {"remap", "multiply", "add", "subtract"};
+    for (unsigned component = 0; component < 8; ++component) for (unsigned operation = 0; operation < 4; ++operation) {
+        auto data = WallpaperEngine::Data::JSON::JSON::parse (R"({"id":941,"particle":{"initializer":[{
+            "name":"remapinitialvalue","input":"positionbetweentwocontrolpoints","output":"controlpoint",
+            "flags":0,"inputcontrolpoint0":0,"inputcontrolpoint1":1,"outputcontrolpoint0":2,"outputcontrolpoint1":3,
+            "outputrangemin":"2 -3 4","outputrangemax":"2 -3 4"
+        }]}})");
+        auto& item = data["particle"]["initializer"][0];
+        item["outputcomponent"] = components[component]; item["operation"] = operations[operation];
+        WallpaperEngine::Data::Model::Project project {};
+        const auto object = WallpaperEngine::Data::Parsers::ObjectParser::parse (data, project);
+        REQUIRE (object->as<Particle> ()->initializers.size () == 1);
+        const auto& remap = object->as<Particle> ()->initializers[0]->as<ControlPointRemapInitializer> ()->remap;
+        std::vector<ControlPointData> points (4);
+        points[0].position = {-90, -80, -70}; points[1].position = {50, 60, 70};
+        points[2].position = {11, -13, 17}; points[3].position = {43, -13, 17};
+        points[2].birthPreviousPosition = {21, 22, 23}; points[2].offset = {91, 92, 93};
+        ParticleInstance p; p.position = {19, -13, 17};
+        glm::vec3 destination = points[2].position;
+        applyParticleControlPointRemap (p, remap, points, true, false, 0, 0, glm::vec3 (0), 0, 0, 0, &destination);
+        glm::vec3 expected = points[2].position;
+        const glm::vec3 mapped (2, -3, 4), reflected (2, 3, 4);
+        for (unsigned axis = 0; axis < 3; ++axis) if (component == 0 || component == axis + 1) {
+            expected[axis] = operation == 0 ? reflected[axis] : operation == 1 ? expected[axis] * mapped[axis]
+                : operation == 2 ? expected[axis] + reflected[axis] : expected[axis] - reflected[axis];
+        }
+        CHECK (destination == expected);
+        CHECK (p.position == glm::vec3 (19, -13, 17));
+        CHECK (points[2].position == glm::vec3 (11, -13, 17));
+        CHECK (points[2].birthPreviousPosition == glm::vec3 (21, 22, 23));
+        CHECK (points[2].offset == glm::vec3 (91, 92, 93));
+    }
+}
+
+TEST_CASE ("initializer CP output recomputes its aliased B endpoint for each birth", "[particle][remap][remap-initializer-cp-output]") {
+    using WallpaperEngine::Render::Objects::applyParticleControlPointRemap;
+    using WallpaperEngine::Render::Objects::ControlPointData;
+    auto data = WallpaperEngine::Data::JSON::JSON::parse (R"({"id":942,"particle":{"initializer":[{
+        "name":"remapinitialvalue","input":"positionbetweentwocontrolpoints","output":"controlpoint",
+        "operation":"remap","flags":0,"outputrangemax":"8 0 0"
+    }]}})");
+    WallpaperEngine::Data::Model::Project project {};
+    const auto object = WallpaperEngine::Data::Parsers::ObjectParser::parse (data, project);
+    REQUIRE (object->as<Particle> ()->initializers.size () == 1);
+    const auto& remap = object->as<Particle> ()->initializers[0]->as<ControlPointRemapInitializer> ()->remap;
+    std::vector<ControlPointData> points (2); points[1].position = {8, 0, 0};
+    for (const float expected : {2.0f, 0.0f, 2.0f}) {
+        ParticleInstance p; p.position = {2, 0, 0};
+        auto destination = points[0].position;
+        applyParticleControlPointRemap (p, remap, points, true, false, 0, 0, glm::vec3 (0), 0, 0, 0, &destination);
+        CHECK (destination.x == Catch::Approx (expected));
+        CHECK (p.position == glm::vec3 (2, 0, 0));
+        points[0].position = destination;
+    }
+}

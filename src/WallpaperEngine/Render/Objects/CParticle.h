@@ -194,7 +194,7 @@ void applyParticleControlPointRemap (
     ParticleInstance& particle, const ControlPointRemap& remap,
     const std::vector<ControlPointData>& controlPoints, bool initializer, bool angularVelocityAvailable = false,
     float runtime = 0.0f, float timeOfDay = 0.0f, glm::vec3 layerOrigin = glm::vec3 (0.0f),
-    float initializerPhase = 0.0f, float systemTime = 0.0f, float layerTime = 0.0f
+    float initializerPhase = 0.0f, float systemTime = 0.0f, float layerTime = 0.0f, glm::vec3* pointOutput = nullptr
 );
 
 /**

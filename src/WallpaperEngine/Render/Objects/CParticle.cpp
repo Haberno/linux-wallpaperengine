@@ -1630,8 +1630,10 @@ void WallpaperEngine::Render::Objects::applyParticleControlPointRemap (
     ParticleInstance& particle, const ControlPointRemap& remap,
     const std::vector<ControlPointData>& controlPoints, const bool initializer, const bool angularVelocityAvailable,
     const float runtime, const float timeOfDay, const glm::vec3 layerOrigin, const float initializerPhase,
-    const float systemTime, const float layerTime
+    const float systemTime, const float layerTime, glm::vec3* pointOutput
 ) {
+    const bool controlPointOutput = remap.output == ControlPointRemap::Output::ControlPoint;
+    if (controlPointOutput && (!initializer || pointOutput == nullptr)) return;
     const float weight = initializer ? 1.0f : particleOperatorBlend (particle.getLifetimePos (), remap.blendTimes);
     if (!initializer && (remap.transform == ControlPointRemap::Transform::SimplexNoise
         || remap.transform == ControlPointRemap::Transform::FbmNoise)) {
@@ -1887,14 +1889,14 @@ void WallpaperEngine::Render::Objects::applyParticleControlPointRemap (
         // even output reduction names still reconstruct the resulting position.
         particle.position = start - relative * coordinateScale;
     } else if (remap.output == ControlPointRemap::Output::Velocity || remap.output == ControlPointRemap::Output::Position
-               || remap.output == ControlPointRemap::Output::Color) {
+               || remap.output == ControlPointRemap::Output::Color || controlPointOutput) {
         using Component = ControlPointRemap::Component;
-        // Native output reductions perform no write; only all and XYZ select channels.
+        // Native output reductions leave values unchanged; all and XYZ select channels.
         if (remap.outputComponent > Component::Z) return;
         const bool colorOutput = remap.output == ControlPointRemap::Output::Color;
-        glm::vec3& destination = colorOutput ? (initializer ? particle.initial.color : particle.color)
+        glm::vec3& destination = controlPointOutput ? *pointOutput : colorOutput ? (initializer ? particle.initial.color : particle.color)
             : remap.output == ControlPointRemap::Output::Position ? particle.position : particle.velocity;
-        // RGB stays in its stored units; only position/velocity reflect authored Y.
+        // Spatial outputs reflect authored Y; RGB stays in its stored units.
         const glm::vec3 coordinateScale = colorOutput ? glm::vec3 (1.0f) : glm::vec3 (1.0f, -1.0f, 1.0f);
         glm::vec3 target = mapped * coordinateScale;
         switch (remap.operation) {
@@ -1969,23 +1971,34 @@ glm::vec3 CParticle::remapLayerOrigin () const {
 
 void CParticle::applyInitialControlPointRemap (ParticleInstance& particle, const ControlPointRemap& remap) {
     const bool world = (m_particle.flags & 1) != 0;
+    const bool output = remap.output == ControlPointRemap::Output::ControlPoint;
     const auto& transform = m_initializingManualEmission ? m_pendingBirthTransform : m_controlPointTransform;
-    auto& point = m_controlPoints[remap.inputControlPoint0];
-    // Native changes only current XYZ, before reading the output pair. Keep the
-    // authored point and previous simulation position intact for later initializers.
-    point.simulationPosition = glm::vec3 (0.0f);
-    point.position = world ? glm::vec3 (glm::inverse (transform) * glm::vec4 (0, 0, 0, 1)) : glm::vec3 (0.0f);
-    point.displacement = -point.birthPreviousPosition;
-    if (!world) {
-        applyParticleControlPointRemap (particle, remap, m_controlPoints, true);
-        return;
+    auto& point = m_controlPoints[output ? remap.outputControlPoint0 : remap.inputControlPoint0];
+    // Input getters zero current XYZ before reading the output pair. CP output
+    // instead reads that pair first, then writes only its selected current XYZ.
+    if (!output) {
+        point.simulationPosition = glm::vec3 (0.0f);
+        point.position = world ? glm::vec3 (glm::inverse (transform) * glm::vec4 (0, 0, 0, 1)) : glm::vec3 (0.0f);
+        point.displacement = -point.birthPreviousPosition;
     }
-    auto points = m_controlPoints;
-    for (auto& value : points) value.position = value.simulationPosition;
-    auto simulationParticle = particle;
-    simulationParticle.position = glm::vec3 (transform * glm::vec4 (particle.position, 1.0f));
-    applyParticleControlPointRemap (simulationParticle, remap, points, true);
-    particle.position = glm::vec3 (glm::inverse (transform) * glm::vec4 (simulationParticle.position, 1.0f));
+    glm::vec3 target = point.simulationPosition;
+    if (!world) {
+        applyParticleControlPointRemap (particle, remap, m_controlPoints, true, false, 0, 0, glm::vec3 (0), 0, 0, 0,
+                                       output ? &target : nullptr);
+    } else {
+        auto points = m_controlPoints;
+        for (auto& value : points) value.position = value.simulationPosition;
+        auto simulationParticle = particle;
+        simulationParticle.position = glm::vec3 (transform * glm::vec4 (particle.position, 1.0f));
+        applyParticleControlPointRemap (simulationParticle, remap, points, true, false, 0, 0, glm::vec3 (0), 0, 0, 0,
+                                       output ? &target : nullptr);
+        if (!output) particle.position = glm::vec3 (glm::inverse (transform) * glm::vec4 (simulationParticle.position, 1.0f));
+    }
+    if (output) {
+        point.simulationPosition = target;
+        point.position = world ? glm::vec3 (glm::inverse (transform) * glm::vec4 (target, 1.0f)) : target;
+        point.displacement = target - point.birthPreviousPosition;
+    }
 }
 
 InitializerFunc CParticle::createControlPointRemapInitializer (const ControlPointRemapInitializer& init) {
@@ -1994,7 +2007,8 @@ InitializerFunc CParticle::createControlPointRemapInitializer (const ControlPoin
     includeControlPoint (remap.inputControlPoint1);
     includeControlPoint (remap.outputControlPoint0);
     includeControlPoint (remap.outputControlPoint1);
-    const bool mutatesPoint = remap.input == ControlPointRemap::Input::ControlPoint
+    const bool mutatesPoint = remap.output == ControlPointRemap::Output::ControlPoint
+        || remap.input == ControlPointRemap::Input::ControlPoint
         || remap.input == ControlPointRemap::Input::DeltaToPoint || remap.input == ControlPointRemap::Input::DirectionToPoint;
     m_hasMutatingRemapInitializer |= mutatesPoint;
     return [this, &remap, mutatesPoint] (ParticleInstance& particle) {
