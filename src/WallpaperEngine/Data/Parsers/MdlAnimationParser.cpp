@@ -712,7 +712,15 @@ void parseAnimations (
 	animation.boneFrames.resize (boneCount);
 	animation.boneFlags.resize (boneCount);
 	for (uint32_t bone = 0; bone < boneCount; bone++) {
-	    animation.boneFlags[bone] = readValue<uint32_t> (data, offset, sectionEnd);
+	    auto& flags = animation.boneFlags[bone];
+	    flags = readValue<uint32_t> (data, offset, sectionEnd);
+	    // Native masks solver-owned bones, except the bone that updates an IK group.
+	    if ((result.bones[bone].type & 2) != 0
+	        && std::none_of (result.ikGroups.begin (), result.ikGroups.end (),
+	                         [bone] (const MdlIkGroup& group) { return group.root == bone; })) {
+	        if ((flags & 1) == 0) flags |= 2;
+	        flags |= 1;
+	    }
 	    const uint32_t frameBytes = readValue<uint32_t> (data, offset, sectionEnd);
 	    constexpr uint32_t frameSize = sizeof (float) * 9;
 	    if (frameBytes % frameSize != 0) {

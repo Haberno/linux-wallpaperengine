@@ -175,7 +175,7 @@ TEST_CASE ("MDL animation parser shares legacy skeleton attachments and event-on
     CHECK (animationData.animations[1].boneFrames.empty ());
 }
 
-TEST_CASE ("MDL bone controls retain their extra animation pose tracks", "[mdl][animation]") {
+TEST_CASE ("MDL bone controls retain their extra animation pose tracks", "[mdl][animation][solver-track-mask]") {
     std::vector<char> data;
     appendMarker (data, "MDLS0002");
     const auto skeletonEnd = data.size ();
@@ -265,6 +265,8 @@ TEST_CASE ("MDL bone controls retain their extra animation pose tracks", "[mdl][
     REQUIRE (parsed.animations.size () == 2);
     for (size_t clip = 0; clip < 2; ++clip) {
 	const auto& animation = parsed.animations[clip];
+	CHECK (animation.boneFlags == std::vector<uint32_t> { 0, 3 });
+	CHECK (animation.controlFlags == std::vector<uint32_t> { 0, 0 });
 	REQUIRE (animation.controlFrames.size () == 2);
 	CHECK (animation.controlFrames[0][1].translation.x == Catch::Approx (2));
 	CHECK (animation.controlFrames[0][1].translation.y == Catch::Approx (clip + 1));
@@ -1415,5 +1417,51 @@ TEST_CASE ("Rope wind replays native force phases independently of mass", "[mdl]
             CHECK (pose.worldBones[1][3][axis] == Catch::Approx (sample.first[axis]).margin (2e-4f));
             CHECK (pose.worldBones[2][3][axis] == Catch::Approx (sample.second[axis]).margin (2e-4f));
         }
+    }
+}
+
+TEST_CASE ("MDLA masks solver-owned bone tracks while preserving authored masks", "[mdl][animation][solver-track-mask]") {
+    // Native 140261880 masks type-0x2 bones unless they own an IK group.
+    // Wind01's animated phaseX tip stays at bind X45 despite two authored X60 local samples.
+    const uint32_t expected[4][4] = { { 0, 1, 2, 3 }, { 0, 1, 2, 3 }, { 3, 1, 3, 3 }, { 3, 1, 3, 3 } };
+    for (uint32_t type = 0; type < 4; ++type) for (uint32_t flags = 0; flags < 4; ++flags) {
+        CAPTURE (type, flags);
+        std::vector<char> bytes;
+        appendMarker (bytes, "MDLS0002");
+        const auto skeletonEnd = bytes.size ();
+        appendValue<uint32_t> (bytes, 0);
+        appendValue<uint32_t> (bytes, 1);
+        appendString (bytes, "tip");
+        appendValue (bytes, type);
+        appendValue<int32_t> (bytes, -1);
+        appendValue<uint32_t> (bytes, 64);
+        appendMatrix (bytes, glm::translate (glm::mat4 (1), glm::vec3 (45, 0, 0)));
+        appendString (bytes, "");
+        patchU32 (bytes, skeletonEnd, bytes.size ());
+        appendMarker (bytes, "MDLA0001");
+        const auto animationEnd = bytes.size ();
+        appendValue<uint32_t> (bytes, 0);
+        appendValue<uint32_t> (bytes, 1);
+        appendValue<uint32_t> (bytes, 1);
+        appendValue<uint32_t> (bytes, 0);
+        appendString (bytes, "move");
+        appendString (bytes, "loop");
+        appendValue<float> (bytes, 30);
+        appendValue<uint32_t> (bytes, 1);
+        appendValue<uint32_t> (bytes, 0);
+        appendValue<uint32_t> (bytes, 1);
+        appendValue (bytes, flags);
+        appendValue<uint32_t> (bytes, 72);
+        appendFrame (bytes, glm::vec3 (75, 0, 0));
+        appendFrame (bytes, glm::vec3 (75, 0, 0));
+        appendValue<uint32_t> (bytes, 0);
+        appendValue<uint32_t> (bytes, 0);
+        patchU32 (bytes, animationEnd, bytes.size ());
+        const auto parsed = MdlAnimationParser::parse (bytes, "solver-track.mdl");
+        REQUIRE (parsed.animations.size () == 1);
+        CHECK (parsed.animations[0].boneFlags == std::vector<uint32_t> { expected[type][flags] });
+        CHECK (parsed.animations[0].boneFrames[0][0].translation.x == 75);
+        const auto pose = MdlAnimationEvaluator::evaluate (parsed, { { .animation = &parsed.animations[0] } });
+        CHECK (pose.worldBones[0][3].x == ((expected[type][flags] & 1) ? 45 : 75));
     }
 }
