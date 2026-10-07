@@ -799,7 +799,7 @@ void CModel::setupShadowProgram () {
 void CModel::setupGeometryCallback (Effects::CPass* pass, size_t submeshIndex) {
     pass->setGeometryCallback (
 	[this, pass, submeshIndex, revision = uint64_t (0), vertexTag = uint32_t (0),
-	 locations = std::array<GLint, 7> { -1, -1, -1, -1, -1, -1, -1 }] () mutable {
+	 locations = std::array<GLint, 10> { -1, -1, -1, -1, -1, -1, -1, -1, -1, -1 }] () mutable {
 	    if (m_modelData && m_structureRevision != m_modelData->structureRevision) return;
 	    const auto& mesh = m_modelData ? m_modelData->shapes[submeshIndex].layout : m_model.mesh;
 	    if (revision == pass->getShaderRevision () && vertexTag == mesh.vertexTag) {
@@ -815,23 +815,29 @@ void CModel::setupGeometryCallback (Effects::CPass* pass, size_t submeshIndex) {
 		}
 	    }
 	    const GLint position = glGetAttribLocation (pass->getProgramID (), "a_Position");
+        const GLint positionVec4 = m_modelData ? glGetAttribLocation (pass->getProgramID (), "a_PositionVec4") : -1;
 	    const GLint normal = glGetAttribLocation (pass->getProgramID (), "a_Normal");
 	    const GLint tangent = glGetAttribLocation (pass->getProgramID (), "a_Tangent4");
 	    const GLint texCoord = glGetAttribLocation (pass->getProgramID (), "a_TexCoord");
+        const GLint texCoordVec3 = m_modelData ? glGetAttribLocation (pass->getProgramID (), "a_TexCoordVec3") : -1;
+        const GLint texCoordVec4 = m_modelData ? glGetAttribLocation (pass->getProgramID (), "a_TexCoordVec4") : -1;
 	    const GLint blendIndices = glGetAttribLocation (pass->getProgramID (), "a_BlendIndices");
 	    const GLint blendWeights = glGetAttribLocation (pass->getProgramID (), "a_BlendWeights");
 
 	    const GLint color = glGetAttribLocation (pass->getProgramID (), "a_Color");
-	    locations = { position, normal, tangent, texCoord, blendIndices, blendWeights, color };
+	    locations = { position, normal, tangent, texCoord, blendIndices, blendWeights, color, positionVec4, texCoordVec3, texCoordVec4 };
 	    glBindBuffer (GL_ELEMENT_ARRAY_BUFFER, m_modelData ? m_modelData->shapes[submeshIndex].indexBuffer
 		: this->m_submeshes[submeshIndex].indexBuffer);
 	    glBindBuffer (GL_ARRAY_BUFFER, this->m_submeshes[submeshIndex].vertexBuffer);
 
-	    if (position >= 0 && mesh.positionOffset != MdlMesh::AttributeAbsent) {
-		glEnableVertexAttribArray (position);
-		glVertexAttribPointer (
-		    position, 3, GL_FLOAT, GL_FALSE, stride, reinterpret_cast<void*> (mesh.positionOffset)
-		);
+	    // Script resources store POSITION3/UV2; GL supplies missing components.
+	    for (const auto location : { position, positionVec4 }) {
+		if (location >= 0 && mesh.positionOffset != MdlMesh::AttributeAbsent) {
+		    glEnableVertexAttribArray (location);
+		    glVertexAttribPointer (
+			location, 3, GL_FLOAT, GL_FALSE, stride, reinterpret_cast<void*> (mesh.positionOffset)
+		    );
+		}
 	    }
 
 	    // a shader can ask for an attribute the vertex tag left out; leaving the array
@@ -850,11 +856,13 @@ void CModel::setupGeometryCallback (Effects::CPass* pass, size_t submeshIndex) {
 		);
 	    }
 
-	    if (texCoord >= 0 && mesh.uvOffset != MdlMesh::AttributeAbsent) {
-		glEnableVertexAttribArray (texCoord);
-		glVertexAttribPointer (
-		    texCoord, 2, GL_FLOAT, GL_FALSE, stride, reinterpret_cast<void*> (mesh.uvOffset)
-		);
+	    for (const auto location : { texCoord, texCoordVec3, texCoordVec4 }) {
+		if (location >= 0 && mesh.uvOffset != MdlMesh::AttributeAbsent) {
+		    glEnableVertexAttribArray (location);
+		    glVertexAttribPointer (
+			location, 2, GL_FLOAT, GL_FALSE, stride, reinterpret_cast<void*> (mesh.uvOffset)
+		    );
+		}
 	    }
 
 	    if (color >= 0 && m_modelData

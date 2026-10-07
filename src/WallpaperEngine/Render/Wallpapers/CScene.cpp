@@ -2108,23 +2108,23 @@ Render::CObject* CScene::createLayer (const std::string& modelPath, const std::s
     return this->createLayer (std::move (layer), workshopId);
 }
 
-const char* CScene::validateModelDataMaterial (const Scripting::ModelDataShape& shape) const {
+const char* CScene::validateModelDataMaterial (const Scripting::ModelDataShape& shape, bool allowUnknownSignature) const {
     try {
         const auto material = MaterialParser::load (getScene ().project, shape.material, true);
-        if (material->passes.size () != 1) return "Model shader validation currently requires one material pass";
+        if (material->passes.empty ()) return "Material or shader missing";
         const auto& pass = *material->passes.front ();
         const auto& assets = getAssetLocator ();
-        const auto semantics = Objects::modelInputSemantics (assets.vertexShader (pass.shader), [&] (const std::string& name) {
-            return assets.includeShader (name);
-        });
         // Keep compilation failure ahead of signature mismatch, as in native.
         // No pass, script owner, texture provider or live program is created here.
         const ComboMap overrides;
         const TextureMap textureOverrides;
         Shaders::Shader shader (assets, pass.shader, pass.combos, overrides, pass.textures, textureOverrides, pass.constants);
-        const auto compiled = Shaders::GLSLContext::get ().toGlsl (shader.vertex (), shader.fragment ());
+        const auto& vertex = shader.vertex ();
+        const auto selected = Shaders::GLSLContext::get ().preprocess (Shaders::GLSLContext::UnitType_Vertex, vertex);
+        const auto semantics = Objects::modelInputSemantics (selected);
+        const auto compiled = Shaders::GLSLContext::get ().toGlsl (vertex, shader.fragment ());
         if (compiled.first.empty () || compiled.second.empty ()) return "Material or shader missing";
-        if (!semantics) return "Model shader input declaration requires wider native validation";
+        if (!semantics) return allowUnknownSignature ? nullptr : "Model shader input declaration requires wider native validation";
         if ((*semantics & shape.vertexFormat) != *semantics) return "Incompatible vertex format";
         return nullptr;
     } catch (const std::exception&) {
@@ -2135,10 +2135,13 @@ const char* CScene::validateModelDataMaterial (const Scripting::ModelDataShape& 
 uint32_t CScene::createModelData (
     std::vector<Scripting::ModelDataShape> shapes, std::optional<std::pair<glm::vec3, glm::vec3>> bounds
 ) {
-    // Validate materials before committing a token or allocating GPU storage.
+    // Native visits every shape, preserves the last failed material/signature
+    // check, and publishes no token on failure. Validate before transient uploads.
+    const char* validationError = nullptr;
     for (const auto& shape : shapes) {
-	MaterialParser::load (getScene ().project, shape.material, true);
+        if (const char* error = validateModelDataMaterial (shape, true)) validationError = error;
     }
+    if (validationError) throw std::runtime_error (validationError);
     auto resource = std::make_unique<Objects::ModelData> (std::move (shapes));
     resource->validateMaterial = [this] (const Scripting::ModelDataShape& shape) {
         return validateModelDataMaterial (shape);
