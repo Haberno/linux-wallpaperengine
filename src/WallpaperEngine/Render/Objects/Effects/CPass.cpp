@@ -898,7 +898,7 @@ void CPass::setupShaders () {
 	      }
 	  };
 
-    // Initial shader defaults and failed selected images can expose cold sources.
+    // Initial format defaults and failed selected images can expose cold sources.
     // Keep their prepared providers alive until setupUniforms installs the bindings.
     std::vector<std::shared_ptr<const TextureProvider>> preparedUserFallbacks;
     const auto registerAuthoredTextures
@@ -996,8 +996,16 @@ void CPass::setupShaders () {
     // the constructor above. ShaderUnit keeps m_combos by reference and only emits the #define
     // block on compile (), so registering them here still reaches the generated source. Without
     // this an R8 gradient reads through the RGBA path and every lit pixel comes out red.
-    registerAuthoredTextures (this->m_shader->getVertex ().getTextures (), false);
-    registerAuthoredTextures (this->m_shader->getFragment ().getTextures (), false);
+    const auto registerShaderFormats = [&] (const TextureMap& textures) {
+	for (const auto& [index, name] : textures) {
+	    if (m_shader->getVertex ().requestsTextureFormat (index)
+		|| m_shader->getFragment ().requestsTextureFormat (index)) {
+		registerAuthoredTextures ({ { index, name } }, false);
+	    }
+	}
+    };
+    registerShaderFormats (this->m_shader->getVertex ().getTextures ());
+    registerShaderFormats (this->m_shader->getFragment ().getTextures ());
 
     if (imageFormatRequests) {
 	retainUserTextureFormats ();
@@ -1229,22 +1237,30 @@ void CPass::setupUserTexture (int index, const std::string& entry) {
 }
 
 void CPass::setupTextureUniforms () {
+    const auto resolveDefaultTexture = [this] (const std::string& name) -> std::shared_ptr<const TextureProvider> {
+	if (name.starts_with ("_rt_") || name.starts_with ("_alias_")) return this->resolveFBO (name);
+	const auto& scene = m_renderable.getScene ();
+	std::vector<std::shared_ptr<const TextureProvider>> prepared;
+	if (scene.isConstructing () && !name.starts_with ('$')) {
+	    prepared = getContext ().prepareTextureFallbacks (
+		{ name }, m_renderable.getAssetLocator (), scene.getScene ().project.properties, scene.getTextureReduction ()
+	    );
+	}
+	// The returned provider takes ownership before the local prepared hold ends.
+	return scene.resolveTexture (name);
+    };
     // first set default textures extracted from the shader
     // vertex shader doesn't seem to have texture info
     // but for now just set first vertex's textures
     // and then try with fragment's and override any existing
     for (const auto& [index, textureName] : this->m_shader->getVertex ().getTextures ()) {
 	if (m_userTextureProviders.contains (index)) continue;
-	// Shader metadata includes disabled #if branches. They must not request a
-	// reflection snapshot when the compiled material has no reflection sampler.
-	if ((textureName == "_rt_MipMappedFrameBuffer" || textureName == "_rt_Reflection")
-	    && glGetUniformLocation (this->m_programID, ("g_Texture" + std::to_string (index)).c_str ()) < 0) {
+	// Metadata includes inactive branches; only reflected samplers acquire defaults.
+	if (glGetUniformLocation (this->m_programID, ("g_Texture" + std::to_string (index)).c_str ()) < 0) {
 	    continue;
 	}
 	try {
-	    auto texture = textureName.find ("_rt_") == 0 || textureName.find ("_alias_") == 0
-		? this->resolveFBO (textureName)
-		: this->m_renderable.getScene ().resolveTexture (textureName);
+	    auto texture = resolveDefaultTexture (textureName);
 
 	    // create chain entry
 	    this->m_textures[index] = std::make_shared<TextureChainEntry> (TextureChainEntry {
@@ -1258,14 +1274,11 @@ void CPass::setupTextureUniforms () {
 
     for (const auto& [index, textureName] : this->m_shader->getFragment ().getTextures ()) {
 	if (m_userTextureProviders.contains (index)) continue;
-	if ((textureName == "_rt_MipMappedFrameBuffer" || textureName == "_rt_Reflection")
-	    && glGetUniformLocation (this->m_programID, ("g_Texture" + std::to_string (index)).c_str ()) < 0) {
+	if (glGetUniformLocation (this->m_programID, ("g_Texture" + std::to_string (index)).c_str ()) < 0) {
 	    continue;
 	}
 	try {
-	    auto texture = textureName.find ("_rt_") == 0 || textureName.find ("_alias_") == 0
-		? this->resolveFBO (textureName)
-		: this->m_renderable.getScene ().resolveTexture (textureName);
+	    auto texture = resolveDefaultTexture (textureName);
 
 	    const auto it = this->m_textures.find (index);
 	    const auto chain = std::make_shared<TextureChainEntry> (TextureChainEntry {
