@@ -915,9 +915,43 @@ void CImage::updatePuppetPositionBuffer (const glm::vec2& size, const bool stepR
     };
     this->m_puppetPhysicsTime = sceneTime;
     const auto& scene = this->getScene ().getScene ();
-    // The current puppet model omits layer rotation; perspective ropes also
-    // require their own model contract before enabling this path.
-    if (stepRope && !scene.camera.projection.isPerspective) {
+    bool ropeEnabled = stepRope && !scene.camera.projection.isPerspective;
+    if (ropeEnabled) {
+	const auto transform = this->resolveTransform (this->getImage ());
+	if (transform.angles != glm::vec3 (0.0f)) {
+	    // Native predicts scene-space points through the parent-composed image model.
+	    // Keep springs on their existing model until their rotated path is established.
+	    ropeEnabled = !this->getImage ().model->fullscreen
+		&& !this->getImage ().perspective->value->getBool ()
+		&& this->getImage ().alignment == "center"
+		&& transform.angles.x == 0.0f && transform.angles.y == 0.0f
+		&& std::ranges::none_of (this->m_puppetAnimation.bones, [] (const auto& bone) { return bone.spring.has_value (); });
+	    const Object* object = &this->getImage ();
+	    for (int depth = 0; ropeEnabled && object != nullptr; ++depth) {
+		if (depth > 32 || object->attachment.has_value ()) {
+		    ropeEnabled = false;
+		    break;
+		}
+		const auto* parent = object->parent.has_value () ? this->getScene ().getObject (*object->parent) : nullptr;
+		object = parent != nullptr ? &parent->getObject () : nullptr;
+	    }
+	    if (ropeEnabled) {
+		const glm::mat4 world = this->resolveWorldMatrix ();
+		const glm::mat4 rotation = glm::rotate (glm::mat4 (1.0f), transform.angles.z, glm::vec3 (0.0f, 0.0f, 1.0f));
+		// Admit only a unit planar basis matching the ordinary image renderer.
+		for (glm::length_t column = 0; column < 3; ++column) {
+		    ropeEnabled = ropeEnabled && glm::all (glm::lessThanEqual (glm::abs (world[column] - rotation[column]), glm::vec4 (1e-5f)));
+		}
+		if (ropeEnabled) {
+		    physics.model = glm::translate (glm::mat4 (1.0f), glm::vec3 (
+			-static_cast<float> (this->getScene ().getWidth ()) * 0.5f + parallax.x,
+			-static_cast<float> (this->getScene ().getHeight ()) * 0.5f - parallax.y, 0.0f
+		    )) * world;
+		}
+	    }
+	}
+    }
+    if (ropeEnabled) {
 	physics.rope = MdlRopeStep {
 	    .gravity = scene.physics.gravityDirection->evaluateVec3 (sceneTime)
 		* scene.physics.gravityStrength->evaluateFloat (sceneTime),
@@ -2651,7 +2685,7 @@ CImage::ResolvedTransform CImage::updateGeometryBuffers () {
     // puppet positions depend on the freshly updated scene quad (m_pos) and the animation time,
     // so re-skin after the scene position is known
     if (this->m_hasPuppetMesh) {
-	this->updatePuppetPositionBuffer (size, transform.angles == glm::vec3 (0.0f));
+	this->updatePuppetPositionBuffer (size, true);
     }
     return transform;
 }
