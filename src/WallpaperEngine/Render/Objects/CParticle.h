@@ -116,6 +116,9 @@ struct ParticleInstance {
     } initial;
 
     bool alive { false };
+    uint32_t remapSlot { 0 };
+    bool nativeSlotState { false };
+    bool shouldSimulate () const { return alive || nativeSlotState; }
 
     // Rope trails follow one particle through time. Keeping the history on the
     // particle also makes order-preserving compaction move it with its owner.
@@ -124,9 +127,15 @@ struct ParticleInstance {
     bool trailLastFrameValid { false };
 
     // Get normalized lifetime position (0.0 to 1.0)
-    float getLifetimePos () const { return lifetime > 0.0f ? (age / lifetime) : 1.0f; }
+    float getLifetimePos () const {
+        // Retired native slots keep aging with a zero lifetime; operator envelopes
+        // consume that division, rather than the live-view fallback endpoint.
+        return nativeSlotState ? age / lifetime : lifetime > 0.0f ? age / lifetime : 1.0f;
+    }
 
-    bool isAlive () const { return alive && age < lifetime; }
+    bool isAlive () const {
+        return alive && (nativeSlotState ? lifetime != 0.0f && !(lifetime < age) : age < lifetime);
+    }
 };
 
 void applyParticleAttractionDeletion (
@@ -158,6 +167,7 @@ void initializeParticleBetweenControlPoints (
 struct ControlPointData {
     glm::vec3 position { 0.0f };
     glm::vec3 offset { 0.0f };
+    glm::vec3 basePosition { 0.0f };
     glm::mat3 baseOrientation { 1.0f };
     glm::mat3 orientation { 1.0f };
     uint32_t flags { 0 };
@@ -244,7 +254,7 @@ protected:
     void setupEmitters ();
     void setupInitializers ();
     void setupOperators ();
-    void updateControlPoints (float frameTime = 0.0f);
+    void updateControlPoints (float frameTime = 0.0f, bool refreshOnly = false);
     void includeControlPoint (uint32_t index);
     [[nodiscard]] glm::mat4 particleWorldMatrix ();
 
@@ -365,6 +375,14 @@ private:
 
     std::vector<ParticleInstance> m_particles;
     uint32_t m_particleCount { 0 };
+    // The public/render view stays dense. Only CP-output owners need inactive
+    // native slots to retain and evolve state through the high-water extent.
+    std::vector<ParticleInstance> m_remapSlots;
+    bool m_hasControlPointOutputOperator { false };
+    uint32_t acquireRemapSlot ();
+    void retainRetiredRemapSlot (const ParticleInstance& particle);
+    void synchronizeRemapSlots ();
+    void publishRemapSlots ();
     uint32_t m_retiredParticleCount { 0 };
     bool m_emitting = true;
     uint32_t m_pendingEmission = 0;

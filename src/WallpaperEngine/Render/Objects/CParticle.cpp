@@ -542,6 +542,7 @@ void CParticle::updateInstanceParameters (const bool allowColorOverride) {
 	m_instanceColor *= color;
     }
     m_instanceParametersDirty = false;
+    if (m_initialized && m_hasControlPointOutputOperator) updateControlPoints (0.0f, true);
 }
 
 void CParticle::activateInstanceParameters () {
@@ -607,7 +608,7 @@ void CParticle::render () {
     // Control-point motion uses elapsed frame time, before simulation rate and
     // the physics stability cap. Mutating owners retain native current/previous
     // state while held; their resolver runs only at a positive simulation step.
-    if (!m_hasMutatingRemapInitializer || (dt > 0.0f && getInstanceOverride ().rate->value->getFloat () > 0.0f))
+    if (!(m_hasMutatingRemapInitializer || m_hasControlPointOutputOperator) || (dt > 0.0f && getInstanceOverride ().rate->value->getFloat () > 0.0f))
         updateControlPoints (dt);
 
     bool simulated = false;
@@ -708,6 +709,7 @@ void CParticle::clearParticles (const bool stopEmission) {
     if (stopEmission) m_emitting = false;
     m_remapSystemTime = 0.0f;
     m_particleCount = 0;
+    m_remapSlots.clear ();
     m_retiredParticleCount = 0;
     m_emitters.clear ();
     setupEmitters ();
@@ -866,7 +868,7 @@ void CParticle::includeControlPoint (const uint32_t index) {
     m_controlPointCount = std::max (m_controlPointCount, std::min (index, 7u) + 1);
 }
 
-void CParticle::updateControlPoints (const float frameTime) {
+void CParticle::updateControlPoints (const float frameTime, const bool refreshOnly) {
     const CParticle* root = this;
     while (root->m_particleParent != nullptr) root = root->m_particleParent;
     const glm::mat4 localToWorld = particleWorldMatrix ();
@@ -890,6 +892,12 @@ void CParticle::updateControlPoints (const float frameTime) {
 	? flipY * glm::inverse (resolveWorldMatrix ()) * flipY : glm::mat4 (1.0f);
     for (size_t i = 0; i < m_controlPoints.size (); ++i) {
 	auto& cp = m_controlPoints[i];
+        // Common refresh restores active authored overrides; ordinary local
+        // resolution otherwise retains operator-written current matrices.
+        if (refreshOnly && ((cp.flags & 0x10005) != 0 || i >= m_controlPointCount)) continue;
+        const bool refresh = !cp.hasPreviousPosition || refreshOnly;
+        if (!cp.hasPreviousPosition) cp.basePosition = cp.offset;
+        bool activeOverride = false;
 	if ((cp.flags & 1) != 0 && mouse) {
 	    // Native 14022e3e0 replaces the translation with the cursor position;
 	    // neither the definition offset nor an instance override is added to it.
@@ -902,24 +910,27 @@ void CParticle::updateControlPoints (const float frameTime) {
 	    cp.orientation = (cp.flags & 8) != 0 ? source.orientation
 		: glm::mat3 (parentToLocal) * source.orientation;
 	} else {
-	    glm::vec3 offset = cp.offset;
+	    glm::vec3 offset = m_hasControlPointOutputOperator ? cp.basePosition : cp.offset;
 	    // Authored root offsets stay on that system. Script/user assignments
 	    // propagate to descendants, including assignments of the same value.
 	    const auto& overrides = root->m_particle.instanceOverride.controlPointOffsets;
-	    if ((cp.flags & 5) == 0) {
+	    if ((cp.flags & 5) == 0 && (!m_hasControlPointOutputOperator || refresh)) {
 		if (const auto it = overrides.find (static_cast<int> (i)); it != overrides.end ()) {
 		    if (this == root || root->m_controlPointOverridesChanged[i] || it->second->animation != nullptr) {
 			const auto value = it->second->evaluateVec3 (getScene ().getElapsedTime ());
-			if (value.x != std::numeric_limits<float>::max ()) offset = value;
+			if (value.x != std::numeric_limits<float>::max ()) {
+                            offset = value;
+                            activeOverride = true;
+                        }
 		    }
 		}
 	    }
 	    // Native 14022a070 keeps point zero attached to a world-space emitter
 	    // even when flagged as world. Other world points remain independent.
 	    const bool worldOffset = (cp.flags & 2) != 0 && !(worldSpace && i == 0);
-	    cp.position = resolveParticleControlPoint (offset, worldToLocal, worldOffset);
 	    const auto& angles = root->m_particle.instanceOverride.controlPointAngles;
-	    if ((cp.flags & 0x10005) == 0 && i < m_controlPointCount) {
+	    if ((cp.flags & 0x10005) == 0 && i < m_controlPointCount
+                && (!m_hasControlPointOutputOperator || refresh)) {
 		if (const auto it = angles.find (static_cast<int> (i)); it != angles.end ()) {
 		    if (this == root || root->m_controlPointAnglesChanged || m_controlPointTimelines) {
 			const auto value = it->second->evaluateVec3 (getScene ().getElapsedTime ());
@@ -930,14 +941,29 @@ void CParticle::updateControlPoints (const float frameTime) {
 				glm::mat4 (1.0f), value.z, { 0.0f, 0.0f, 1.0f }),
 				value.y, { 0.0f, 1.0f, 0.0f }), value.x, { 1.0f, 0.0f, 0.0f });
 			    cp.baseOrientation = glm::mat3 (flipY * rotation * flipY);
+                            activeOverride = true;
 			}
 		    }
 		}
 	    }
+            if (m_hasControlPointOutputOperator) cp.basePosition = offset;
+            if (refreshOnly && !activeOverride) continue;
+            const bool resolve = !m_hasControlPointOutputOperator || !cp.hasPreviousPosition
+                || (refresh && activeOverride) || (!refreshOnly && worldSpace != worldOffset);
+            if (resolve) cp.position = resolveParticleControlPoint (offset, worldToLocal, worldOffset);
+            else if (worldSpace) {
+                cp.position = glm::vec3 (flipY * worldToLocal * flipY * glm::vec4 (cp.simulationPosition, 1.0f));
+            }
 	    cp.orientation = worldOffset ? glm::mat3 (flipY * worldToLocal * flipY) * cp.baseOrientation
 		: cp.baseOrientation;
 	}
+        if (refreshOnly) {
+            cp.simulationPosition = worldSpace
+                ? glm::vec3 (flipY * localToWorld * flipY * glm::vec4 (cp.position, 1.0f)) : cp.position;
+            cp.displacement = cp.simulationPosition - cp.birthPreviousPosition;
+        }
     }
+    if (refreshOnly) return;
     if (m_followPosition.has_value () && (m_controlPoints[0].flags & 5) == 0) {
 	m_controlPoints[0].position = *m_followPosition;
     }
@@ -970,6 +996,12 @@ void CParticle::update (float dt) {
     }
     // Reclaim this frame's expired slots before emitting. A full one-particle
     // glow otherwise rejects its replacement, then disappears for one frame.
+    if (dt > 0.0f) for (auto& slot : m_remapSlots) {
+        if (!slot.alive) {
+            slot.age += dt;
+            if (slot.lifetime != 0.0f && slot.lifetime < slot.age) slot.lifetime = 0.0f;
+        }
+    }
     uint32_t writeIdx = 0;
     for (uint32_t readIdx = 0; dt > 0.0f && readIdx < m_particleCount; ++readIdx) {
 	auto& particle = m_particles[readIdx];
@@ -978,6 +1010,7 @@ void CParticle::update (float dt) {
 	    if (writeIdx != readIdx) m_particles[writeIdx] = std::move (particle);
 	    ++writeIdx;
 	} else {
+            if (m_hasControlPointOutputOperator) retainRetiredRemapSlot (particle);
 	    ++m_retiredParticleCount;
 	    // Death bursts keep the last simulated tip before this slot is reused.
 	    for (auto& child : m_followChildren) {
@@ -1021,7 +1054,7 @@ void CParticle::update (float dt) {
 	// act in the same space as the already spawned particles.
 	worldControlPoints = m_controlPoints;
 	for (auto& point : worldControlPoints) {
-            point.position = m_hasMutatingRemapInitializer ? point.simulationPosition
+            point.position = (m_hasMutatingRemapInitializer || m_hasControlPointOutputOperator) ? point.simulationPosition
                 : glm::vec3 (localToWorld * glm::vec4 (point.position, 1.0f));
 	}
 	operatorControlPoints = &worldControlPoints;
@@ -1037,21 +1070,32 @@ void CParticle::update (float dt) {
     const int fps = getScene ().getContext ().getApp ().getContext ().settings.render.maximumFPS;
     const int substeps = fps >= 1 && fps <= 20 ? 2 : 1;
     const float operatorDt = dt / static_cast<float> (substeps);
+    if (m_hasControlPointOutputOperator) synchronizeRemapSlots ();
+    auto& simulatedParticles = m_hasControlPointOutputOperator ? m_remapSlots : m_particles;
+    const uint32_t simulatedCount = m_hasControlPointOutputOperator ? m_remapSlots.size () : m_particleCount;
     for (int step = 0; step < substeps; ++step) {
 	// Each native dispatch restores birth color/alpha/size before operators.
-	for (uint32_t i = 0; i < m_particleCount; ++i) {
-	    if (m_hasColorOperators) m_particles[i].color = m_particles[i].initial.color;
-	    if (m_hasAlphaOperators) m_particles[i].alpha = m_particles[i].initial.alpha;
-	    m_particles[i].size = m_particles[i].initial.size;
+	for (uint32_t i = 0; i < simulatedCount; ++i) {
+	    if (m_hasColorOperators) simulatedParticles[i].color = simulatedParticles[i].initial.color;
+	    if (m_hasAlphaOperators) simulatedParticles[i].alpha = simulatedParticles[i].initial.alpha;
+	    simulatedParticles[i].size = simulatedParticles[i].initial.size;
 	}
 	for (auto& op : m_operators) {
-	    op (m_particles, m_particleCount, *operatorControlPoints, m_simulationTime, operatorDt);
+	    op (simulatedParticles, simulatedCount, *operatorControlPoints, m_simulationTime, operatorDt);
+            if (m_hasControlPointOutputOperator && !worldControlPoints.empty ()) {
+                for (size_t index = 0; index < worldControlPoints.size (); ++index) {
+                    worldControlPoints[index].position = m_controlPoints[index].simulationPosition;
+                    worldControlPoints[index].displacement = m_controlPoints[index].displacement;
+                }
+            }
 	}
     }
 
+    if (m_hasControlPointOutputOperator) publishRemapSlots ();
+
     updateRopeTrailHistory (dt);
     updateFollowChildren (firstNewParticle);
-    if (m_hasMutatingRemapInitializer) {
+    if (m_hasMutatingRemapInitializer || m_hasControlPointOutputOperator) {
         // Native publishes previous matrices after emission and operators.
         for (auto& point : m_controlPoints) {
             point.previousPosition = point.simulationPosition;
@@ -1059,6 +1103,51 @@ void CParticle::update (float dt) {
         }
     }
 
+}
+
+uint32_t CParticle::acquireRemapSlot () {
+    for (uint32_t index = 0; index < m_remapSlots.size (); ++index) {
+        if (m_remapSlots[index].lifetime == 0.0f) return index;
+    }
+    if (m_remapSlots.size () == m_maxParticles) return m_maxParticles;
+    const uint32_t index = m_remapSlots.size ();
+    m_remapSlots.emplace_back ();
+    m_remapSlots.back ().lifetime = 0.0f;
+    return index;
+}
+
+void CParticle::retainRetiredRemapSlot (const ParticleInstance& particle) {
+    auto& slot = m_remapSlots[particle.remapSlot];
+    slot = particle;
+    slot.alive = false;
+    slot.lifetime = 0.0f;
+    slot.nativeSlotState = true;
+    slot.trailHistory.clear ();
+}
+
+void CParticle::synchronizeRemapSlots () {
+    for (uint32_t index = 0; index < m_particleCount; ++index) {
+        const auto& particle = m_particles[index];
+        auto& slot = m_remapSlots[particle.remapSlot];
+        slot = particle;
+        slot.nativeSlotState = true;
+        slot.trailHistory.clear ();
+    }
+}
+
+void CParticle::publishRemapSlots () {
+    // Membership remains the dense live view, including same-tick deletions.
+    // A lifetime remap of a retired slot does not invent a new live particle.
+    for (uint32_t index = 0; index < m_particleCount; ++index) {
+        auto& particle = m_particles[index];
+        auto history = std::move (particle.trailHistory);
+        const auto frame = particle.trailLastFrame;
+        const bool valid = particle.trailLastFrameValid;
+        particle = m_remapSlots[particle.remapSlot];
+        particle.trailHistory = std::move (history);
+        particle.trailLastFrame = frame;
+        particle.trailLastFrameValid = valid;
+    }
 }
 
 void CParticle::finalizeParticleBirths (const uint32_t firstNewParticle, const uint32_t firstManual) {
@@ -1318,7 +1407,11 @@ EmitterFunc CParticle::createBoxEmitter (const ParticleEmitter& emitter) {
             }
 	    // Native caches the origin before the birth loop; initializers may mutate it.
 	    for (uint32_t i = 0; i < toEmit && count < particles.size (); i++) {
+                const uint32_t slot = m_hasControlPointOutputOperator ? acquireRemapSlot () : 0;
+                if (m_hasControlPointOutputOperator && slot == m_maxParticles) break;
 		auto& p = particles[count];
+                p.remapSlot = slot;
+                p.nativeSlotState = m_hasControlPointOutputOperator;
 
 		// Generate random position within box volume centered on origin
 		// This creates a centered box (or hollow box if distanceMin > 0)
@@ -1389,6 +1482,7 @@ EmitterFunc CParticle::createBoxEmitter (const ParticleEmitter& emitter) {
 		    init (p);
 		}
 
+                if (m_hasControlPointOutputOperator) m_remapSlots[slot] = p;
 		count++;
 	    }
 	};
@@ -1501,7 +1595,11 @@ EmitterFunc CParticle::createSphereEmitter (const ParticleEmitter& emitter) {
             }
 	    // Native caches the origin before the birth loop; initializers may mutate it.
 	    for (uint32_t i = 0; i < toEmit && count < particles.size (); i++) {
+                const uint32_t slot = m_hasControlPointOutputOperator ? acquireRemapSlot () : 0;
+                if (m_hasControlPointOutputOperator && slot == m_maxParticles) break;
 		auto& p = particles[count];
+                p.remapSlot = slot;
+                p.nativeSlotState = m_hasControlPointOutputOperator;
 	    // Spawn at random position on ellipsoid surface
 	    glm::vec3 randomPos;
 
@@ -1610,6 +1708,7 @@ EmitterFunc CParticle::createSphereEmitter (const ParticleEmitter& emitter) {
 		init (p);
 	    }
 
+            if (m_hasControlPointOutputOperator) m_remapSlots[slot] = p;
 	    count++;
 	}
     };
@@ -1649,7 +1748,7 @@ void WallpaperEngine::Render::Objects::applyParticleControlPointRemap (
     const float systemTime, const float layerTime, glm::vec3* pointOutput
 ) {
     const bool controlPointOutput = remap.output == ControlPointRemap::Output::ControlPoint;
-    if (controlPointOutput && (!initializer || pointOutput == nullptr)) return;
+    if (controlPointOutput && pointOutput == nullptr) return;
     const float weight = initializer ? 1.0f : particleOperatorBlend (particle.getLifetimePos (), remap.blendTimes);
     if (!initializer && remap.input == ControlPointRemap::Input::LifetimeFraction
         && ((remap.output == ControlPointRemap::Output::Velocity && remap.transform == ControlPointRemap::Transform::SimplexNoise)
@@ -1925,7 +2024,7 @@ void WallpaperEngine::Render::Objects::applyParticleControlPointRemap (
         glm::vec3 target = mapped * coordinateScale;
         switch (remap.operation) {
             case ControlPointRemap::Operation::Remap: {
-                if (!initializer && remap.outputComponent == Component::All) {
+                if (!initializer && !controlPointOutput && remap.outputComponent == Component::All) {
                     glm::vec4 blendTimes = remap.blendTimes;
                     blendTimes.x = std::min (blendTimes.x, blendTimes.y - 0.0001f);
                     blendTimes.w = std::max (blendTimes.w, blendTimes.z + 0.0001f);
@@ -2049,6 +2148,7 @@ InitializerFunc CParticle::createControlPointRemapInitializer (const ControlPoin
 
 OperatorFunc CParticle::createControlPointRemapOperator (const ControlPointRemapOperator& op) {
     const auto& remap = op.remap;
+    if (remap.output == ControlPointRemap::Output::ControlPoint) m_hasControlPointOutputOperator = true;
     if (remap.output == ControlPointRemap::Output::Opacity) m_hasAlphaOperators = true;
     if (remap.output == ControlPointRemap::Output::Color) m_hasColorOperators = true;
     includeControlPoint (remap.inputControlPoint0);
@@ -2060,13 +2160,28 @@ OperatorFunc CParticle::createControlPointRemapOperator (const ControlPointRemap
         const glm::vec3 layerOrigin = remap.input == ControlPointRemap::Input::LayerOrigin
             ? remapLayerOrigin () : glm::vec3 (0.0f);
         const float layerTime = remapLayerTime ();
-        for (uint32_t i = 0; i < count; ++i) {
-            if (!particles[i].alive) continue;
+        const bool output = remap.output == ControlPointRemap::Output::ControlPoint;
+        auto points = output ? controlPoints : std::vector<ControlPointData> ();
+        // Native CP stores use lane zero of each SIMD block, even when retired.
+        // The next block observes the preceding block's current-point write.
+        for (uint32_t i = 0; i < count; i += output ? 4 : 1) {
+            if (!output && !particles[i].shouldSimulate ()) continue;
             if ((remap.transform == ControlPointRemap::Transform::SimplexNoise
                  || remap.transform == ControlPointRemap::Transform::FbmNoise) && particles[i].oscillationRandom < 0.0f) {
                 particles[i].oscillationRandom = WallpaperEngine::Maths::randomFloat (m_rng, 0.0f, 1.0f);
             }
-            applyParticleControlPointRemap (particles[i], remap, controlPoints, false, m_hasAngularVelocity, getScene ().getTime (), g_Daytime, layerOrigin, 0.0f, m_remapSystemTime, layerTime);
+            glm::vec3 target = output ? points[remap.outputControlPoint0].position : glm::vec3 (0.0f);
+            applyParticleControlPointRemap (particles[i], remap, output ? points : controlPoints, false, m_hasAngularVelocity,
+                getScene ().getTime (), g_Daytime, layerOrigin, 0.0f, m_remapSystemTime, layerTime, output ? &target : nullptr);
+            if (output) points[remap.outputControlPoint0].position = target;
+        }
+        if (output && count != 0) {
+            auto& point = m_controlPoints[remap.outputControlPoint0];
+            point.simulationPosition = points[remap.outputControlPoint0].position;
+            point.position = (m_particle.flags & 1) != 0
+                ? glm::vec3 (glm::inverse (m_controlPointTransform) * glm::vec4 (point.simulationPosition, 1.0f))
+                : point.simulationPosition;
+            point.displacement = point.simulationPosition - point.birthPreviousPosition;
         }
     };
 }
@@ -2609,7 +2724,7 @@ OperatorFunc CParticle::createMovementOperator (const MovementOperator& op) {
 
 	for (uint32_t i = 0; i < count; i++) {
 	    auto& p = particles[i];
-	    if (!p.alive) {
+	    if (!p.shouldSimulate ()) {
 		continue;
 	    }
 
@@ -2635,7 +2750,7 @@ OperatorFunc CParticle::createCapVelocityOperator (const CapVelocityOperator& op
 	const float maxSpeed = maxSpeedValue ? maxSpeedValue->getFloat () : defaultMaxSpeed;
 	for (uint32_t i = 0; i < count; i++) {
 	    auto& particle = particles[i];
-	    if (particle.alive) {
+	    if (particle.shouldSimulate ()) {
 		particle.velocity = calculateParticleVelocityCap (
 		    particle.velocity, maxSpeed, particle.getLifetimePos (), blendTimes
 		);
@@ -2659,7 +2774,7 @@ OperatorFunc CParticle::createReduceMovementNearControlPointOperator (const Redu
         const glm::vec3 center = controlPoints[op.controlPoint].position;
         for (uint32_t i = 0; i < count; ++i) {
             auto& particle = particles[i];
-            if (!particle.alive) continue;
+            if (!particle.shouldSimulate ()) continue;
             particle.velocity = calculateParticleMovementReduction (
                 particle.velocity, glm::length (particle.position - center), distances, reductions,
                 dt, particle.getLifetimePos (), op.blendTimes
@@ -2682,7 +2797,7 @@ OperatorFunc CParticle::createInheritEventColorOperator (const InheritEventColor
         });
         if (parent == end) return;
         for (uint32_t i = 0; i < count; ++i) {
-            if (particles[i].alive) applyParticleEventColor (particles[i], &*parent, op.blendTimes);
+            if (particles[i].shouldSimulate ()) applyParticleEventColor (particles[i], &*parent, op.blendTimes);
         }
     };
 }
@@ -2702,7 +2817,7 @@ OperatorFunc CParticle::createMaintainDistanceToControlPointOperator (const Main
         const float strength = op.variableStrength->value->getFloat ();
         for (uint32_t i = 0; i < count; ++i) {
             auto& particle = particles[i];
-            if (!particle.alive) continue;
+            if (!particle.shouldSimulate ()) continue;
             applyParticleDistanceConstraint (particle, point, inverseBasis, distance, strength, dt, op.blendTimes);
         }
     };
@@ -2724,7 +2839,7 @@ void WallpaperEngine::Render::Objects::applyParticleBetweenControlPointConstrain
     const glm::vec3 previousAxis = previousSegment / previousLength;
     for (uint32_t index = 0; index < count; ++index) {
         auto& particle = particles[index];
-        if (!particle.alive) continue;
+        if (!particle.shouldSimulate ()) continue;
         const float distance = glm::dot (particle.position - previousStart, previousAxis);
         const float fraction = glm::clamp (distance / previousLength, 0.0f, 1.0f);
         // Preserve the world perpendicular residual; weight translation too.
@@ -2774,7 +2889,7 @@ OperatorFunc CParticle::createAngularMovementOperator (const AngularMovementOper
         const float forceDt = dt * std::pow (std::min (0.025f / getScene ().getDeltaTime (), 1.0f), 0.7f);
         for (uint32_t i = 0; i < count; ++i) {
             auto& particle = particles[i];
-            if (!particle.alive) continue;
+            if (!particle.shouldSimulate ()) continue;
             applyParticleAngularMovement (
                 particle, force, drag, dt, forceDt, particleOperatorBlend (particle.getLifetimePos (), op.blendTimes)
             );
@@ -2796,7 +2911,7 @@ OperatorFunc CParticle::createAlphaFadeOperator (const AlphaFadeOperator& op) {
 
 	    for (uint32_t i = 0; i < count; i++) {
 		auto& p = particles[i];
-		if (!p.alive) {
+		if (!p.shouldSimulate ()) {
 		    continue;
 		}
 
@@ -2832,7 +2947,7 @@ OperatorFunc CParticle::createSizeChangeOperator (const SizeChangeOperator& op) 
 
 	    for (uint32_t i = 0; i < count; i++) {
 		auto& p = particles[i];
-		if (!p.alive) {
+		if (!p.shouldSimulate ()) {
 		    continue;
 		}
 
@@ -2861,7 +2976,7 @@ OperatorFunc CParticle::createAlphaChangeOperator (const AlphaChangeOperator& op
 
 	    for (uint32_t i = 0; i < count; i++) {
 		auto& p = particles[i];
-		if (!p.alive) {
+		if (!p.shouldSimulate ()) {
 		    continue;
 		}
 
@@ -2890,7 +3005,7 @@ OperatorFunc CParticle::createColorChangeOperator (const ColorChangeOperator& op
 
 	    for (uint32_t i = 0; i < count; i++) {
 		auto& p = particles[i];
-		if (!p.alive) {
+		if (!p.shouldSimulate ()) {
 		    continue;
 		}
 
@@ -2948,7 +3063,7 @@ OperatorFunc CParticle::createTurbulenceOperator (const TurbulenceOperator& op) 
 
 	for (size_t i = 0; i < count; ++i) {
 	    ParticleInstance& p = particles[i];
-	    if (!p.alive) {
+	    if (!p.shouldSimulate ()) {
 		continue;
 	    }
 	    if (p.oscillationRandom < 0.0f) {
@@ -3042,7 +3157,7 @@ OperatorFunc CParticle::createVortexV2Operator (const VortexOperator& op) {
         const float forceDt = dt * std::pow (std::min (0.025f / getScene ().getDeltaTime (), 1.0f), 0.7f);
         for (uint32_t i = 0; i < count; ++i) {
             auto& particle = particles[i];
-            if (!particle.alive) continue;
+            if (!particle.shouldSimulate ()) continue;
             particle.velocity += calculateParticleVortexV2 (
                 particle.position - center, particle.velocity, axis, op.flags, distances, speeds,
                 centerForce, ring, dt, forceDt, particleOperatorBlend (particle.getLifetimePos (), op.blendTimes)
@@ -3100,7 +3215,7 @@ OperatorFunc CParticle::createVortexOperator (const VortexOperator& op) {
         const float forceDt = dt * std::pow (std::min (0.025f / getScene ().getDeltaTime (), 1.0f), 0.7f);
         for (uint32_t i = 0; i < count; ++i) {
             auto& particle = particles[i];
-            if (!particle.alive) continue;
+            if (!particle.shouldSimulate ()) continue;
             particle.velocity += calculateParticleLegacyVortex (
                 particle.position - center, axis, op.flags, distances, speeds, forceDt
             );
@@ -3154,7 +3269,7 @@ OperatorFunc CParticle::createControlPointAttractOperator (const ControlPointAtt
 	// Apply attraction force to all particles within threshold
 	for (uint32_t i = 0; i < count; i++) {
 	    auto& p = particles[i];
-	    if (!p.alive) {
+	    if (!p.shouldSimulate ()) {
 		continue;
 	    }
 
@@ -3193,7 +3308,7 @@ OperatorFunc CParticle::createOscillateAlphaOperator (const OscillateAlphaOperat
         const glm::vec2 scales (op.scaleMin->value->getFloat (), op.scaleMax->value->getFloat ());
         for (uint32_t i = 0; i < count; ++i) {
             auto& particle = particles[i];
-            if (!particle.alive) continue;
+            if (!particle.shouldSimulate ()) continue;
             if (particle.oscillationRandom < 0.0f) {
                 particle.oscillationRandom = WallpaperEngine::Maths::randomFloat (m_rng, 0.0f, 1.0f);
             }
@@ -3211,7 +3326,7 @@ OperatorFunc CParticle::createOscillateSizeOperator (const OscillateSizeOperator
         const glm::vec2 scales (op.scaleMin->value->getFloat (), op.scaleMax->value->getFloat ());
         for (uint32_t i = 0; i < count; ++i) {
             auto& particle = particles[i];
-            if (!particle.alive) continue;
+            if (!particle.shouldSimulate ()) continue;
             if (particle.oscillationRandom < 0.0f) {
                 particle.oscillationRandom = WallpaperEngine::Maths::randomFloat (m_rng, 0.0f, 1.0f);
             }
@@ -3253,7 +3368,7 @@ OperatorFunc CParticle::createOscillatePositionOperator (const OscillatePosition
         const glm::vec3 mask = op.mask->value->getVec3 () * glm::vec3 (1.0f, -1.0f, 1.0f);
         for (uint32_t i = 0; i < count; ++i) {
             auto& particle = particles[i];
-            if (!particle.alive) continue;
+            if (!particle.shouldSimulate ()) continue;
             if (particle.oscillationRandom < 0.0f) {
                 particle.oscillationRandom = WallpaperEngine::Maths::randomFloat (m_rng, 0.0f, 1.0f);
             }

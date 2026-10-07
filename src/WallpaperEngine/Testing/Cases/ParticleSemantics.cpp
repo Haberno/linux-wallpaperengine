@@ -1260,7 +1260,7 @@ TEST_CASE ("two-control-point remaps retain only the measured linear subset", "[
             ],"operator":[
                 {"name":"remapvalue","input":"positionbetweentwocontrolpoints","output":"velocity","operation":"remap"},
                 {"name":"remapvalue","input":"maxlifetime","output":"positionbetweentwocontrolpoints","operation":"remap"},
-                {"name":"remapvalue","input":"positionbetweentwocontrolpoints","output":"controlpoint","operation":"remap"},
+                {"name":"remapvalue","input":"size","output":"controlpoint","operation":"remap"},
                 {"name":"remapvalue","input":"positionbetweentwocontrolpoints","output":"velocity","operation":"remap","flags":4},
                 {"name":"remapvalue","input":"lifetimefraction","output":"velocity","operation":"remap","transformfunction":"simplexnoise","inputcomponent":"x"},
                 {"name":"remapvalue","input":"positionbetweentwocontrolpoints","output":"velocity","operation":"remap","outputcomponent":"w"},
@@ -4040,7 +4040,7 @@ TEST_CASE ("scalar selector admission preserves unknown names and unrelated nois
         WallpaperEngine::Data::JSON::JSON::parse (R"({"id":445,"particle":{"operator":[
             {"name":"remapvalue","input":"size","output":"positionbetweentwocontrolpoints","inputcomponent":"w"},
             {"name":"remapvalue","input":"size","output":"positionbetweentwocontrolpoints","outputcomponent":"magnitude"},
-            {"name":"remapvalue","input":"positionbetweentwocontrolpoints","output":"controlpoint","inputcomponent":"x"},
+            {"name":"remapvalue","input":"positionbetweentwocontrolpoints","output":"controlpoint","inputcomponent":"unknown"},
             {"name":"remapvalue","input":"lifetimefraction","output":"velocity","transformfunction":"simplexnoise","inputcomponent":"x"},
             {"name":"remapvalue","input":"lifetimefraction","output":"speed","operation":"multiply","transformfunction":"fbmnoise","flags":3,"outputcomponent":"sum"}
         ]}})"), project);
@@ -5235,7 +5235,7 @@ TEST_CASE ("initializer simplex shares vector selectors and preserves reflected 
     CHECK(p.position.x==Catch::Approx((.437431663f*.5f+.5f)*64).margin(.00004f));CHECK(p.position.y==-4);
 }
 
-TEST_CASE ("initializer control-point output admits only the recovered B input", "[particle][remap][remap-initializer-cp-output-admission]") {
+TEST_CASE ("control-point output admits only the recovered B input", "[particle][remap][remap-initializer-cp-output-admission]") {
     for (const bool initializer : {false, true}) for (const auto input : {"positionbetweentwocontrolpoints", "size"}) {
         auto data = WallpaperEngine::Data::JSON::JSON::parse (R"({"id":940,"particle":{}})");
         data["particle"][initializer ? "initializer" : "operator"] = WallpaperEngine::Data::JSON::JSON::parse (
@@ -5247,7 +5247,7 @@ TEST_CASE ("initializer control-point output admits only the recovered B input",
         const auto object = WallpaperEngine::Data::Parsers::ObjectParser::parse (data, project);
         const auto* particle = object->as<Particle> ();
         const auto count = initializer ? particle->initializers.size () : particle->operators.size ();
-        CHECK (count == (initializer && std::string (input) == "positionbetweentwocontrolpoints" ? 1 : 0));
+        CHECK (count == (std::string (input) == "positionbetweentwocontrolpoints" ? 1 : 0));
     }
 }
 
@@ -5684,4 +5684,56 @@ TEST_CASE ("operator FBM count parsing retains null boolean and truncated number
             CHECK (p.size == Catch::Approx (.8035542369f * .5f + .5f).margin (.00001f));
         }
     }
+}
+
+TEST_CASE ("ordinary B to CP output admits only the endpoint family", "[particle][remap][remap-slots-admission]") {
+    for (const auto input : {"positionbetweentwocontrolpoints", "size"}) {
+        auto data = WallpaperEngine::Data::JSON::JSON::parse (R"({"id":950,"particle":{"operator":[{
+            "name":"remapvalue","output":"controlpoint","operation":"remap"
+        }]}})");
+        data["particle"]["operator"][0]["input"] = input;
+        WallpaperEngine::Data::Model::Project project {};
+        const auto object = WallpaperEngine::Data::Parsers::ObjectParser::parse (data, project);
+        CHECK (object->as<Particle> ()->operators.size () == (std::string (input) == "positionbetweentwocontrolpoints" ? 1 : 0));
+    }
+}
+
+TEST_CASE ("ordinary CP output preserves native XYZ arithmetic and blended channel identity", "[particle][remap][remap-slots-output]") {
+    using WallpaperEngine::Render::Objects::applyParticleControlPointRemap;
+    using WallpaperEngine::Render::Objects::ControlPointData;
+    const char* components[] = {"all", "x", "y", "z", "sum", "average", "max", "min"};
+    const char* operations[] = {"remap", "multiply", "add", "subtract"};
+    // Ordinary writer32 retained controls; blended writer249474 uses all three
+    // mapped axes independently, unlike the particle-vector all-remap branch.
+    for (unsigned component = 0; component < 8; ++component) for (unsigned operation = 0; operation < 4; ++operation)
+        for (const float weight : {1.0f, .5f, 0.0f}) {
+            auto data = WallpaperEngine::Data::JSON::JSON::parse (R"({"id":951,"particle":{"operator":[{
+                "name":"remapvalue","input":"positionbetweentwocontrolpoints","output":"controlpoint",
+                "flags":0,"outputcontrolpoint0":2,"outputcontrolpoint1":3,
+                "outputrangemin":"2 -3 4","outputrangemax":"2 -3 4"
+            }]}})");
+            auto& item = data["particle"]["operator"][0];
+            item["outputcomponent"] = components[component]; item["operation"] = operations[operation];
+            WallpaperEngine::Data::Model::Project project {};
+            const auto object = WallpaperEngine::Data::Parsers::ObjectParser::parse (data, project);
+            REQUIRE (object->as<Particle> ()->operators.size () == 1);
+            auto& remap = object->as<Particle> ()->operators[0]->as<ControlPointRemapOperator> ()->remap;
+            remap.blendTimes = {0, .5f, .75f, 1};
+            std::vector<ControlPointData> points (4); points[2].position = {11,-13,17}; points[3].position = {43,-13,17};
+            ParticleInstance p; p.position = {19,-13,17}; p.lifetime = 1; p.age = weight*.5f;
+            glm::vec3 destination = points[2].position, expected = destination;
+            const glm::vec3 mapped (2,-3,4), reflected (2,3,4);
+            for (unsigned axis = 0; axis < 3; ++axis) if (component == 0 || component == axis+1) {
+                const float target = operation == 0 ? reflected[axis] : operation == 1 ? expected[axis]*mapped[axis]
+                    : operation == 2 ? expected[axis]+reflected[axis] : expected[axis]-reflected[axis];
+                expected[axis] += (target-expected[axis])*weight;
+            }
+            applyParticleControlPointRemap (p,remap,points,false,false,0,0,{},0,0,0,&destination);
+            CHECK (destination == expected); CHECK (p.position == glm::vec3 (19,-13,17));
+            // A retired slot uses age/zero, not the live fallback endpoint1.
+            remap.blendTimes = {0,.5f,2,3}; p.nativeSlotState = true; p.lifetime = 0; p.age = 2;
+            destination = points[2].position;
+            applyParticleControlPointRemap (p,remap,points,false,false,0,0,{},0,0,0,&destination);
+            CHECK (destination == points[2].position);
+        }
 }
