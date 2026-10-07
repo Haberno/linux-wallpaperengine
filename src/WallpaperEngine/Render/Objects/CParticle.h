@@ -340,6 +340,7 @@ private:
     bool m_instanceParametersDirty = false;
     bool m_instanceParameterTimelines = false;
     glm::mat4 m_controlPointTransform { 1.0f };
+    glm::mat4 m_commonControlPointTransform { 1.0f };
     struct ChildSystem {
 	// The renderer holds references into the definition and must die first.
 	ObjectUniquePtr definition;
@@ -378,9 +379,11 @@ private:
     // The public/render view stays dense. Only CP-output owners need inactive
     // native slots to retain and evolve state through the high-water extent.
     std::vector<ParticleInstance> m_remapSlots;
+    uint32_t m_remapAllocationCursor { 0 };
+    uint32_t m_remapNativeCount { 0 };
     bool m_hasControlPointOutputOperator { false };
+    void advanceRemapSlots (float dt);
     uint32_t acquireRemapSlot ();
-    void retainRetiredRemapSlot (const ParticleInstance& particle);
     void synchronizeRemapSlots ();
     void publishRemapSlots ();
     uint32_t m_retiredParticleCount { 0 };

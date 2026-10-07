@@ -442,6 +442,7 @@ void CParticle::setup () {
 	runtime.parentControlPoint = cp.parentControlPoint;
     }
     updateControlPoints ();
+    m_commonControlPointTransform = m_controlPointTransform;
 
     setupChildren ();
     m_initialized = true;
@@ -542,7 +543,8 @@ void CParticle::updateInstanceParameters (const bool allowColorOverride) {
 	m_instanceColor *= color;
     }
     m_instanceParametersDirty = false;
-    if (m_initialized && m_hasControlPointOutputOperator) updateControlPoints (0.0f, true);
+    if (m_initialized && (m_hasMutatingRemapInitializer || m_hasControlPointOutputOperator))
+        updateControlPoints (0.0f, true);
 }
 
 void CParticle::activateInstanceParameters () {
@@ -599,6 +601,10 @@ void CParticle::render () {
     }
     const bool visible = m_particle.visible->value->getBool () && isVisibleThroughParents ();
     updateRemapClocks (getScene ().getDeltaTime (), visible);
+    // Native common refresh reads the previous system+3a0 publication, then
+    // the layer update publishes its current matrix even while integration is held.
+    const glm::mat4 pointReflection = glm::scale (glm::mat4 (1.0f), glm::vec3 (1.0f, -1.0f, 1.0f));
+    m_commonControlPointTransform = pointReflection * particleWorldMatrix () * pointReflection;
     if (!visible) return;
 
     // All systems in this scene frame share one double driver sample. Narrow only
@@ -674,14 +680,15 @@ void CParticle::pause () {
 }
 
 void CParticle::emitParticles (const uint32_t count) {
-    if (m_hasMutatingRemapInitializer) {
-        // These getters change the live point. A second script call must see it
-        // before another resolve, so this owner cannot use the pending counter.
+    if (m_hasMutatingRemapInitializer || m_hasControlPointOutputOperator) {
+        // Point mutation and lifetime-zero slot reuse are synchronous per call;
+        // summing separate script bursts changes the next invocation's state.
         m_pendingBirthTransform = m_controlPointTransform;
         m_pendingSystemTime = m_remapSystemTime;
         m_pendingLayerTime = remapLayerTime ();
         const uint32_t first = m_particleCount;
         m_initializingManualEmission = true;
+        m_remapAllocationCursor = 0;
         for (auto& emitter : m_emitters) emitter (m_particles, m_particleCount, 0.0f, std::max (1u, count));
         m_initializingManualEmission = false;
         finalizeParticleBirths (first, first);
@@ -710,6 +717,8 @@ void CParticle::clearParticles (const bool stopEmission) {
     m_remapSystemTime = 0.0f;
     m_particleCount = 0;
     m_remapSlots.clear ();
+    m_remapAllocationCursor = 0;
+    m_remapNativeCount = 0;
     m_retiredParticleCount = 0;
     m_emitters.clear ();
     setupEmitters ();
@@ -732,7 +741,7 @@ void CParticle::updateRemapClocks (const float frameDelta, const bool visible) {
     if (m_particleParent == nullptr) {
         // Native hidden-live clearing resets the layer and permanent systems,
         // while an already empty hidden layer retains its layer clock.
-        if (!visible && m_particleCount != 0) {
+        if (!visible && (m_hasControlPointOutputOperator ? m_remapNativeCount : m_particleCount) != 0) {
             m_remapLayerTime = 0.0f;
             clearParticles (false);
         }
@@ -871,7 +880,10 @@ void CParticle::includeControlPoint (const uint32_t index) {
 void CParticle::updateControlPoints (const float frameTime, const bool refreshOnly) {
     const CParticle* root = this;
     while (root->m_particleParent != nullptr) root = root->m_particleParent;
-    const glm::mat4 localToWorld = particleWorldMatrix ();
+    const bool mutablePoints = m_hasMutatingRemapInitializer || m_hasControlPointOutputOperator;
+    const glm::mat4 flipY = glm::scale (glm::mat4 (1.0f), glm::vec3 (1.0f, -1.0f, 1.0f));
+    const glm::mat4 localToWorld = refreshOnly && mutablePoints
+        ? flipY * m_commonControlPointTransform * flipY : particleWorldMatrix ();
     const glm::mat4 worldToLocal = glm::inverse (localToWorld);
     const bool worldSpace = (m_particle.flags & 1) != 0;
     const glm::vec2* mouse = getScene ().getMousePositionNormalized ();
@@ -887,7 +899,6 @@ void CParticle::updateControlPoints (const float frameTime, const bool refreshOn
 		mouse->y * getScene ().getCamera ().getHeight (), 0.0f };
 	}
     }
-    const glm::mat4 flipY = glm::scale (glm::mat4 (1.0f), glm::vec3 (1.0f, -1.0f, 1.0f));
     const glm::mat4 parentToLocal = m_particleParent
 	? flipY * glm::inverse (resolveWorldMatrix ()) * flipY : glm::mat4 (1.0f);
     for (size_t i = 0; i < m_controlPoints.size (); ++i) {
@@ -910,11 +921,11 @@ void CParticle::updateControlPoints (const float frameTime, const bool refreshOn
 	    cp.orientation = (cp.flags & 8) != 0 ? source.orientation
 		: glm::mat3 (parentToLocal) * source.orientation;
 	} else {
-	    glm::vec3 offset = m_hasControlPointOutputOperator ? cp.basePosition : cp.offset;
+	    glm::vec3 offset = mutablePoints ? cp.basePosition : cp.offset;
 	    // Authored root offsets stay on that system. Script/user assignments
 	    // propagate to descendants, including assignments of the same value.
 	    const auto& overrides = root->m_particle.instanceOverride.controlPointOffsets;
-	    if ((cp.flags & 5) == 0 && (!m_hasControlPointOutputOperator || refresh)) {
+	    if ((cp.flags & 5) == 0 && (!mutablePoints || refresh)) {
 		if (const auto it = overrides.find (static_cast<int> (i)); it != overrides.end ()) {
 		    if (this == root || root->m_controlPointOverridesChanged[i] || it->second->animation != nullptr) {
 			const auto value = it->second->evaluateVec3 (getScene ().getElapsedTime ());
@@ -930,7 +941,7 @@ void CParticle::updateControlPoints (const float frameTime, const bool refreshOn
 	    const bool worldOffset = (cp.flags & 2) != 0 && !(worldSpace && i == 0);
 	    const auto& angles = root->m_particle.instanceOverride.controlPointAngles;
 	    if ((cp.flags & 0x10005) == 0 && i < m_controlPointCount
-                && (!m_hasControlPointOutputOperator || refresh)) {
+                && (!mutablePoints || refresh)) {
 		if (const auto it = angles.find (static_cast<int> (i)); it != angles.end ()) {
 		    if (this == root || root->m_controlPointAnglesChanged || m_controlPointTimelines) {
 			const auto value = it->second->evaluateVec3 (getScene ().getElapsedTime ());
@@ -946,9 +957,9 @@ void CParticle::updateControlPoints (const float frameTime, const bool refreshOn
 		    }
 		}
 	    }
-            if (m_hasControlPointOutputOperator) cp.basePosition = offset;
+            if (mutablePoints) cp.basePosition = offset;
             if (refreshOnly && !activeOverride) continue;
-            const bool resolve = !m_hasControlPointOutputOperator || !cp.hasPreviousPosition
+            const bool resolve = !mutablePoints || !cp.hasPreviousPosition
                 || (refresh && activeOverride) || (!refreshOnly && worldSpace != worldOffset);
             if (resolve) cp.position = resolveParticleControlPoint (offset, worldToLocal, worldOffset);
             else if (worldSpace) {
@@ -960,6 +971,13 @@ void CParticle::updateControlPoints (const float frameTime, const bool refreshOn
         if (refreshOnly) {
             cp.simulationPosition = worldSpace
                 ? glm::vec3 (flipY * localToWorld * flipY * glm::vec4 (cp.position, 1.0f)) : cp.position;
+            if (worldSpace) {
+                // A held refresh replaces only this current point. Express its
+                // new matrix in the retained birth bridge alongside untouched points.
+                const auto toBirth = glm::inverse (m_controlPointTransform);
+                cp.position = glm::vec3 (toBirth * glm::vec4 (cp.simulationPosition, 1.0f));
+                cp.orientation = glm::mat3 (toBirth * flipY * localToWorld * flipY) * cp.orientation;
+            }
             cp.displacement = cp.simulationPosition - cp.birthPreviousPosition;
         }
     }
@@ -996,21 +1014,22 @@ void CParticle::update (float dt) {
     }
     // Reclaim this frame's expired slots before emitting. A full one-particle
     // glow otherwise rejects its replacement, then disappears for one frame.
-    if (dt > 0.0f) for (auto& slot : m_remapSlots) {
-        if (!slot.alive) {
-            slot.age += dt;
-            if (slot.lifetime != 0.0f && slot.lifetime < slot.age) slot.lifetime = 0.0f;
-        }
-    }
+    if (dt > 0.0f && m_hasControlPointOutputOperator) advanceRemapSlots (dt);
     uint32_t writeIdx = 0;
     for (uint32_t readIdx = 0; dt > 0.0f && readIdx < m_particleCount; ++readIdx) {
 	auto& particle = m_particles[readIdx];
-	particle.age += dt;
+        if (m_hasControlPointOutputOperator) {
+            const auto& slot = m_remapSlots[particle.remapSlot];
+            if (slot.serial != particle.serial) continue;
+            particle.age = slot.age;
+            particle.lifetime = slot.lifetime;
+        } else {
+            particle.age += dt;
+        }
 	if (particle.isAlive ()) {
 	    if (writeIdx != readIdx) m_particles[writeIdx] = std::move (particle);
 	    ++writeIdx;
-	} else {
-            if (m_hasControlPointOutputOperator) retainRetiredRemapSlot (particle);
+	} else if (!m_hasControlPointOutputOperator) {
 	    ++m_retiredParticleCount;
 	    // Death bursts keep the last simulated tip before this slot is reused.
 	    for (auto& child : m_followChildren) {
@@ -1024,6 +1043,7 @@ void CParticle::update (float dt) {
     const uint32_t firstNewParticle = m_particleCount;
     if (m_emitting && dt > 0.0f) {
 	m_pendingEmitterCount = 0;
+        m_remapAllocationCursor = 0;
 	for (auto& emitter : m_emitters) {
 	    emitter (m_particles, m_particleCount, dt, 0);
 	}
@@ -1034,6 +1054,7 @@ void CParticle::update (float dt) {
 	// Queue that same point state, even if the callback also changes a point.
 	m_controlPoints.swap (m_pendingControlPoints);
 	m_initializingManualEmission = true;
+        m_remapAllocationCursor = 0;
 	for (auto& emitter : m_emitters) emitter (m_particles, m_particleCount, 0.0f, m_pendingEmission);
 	m_initializingManualEmission = false;
 	m_controlPoints.swap (m_pendingControlPoints);
@@ -1105,30 +1126,47 @@ void CParticle::update (float dt) {
 
 }
 
+void CParticle::advanceRemapSlots (const float dt) {
+    synchronizeRemapSlots ();
+    for (auto& slot : m_remapSlots) {
+        slot.age += dt;
+        if (slot.lifetime != 0.0f && slot.lifetime < slot.age) {
+            slot.lifetime = 0.0f;
+            --m_remapNativeCount;
+            ++m_retiredParticleCount;
+            for (auto& child : m_followChildren) {
+                if (child.settings->type == "eventdeath") spawnEventChild (child, slot);
+            }
+        }
+        // A rewritten inactive lifetime participates in native retirement, but
+        // does not recreate a dense particle or its follower identity.
+        if (slot.lifetime == 0.0f) slot.alive = false;
+    }
+}
+
 uint32_t CParticle::acquireRemapSlot () {
-    for (uint32_t index = 0; index < m_remapSlots.size (); ++index) {
-        if (m_remapSlots[index].lifetime == 0.0f) return index;
+    if (m_remapNativeCount >= m_maxParticles) return m_maxParticles;
+    for (uint32_t index = m_remapAllocationCursor; index < m_remapSlots.size (); ++index) {
+        if (m_remapSlots[index].lifetime == 0.0f) {
+            m_remapAllocationCursor = index + 1;
+            ++m_remapNativeCount;
+            return index;
+        }
     }
     if (m_remapSlots.size () == m_maxParticles) return m_maxParticles;
     const uint32_t index = m_remapSlots.size ();
     m_remapSlots.emplace_back ();
     m_remapSlots.back ().lifetime = 0.0f;
+    m_remapAllocationCursor = index + 1;
+    ++m_remapNativeCount;
     return index;
-}
-
-void CParticle::retainRetiredRemapSlot (const ParticleInstance& particle) {
-    auto& slot = m_remapSlots[particle.remapSlot];
-    slot = particle;
-    slot.alive = false;
-    slot.lifetime = 0.0f;
-    slot.nativeSlotState = true;
-    slot.trailHistory.clear ();
 }
 
 void CParticle::synchronizeRemapSlots () {
     for (uint32_t index = 0; index < m_particleCount; ++index) {
         const auto& particle = m_particles[index];
         auto& slot = m_remapSlots[particle.remapSlot];
+        if (slot.serial != particle.serial) continue;
         slot = particle;
         slot.nativeSlotState = true;
         slot.trailHistory.clear ();
@@ -1140,6 +1178,7 @@ void CParticle::publishRemapSlots () {
     // A lifetime remap of a retired slot does not invent a new live particle.
     for (uint32_t index = 0; index < m_particleCount; ++index) {
         auto& particle = m_particles[index];
+        if (m_remapSlots[particle.remapSlot].serial != particle.serial) continue;
         auto history = std::move (particle.trailHistory);
         const auto frame = particle.trailLastFrame;
         const bool valid = particle.trailLastFrameValid;
@@ -1153,6 +1192,8 @@ void CParticle::publishRemapSlots () {
 void CParticle::finalizeParticleBirths (const uint32_t firstNewParticle, const uint32_t firstManual) {
     for (uint32_t i = firstNewParticle; i < m_particleCount; ++i) {
         m_particles[i].serial = ++m_nextParticleSerial;
+        if (m_hasControlPointOutputOperator)
+            m_remapSlots[m_particles[i].remapSlot].serial = m_particles[i].serial;
     }
     if ((m_particle.flags & 1) == 0) return;
     const glm::mat4 flipY = glm::scale (glm::mat4 (1.0f), glm::vec3 (1.0f, -1.0f, 1.0f));
@@ -2139,10 +2180,33 @@ InitializerFunc CParticle::createControlPointRemapInitializer (const ControlPoin
             applyInitialControlPointRemap (particle, remap);
             return;
         }
-        applyParticleControlPointRemap (particle, remap, m_controlPoints, true, m_hasAngularVelocity, getScene ().getTime (), g_Daytime,
-            remap.input == ControlPointRemap::Input::LayerOrigin ? remapLayerOrigin () : glm::vec3 (0.0f),
-            m_particle.animationMode == "randomframe" ? particle.oscillationRandom : 0.0f,
-            m_initializingManualEmission ? m_pendingSystemTime : m_remapSystemTime, remapLayerTime ());
+        const auto apply = [&] (const std::vector<ControlPointData>& points) {
+            applyParticleControlPointRemap (particle, remap, points, true, m_hasAngularVelocity, getScene ().getTime (), g_Daytime,
+                remap.input == ControlPointRemap::Input::LayerOrigin ? remapLayerOrigin () : glm::vec3 (0.0f),
+                m_particle.animationMode == "randomframe" ? particle.oscillationRandom : 0.0f,
+                m_initializingManualEmission ? m_pendingSystemTime : m_remapSystemTime, remapLayerTime ());
+        };
+        if (!(m_particle.flags & 1)) {
+            apply (m_controlPoints);
+            return;
+        }
+        // Native remap initializers read/write simulation-space birth arrays.
+        // The fork keeps local births until finalization, so bridge this dispatch
+        // using the same matrix that will publish its position and velocity.
+        const auto& transform = m_initializingManualEmission ? m_pendingBirthTransform : m_controlPointTransform;
+        const glm::vec3 position = particle.position, velocity = particle.velocity;
+        auto points = m_controlPoints;
+        for (auto& point : points) point.position = point.simulationPosition;
+        particle.position = glm::vec3 (transform * glm::vec4 (position, 1.0f));
+        particle.velocity = glm::mat3 (transform) * velocity;
+        apply (points);
+        using Output = ControlPointRemap::Output;
+        const bool positionOutput = remap.output == Output::BetweenPoints || remap.output == Output::Position
+            || remap.output == Output::DistanceToPoint || remap.output == Output::DeltaToPoint
+            || remap.output == Output::DirectionToPoint;
+        particle.position = positionOutput ? glm::vec3 (glm::inverse (transform) * glm::vec4 (particle.position, 1.0f)) : position;
+        particle.velocity = remap.output == Output::Velocity || remap.output == Output::Speed
+            ? glm::inverse (glm::mat3 (transform)) * particle.velocity : velocity;
     };
 }
 
