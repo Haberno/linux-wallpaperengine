@@ -18,7 +18,6 @@
 #include <xmmintrin.h>
 #endif
 
-extern float g_Time;
 extern float g_Daytime;
 
 using namespace WallpaperEngine::Render::Objects;
@@ -683,6 +682,7 @@ void CParticle::stop () {
     m_pendingControlPoints.clear ();
     m_emitting = false;
     m_particleCount = 0;
+    m_retiredParticleCount = 0;
     m_emitters.clear ();
     setupEmitters ();
     for (auto& child : m_children) {
@@ -917,6 +917,7 @@ void CParticle::update (float dt) {
 	    if (writeIdx != readIdx) m_particles[writeIdx] = std::move (particle);
 	    ++writeIdx;
 	} else {
+	    ++m_retiredParticleCount;
 	    // Death bursts keep the last simulated tip before this slot is reused.
 	    for (auto& child : m_followChildren) {
 		if (child.settings->type == "eventdeath") spawnEventChild (child, particle);
@@ -3961,10 +3962,11 @@ void CParticle::renderRope () {
 	}
     }
 
-    // UV scrolling: shift UV along the rope over time (1 UV cycle per second)
+    // Native ordinary-rope scrolling advances by retired particles. Convert its
+    // particle ordinal to the sub-segment units used by our interpolated mesh.
     float scrollOffset = 0.0f;
     if (m_ropeUVScrolling && usableLength > 0.0f) {
-	scrollOffset = std::fmod (static_cast<float> (g_Time), 10000.0f) * usableLength;
+	scrollOffset = static_cast<float> (m_retiredParticleCount) * subdivision;
     }
 
     for (uint32_t s = 0; s < totalSubSegments; s++) {

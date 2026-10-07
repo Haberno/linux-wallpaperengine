@@ -358,6 +358,7 @@ private:
 
     std::vector<ParticleInstance> m_particles;
     uint32_t m_particleCount { 0 };
+    uint32_t m_retiredParticleCount { 0 };
     bool m_emitting = true;
     uint32_t m_pendingEmission = 0;
     std::vector<ControlPointData> m_pendingControlPoints;
