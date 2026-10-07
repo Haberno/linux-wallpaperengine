@@ -1625,7 +1625,7 @@ TEST_CASE ("Ordinary descendants use animated locals after the rope solve", "[md
 	auto rejected = data;
 	if (route == 0) rejected.bones[4].type = 1;
 	if (route == 1) rejected.bones[4].type = 2;
-	if (route == 2) rejected.bones[4].parent = -1;
+	if (route == 2) rejected.bones[4].parent = 4;
 	if (route == 3) rejected.bones[4].rope = MdlBoneRope {};
 	if (route == 4) rejected.bones[2].type = 0;
 	MdlPhysicsState rejectedState;
@@ -1718,8 +1718,8 @@ TEST_CASE ("Serial ropes admit a pinned working-pose endpoint without a control"
     }
     for (int route = 0; route < 5; ++route) {
 	auto rejected = data;
-	if (route == 0) rejected.bones[6].ikFollowEnd = true;
-	if (route == 1) rejected.bones[3].ikFollowEnd = false;
+	if (route == 0) rejected.bones[6].ikAngleLimits = true;
+	if (route == 1) rejected.ikGroups[0].nodes[1].branches[0].bones[0] = 2;
 	if (route == 2) rejected.ikGroups[0].hasDependencies = true;
 	if (route == 3) rejected.bones[4].type = 0;
 	if (route == 4) rejected.ikGroups[0].nodes[1].branches[0].flags = 5;
@@ -1857,7 +1857,7 @@ TEST_CASE ("Two pinned rope branches retain native initialization and ordered ro
             auto& branches=rejected.ikGroups[0].nodes[0].branches;
             if (route==0) branches.push_back (branches[0]);
             if (route==1) branches[1].flags=5;
-            if (route==2) rejected.bones[branches[1].bones.back ()].ikFollowEnd=true;
+            if (route==2) rejected.bones[branches[1].bones.back ()].spring=MdlBoneSpring {};
             if (route==3) branches[1].bones[1]=branches[0].bones[1];
             if (route==4) rejected.ikGroups[0].hasDependencies=true;
             if (route==5) rejected.bones[1].type=0;
@@ -1868,5 +1868,258 @@ TEST_CASE ("Two pinned rope branches retain native initialization and ordered ro
             CHECK (rejectedState.ropePoints.empty ());
             CHECK (rejectedState.ropeWorldBones.empty ());
         }
+    }
+}
+
+TEST_CASE ("Kinematic graph replays native owner traversal and full graph state", "[mdl][animation][physics][rope][graphs]") {
+    // Native oracle03, wallpaper64.exe40e2ce02: four consecutive positive outer publications.
+    struct Frame {
+        float dt;
+        std::vector<glm::mat4> world;
+        std::vector<glm::mat4> owners;
+        std::vector<glm::vec3> current;
+        std::vector<glm::vec3> previous;
+    };
+    const std::vector<Frame> frames = {
+        { 0.0484232008f,
+            { glm::mat4 (0.806113958f, 0.591760337f, 0.0f, 0.0f, -0.591760337f, 0.806113958f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f), glm::mat4 (1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 30.0f, -0.211029053f, 0.0f, 1.0f), glm::mat4 (1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 60.0f, -0.211029053f, 0.0f, 1.0f), glm::mat4 (0.659066319f, -0.752084851f, 0.0f, 0.0f, 0.752084851f, 0.659066319f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f, -160.0f, -90.2110291f, 0.0f, 1.0f), glm::mat4 (0.93778348f, 0.342317641f, 0.0f, 0.0f, -0.342317641f, 0.93778348f, 0.0f, 0.0f, 0.0f, 0.0f, 0.998308122f, 0.0f, 0.0f, 50.0f, 0.0f, 1.0f), glm::mat4 (-0.821567178f, -0.570111156f, 0.0f, 0.0f, 0.570111156f, -0.821567178f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f, -160.0f, -90.2110291f, 0.0f, 1.0f), glm::mat4 (1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f, -30.0f, 0.0f, 0.0f, 1.0f), glm::mat4 (0.946666598f, 0.322214693f, 0.0f, 0.0f, -0.322214693f, 0.946666598f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 80.0f, -0.211029053f, 0.0f, 1.0f), glm::mat4 (0.978408456f, -0.198333204f, -0.0f, 0.0f, 0.198333204f, 0.978408456f, 0.0f, 0.0f, 0.0f, -0.0f, 0.998308122f, 0.0f, 110.0f, 10.0f, 0.0f, 1.0f) },
+            { glm::mat4 (1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f) },
+            { glm::vec3 (160.0f, 90.0f, 0.0f), glm::vec3 (190.0f, 89.7889709f, 0.0f), glm::vec3 (220.0f, 89.7889709f, 0.0f), glm::vec3 (147.770538f, 111.804588f, 0.0f), glm::vec3 (160.0f, 140.0f, 0.0f), glm::vec3 (145.297134f, 87.029213f, 0.0f), glm::vec3 (130.0f, 90.0f, 0.0f), glm::vec3 (245.440735f, 91.7472687f, 0.0f), glm::vec3 (270.0f, 100.0f, 0.0f) },
+            { glm::vec3 (0.0f, 0.0f, 0.0f), glm::vec3 (190.0f, 90.0f, 0.0f), glm::vec3 (220.0f, 90.0f, 0.0f), glm::vec3 (0.0f, 0.0f, 0.0f), glm::vec3 (0.0f, 0.0f, 0.0f), glm::vec3 (0.0f, 0.0f, 0.0f), glm::vec3 (0.0f, 0.0f, 0.0f), glm::vec3 (240.0f, 90.0f, 0.0f), glm::vec3 (0.0f, 0.0f, 0.0f) } },
+        { 0.031936001f,
+            { glm::mat4 (0.51012218f, -0.860101819f, 0.0f, 0.0f, 0.860101819f, 0.51012218f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f), glm::mat4 (1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 30.0f, -0.513847351f, 0.0f, 1.0f), glm::mat4 (0.992053211f, 0.125818849f, 0.0f, 0.0f, -0.125818849f, 0.992053211f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 60.0f, -0.513847351f, 0.0f, 1.0f), glm::mat4 (-0.524587393f, 0.851356924f, 0.0f, 0.0f, -0.851356924f, -0.524587393f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 135.541077f, 133.51738f, 0.0f, 1.0f), glm::mat4 (0.93778342f, 0.3423177f, 0.0f, 0.0f, -0.3423177f, 0.93778342f, 0.0f, 0.0f, 0.0f, 0.0f, 0.998308122f, 0.0f, 0.0f, 50.0f, 0.0f, 1.0f), glm::mat4 (0.886180997f, 0.46333921f, 0.0f, 0.0f, -0.46333921f, 0.886180997f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 130.594269f, 83.966629f, 0.0f, 1.0f), glm::mat4 (1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f, -30.0f, 0.0f, 0.0f, 1.0f), glm::mat4 (0.94530201f, 0.326196432f, 0.0f, 0.0f, -0.326196432f, 0.94530201f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 90.8814697f, 3.40274811f, 0.0f, 1.0f), glm::mat4 (0.978408456f, -0.198333234f, -0.0f, 0.0f, 0.198333234f, 0.978408456f, 0.0f, 0.0f, 0.0f, -0.0f, 0.998308122f, 0.0f, 110.0f, 10.0f, 0.0f, 1.0f) },
+            { glm::mat4 (1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f) },
+            { glm::vec3 (160.002197f, 89.9999619f, 0.0f), glm::vec3 (189.998901f, 89.4861908f, 0.0f), glm::vec3 (219.998901f, 89.4861526f, 0.0f), glm::vec3 (167.990097f, 113.689499f, 0.0f), glm::vec3 (160.0f, 140.0f, 0.0f), glm::vec3 (146.152466f, 95.7606049f, 0.0f), glm::vec3 (130.0f, 90.0f, 0.0f), glm::vec3 (245.455765f, 91.6334381f, 0.0f), glm::vec3 (270.0f, 100.0f, 0.0f) },
+            { glm::vec3 (0.0f, 0.0f, 0.0f), glm::vec3 (190.0f, 89.7889709f, 0.0f), glm::vec3 (220.0f, 89.7889709f, 0.0f), glm::vec3 (147.770538f, 111.804588f, 0.0f), glm::vec3 (0.0f, 0.0f, 0.0f), glm::vec3 (145.297134f, 87.029213f, 0.0f), glm::vec3 (0.0f, 0.0f, 0.0f), glm::vec3 (245.440735f, 91.7472687f, 0.0f), glm::vec3 (0.0f, 0.0f, 0.0f) } },
+        { 0.0319325998f,
+            { glm::mat4 (0.8919245f, -0.45218429f, 0.0f, 0.0f, 0.45218429f, 0.8919245f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f), glm::mat4 (1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 29.9978027f, -0.908363342f, 0.0f, 1.0f), glm::mat4 (0.995819747f, 0.0913401768f, 0.0f, 0.0f, -0.0913401768f, 0.995819747f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 60.0f, -0.908439636f, 0.0f, 1.0f), glm::mat4 (0.655984163f, 0.75477469f, 0.0f, 0.0f, -0.75477469f, 0.655984163f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 28.2096558f, 25.4826355f, 0.0f, 1.0f), glm::mat4 (0.93778348f, 0.342317641f, 0.0f, 0.0f, -0.342317641f, 0.93778348f, 0.0f, 0.0f, 0.0f, 0.0f, 0.998308122f, 0.0f, 0.0f, 50.0f, 0.0f, 1.0f), glm::mat4 (0.763186932f, 0.646177828f, 0.0f, 0.0f, -0.646177828f, 0.763186932f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f, -12.9922028f, 14.4002228f, 0.0f, 1.0f), glm::mat4 (1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f, -30.0f, 0.0f, 0.0f, 1.0f), glm::mat4 (0.944014907f, 0.329902768f, 0.0f, 0.0f, -0.329902768f, 0.944014907f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 85.4707947f, 1.42783356f, 0.0f, 1.0f), glm::mat4 (0.978408456f, -0.198333189f, -0.0f, 0.0f, 0.198333189f, 0.978408456f, 0.0f, 0.0f, 0.0f, -0.0f, 0.998308122f, 0.0f, 110.0f, 10.0f, 0.0f, 1.0f) },
+            { glm::mat4 (1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f) },
+            { glm::vec3 (160.006866f, 89.999794f, 0.0f), glm::vec3 (189.996567f, 89.0918427f, 0.0f), glm::vec3 (219.996567f, 89.0915604f, 0.0f), glm::vec3 (172.244797f, 111.799751f, 0.0f), glm::vec3 (160.0f, 140.0f, 0.0f), glm::vec3 (146.710999f, 96.9438477f, 0.0f), glm::vec3 (130.0f, 90.0f, 0.0f), glm::vec3 (245.470551f, 91.5227356f, 0.0f), glm::vec3 (270.0f, 100.0f, 0.0f) },
+            { glm::vec3 (0.0f, 0.0f, 0.0f), glm::vec3 (189.998901f, 89.4861908f, 0.0f), glm::vec3 (220.0f, 89.4861526f, 0.0f), glm::vec3 (167.990097f, 113.689499f, 0.0f), glm::vec3 (0.0f, 0.0f, 0.0f), glm::vec3 (146.152466f, 95.7606049f, 0.0f), glm::vec3 (0.0f, 0.0f, 0.0f), glm::vec3 (245.455765f, 91.6334381f, 0.0f), glm::vec3 (0.0f, 0.0f, 0.0f) } },
+        { 0.0318192989f,
+            { glm::mat4 (0.939767003f, -0.34181568f, 0.0f, 0.0f, 0.34181568f, 0.939767003f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f), glm::mat4 (1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 29.9942322f, -1.39363098f, 0.0f, 1.0f), glm::mat4 (0.994373083f, 0.10593494f, 0.0f, 0.0f, -0.10593494f, 0.994373083f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 60.0f, -1.39415741f, 0.0f, 1.0f), glm::mat4 (0.877442181f, 0.479682446f, 0.0f, 0.0f, -0.479682446f, 0.877442181f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 16.4994965f, 19.8188782f, 0.0f, 1.0f), glm::mat4 (0.93778342f, 0.342317671f, 0.0f, 0.0f, -0.342317671f, 0.93778342f, 0.0f, 0.0f, 0.0f, 0.0f, 0.998308122f, 0.0f, 0.0f, 50.0f, 0.0f, 1.0f), glm::mat4 (0.906648278f, 0.421887249f, 0.0f, 0.0f, -0.421887249f, 0.906648278f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f, -12.7304688f, 8.03596497f, 0.0f, 1.0f), glm::mat4 (1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f, -30.0f, 0.0f, 0.0f, 1.0f), glm::mat4 (0.942665756f, 0.333738327f, 0.0f, 0.0f, -0.333738327f, 0.942665756f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 85.4853363f, 1.32090759f, 0.0f, 1.0f), glm::mat4 (0.978408456f, -0.198333219f, -0.0f, 0.0f, 0.198333219f, 0.978408456f, 0.0f, 0.0f, 0.0f, -0.0f, 0.998308122f, 0.0f, 110.0f, 10.0f, 0.0f, 1.0f) },
+            { glm::mat4 (1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f) },
+            { glm::vec3 (160.016159f, 89.9992523f, 0.0f), glm::vec3 (189.991913f, 88.6071167f, 0.0f), glm::vec3 (219.991913f, 88.6058426f, 0.0f), glm::vec3 (169.8284f, 112.993568f, 0.0f), glm::vec3 (160.0f, 140.0f, 0.0f), glm::vec3 (146.020279f, 95.3951111f, 0.0f), glm::vec3 (130.0f, 90.0f, 0.0f), glm::vec3 (245.483582f, 91.4046936f, 0.0f), glm::vec3 (270.0f, 100.0f, 0.0f) },
+            { glm::vec3 (0.0f, 0.0f, 0.0f), glm::vec3 (189.996567f, 89.0918427f, 0.0f), glm::vec3 (220.0f, 89.0915604f, 0.0f), glm::vec3 (172.244797f, 111.799751f, 0.0f), glm::vec3 (0.0f, 0.0f, 0.0f), glm::vec3 (146.710999f, 96.9438477f, 0.0f), glm::vec3 (0.0f, 0.0f, 0.0f), glm::vec3 (245.470551f, 91.5227356f, 0.0f), glm::vec3 (0.0f, 0.0f, 0.0f) } }
+    };
+    MdlAnimationData data;
+    const std::vector<glm::vec3> local = { glm::vec3 (0.0f, 0.0f, 0.0f), glm::vec3 (30.0f, 0.0f, 0.0f), glm::vec3 (30.0f, 0.0f, 0.0f), glm::vec3 (0.0f, 20.0f, 0.0f), glm::vec3 (0.0f, 20.0f, 0.0f), glm::vec3 (-15.0f, 0.0f, 0.0f), glm::vec3 (-15.0f, 0.0f, 0.0f), glm::vec3 (20.0f, 0.0f, 0.0f), glm::vec3 (20.0f, 0.0f, 0.0f) };
+    const std::vector<int> parents = { -1, 0, 1, 0, 3, 0, 5, 2, 7 };
+    const std::vector<uint32_t> types = { 3, 3, 3, 3, 3, 3, 3, 3, 3 };
+    data.boneLengths = { 0.0f, 30.0f, 30.0f, 20.0f, 20.0f, 15.0f, 15.0f, 20.0f, 20.0f };
+    data.boneDirections.resize (local.size ());
+    std::vector<glm::mat4> bind;
+    for (uint32_t bone = 0; bone < local.size (); ++bone) {
+        const auto matrix = glm::translate (glm::mat4 (1), local[bone]);
+        bind.push_back ((parents[bone] < 0 ? glm::mat4 (1) : bind[parents[bone]]) * matrix);
+        data.bones.push_back ({ .type=types[bone], .parent=parents[bone], .bindLocal=matrix, .inverseBindWorld=glm::inverse (bind.back ()) });
+        if (parents[bone] >= 0) data.boneDirections[parents[bone]][bone] = glm::normalize (local[bone]);
+    }
+    data.bones[2].rope = MdlBoneRope { .gravity=true, .mass=1.0f, .stretch=false };
+    data.bones[2].ikFollowEnd = true;
+    data.bones[4].rope = MdlBoneRope { .gravity=true, .mass=1.0f, .stretch=true };
+    data.bones[6].rope = MdlBoneRope { .gravity=true, .mass=1.0f, .stretch=false };
+    data.bones[8].rope = MdlBoneRope { .gravity=true, .mass=1.0f, .stretch=true };
+    data.controls.push_back ({ .bone=4, .bindWorld=glm::rotate (glm::translate (glm::mat4 (1), glm::vec3 (0.0f, 50.0f, 0.0f)), 0.35f, glm::vec3 (0,0,1)) });
+    data.controls.push_back ({ .bone=8, .bindWorld=glm::rotate (glm::translate (glm::mat4 (1), glm::vec3 (110.0f, 10.0f, 0.0f)), -0.2f, glm::vec3 (0,0,1)) });
+    data.ikGroups = { { .root=0, .nodes={ { .root=0, .branches={ { .flags=4, .maxLength=60.0f, .bones={ 0, 1, 2 } }, { .flags=5, .maxLength=40.0f, .bones={ 0, 3, 4 } }, { .flags=4, .maxLength=30.0f, .bones={ 0, 5, 6 } } } }, { .root=2, .branches={ { .flags=5, .maxLength=40.0f, .bones={ 2, 7, 8 } } } } } } };
+    MdlAnimationClip clip;
+    const std::vector<size_t> owners = { 0 };
+    MdlPhysicsState state;
+    for (const auto& frame : frames) {
+        MdlPhysicsStep physics { .state=state, .model=glm::translate (glm::mat4 (1), glm::vec3 (160,90,0)),
+            .rope=MdlRopeStep { .gravity={0,-90,0}, .deltaTime=frame.dt } };
+        const auto pose = MdlAnimationEvaluator::evaluate (data, {{ .animation=&clip }}, &physics);
+        REQUIRE (state.ropePoints.size () == data.bones.size ());
+        REQUIRE (pose.publishedWorldBones.size () == data.bones.size ());
+        for (size_t bone=0; bone<data.bones.size (); ++bone) {
+            const auto found = std::find (owners.begin (), owners.end (), bone);
+            const auto& published = found == owners.end () ? frame.world[bone] : frame.owners[found-owners.begin ()];
+            const auto skin = frame.world[bone] * data.bones[bone].inverseBindWorld;
+            for (int column=0; column<4; ++column) for (int axis=0; axis<4; ++axis) {
+                CHECK (pose.worldBones[bone][column][axis] == Catch::Approx (frame.world[bone][column][axis]).margin (3e-4f));
+                CHECK (pose.skinBones[bone][column][axis] == Catch::Approx (skin[column][axis]).margin (3e-4f));
+                CHECK (pose.publishedWorldBones[bone][column][axis] == Catch::Approx (published[column][axis]).margin (3e-4f));
+            }
+            for (int axis=0; axis<3; ++axis) {
+                CHECK (state.ropePoints[bone].current[axis] == Catch::Approx (frame.current[bone][axis]).margin (3e-4f));
+                CHECK (state.ropePoints[bone].previous[axis] == Catch::Approx (frame.previous[bone][axis]).margin (3e-4f));
+            }
+        }
+    }
+}
+
+TEST_CASE ("Kinematic owners replays native owner traversal and full graph state", "[mdl][animation][physics][rope][graphs]") {
+    // Native oracle03, wallpaper64.exe40e2ce02: four consecutive positive outer publications.
+    struct Frame {
+        float dt;
+        std::vector<glm::mat4> world;
+        std::vector<glm::mat4> owners;
+        std::vector<glm::vec3> current;
+        std::vector<glm::vec3> previous;
+    };
+    const std::vector<Frame> frames = {
+        { 0.0484232008f,
+            { glm::mat4 (0.999944329f, -0.010550865f, 0.0f, 0.0f, 0.010550865f, 0.999944329f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f, -40.0f, 0.0f, 0.0f, 1.0f), glm::mat4 (1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f, -20.0f, -0.211029053f, 0.0f, 1.0f), glm::mat4 (1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f, -0.211029053f, 0.0f, 1.0f), glm::mat4 (1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f, 9.78897095f, 0.0f, 1.0f), glm::mat4 (0.999944329f, 0.0105510158f, 0.0f, 0.0f, -0.0105510158f, 0.999944329f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 20.0f, 9.78897095f, 0.0f, 1.0f), glm::mat4 (1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 39.9994431f, 9.99999714f, 0.0f, 1.0f), glm::mat4 (1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 39.9994431f, 23.9999962f, 0.0f, 1.0f) },
+            { glm::mat4 (1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f, 9.78897095f, 0.0f, 1.0f), glm::mat4 (1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f, -40.0f, 0.0f, 0.0f, 1.0f) },
+            { glm::vec3 (120.000557f, 89.9999924f, 0.0f), glm::vec3 (139.999451f, 89.7889786f, 0.0f), glm::vec3 (160.0f, 89.7889709f, 0.0f), glm::vec3 (160.0f, 99.7889709f, 0.0f), glm::vec3 (180.0f, 99.7889709f, 0.0f), glm::vec3 (199.999451f, 100.0f, 0.0f), glm::vec3 (0.0f, 0.0f, 0.0f) },
+            { glm::vec3 (0.0f, 0.0f, 0.0f), glm::vec3 (140.0f, 90.0f, 0.0f), glm::vec3 (160.0f, 90.0f, 0.0f), glm::vec3 (0.0f, 0.0f, 0.0f), glm::vec3 (180.0f, 100.0f, 0.0f), glm::vec3 (0.0f, 0.0f, 0.0f), glm::vec3 (0.0f, 0.0f, 0.0f) } },
+        { 0.031936001f,
+            { glm::mat4 (0.999670088f, -0.0256845392f, 0.0f, 0.0f, 0.0256845392f, 0.999670088f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f, -40.0f, 0.0f, 0.0f, 1.0f), glm::mat4 (1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f, -20.0010986f, -0.513832092f, 0.0f, 1.0f), glm::mat4 (1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f, -0.513847351f, 0.0f, 1.0f), glm::mat4 (1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f, 9.48615265f, 0.0f, 1.0f), glm::mat4 (0.999670029f, 0.0256862231f, 0.0f, 0.0f, -0.0256862231f, 0.999670029f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 20.0f, 9.48615265f, 0.0f, 1.0f), glm::mat4 (1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 39.9967003f, 9.99996185f, 0.0f, 1.0f), glm::mat4 (1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 39.9967003f, 23.9999619f, 0.0f, 1.0f) },
+            { glm::mat4 (1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f, 9.48615265f, 0.0f, 1.0f), glm::mat4 (1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f, -40.0f, 0.0f, 0.0f, 1.0f) },
+            { glm::vec3 (120.003296f, 89.9999161f, 0.0f), glm::vec3 (139.998352f, 89.4862518f, 0.0f), glm::vec3 (159.998352f, 89.4861526f, 0.0f), glm::vec3 (160.0f, 99.4861526f, 0.0f), glm::vec3 (180.0f, 99.4862366f, 0.0f), glm::vec3 (199.996704f, 99.9999619f, 0.0f), glm::vec3 (0.0f, 0.0f, 0.0f) },
+            { glm::vec3 (0.0f, 0.0f, 0.0f), glm::vec3 (139.999451f, 89.7889786f, 0.0f), glm::vec3 (160.0f, 89.7889709f, 0.0f), glm::vec3 (0.0f, 0.0f, 0.0f), glm::vec3 (180.0f, 99.7889709f, 0.0f), glm::vec3 (0.0f, 0.0f, 0.0f), glm::vec3 (0.0f, 0.0f, 0.0f) } },
+        { 0.0319325998f,
+            { glm::mat4 (0.998970151f, -0.0453719124f, 0.0f, 0.0f, 0.0453719124f, 0.998970151f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f, -40.0f, 0.0f, 0.0f, 1.0f), glm::mat4 (1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f, -20.0027466f, -0.908248901f, 0.0f, 1.0f), glm::mat4 (1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f, -0.00329589844f, -0.908439636f, 0.0f, 1.0f), glm::mat4 (1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f, -0.00329589844f, 9.09156036f, 0.0f, 1.0f), glm::mat4 (0.998969615f, 0.0453840531f, 0.0f, 0.0f, -0.0453840531f, 0.998969615f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 20.0f, 9.09172821f, 0.0f, 1.0f), glm::mat4 (1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 39.986393f, 9.99972725f, 0.0f, 1.0f), glm::mat4 (1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 39.986393f, 23.9997272f, 0.0f, 1.0f) },
+            { glm::mat4 (1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f, -0.00329589844f, 9.09156036f, 0.0f, 1.0f), glm::mat4 (1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f, -40.0f, 0.0f, 0.0f, 1.0f) },
+            { glm::vec3 (120.008926f, 89.9995956f, 0.0f), glm::vec3 (139.992523f, 89.0921555f, 0.0f), glm::vec3 (159.992523f, 89.0915604f, 0.0f), glm::vec3 (159.996704f, 99.0915604f, 0.0f), glm::vec3 (179.996704f, 99.0920486f, 0.0f), glm::vec3 (199.986389f, 99.9997253f, 0.0f), glm::vec3 (0.0f, 0.0f, 0.0f) },
+            { glm::vec3 (0.0f, 0.0f, 0.0f), glm::vec3 (139.998352f, 89.4862518f, 0.0f), glm::vec3 (159.998352f, 89.4861526f, 0.0f), glm::vec3 (0.0f, 0.0f, 0.0f), glm::vec3 (180.0f, 99.4862366f, 0.0f), glm::vec3 (0.0f, 0.0f, 0.0f), glm::vec3 (0.0f, 0.0f, 0.0f) } },
+        { 0.0318192989f,
+            { glm::mat4 (0.997579813f, -0.0695309937f, 0.0f, 0.0f, 0.0695309937f, 0.997579813f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f, -40.0f, 0.0f, 0.0f, 1.0f), glm::mat4 (1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f, -20.0133057f, -1.39306641f, 0.0f, 1.0f), glm::mat4 (1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f, -0.0133056641f, -1.39415741f, 0.0f, 1.0f), glm::mat4 (1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f, -0.0133056641f, 8.60584259f, 0.0f, 1.0f), glm::mat4 (0.997578681f, 0.069547005f, 0.0f, 0.0f, -0.069547005f, 0.997578681f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 19.9934082f, 8.60673523f, 0.0f, 1.0f), glm::mat4 (1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 39.962429f, 9.99889183f, 0.0f, 1.0f), glm::mat4 (1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 39.962429f, 23.9988918f, 0.0f, 1.0f) },
+            { glm::mat4 (1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f, -0.0133056641f, 8.60584259f, 0.0f, 1.0f), glm::mat4 (1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f, -40.0f, 0.0f, 0.0f, 1.0f) },
+            { glm::vec3 (120.017548f, 89.9987793f, 0.0f), glm::vec3 (139.977921f, 88.6081543f, 0.0f), glm::vec3 (159.977921f, 88.6058426f, 0.0f), glm::vec3 (159.986694f, 98.6058426f, 0.0f), glm::vec3 (179.986694f, 98.6079559f, 0.0f), glm::vec3 (199.962433f, 99.9988937f, 0.0f), glm::vec3 (0.0f, 0.0f, 0.0f) },
+            { glm::vec3 (0.0f, 0.0f, 0.0f), glm::vec3 (139.992523f, 89.0921555f, 0.0f), glm::vec3 (159.992523f, 89.0915604f, 0.0f), glm::vec3 (0.0f, 0.0f, 0.0f), glm::vec3 (179.996704f, 99.0920486f, 0.0f), glm::vec3 (0.0f, 0.0f, 0.0f), glm::vec3 (0.0f, 0.0f, 0.0f) } }
+    };
+    MdlAnimationData data;
+    const std::vector<glm::vec3> local = { glm::vec3 (-40.0f, 0.0f, 0.0f), glm::vec3 (20.0f, 0.0f, 0.0f), glm::vec3 (20.0f, 0.0f, 0.0f), glm::vec3 (0.0f, 10.0f, 0.0f), glm::vec3 (20.0f, 0.0f, 0.0f), glm::vec3 (20.0f, 0.0f, 0.0f), glm::vec3 (0.0f, 10.0f, 0.0f) };
+    const std::vector<int> parents = { -1, 0, 1, 2, 3, 4, 5 };
+    const std::vector<uint32_t> types = { 3, 3, 3, 3, 3, 3, 0 };
+    data.boneLengths = { 0.0f, 20.0f, 20.0f, 10.0f, 20.0f, 20.0f, 10.0f };
+    data.boneDirections.resize (local.size ());
+    std::vector<glm::mat4> bind;
+    for (uint32_t bone = 0; bone < local.size (); ++bone) {
+        const auto matrix = glm::translate (glm::mat4 (1), local[bone]);
+        bind.push_back ((parents[bone] < 0 ? glm::mat4 (1) : bind[parents[bone]]) * matrix);
+        data.bones.push_back ({ .type=types[bone], .parent=parents[bone], .bindLocal=matrix, .inverseBindWorld=glm::inverse (bind.back ()) });
+        if (parents[bone] >= 0) data.boneDirections[parents[bone]][bone] = glm::normalize (local[bone]);
+    }
+    data.bones[2].rope = MdlBoneRope { .gravity=true, .mass=1.0f, .stretch=false };
+    data.bones[2].ikFollowEnd = true;
+    data.bones[5].rope = MdlBoneRope { .gravity=true, .mass=1.0f, .stretch=false };
+    data.ikGroups = { { .root=3, .nodes={ { .root=3, .branches={ { .flags=4, .maxLength=40.0f, .bones={ 3, 4, 5 } } } } } }, { .root=0, .nodes={ { .root=0, .branches={ { .flags=4, .maxLength=40.0f, .bones={ 0, 1, 2 } } } } } } };
+    MdlAnimationClip clip;
+    clip.boneFrames.resize (7);
+    clip.boneFrames[0] = {{ .translation=glm::vec3 (-40.0f, 0.0f, 0.0f) }};
+    clip.boneFrames[1] = {{ .translation=glm::vec3 (20.0f, 0.0f, 0.0f) }};
+    clip.boneFrames[2] = {{ .translation=glm::vec3 (20.0f, 0.0f, 0.0f) }};
+    clip.boneFrames[3] = {{ .translation=glm::vec3 (0.0f, 10.0f, 0.0f) }};
+    clip.boneFrames[4] = {{ .translation=glm::vec3 (20.0f, 0.0f, 0.0f) }};
+    clip.boneFrames[5] = {{ .translation=glm::vec3 (20.0f, 0.0f, 0.0f) }};
+    clip.boneFrames[6] = {{ .translation=glm::vec3 (0.0f, 14.0f, 0.0f) }};
+    const std::vector<size_t> owners = { 3, 0 };
+    MdlPhysicsState state;
+    for (const auto& frame : frames) {
+        MdlPhysicsStep physics { .state=state, .model=glm::translate (glm::mat4 (1), glm::vec3 (160,90,0)),
+            .rope=MdlRopeStep { .gravity={0,-90,0}, .deltaTime=frame.dt } };
+        const auto pose = MdlAnimationEvaluator::evaluate (data, {{ .animation=&clip }}, &physics);
+        REQUIRE (state.ropePoints.size () == data.bones.size ());
+        REQUIRE (pose.publishedWorldBones.size () == data.bones.size ());
+        for (size_t bone=0; bone<data.bones.size (); ++bone) {
+            const auto found = std::find (owners.begin (), owners.end (), bone);
+            const auto& published = found == owners.end () ? frame.world[bone] : frame.owners[found-owners.begin ()];
+            const auto skin = frame.world[bone] * data.bones[bone].inverseBindWorld;
+            for (int column=0; column<4; ++column) for (int axis=0; axis<4; ++axis) {
+                CHECK (pose.worldBones[bone][column][axis] == Catch::Approx (frame.world[bone][column][axis]).margin (3e-4f));
+                CHECK (pose.skinBones[bone][column][axis] == Catch::Approx (skin[column][axis]).margin (3e-4f));
+                CHECK (pose.publishedWorldBones[bone][column][axis] == Catch::Approx (published[column][axis]).margin (3e-4f));
+            }
+            for (int axis=0; axis<3; ++axis) {
+                CHECK (state.ropePoints[bone].current[axis] == Catch::Approx (frame.current[bone][axis]).margin (3e-4f));
+                CHECK (state.ropePoints[bone].previous[axis] == Catch::Approx (frame.previous[bone][axis]).margin (3e-4f));
+            }
+        }
+    }
+}
+
+TEST_CASE ("Kinematic mixed replays native owner traversal and full graph state", "[mdl][animation][physics][rope][graphs]") {
+    // Native oracle03, wallpaper64.exe40e2ce02: four consecutive positive outer publications.
+    struct Frame {
+        float dt;
+        std::vector<glm::mat4> world;
+        std::vector<glm::mat4> owners;
+        std::vector<glm::vec3> current;
+        std::vector<glm::vec3> previous;
+    };
+    const std::vector<Frame> frames = {
+        { 0.0484232008f,
+            { glm::mat4 (1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f), glm::mat4 (0.968769491f, 0.247962981f, 0.0f, 0.0f, -0.247962981f, 0.968769491f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 10.0f, 0.0f, 0.0f, 1.0f), glm::mat4 (0.999944329f, 0.010550865f, 0.0f, 0.0f, -0.010550865f, 0.999944329f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 30.0f, -0.211029053f, 0.0f, 1.0f), glm::mat4 (1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 50.0f, 0.0f, 0.0f, 1.0f), glm::mat4 (-0.125373244f, -0.992109716f, 0.0f, 0.0f, 0.992109716f, -0.125373244f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.298836708f, 17.4896393f, 0.0f, 1.0f), glm::mat4 (0.998308122f, 0.0f, 0.0f, 0.0f, 0.0f, 0.998308122f, 0.0f, 0.0f, 0.0f, 0.0f, 0.998308122f, 0.0f, 20.1410294f, 14.9821777f, 0.0f, 1.0f), glm::mat4 (1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 50.0f, 10.0f, 0.0f, 1.0f) },
+            { glm::mat4 (1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 10.0f, 0.0f, 0.0f, 1.0f) },
+            { glm::vec3 (0.0f, 0.0f, 0.0f), glm::vec3 (170.0f, 90.0f, 0.0f), glm::vec3 (189.998886f, 89.7891464f, 0.0f), glm::vec3 (210.0f, 90.0f, 0.0f), glm::vec3 (0.0f, 0.0f, 0.0f), glm::vec3 (0.0f, 0.0f, 0.0f), glm::vec3 (0.0f, 0.0f, 0.0f) },
+            { glm::vec3 (0.0f, 0.0f, 0.0f), glm::vec3 (0.0f, 0.0f, 0.0f), glm::vec3 (190.0f, 90.0f, 0.0f), glm::vec3 (0.0f, 0.0f, 0.0f), glm::vec3 (0.0f, 0.0f, 0.0f), glm::vec3 (0.0f, 0.0f, 0.0f), glm::vec3 (0.0f, 0.0f, 0.0f) } },
+        { 0.031936001f,
+            { glm::mat4 (1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f), glm::mat4 (0.968998492f, 0.247066647f, 0.0f, 0.0f, -0.247066647f, 0.968998492f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 10.0f, 0.0f, 0.0f, 1.0f), glm::mat4 (0.999670625f, 0.0256635062f, 0.0f, 0.0f, -0.0256635062f, 0.999670625f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 29.9977722f, -0.513496399f, 0.0f, 1.0f), glm::mat4 (1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 50.0f, 0.0f, 0.0f, 1.0f), glm::mat4 (-0.122003317f, -0.992529631f, 0.0f, 0.0f, 0.992529631f, -0.122003317f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.199128151f, 17.4339581f, 0.0f, 1.0f), glm::mat4 (0.998308122f, 0.0f, 0.0f, 0.0f, 0.0f, 0.998308122f, 0.0f, 0.0f, 0.0f, 0.0f, 0.998308122f, 0.0f, 20.0497208f, 14.9938889f, 0.0f, 1.0f), glm::mat4 (1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 50.0f, 10.0f, 0.0f, 1.0f) },
+            { glm::mat4 (1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 10.0f, 0.0f, 0.0f, 1.0f) },
+            { glm::vec3 (0.0f, 0.0f, 0.0f), glm::vec3 (170.0f, 90.0f, 0.0f), glm::vec3 (189.993423f, 89.4870682f, 0.0f), glm::vec3 (210.0f, 90.0f, 0.0f), glm::vec3 (0.0f, 0.0f, 0.0f), glm::vec3 (0.0f, 0.0f, 0.0f), glm::vec3 (0.0f, 0.0f, 0.0f) },
+            { glm::vec3 (0.0f, 0.0f, 0.0f), glm::vec3 (0.0f, 0.0f, 0.0f), glm::vec3 (189.998886f, 89.7891464f, 0.0f), glm::vec3 (0.0f, 0.0f, 0.0f), glm::vec3 (0.0f, 0.0f, 0.0f), glm::vec3 (0.0f, 0.0f, 0.0f), glm::vec3 (0.0f, 0.0f, 0.0f) } },
+        { 0.0319325998f,
+            { glm::mat4 (1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f), glm::mat4 (0.969956756f, 0.243277341f, 0.0f, 0.0f, -0.243277341f, 0.969956756f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 10.0f, 0.0f, 0.0f, 1.0f), glm::mat4 (0.998974979f, 0.0452654846f, 0.0f, 0.0f, -0.0452654846f, 0.998974979f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 29.9879608f, -0.906784058f, 0.0f, 1.0f), glm::mat4 (1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 50.0f, 0.0f, 0.0f, 1.0f), glm::mat4 (-0.120815754f, -0.992674947f, 0.0f, 0.0f, 0.992674947f, -0.120815754f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.164028168f, 17.4141808f, 0.0f, 1.0f), glm::mat4 (0.998308122f, 0.0f, 0.0f, 0.0f, 0.0f, 0.998308122f, 0.0f, 0.0f, 0.0f, 0.0f, 0.998308122f, 0.0f, 20.0175266f, 14.9978657f, 0.0f, 1.0f), glm::mat4 (1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 50.0f, 10.0f, 0.0f, 1.0f) },
+            { glm::mat4 (1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 10.0f, 0.0f, 0.0f, 1.0f) },
+            { glm::vec3 (0.0f, 0.0f, 0.0f), glm::vec3 (170.0f, 90.0f, 0.0f), glm::vec3 (189.979584f, 89.0965424f, 0.0f), glm::vec3 (210.0f, 90.0f, 0.0f), glm::vec3 (0.0f, 0.0f, 0.0f), glm::vec3 (0.0f, 0.0f, 0.0f), glm::vec3 (0.0f, 0.0f, 0.0f) },
+            { glm::vec3 (0.0f, 0.0f, 0.0f), glm::vec3 (0.0f, 0.0f, 0.0f), glm::vec3 (189.993423f, 89.4870682f, 0.0f), glm::vec3 (0.0f, 0.0f, 0.0f), glm::vec3 (0.0f, 0.0f, 0.0f), glm::vec3 (0.0f, 0.0f, 0.0f), glm::vec3 (0.0f, 0.0f, 0.0f) } },
+        { 0.0318192989f,
+            { glm::mat4 (1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f), glm::mat4 (0.971310318f, 0.237815663f, 0.0f, 0.0f, -0.237815663f, 0.971310318f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 10.0f, 0.0f, 0.0f, 1.0f), glm::mat4 (0.997618556f, 0.0689723864f, 0.0f, 0.0f, -0.0689723864f, 0.997618556f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 29.965744f, -1.38510895f, 0.0f, 1.0f), glm::mat4 (1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 50.0f, 0.0f, 0.0f, 1.0f), glm::mat4 (-0.120396733f, -0.99272573f, 0.0f, 0.0f, 0.99272573f, -0.120396733f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.15166378f, 17.4071903f, 0.0f, 1.0f), glm::mat4 (0.998308122f, 0.0f, 0.0f, 0.0f, 0.0f, 0.998308122f, 0.0f, 0.0f, 0.0f, 0.0f, 0.998308122f, 0.0f, 20.0061798f, 14.9992504f, 0.0f, 1.0f), glm::mat4 (1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 50.0f, 10.0f, 0.0f, 1.0f) },
+            { glm::mat4 (1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 10.0f, 0.0f, 0.0f, 1.0f) },
+            { glm::vec3 (0.0f, 0.0f, 0.0f), glm::vec3 (170.0f, 90.0f, 0.0f), glm::vec3 (189.95282f, 88.6270752f, 0.0f), glm::vec3 (210.0f, 90.0f, 0.0f), glm::vec3 (0.0f, 0.0f, 0.0f), glm::vec3 (0.0f, 0.0f, 0.0f), glm::vec3 (0.0f, 0.0f, 0.0f) },
+            { glm::vec3 (0.0f, 0.0f, 0.0f), glm::vec3 (0.0f, 0.0f, 0.0f), glm::vec3 (189.979584f, 89.0965424f, 0.0f), glm::vec3 (0.0f, 0.0f, 0.0f), glm::vec3 (0.0f, 0.0f, 0.0f), glm::vec3 (0.0f, 0.0f, 0.0f), glm::vec3 (0.0f, 0.0f, 0.0f) } }
+    };
+    MdlAnimationData data;
+    const std::vector<glm::vec3> local = { glm::vec3 (0.0f, 0.0f, 0.0f), glm::vec3 (10.0f, 0.0f, 0.0f), glm::vec3 (20.0f, 0.0f, 0.0f), glm::vec3 (20.0f, 0.0f, 0.0f), glm::vec3 (0.0f, 20.0f, 0.0f), glm::vec3 (0.0f, 20.0f, 0.0f), glm::vec3 (0.0f, 10.0f, 0.0f) };
+    const std::vector<int> parents = { -1, 0, 1, 2, 1, 4, 3 };
+    const std::vector<uint32_t> types = { 0, 3, 3, 3, 3, 3, 0 };
+    data.boneLengths = { 0.0f, 10.0f, 20.0f, 20.0f, 20.0f, 20.0f, 10.0f };
+    data.boneDirections.resize (local.size ());
+    std::vector<glm::mat4> bind;
+    for (uint32_t bone = 0; bone < local.size (); ++bone) {
+        const auto matrix = glm::translate (glm::mat4 (1), local[bone]);
+        bind.push_back ((parents[bone] < 0 ? glm::mat4 (1) : bind[parents[bone]]) * matrix);
+        data.bones.push_back ({ .type=types[bone], .parent=parents[bone], .bindLocal=matrix, .inverseBindWorld=glm::inverse (bind.back ()) });
+        if (parents[bone] >= 0) data.boneDirections[parents[bone]][bone] = glm::normalize (local[bone]);
+    }
+    data.bones[3].rope = MdlBoneRope { .gravity=true, .mass=1.0f, .stretch=false };
+    data.bones[5].rope = MdlBoneRope { .gravity=false, .mass=1.0f, .stretch=false };
+    data.controls.push_back ({ .bone=5, .bindWorld=glm::rotate (glm::translate (glm::mat4 (1), glm::vec3 (20.0f, 15.0f, 0.0f)), 0.0f, glm::vec3 (0,0,1)) });
+    data.ikGroups = { { .root=1, .nodes={ { .root=1, .branches={ { .flags=4, .maxLength=40.0f, .bones={ 1, 2, 3 } }, { .flags=1, .maxLength=40.0f, .bones={ 1, 4, 5 } } } } } } };
+    MdlAnimationClip clip;
+    const std::vector<size_t> owners = { 1 };
+    MdlPhysicsState state;
+    for (const auto& frame : frames) {
+        MdlPhysicsStep physics { .state=state, .model=glm::translate (glm::mat4 (1), glm::vec3 (160,90,0)),
+            .rope=MdlRopeStep { .gravity={0,-90,0}, .deltaTime=frame.dt } };
+        const auto pose = MdlAnimationEvaluator::evaluate (data, {{ .animation=&clip }}, &physics);
+        REQUIRE (state.ropePoints.size () == data.bones.size ());
+        REQUIRE (pose.publishedWorldBones.size () == data.bones.size ());
+        for (size_t bone=0; bone<data.bones.size (); ++bone) {
+            const auto found = std::find (owners.begin (), owners.end (), bone);
+            const auto& published = found == owners.end () ? frame.world[bone] : frame.owners[found-owners.begin ()];
+            const auto skin = frame.world[bone] * data.bones[bone].inverseBindWorld;
+            for (int column=0; column<4; ++column) for (int axis=0; axis<4; ++axis) {
+                CHECK (pose.worldBones[bone][column][axis] == Catch::Approx (frame.world[bone][column][axis]).margin (3e-4f));
+                CHECK (pose.skinBones[bone][column][axis] == Catch::Approx (skin[column][axis]).margin (3e-4f));
+                CHECK (pose.publishedWorldBones[bone][column][axis] == Catch::Approx (published[column][axis]).margin (3e-4f));
+            }
+            for (int axis=0; axis<3; ++axis) {
+                CHECK (state.ropePoints[bone].current[axis] == Catch::Approx (frame.current[bone][axis]).margin (3e-4f));
+                CHECK (state.ropePoints[bone].previous[axis] == Catch::Approx (frame.previous[bone][axis]).margin (3e-4f));
+            }
+        }
+    }
+}
+
+TEST_CASE ("Rope working references remain separate from the fixed bind reconstruction", "[mdl][animation][physics][rope][graphs]") {
+    // Native setup1401fbae0 copies raw bind worlds into328; caller initializes2c8 from optional references.
+    auto data = ropeRig ();
+    for (auto& bone : data.bones) bone.type = 3;
+    data.bones[0].referenceLocal = glm::rotate (
+        glm::translate (glm::mat4 (1), glm::vec3 (-45, 10, 0)), glm::half_pi<float> (), glm::vec3 (0, 0, 1)
+    );
+    MdlPhysicsState state;
+    MdlPhysicsStep step { .state=state, .rope=MdlRopeStep { .deltaTime=0.03f } };
+    const auto pose = MdlAnimationEvaluator::evaluate (data, {}, &step);
+    REQUIRE (state.ropePoints.size () == 4);
+    for (size_t bone=0; bone<4; ++bone) {
+        CHECK (pose.worldBones[bone][3].x == Catch::Approx (-45).margin (2e-5f));
+        CHECK (pose.worldBones[bone][3].y == Catch::Approx (10+30*bone).margin (2e-5f));
+        CHECK (pose.worldBones[bone][0].x == Catch::Approx (0).margin (2e-5f));
+        CHECK (pose.worldBones[bone][0].y == Catch::Approx (1).margin (2e-5f));
     }
 }

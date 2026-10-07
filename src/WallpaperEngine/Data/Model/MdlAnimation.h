@@ -182,6 +182,8 @@ struct MdlModelMorphState {
 struct MdlPose {
     std::vector<glm::mat4> worldBones = {};
     std::vector<glm::mat4> skinBones = {};
+    /** Model-space +340 snapshots; rope owners publish before solving their own group. */
+    std::vector<glm::mat4> publishedWorldBones;
     /** Interpolated blend track values of the active clips, indexed by track row. */
     std::vector<float> blendWeights = {};
     /** Native puppet runtime evaluates the first submesh, with a 64-target mask. */

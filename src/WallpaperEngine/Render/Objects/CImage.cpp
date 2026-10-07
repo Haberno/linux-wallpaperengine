@@ -601,6 +601,7 @@ bool CImage::loadPuppetMesh (const glm::vec2& size) {
 	    );
 	    const auto bindPose = MdlAnimationEvaluator::evaluate (this->m_puppetAnimation, {});
 	    this->m_puppetWorldBones = bindPose.worldBones;
+	    this->m_puppetPublishedWorldBones.clear ();
 	    sLog.out (
 		"Loaded puppet animation data ", *this->getImage ().model->puppet,
 		" bones=", this->m_puppetAnimation.bones.size (),
@@ -611,6 +612,7 @@ bool CImage::loadPuppetMesh (const glm::vec2& size) {
 	    sLog.error ("Could not load puppet animation data ", *this->getImage ().model->puppet, ": ", ex.what ());
 	    this->m_puppetAnimation = {};
 	    this->m_puppetWorldBones.clear ();
+	    this->m_puppetPublishedWorldBones.clear ();
 	}
 
 	this->m_puppetDrawRanges = { MdlDrawRange { .indexCount = static_cast<uint32_t> (indices.size ()) } };
@@ -915,6 +917,9 @@ void CImage::updatePuppetPositionBuffer (const glm::vec2& size, const bool stepR
     };
     this->m_puppetPhysicsTime = sceneTime;
     const auto& scene = this->getScene ().getScene ();
+    const bool hasSpringBones = std::ranges::any_of (
+        this->m_puppetAnimation.bones, [] (const auto& bone) { return bone.spring.has_value (); }
+    );
     bool ropeEnabled = stepRope && !scene.camera.projection.isPerspective;
     if (ropeEnabled) {
 	const auto transform = this->resolveTransform (this->getImage ());
@@ -925,7 +930,7 @@ void CImage::updatePuppetPositionBuffer (const glm::vec2& size, const bool stepR
 		&& !this->getImage ().perspective->value->getBool ()
 		&& this->getImage ().alignment == "center"
 		&& transform.angles.x == 0.0f && transform.angles.y == 0.0f
-		&& std::ranges::none_of (this->m_puppetAnimation.bones, [] (const auto& bone) { return bone.spring.has_value (); });
+		&& !hasSpringBones;
 	    const Object* object = &this->getImage ();
 	    for (int depth = 0; ropeEnabled && object != nullptr; ++depth) {
 		if (depth > 32 || object->attachment.has_value ()) {
@@ -952,6 +957,15 @@ void CImage::updatePuppetPositionBuffer (const glm::vec2& size, const bool stepR
 	}
     }
     if (ropeEnabled) {
+        // Native physics uses authored scene coordinates; camera parallax is draw-only.
+        // Literal zero sibling points therefore precede the canvas origin.
+        // Preserve the spring fallback model when this skeleton cannot enter the rope solver.
+        if (!hasSpringBones) {
+            physics.model = glm::translate (glm::mat4 (1.0f), glm::vec3 (
+                this->getScene ().getWidth () * 0.5f - parallax.x,
+                this->getScene ().getHeight () * 0.5f + parallax.y, 0.0f
+            )) * physics.model;
+        }
 	physics.rope = MdlRopeStep {
 	    .gravity = scene.physics.gravityDirection->evaluateVec3 (sceneTime)
 		* scene.physics.gravityStrength->evaluateFloat (sceneTime),
@@ -963,8 +977,8 @@ void CImage::updatePuppetPositionBuffer (const glm::vec2& size, const bool stepR
 	    physics.rope->windStrength = scene.physics.windStrength->evaluateFloat (sceneTime);
 	    physics.rope->windTime = this->getScene ().getTime ();
 	    physics.rope->windWidth = static_cast<float> (this->getScene ().getWidth ());
-	    // Native noise samples authored world X; the puppet model is centered on the canvas.
-	    physics.rope->windOriginX = physics.rope->windWidth * 0.5f;
+	    // Admitted rope models already use native authored world X.
+	    physics.rope->windOriginX = hasSpringBones ? physics.rope->windWidth * 0.5f : 0.0f;
 	}
     }
 
@@ -973,6 +987,7 @@ void CImage::updatePuppetPositionBuffer (const glm::vec2& size, const bool stepR
     // animatedWorld * inverseBindWorld. The same evaluator now drives 3D models too.
     auto pose = MdlAnimationEvaluator::evaluate (this->m_puppetAnimation, this->m_puppetActiveLayers, &physics);
     this->m_puppetWorldBones = std::move (pose.worldBones);
+    this->m_puppetPublishedWorldBones = std::move (pose.publishedWorldBones);
     this->m_puppetSkinBones = std::move (pose.skinBones);
 
     const auto& mesh = *this->getImage ().model->puppetMesh;
@@ -2922,8 +2937,9 @@ std::optional<size_t> CImage::getBoneIndex (const std::string& name) const {
 }
 
 std::optional<glm::mat4> CImage::getBoneTransform (const size_t index) const {
-    if (index >= this->m_puppetWorldBones.size ()) return std::nullopt;
-    return this->m_puppetWorldBones[index];
+    const auto& bones = this->m_puppetPublishedWorldBones.empty () ? this->m_puppetWorldBones : this->m_puppetPublishedWorldBones;
+    if (index >= bones.size ()) return std::nullopt;
+    return bones[index];
 }
 
 glm::mat3 CImage::calculateOrthographicAttachmentTextureMatrix (

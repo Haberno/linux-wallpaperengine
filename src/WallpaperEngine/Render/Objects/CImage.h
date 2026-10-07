@@ -225,6 +225,8 @@ private:
     WallpaperEngine::Data::Model::MdlPhysicsState m_puppetPhysics = {};
     double m_puppetPhysicsTime = 0.0;
     std::vector<glm::mat4> m_puppetWorldBones = {};
+    /** Native API snapshots before each owner's own group solve. */
+    std::vector<glm::mat4> m_puppetPublishedWorldBones;
     std::vector<glm::mat4> m_puppetSkinBones = {};
     std::vector<GLfloat> m_puppetPositions = {};
     std::vector<WallpaperEngine::Data::Model::MdlActiveAnimation> m_puppetActiveLayers = {};
