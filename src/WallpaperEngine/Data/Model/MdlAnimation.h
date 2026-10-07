@@ -208,6 +208,8 @@ struct MdlPhysicsState {
 	bool initialized = false;
     };
     std::vector<RopePoint> ropePoints;
+    /** Native working poses retained when solver-owned bones skip ordinary traversal. */
+    std::vector<glm::mat4> ropeWorldBones;
     std::vector<Bone> bones;
     /** Last frame's scene-space bone matrices after physics; empty before the first step. */
     std::vector<glm::mat4> previousWorld;

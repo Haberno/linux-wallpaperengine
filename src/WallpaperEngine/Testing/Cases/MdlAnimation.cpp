@@ -1373,9 +1373,9 @@ TEST_CASE ("Unsupported rope routes preserve authored pose and ordinary state", 
 	if (route == 5) physics.model = glm::scale (glm::mat4 (1), glm::vec3 (0));
 	if (route == 6) data.ikGroups[0].nodes[0].root = 1;
 	if (route == 7) {
-	    // A side branch must retain its authored parent-relative placement.
+	    // An extra solver-owned side branch remains unsupported.
 	    data.bones.push_back ({
-		.parent = 1, .bindLocal = glm::translate (glm::mat4 (1), glm::vec3 (0, 5, 0)),
+		.type = 2, .parent = 1, .bindLocal = glm::translate (glm::mat4 (1), glm::vec3 (0, 5, 0)),
 		.inverseBindWorld = glm::translate (glm::mat4 (1), glm::vec3 (15, -5, 0)),
 	    });
 	    data.boneLengths.push_back (5);
@@ -1545,4 +1545,115 @@ TEST_CASE ("Unmeasured controlled rope branches retain their authored pose", "[m
 	CHECK (state.ropePoints.empty ());
 	for (const auto& skin : pose.skinBones) CHECK (skin == glm::mat4 (1));
     }
+}
+
+TEST_CASE ("Serial rope nodes replay native shared-boundary ordering", "[mdl][animation][physics][rope][coupled]") {
+    // Native coupled01 (40e2ce02), four complete updates. Reversing predictor nodes
+    // differs by0.08007; failing to retain prior working poses loses the moving boundary.
+    MdlAnimationData data;
+    data.boneLengths = { 0, 20, 20, 20, 20, 20, 20 };
+    data.boneDirections.resize (7);
+    for (uint32_t bone = 0; bone < 7; ++bone) {
+	data.bones.push_back ({ .type = 3, .parent = static_cast<int32_t> (bone) - 1,
+	    .bindLocal = glm::translate (glm::mat4 (1), glm::vec3 (bone ? 20 : -60, 0, 0)),
+	    .inverseBindWorld = glm::translate (glm::mat4 (1), glm::vec3 (60 - 20 * static_cast<int> (bone), 0, 0)) });
+	if (bone) data.boneDirections[bone - 1][bone] = { 1, 0, 0 };
+    }
+    data.bones[3].ikFollowEnd = true;
+    data.bones[3].rope = data.bones[6].rope = MdlBoneRope { .gravity = true, .mass = 1 };
+    data.controls = {{ .bone = 6, .bindWorld = glm::translate (glm::mat4 (1), glm::vec3 (70, 0, 0)) }};
+    data.ikGroups = {{ .nodes = {
+	{ .root = 0, .branches = {{ .flags = 4, .maxLength = 60, .bones = { 0, 1, 2, 3 } }} },
+	{ .root = 3, .branches = {{ .flags = 5, .maxLength = 60, .bones = { 3, 4, 5, 6 } }} },
+    } }};
+    struct Frame { float dt; std::array<glm::vec2, 7> positions; glm::vec2 rootBasis; glm::vec2 lastBasis; };
+    const Frame frames[] = {
+	{ 0.04950379953f, {{ { -60.0f, 0.0f }, { -40.0f, -0.2205581665f }, { -20.0f, -0.2205581665f }, { 0.0f, -0.2205581665f }, { 20.0f, -0.2205581665f }, { 40.0f, -0.2205581665f }, { 60.0f, 0.0f } }}, { 0.9999392033f, -0.01102723833f }, { 0.9999392033f, 0.01102723833f } },
+	{ 0.04177010059f, {{ { -60.0f, 0.0f }, { -40.0012207f, -0.5981292725f }, { -20.0f, -0.5981445312f }, { 0.0f, -0.5981445312f }, { 20.0012207f, -0.5981445312f }, { 40.0012207f, -0.5981140137f }, { 59.99969864f, -0.0315092504f } }}, { 0.9995530248f, -0.02989492379f }, { 0.9995988607f, 0.02832102776f } },
+	{ 0.03172549978f, {{ { -60.0f, 0.0f }, { -40.004776f, -1.066047668f }, { -20.00268555f, -1.066314697f }, { 0.0f, -1.066314697f }, { 20.00250244f, -1.066314697f }, { 40.00250244f, -1.06590271f }, { 59.99780655f, -0.08546793461f } }}, { 0.9985817671f, -0.05323950201f }, { 0.9988000393f, 0.04897441342f } },
+	{ 0.03147879988f, {{ { -60.0f, 0.0f }, { -40.01506805f, -1.621879578f }, { -20.00753784f, -1.623664856f }, { 0.0f, -1.623664856f }, { 20.00613403f, -1.623664856f }, { 40.00613403f, -1.621162415f }, { 59.99303818f, -0.1524367332f } }}, { 0.9967231154f, -0.08088918775f }, { 0.9973109365f, 0.07328678668f } },
+    };
+    MdlPhysicsState state;
+    for (const auto& frame : frames) {
+	MdlPhysicsStep physics { .state = state,
+	    .model = glm::translate (glm::mat4 (1), glm::vec3 (160, 120, 0)),
+	    .rope = MdlRopeStep { .gravity = { 0, -90, 0 }, .deltaTime = frame.dt } };
+	const auto pose = MdlAnimationEvaluator::evaluate (data, {}, &physics);
+	REQUIRE (state.ropePoints.size () == 7);
+	for (size_t bone = 0; bone < 7; ++bone) for (int axis = 0; axis < 2; ++axis)
+	    CHECK (pose.worldBones[bone][3][axis] == Catch::Approx (frame.positions[bone][axis]).margin (2e-4f));
+	for (int axis = 0; axis < 2; ++axis) {
+	    CHECK (pose.worldBones[0][0][axis] == Catch::Approx (frame.rootBasis[axis]).margin (2e-6f));
+	    CHECK (pose.worldBones[5][0][axis] == Catch::Approx (frame.lastBasis[axis]).margin (2e-6f));
+	}
+	CHECK (pose.worldBones[6][0].x == Catch::Approx (0.9983081222f).margin (2e-6f));
+    }
+    const std::array<glm::vec2, 7> corrected = {{ { 100.0289764f, 119.9976501f }, { 119.9779739f, 118.3804703f }, { 139.9889832f, 118.3763351f }, { 159.9889832f, 118.3763351f }, { 180.0077362f, 118.3763504f }, { 200.0077362f, 118.381813f }, { 219.993042f, 119.8475647f } }};
+    const std::array<glm::vec2, 7> previous = {{ { 0.0f, 0.0f }, { 119.9911194f, 118.9346466f }, { 139.9955597f, 118.9336853f }, { 160.0f, 118.9336853f }, { 180.0038452f, 118.9336853f }, { 200.0038452f, 118.9350433f }, { 0.0f, 0.0f } }};
+    for (size_t bone = 0; bone < 7; ++bone) for (int axis = 0; axis < 2; ++axis) {
+	CHECK (state.ropePoints[bone].current[axis] == Catch::Approx (corrected[bone][axis]).margin (2e-4f));
+	CHECK (state.ropePoints[bone].previous[axis] == Catch::Approx (previous[bone][axis]).margin (2e-4f));
+    }
+}
+
+TEST_CASE ("Ordinary descendants use animated locals after the rope solve", "[mdl][animation][physics][rope][coupled]") {
+    // Native coupled01: bind local Y10, enabled child track Y14, endpoint rotation0.5.
+    auto data = ropeRig ();
+    for (auto& bone : data.bones) bone.type = 3;
+    data.ikGroups[0].nodes[0].branches[0].flags = 5;
+    data.bones[3].rope->stretch = true;
+    data.controls = {{ .bone = 3, .bindWorld = glm::translate (glm::mat4 (1), glm::vec3 (75, 0, 0)) }};
+    data.bones.push_back ({ .parent = 3,
+	.bindLocal = glm::translate (glm::mat4 (1), glm::vec3 (0, 10, 0)),
+	.inverseBindWorld = glm::translate (glm::mat4 (1), glm::vec3 (-45, -10, 0)) });
+    MdlAnimationClip clip;
+    clip.boneFrames.resize (5);
+    clip.boneFrames[4] = {{ .translation = { 0, 14, 0 } }};
+    clip.controlFrames = {{ { .translation = { 75, 0, 0 }, .rotation = glm::angleAxis (0.5f, glm::vec3 (0, 0, 1)) } }};
+    MdlPhysicsState state;
+    MdlPhysicsStep physics { .state = state, .model = glm::translate (glm::mat4 (1), glm::vec3 (160, 60, 0)),
+	.rope = MdlRopeStep { .gravity = { 0, -90, 0 }, .deltaTime = 0.04950379953f } };
+    const auto pose = MdlAnimationEvaluator::evaluate (data, {{ .animation = &clip }}, &physics);
+    REQUIRE (state.ropePoints.size () == 5);
+    CHECK (pose.worldBones[4][3].x == Catch::Approx (68.29940033f).margin (2e-4f));
+    CHECK (pose.worldBones[4][3].y == Catch::Approx (12.26536942f).margin (2e-4f));
+    CHECK (pose.worldBones[4][0].x == Catch::Approx (0.8760977983f).margin (2e-6f));
+    CHECK (pose.worldBones[4][0].y == Catch::Approx (0.4786144197f).margin (2e-6f));
+    CHECK (pose.skinBones[4][3].x == Catch::Approx (33.66114044f).margin (2e-4f));
+    CHECK (pose.skinBones[4][3].y == Catch::Approx (-18.03325653f).margin (2e-4f));
+    for (int route = 0; route < 5; ++route) {
+	auto rejected = data;
+	if (route == 0) rejected.bones[4].type = 1;
+	if (route == 1) rejected.bones[4].type = 2;
+	if (route == 2) rejected.bones[4].parent = -1;
+	if (route == 3) rejected.bones[4].rope = MdlBoneRope {};
+	if (route == 4) rejected.bones[2].type = 0;
+	MdlPhysicsState rejectedState;
+	MdlPhysicsStep rejectedStep { .state = rejectedState, .rope = physics.rope };
+	static_cast<void> (MdlAnimationEvaluator::evaluate (rejected, {{ .animation = &clip }}, &rejectedStep));
+	CHECK (rejectedState.ropePoints.empty ());
+	CHECK (rejectedState.ropeWorldBones.empty ());
+    }
+}
+
+TEST_CASE ("Whole-skeleton single rope retains nonzero-root admission", "[mdl][animation][physics][rope][coupled]") {
+    auto data = ropeRig ();
+    const auto original = data;
+    // Permute the old accepted synthetic skeleton; new topology gates must not
+    // narrow this existing whole-skeleton path even for non-native bone order.
+    for (uint32_t old = 0; old < 4; ++old) {
+        const uint32_t bone = (old + 1) % 4;
+        data.bones[bone] = original.bones[old];
+        data.bones[bone].parent = old ? static_cast<int32_t> (old) : -1;
+        data.boneLengths[bone] = original.boneLengths[old];
+        data.boneDirections[bone].clear ();
+        if (old < 3) data.boneDirections[bone][(old + 2) % 4] = { 1, 0, 0 };
+    }
+    data.ikGroups[0].root = data.ikGroups[0].nodes[0].root = 1;
+    data.ikGroups[0].nodes[0].branches[0].bones = { 1, 2, 3, 0 };
+    MdlPhysicsState state;
+    MdlPhysicsStep physics { .state = state, .rope = MdlRopeStep { .gravity = { 0, -90, 0 }, .deltaTime = 0.01f } };
+    static_cast<void> (MdlAnimationEvaluator::evaluate (data, {}, &physics));
+    REQUIRE (state.ropePoints.size () == 4);
+    CHECK (state.ropePoints[1].initialized);
 }
