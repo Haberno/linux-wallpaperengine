@@ -921,7 +921,9 @@ void CImage::updatePuppetPositionBuffer (const glm::vec2& size, const bool stepR
     const bool hasSpringBones = std::ranges::any_of (
         this->m_puppetAnimation.bones, [] (const auto& bone) { return bone.spring.has_value (); }
     );
-    if (stepRope && !hasSpringBones) {
+    if (stepRope || (hasSpringBones && !this->m_puppetAnimation.ikGroups.empty ())) {
+        physics.previewRope = !stepRope;
+        if (hasSpringBones) physics.ropeFallbackModel = physics.model;
         // Native predicts authored scene-space points through the aligned layer Model.
         // Camera projection, fullscreen geometry and parallax only affect drawing.
         physics.model = this->resolveLayerModelMatrix ();
@@ -944,7 +946,20 @@ void CImage::updatePuppetPositionBuffer (const glm::vec2& size, const bool stepR
 
     // Vertex positions are stored in the assembled rest pose, so each bone applies
     // animatedWorld * inverseBindWorld. The same evaluator now drives 3D models too.
+    // Setup previews preserve dependency history. Admitted mixed graphs leave all
+    // physics history untouched; standalone springs keep their existing setup path.
+    const bool previewDependencies = !stepRope && this->m_puppetAnimation.dependencyCount != 0;
+    std::vector<glm::mat4> setupWorkingWorldBones;
+    std::vector<float> setupDependencyWeights;
+    if (previewDependencies) {
+        setupWorkingWorldBones.swap (physics.state.workingWorldBones);
+        setupDependencyWeights.swap (physics.state.dependencyWeights);
+    }
     auto pose = MdlAnimationEvaluator::evaluate (this->m_puppetAnimation, this->m_puppetActiveLayers, &physics);
+    if (previewDependencies) {
+        physics.state.workingWorldBones.swap (setupWorkingWorldBones);
+        physics.state.dependencyWeights.swap (setupDependencyWeights);
+    }
     this->m_puppetWorldBones = std::move (pose.worldBones);
     this->m_puppetPublishedSceneBones = std::move (pose.publishedWorldBones);
     // The public native buffer is sampled during evaluation, including the layer Model.

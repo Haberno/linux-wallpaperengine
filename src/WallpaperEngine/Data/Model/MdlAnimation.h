@@ -44,8 +44,17 @@ struct MdlBoneSpring {
 struct MdlBoneRope {
     bool gravity = false;
     float mass = 0.0f;
-    float friction = 0.0f; // clamp((tf / 100)^2, 0, 1)
+    float friction = 0.0f; // Rope-only clamp((tf / 100)^2, 0, 1); active spring/rigid metadata keeps tf raw.
     bool stretch = false; // ikse
+};
+
+/** Ordered MDLS blend-rule record; the weight indexes the separate MDLA dependency stream. */
+struct MdlBoneDependency {
+    uint32_t flags = 0;
+    uint32_t weight = 0;
+    uint32_t source = 0;
+    float start = 0.0f;
+    float range = 0.0f;
 };
 
 struct MdlBone {
@@ -64,6 +73,7 @@ struct MdlBone {
     float ikMaxAngle = 0.0f; // ikrmaxl, radians
     std::optional<MdlBoneSpring> spring;
     std::optional<MdlBoneRope> rope;
+    std::vector<MdlBoneDependency> dependencies;
 };
 
 struct MdlAttachment {
@@ -89,6 +99,7 @@ struct MdlBoneControl {
     uint32_t type = 0;
     glm::mat4 bindWorld = glm::mat4 (1.0f);
     std::optional<glm::mat4> referenceWorld;
+    std::vector<MdlBoneDependency> dependencies;
 };
 
 struct MdlIkChain {
@@ -106,7 +117,7 @@ struct MdlIkNode {
 
 struct MdlIkGroup {
     uint32_t root = 0;
-    bool hasDependencies = false;
+    std::vector<uint32_t> controlDependencies;
     std::vector<MdlIkNode> nodes;
 };
 
@@ -192,6 +203,7 @@ struct MdlPose {
     std::vector<glm::mat4> publishedWorldBones;
     /** Interpolated blend track values of the active clips, indexed by track row. */
     std::vector<float> blendWeights = {};
+    std::vector<float> dependencyWeights;
     /** Native puppet runtime evaluates the first submesh, with a 64-target mask. */
     std::vector<float> puppetMorphWeights;
     uint64_t puppetMorphMask = 0;
@@ -216,8 +228,9 @@ struct MdlPhysicsState {
 	bool initialized = false;
     };
     std::vector<RopePoint> ropePoints;
-    /** Native working poses retained when solver-owned bones skip ordinary traversal. */
-    std::vector<glm::mat4> ropeWorldBones;
+    /** Native working poses retained for solver-owned bones and forward dependency references. */
+    std::vector<glm::mat4> workingWorldBones;
+    std::vector<float> dependencyWeights;
     std::vector<Bone> bones;
     /** Last frame's scene-space bone matrices after physics; empty before the first step. */
     std::vector<glm::mat4> previousWorld;
@@ -241,6 +254,10 @@ struct MdlPhysicsStep {
     float deltaTime = 0.0f;
     /** Only supplied for a supported puppet scene; setup skinning does not advance ropes. */
     std::optional<MdlRopeStep> rope;
+    /** Preserve the established spring model if the requested rope graph is not admitted. */
+    std::optional<glm::mat4> ropeFallbackModel;
+    /** An admitted setup preview must not manufacture preceding-frame physics history. */
+    bool previewRope = false;
 };
 
 class MdlAnimationEvaluator {

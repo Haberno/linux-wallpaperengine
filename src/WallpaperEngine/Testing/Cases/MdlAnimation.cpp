@@ -277,31 +277,39 @@ TEST_CASE ("MDL bone controls retain their extra animation pose tracks", "[mdl][
     CHECK_THROWS (MdlAnimationParser::parse (data, "invalid-control.mdl"));
 }
 
-TEST_CASE ("MDLS0003 imports retain named bones and skip legacy metadata", "[mdl][animation]") {
+TEST_CASE ("MDLS0003 imports retain named bones and dependency records", "[mdl][animation][physics][rope][dependencies]") {
     std::vector<char> data;
     appendMarker (data, "MDLS0003");
     const auto endOffset = data.size ();
     appendValue<uint32_t> (data, 0);
     appendValue<uint32_t> (data, 1);
     appendString (data, "RootNode");
-    appendValue<uint32_t> (data, 1);
+    appendValue<uint32_t> (data, 0);
     appendValue<int32_t> (data, -1);
     appendValue<uint32_t> (data, 64);
     appendMatrix (data, glm::mat4 (1));
     appendString (data, "");
-    // This optional legacy tail starts with a byte flag, not a u16 control count.
-    appendValue<uint8_t> (data, 1);
-    appendMatrix (data, glm::mat4 (1));
+    appendValue<uint16_t> (data, 0); // Controls.
+    appendValue<uint8_t> (data, 0); // Alternate reference pose.
+    appendValue<uint32_t> (data, 1); // Raw dependency count, including unfiltered records.
+    for (int field=0; field<3; ++field) appendValue<uint32_t> (data, 0); // Destination, weight, source; no flags in v3.
+    appendValue<uint16_t> (data, 0); // Lengths.
+    appendValue<uint16_t> (data, 0); // Groups.
     patchU32 (data, endOffset, data.size ());
     const auto parsed = MdlAnimationParser::parse (data, "legacy-3d.mdl");
     REQUIRE (parsed.bones.size () == 1);
-    CHECK (parsed.bones.front ().name == "RootNode");
+    CHECK (parsed.bones[0].name == "RootNode");
+    CHECK (parsed.dependencyCount == 1);
+    REQUIRE (parsed.bones[0].dependencies.size () == 1);
+    CHECK (parsed.bones[0].dependencies[0].flags == 0);
+    CHECK (parsed.bones[0].dependencies[0].source == 0);
+    CHECK (parsed.bones[0].dependencies[0].weight == 0);
     CHECK (parsed.controls.empty ());
     CHECK (parsed.ikGroups.empty ());
 }
 
 TEST_CASE ("MDLS reference transforms survive parsing with or without controls", "[mdl][animation]") {
-    for (const auto* version : { "MDLS0002", "MDLS0004" }) {
+    for (const auto* version : { "MDLS0002", "MDLS0003", "MDLS0004" }) {
 	for (const uint16_t controlCount : { 0, 1 }) {
 	    for (const bool hasReference : { false, true }) {
 		CAPTURE (version, controlCount, hasReference);
@@ -1257,10 +1265,10 @@ TEST_CASE ("MDLS retains IK gravity and friction without spring mode", "[mdl][an
     CHECK (parsed.bones[0].ikFollowEnd);
     REQUIRE (parsed.bones[1].rope);
     CHECK_FALSE (parsed.bones[1].rope->gravity);
-    CHECK (parsed.bones[1].rope->mass == 0.0f);
+    CHECK (parsed.bones[1].rope->mass == 1000.0f);
     CHECK (parsed.bones[1].rope->friction == 1.0f);
     REQUIRE (parsed.bones[2].rope);
-    CHECK (parsed.bones[2].rope->mass == 0.0f);
+    CHECK (parsed.bones[2].rope->mass == 1000.0f);
     CHECK (parsed.bones[2].rope->friction == 0.0f);
     CHECK_FALSE (parsed.bones[3].rope);
 }
@@ -1366,7 +1374,7 @@ TEST_CASE ("Unsupported rope routes preserve authored pose and ordinary state", 
 	MdlPhysicsState state;
 	MdlPhysicsStep physics { .state = state, .rope = MdlRopeStep { .gravity = { 0, -90, 0 }, .deltaTime = 0.1f } };
 	if (route == 0) physics.rope.reset ();
-	if (route == 1) data.ikGroups[0].hasDependencies = true;
+	if (route == 1) data.ikGroups[0].controlDependencies = { UINT32_MAX };
 	if (route == 2) data.ikGroups[0].nodes[0].branches[0].flags = 5;
 	if (route == 3) data.bones[1].spring = MdlBoneSpring {};
 	if (route == 4) data.ikGroups[0].nodes[0].branches[0].flags = 8;
@@ -1632,7 +1640,7 @@ TEST_CASE ("Ordinary descendants use animated locals after the rope solve", "[md
 	MdlPhysicsStep rejectedStep { .state = rejectedState, .rope = physics.rope };
 	static_cast<void> (MdlAnimationEvaluator::evaluate (rejected, {{ .animation = &clip }}, &rejectedStep));
 	CHECK (rejectedState.ropePoints.empty ());
-	CHECK (rejectedState.ropeWorldBones.empty ());
+	CHECK (rejectedState.workingWorldBones.empty ());
     }
 }
 
@@ -1681,7 +1689,7 @@ TEST_CASE ("Serial ropes admit a pinned working-pose endpoint without a control"
 	.rope = MdlRopeStep { .gravity = { 0, -90, 0 }, .deltaTime = 0.1f } };
     const auto first = MdlAnimationEvaluator::evaluate (data, {}, &physics);
     REQUIRE (state.ropePoints.size () == 7);
-    REQUIRE (state.ropeWorldBones.size () == 7);
+    REQUIRE (state.workingWorldBones.size () == 7);
     CHECK (state.ropePoints[0].initialized);
     CHECK (state.ropePoints[3].initialized);
     CHECK_FALSE (state.ropePoints[6].initialized);
@@ -1720,14 +1728,14 @@ TEST_CASE ("Serial ropes admit a pinned working-pose endpoint without a control"
 	auto rejected = data;
 	if (route == 0) rejected.ikGroups[0].nodes[1].branches[0].flags = 8;
 	if (route == 1) rejected.ikGroups[0].nodes[1].branches[0].bones[0] = 2;
-	if (route == 2) rejected.ikGroups[0].hasDependencies = true;
+	if (route == 2) rejected.ikGroups[0].controlDependencies = { UINT32_MAX };
 	if (route == 3) rejected.bones[4].type = 0;
 	if (route == 4) rejected.ikGroups[0].nodes[1].branches[0].flags = 5;
 	MdlPhysicsState rejectedState;
 	MdlPhysicsStep rejectedStep { .state = rejectedState, .rope = physics.rope };
 	const auto unchanged = MdlAnimationEvaluator::evaluate (rejected, {}, &rejectedStep);
 	CHECK (rejectedState.ropePoints.empty ());
-	CHECK (rejectedState.ropeWorldBones.empty ());
+	CHECK (rejectedState.workingWorldBones.empty ());
 	CHECK (unchanged.worldBones[4][3].y == 0.0f);
     }
 }
@@ -1833,7 +1841,7 @@ TEST_CASE ("Two pinned rope branches retain native initialization and ordered ro
                 .rope=MdlRopeStep {.gravity={0,-90,0}, .deltaTime=frame.dt}};
             const auto pose = MdlAnimationEvaluator::evaluate (data, {}, &physics);
             REQUIRE (state.ropePoints.size () == 5);
-            REQUIRE (state.ropeWorldBones.size () == 5);
+            REQUIRE (state.workingWorldBones.size () == 5);
             for (size_t bone=0; bone<5; ++bone) {
                 CHECK (state.ropePoints[bone].initialized == (bone == 0));
                 const auto expectedSkin = frame.world[bone] * data.bones[bone].inverseBindWorld;
@@ -1859,14 +1867,20 @@ TEST_CASE ("Two pinned rope branches retain native initialization and ordered ro
             if (route==1) branches[1].flags=5;
             if (route==2) rejected.bones[branches[1].bones.back ()].spring=MdlBoneSpring {};
             if (route==3) branches[1].bones[1]=branches[0].bones[1];
-            if (route==4) rejected.ikGroups[0].hasDependencies=true;
+            if (route==4) rejected.ikGroups[0].controlDependencies = { UINT32_MAX };
             if (route==5) rejected.bones[1].type=0;
             if (route==6) rejected.controls.push_back ({.bone=2});
             MdlPhysicsState rejectedState;
             MdlPhysicsStep step {.state=rejectedState, .rope=MdlRopeStep {.gravity={0,-90,0}, .deltaTime=.03f}};
             const auto pose=MdlAnimationEvaluator::evaluate (rejected, {}, &step);
-            CHECK (rejectedState.ropePoints.empty ());
-            CHECK (rejectedState.ropeWorldBones.empty ());
+            if (route == 2) {
+                // Solver-owned non-owners skip ordinary spring stepping.
+                CHECK (rejectedState.ropePoints.size () == data.bones.size ());
+                CHECK (rejectedState.workingWorldBones.size () == data.bones.size ());
+            } else {
+                CHECK (rejectedState.ropePoints.empty ());
+                CHECK (rejectedState.workingWorldBones.empty ());
+            }
         }
     }
 }
@@ -2361,4 +2375,376 @@ TEST_CASE ("Kinematic endpoints branches replay native limits and endpoint modes
         CHECK (state.ropePoints[bone].current[axis] == Catch::Approx (finalCurrent[bone][axis]).margin (3e-4f));
         CHECK (state.ropePoints[bone].previous[axis] == Catch::Approx (finalPrevious[bone][axis]).margin (3e-4f));
     }
+}
+
+TEST_CASE ("Dependency scalars retain masked rows and compose raw layers", "[mdl][animation][physics][rope][dependencies]") {
+    MdlAnimationData data;
+    data.bones.resize (1);
+    data.dependencyCount = 2;
+    MdlAnimationClip first, second;
+    first.frameCount = second.frameCount = 1;
+    first.dependencyFlags = { 0, 1 };
+    first.dependencyTracks = {{ 2, 6 }, { 7, 7 }};
+    second.dependencyTracks = {{ 4, 4 }, { 8, 8 }};
+    MdlPhysicsState state;
+    state.bones.resize (1); // This scalar history belongs to an already allocated puppet.
+    MdlPhysicsStep step { .state=state };
+    const auto evaluate = [&] (const std::vector<MdlActiveAnimation>& layers) {
+        const auto pose = MdlAnimationEvaluator::evaluate (data, layers, &step);
+        REQUIRE (pose.dependencyWeights == state.dependencyWeights);
+        return pose.dependencyWeights;
+    };
+    state.dependencyWeights = { 9, 11 };
+    auto values = evaluate ({{ .animation=&first, .frame=.25f }});
+    CHECK (values == std::vector<float> { 3, 11 }); // A full zero-bone clip keeps masked rows.
+    CHECK (evaluate ({}) == values);
+    CHECK (evaluate ({{ .animation=&first, .weight=0, .enabled=false }}) == values);
+    CHECK (evaluate ({{ .animation=&first, .weight=0 }}) == std::vector<float> { 0, 0 });
+    state.dependencyWeights = { 9, 11 };
+    CHECK (evaluate ({{ .animation=&first, .weight=.5f, .frame=.25f }}) == std::vector<float> { 1.5f, 0 });
+    state.dependencyWeights = { 9, 11 };
+    CHECK (evaluate ({{ .animation=&first, .weight=.5f, .additive=true, .frame=.25f }}) == std::vector<float> { 1.5f, 0 });
+    state.dependencyWeights = { 9, 11 };
+    CHECK (evaluate ({{ .animation=&first, .frame=.25f }, { .animation=&second, .weight=-.5f, .additive=true }}) == std::vector<float> { 1, 7 });
+    state.dependencyWeights = { 9, 11 };
+    CHECK (evaluate ({{ .animation=&first, .frame=.25f }, { .animation=&second, .weight=1.5f }}) == std::vector<float> { 4.5f, 6.5f });
+}
+
+// Native dependency02, wallpaper64.exe40e2ce02, 2026-10-07; literal trajectories are independent of the evaluator.
+TEST_CASE ("Dependencies replay ordered owners and retained native history", "[mdl][animation][physics][rope][dependencies]") {
+    struct Frame { float dt; std::vector<glm::mat4> world, owners; };
+    const std::vector<Frame> frames = {
+        { 0.0341192f, {
+            glm::mat4 (0.999200106f, -0.0399893373f, 0.0f, 0.0f, 0.0399893373f, 0.999200106f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f, -1.5f, 0.800000012f, 0.200000003f, 1.0f),
+            glm::mat4 (0.935896814f, 0.352274209f, 0.0f, 0.0f, -0.352274209f, 0.935896814f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 38.6679497f, 4.19642687f, 0.200000003f, 1.0f),
+            glm::mat4 (-1.11368728f, 0.44687888f, 0.0f, 0.0f, -0.297919244f, -0.742458224f, 0.0f, 0.0f, 0.0f, 0.0f, 1.10000002f, 0.0f, -1.5f, 0.800000012f, 5.19999981f, 1.0f),
+            glm::mat4 (0.661476254f, -0.748664439f, -0.0441680104f, 0.0f, 0.748608649f, 0.662674785f, -0.0211509075f, 0.0f, 0.0451039597f, -0.0190737266f, 0.998800218f, 0.0f, 3.49600029f, 0.60005331f, 0.200000003f, 1.0f),
+            glm::mat4 (1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 25.0f, -0.104774475f, 0.0f, 1.0f),
+            glm::mat4 (-0.933678746f, 0.284808427f, 0.217098191f, 0.0f, -0.284808427f, -0.223041534f, -0.93227613f, 0.0f, -0.217098191f, -0.93227613f, 0.289362788f, 0.0f, 45.0f, -0.104774475f, 0.0f, 1.0f),
+            glm::mat4 (-0.140453592f, -0.990081608f, 0.0f, 0.0f, 0.990050614f, -0.140449196f, 0.0f, 0.0f, 0.0f, 0.0f, 0.999693215f, 0.0f, 26.2639427f, 5.61046457f, 4.35650063f, 1.0f),
+            glm::mat4 (0.993012905f, 0.118005656f, -9.27938527e-05f, 0.0f, -0.118005656f, 0.993011713f, -0.00156720646f, 0.0f, -9.27938527e-05f, 0.00156720646f, 0.999998748f, 0.0f, 4.64228439f, 20.5663338f, 0.0164405704f, 1.0f),
+            glm::mat4 (-0.587360382f, -0.809271812f, -0.00930776075f, 0.0f, 0.809271812f, -0.58741498f, 0.00474530412f, 0.0f, -0.00930776075f, -0.00474530412f, 0.999945402f, 0.0f, 2.28217125f, 40.4265671f, -0.0149035603f, 1.0f),
+            glm::mat4 (0.953720212f, 0.295020252f, 0.0f, 0.0f, -0.295020252f, 0.953720212f, 0.0f, 0.0f, 0.0f, 0.0f, 0.998308122f, 0.0f, 18.4676075f, 28.6782646f, 0.0800025165f, 1.0f),
+            glm::mat4 (-0.956990957f, -0.285693824f, -0.0504689217f, 0.0f, 0.285693824f, -0.897768021f, -0.335248083f, 0.0f, 0.0504689217f, -0.335248083f, 0.940777123f, 0.0f, 22.2872047f, 7.34596872f, 1.37612021f, 1.0f),
+            glm::mat4 (-0.96976769f, -0.240228087f, -0.042950321f, 0.0f, 0.240228087f, -0.908752918f, -0.34126547f, 0.0f, 0.042950321f, -0.34126547f, 0.938985229f, 0.0f, 41.4270248f, 13.059845f, 2.38549852f, 1.0f),
+            glm::mat4 (0.978408456f, -0.198333204f, 0.0f, 0.0f, 0.198333204f, 0.978408456f, 0.0f, 0.0f, 0.0f, 0.0f, 0.998308122f, 0.0f, 60.8223419f, 17.8644066f, 3.24450493f, 1.0f),
+            glm::mat4 (0.265711904f, -0.963952303f, -0.013894313f, 0.0f, 0.963952303f, 0.265448987f, 0.0182400551f, 0.0f, -0.013894313f, -0.0182400551f, 0.999737084f, 0.0f, 13.1042566f, 3.36580896f, 0.378953934f, 1.0f),
+            glm::mat4 (0.239824414f, -0.970700324f, -0.0150042204f, 0.0f, 0.970700324f, 0.239528239f, 0.0191595238f, 0.0f, -0.0150042204f, -0.0191595238f, 0.999703825f, 0.0f, 32.3833046f, 8.67478752f, 0.743755043f, 1.0f),
+            glm::mat4 (0.215989351f, -0.976262808f, -0.0161109082f, 0.0f, 0.976262808f, 0.215658307f, 0.0200615656f, 0.0f, -0.0161109082f, -0.0200615656f, 0.999668956f, 0.0f, 51.7973099f, 13.4653521f, 1.1269455f, 1.0f),
+            glm::mat4 (0.918723404f, 0.390597701f, 0.0f, 0.0f, -0.390597701f, 0.918723404f, 0.0f, 0.0f, 0.0f, 0.0f, 0.998308122f, 0.0f, 71.3225632f, 17.7785168f, 1.52817678f, 1.0f),
+            glm::mat4 (0.883614898f, 0.468086183f, 0.0109581733f, 0.0f, -0.468086183f, 0.883678615f, -0.00272315228f, 0.0f, -0.0109581733f, -0.00272315228f, 0.999936223f, 0.0f, -160.0f, -90.1047745f, 0.0f, 1.0f),
+            glm::mat4 (0.978408456f, 0.198333204f, 0.0f, 0.0f, -0.198333204f, 0.978408456f, 0.0f, 0.0f, 0.0f, 0.0f, 0.998308122f, 0.0f, 9.33397484f, -0.401786566f, 2.0999999f, 1.0f),
+            glm::mat4 (0.993320763f, -0.0996645093f, 0.0f, 0.0f, 0.0996645093f, 0.993320763f, 0.0f, 0.0f, 0.0f, 0.0f, 0.998308122f, 0.0f, 13.4162321f, 1.86056292f, 0.189401001f, 1.0f),
+            glm::mat4 (0.996311128f, 0.0594539754f, -0.0618818589f, 0.0f, -0.0594539754f, 0.998229325f, 0.00184296037f, 0.0f, 0.0618818589f, 0.00184296037f, 0.998081803f, 0.0f, 24.8594074f, -4.29035139f, 4.35650063f, 1.0f),
+            glm::mat4 (-0.98963809f, 0.126557842f, 0.0678008348f, 0.0f, -0.126557842f, -0.545942426f, -0.828207731f, 0.0f, -0.0678008348f, -0.828207731f, 0.556304276f, 0.0f, 95.0f, -0.104774475f, 0.0f, 1.0f),
+            glm::mat4 (0.763548195f, 0.643127739f, 0.0f, 0.0f, -0.643127739f, 0.763548195f, 0.0f, 0.0f, 0.0f, 0.0f, 0.998308122f, 0.0f, 63.9556351f, 3.86526537f, 2.12686944f, 1.0f),
+            glm::mat4 (0.95233357f, 0.305058599f, 0.0f, 0.0f, -0.305058599f, 0.95233357f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 15.3664341f, -2.87741899f, 2.20000005f, 1.0f),
+        }, { glm::mat4 (0.999200106f, -0.0399893373f, 0.0f, 0.0f, 0.0399893373f, 0.999200106f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 3.4960022f, 0.60005188f, 0.200000003f, 1.0f), glm::mat4 (-0.140453592f, -0.990081608f, 0.0f, 0.0f, 0.990050614f, -0.140449196f, 0.0f, 0.0f, 0.0f, 0.0f, 0.999693215f, 0.0f, 24.8594055f, -4.29035187f, 4.35650063f, 1.0f) } },
+        { 0.0878721029f, {
+            glm::mat4 (0.999519527f, 0.0309950337f, 0.0f, 0.0f, -0.0309950337f, 0.999519527f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 1.53664351f, -0.287741929f, 0.220000029f, 1.0f),
+            glm::mat4 (0.908548355f, 0.417779565f, 0.0f, 0.0f, -0.417779565f, 0.908548355f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 41.3624496f, 5.94965696f, 0.220000029f, 1.0f),
+            glm::mat4 (-1.14258313f, 0.366747618f, 0.0f, 0.0f, -0.244498402f, -0.761722207f, 0.0f, 0.0f, 0.0f, 0.0f, 1.10000002f, 0.0f, 1.53664351f, -0.287741929f, 5.22000027f, 1.0f),
+            glm::mat4 (0.86233449f, -0.493938744f, 0.11137218f, 0.0f, 0.494074166f, 0.868958116f, 0.0283274427f, 0.0f, -0.110769786f, 0.0305984057f, 0.993374944f, 0.0f, 6.5342412f, -0.132766753f, 0.220000029f, 1.0f),
+            glm::mat4 (0.982156992f, -0.153016523f, -0.109332338f, 0.0f, 0.153016523f, 0.988187611f, -0.00844012573f, 0.0f, 0.109332338f, -0.00844012573f, 0.99396944f, 0.0f, 22.4037476f, -0.915077209f, -0.190944999f, 1.0f),
+            glm::mat4 (-0.777830243f, 0.511231124f, 0.365545392f, 0.0f, -0.511231124f, -0.176383734f, -0.841149151f, 0.0f, -0.365545392f, -0.841149151f, 0.398553491f, 0.0f, 42.2232971f, -4.00289154f, -2.39722943f, 1.0f),
+            glm::mat4 (-0.10875418f, -0.994063079f, 0.0f, 0.0f, 0.994031906f, -0.108750768f, 0.0f, 0.0f, 0.0f, 0.0f, 0.999693215f, 0.0f, 27.8296356f, 5.45738745f, 4.36715031f, 1.0f),
+            glm::mat4 (0.993198812f, 0.116430856f, -0.000109106921f, 0.0f, -0.116430856f, 0.993197024f, -0.00186781748f, 0.0f, -0.000109106921f, 0.00186781748f, 0.999998271f, 0.0f, 4.71036339f, 19.7829304f, 0.0238958299f, 1.0f),
+            glm::mat4 (-0.513298512f, -0.858163476f, -0.00894587021f, 0.0f, 0.858163476f, -0.51335144f, 0.00507303653f, 0.0f, -0.00894587021f, -0.00507303653f, 0.999947131f, 0.0f, 2.38174629f, 39.6468697f, -0.0134605169f, 1.0f),
+            glm::mat4 (0.953720212f, 0.295020252f, 0.0f, 0.0f, -0.295020252f, 0.953720212f, 0.0f, 0.0f, 0.0f, 0.0f, 0.998308122f, 0.0f, 19.5450153f, 29.3798409f, 0.088000223f, 1.0f),
+            glm::mat4 (-0.969295382f, -0.241404817f, -0.046888262f, 0.0f, 0.241404817f, -0.89770329f, -0.36859253f, 0.0f, 0.046888262f, -0.36859253f, 0.928407967f, 0.0f, 24.3903198f, 8.77327919f, 1.57750595f, 1.0f),
+            glm::mat4 (-0.947793245f, -0.316159368f, -0.0415939279f, 0.0f, 0.316159368f, -0.914654374f, -0.251891941f, 0.0f, 0.0415939279f, -0.251891941f, 0.966861069f, 0.0f, 43.7761421f, 13.6013756f, 2.51527119f, 1.0f),
+            glm::mat4 (0.978408456f, -0.198333189f, 0.0f, 0.0f, 0.198333189f, 0.978408456f, 0.0f, 0.0f, 0.0f, 0.0f, 0.998308122f, 0.0f, 62.7320175f, 19.9245625f, 3.34714961f, 1.0f),
+            glm::mat4 (0.287092447f, -0.95779866f, -0.0141269071f, 0.0f, 0.95779866f, 0.286812484f, 0.0189796463f, 0.0f, -0.0141269071f, -0.0189796463f, 0.999720037f, 0.0f, 16.1222363f, 2.70166516f, 0.410706878f, 1.0f),
+            glm::mat4 (0.294965625f, -0.955404103f, -0.0140825082f, 0.0f, 0.955404103f, 0.29468435f, 0.0190834478f, 0.0f, -0.0140825082f, -0.0190834478f, 0.999718726f, 0.0f, 35.2782135f, 8.43791389f, 0.790299892f, 1.0f),
+            glm::mat4 (0.301803827f, -0.953263402f, -0.0142601635f, 0.0f, 0.953263402f, 0.301512599f, 0.0194697324f, 0.0f, -0.0142601635f, -0.0194697324f, 0.999708772f, 0.0f, 54.3862991f, 14.3316031f, 1.17196894f, 1.0f),
+            glm::mat4 (0.89818418f, 0.43575719f, 0.0f, 0.0f, -0.43575719f, 0.89818418f, 0.0f, 0.0f, 0.0f, 0.0f, 0.998308122f, 0.0f, 73.4515686f, 20.3618546f, 1.56136358f, 1.0f),
+            glm::mat4 (-0.342981339f, 0.374082983f, -0.861641109f, 0.0f, -0.374082983f, 0.787010431f, 0.490587831f, 0.0f, 0.861641109f, 0.490587831f, -0.12999177f, 0.0f, 66.530838f, -60.439209f, 142.415878f, 1.0f),
+            glm::mat4 (0.978408456f, 0.198333189f, 0.0f, 0.0f, -0.198333189f, 0.978408456f, 0.0f, 0.0f, 0.0f, 0.0f, 0.998308122f, 0.0f, 10.6812248f, 0.474828482f, 2.11000013f, 1.0f),
+            glm::mat4 (0.993320763f, -0.0996645018f, 0.0f, 0.0f, 0.0996645018f, 0.993320763f, 0.0f, 0.0f, 0.0f, 0.0f, 0.998308122f, 0.0f, 16.3610859f, 1.72006106f, 0.208172023f, 1.0f),
+            glm::mat4 (-0.997646093f, -0.0307969488f, 0.0595296808f, 0.0f, 0.0307969488f, 0.578234076f, 0.815262258f, 0.0f, -0.0595296808f, 0.815262258f, -0.57588017f, 0.0f, 26.742094f, -4.48324347f, 4.36715031f, 1.0f),
+            glm::mat4 (0.989168286f, 0.134592399f, -0.0585748143f, 0.0f, -0.134592399f, 0.990893126f, 0.0039633275f, 0.0f, 0.0585748143f, 0.0039633275f, 0.998275161f, 0.0f, -5.53533936f, -5.47953033f, 6.29294634f, 1.0f),
+            glm::mat4 (0.763548195f, 0.643127739f, 0.0f, 0.0f, -0.643127739f, 0.763548195f, 0.0f, 0.0f, 0.0f, 0.0f, 0.998308122f, 0.0f, 65.7173462f, 4.21555471f, 2.07363105f, 1.0f),
+            glm::mat4 (0.928293288f, 0.371848941f, 0.0f, 0.0f, -0.371848941f, 0.928293288f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 18.6214619f, -2.75938487f, 2.22000003f, 1.0f),
+        }, { glm::mat4 (0.999519527f, 0.0309950337f, 0.0f, 0.0f, -0.0309950337f, 0.999519527f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 6.53424072f, -0.132766724f, 0.220000029f, 1.0f), glm::mat4 (-0.10875418f, -0.994063079f, 0.0f, 0.0f, 0.994031906f, -0.108750768f, 0.0f, 0.0f, 0.0f, 0.0f, 0.999693215f, 0.0f, 26.7420959f, -4.48324585f, 4.36715031f, 1.0f) } },
+        { 0.0895958021f, {
+            glm::mat4 (0.999274254f, 0.0380907804f, 0.0f, 0.0f, -0.0380907804f, 0.999274254f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 1.86214602f, -0.275938481f, 0.221999988f, 1.0f),
+            glm::mat4 (0.905559301f, 0.424219608f, 0.0f, 0.0f, -0.424219608f, 0.905559301f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 41.642662f, 6.24406385f, 0.221999988f, 1.0f),
+            glm::mat4 (-1.14515805f, 0.358626127f, 0.0f, 0.0f, -0.239084065f, -0.763438523f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0999999f, 0.0f, 1.86214602f, -0.275938481f, 5.22200012f, 1.0f),
+            glm::mat4 (0.881081223f, -0.428937733f, 0.199269325f, 0.0f, 0.429186225f, 0.902133107f, 0.0442165546f, 0.0f, -0.198733598f, 0.0465652756f, 0.978946686f, 0.0f, 6.85851717f, -0.0854845792f, 0.221999988f, 1.0f),
+            glm::mat4 (0.942070007f, -0.259078592f, -0.213031411f, 0.0f, 0.259078592f, 0.965438068f, -0.028419096f, 0.0f, 0.213031411f, -0.028419096f, 0.976631939f, 0.0f, 28.7239685f, 0.679321289f, 2.39958119f, 1.0f),
+            glm::mat4 (-0.857960939f, 0.435827106f, 0.271951139f, 0.0f, -0.435827106f, -0.337276578f, -0.834445357f, 0.0f, -0.271951139f, -0.834445357f, 0.479315579f, 0.0f, 47.8553314f, -4.5819931f, -1.92661703f, 1.0f),
+            glm::mat4 (-0.105577685f, -0.994405448f, 0.0f, 0.0f, 0.994374275f, -0.105574362f, 0.0f, 0.0f, 0.0f, 0.0f, 0.999693215f, 0.0f, 27.99617f, 5.50606346f, 4.36821508f, 1.0f),
+            glm::mat4 (0.993522763f, 0.113633357f, -0.000104331812f, 0.0f, -0.113633357f, 0.993521094f, -0.00183033978f, 0.0f, -0.000104331812f, 0.00183033978f, 0.999998331f, 0.0f, 4.70907402f, 19.7976856f, 0.0234028399f, 1.0f),
+            glm::mat4 (-0.508471251f, -0.861032844f, -0.00893520005f, 0.0f, 0.861032844f, -0.508524179f, 0.00510019716f, 0.0f, -0.00893520005f, -0.00510019716f, 0.999947071f, 0.0f, 2.43640709f, 39.6681061f, -0.0132039562f, 1.0f),
+            glm::mat4 (0.953720212f, 0.295020252f, 0.0f, 0.0f, -0.295020252f, 0.953720212f, 0.0f, 0.0f, 0.0f, 0.0f, 0.998308122f, 0.0f, 19.6570644f, 29.4976273f, 0.0887999907f, 1.0f),
+            glm::mat4 (-0.987718701f, -0.150696814f, -0.0412380658f, 0.0f, 0.150696814f, -0.849240422f, -0.506043196f, 0.0f, 0.0412380658f, -0.506043196f, 0.861521661f, 0.0f, 24.0795383f, 9.97723484f, 1.69783223f, 1.0f),
+            glm::mat4 (-0.934349537f, -0.353996605f, -0.0409245156f, 0.0f, 0.353996605f, -0.908837914f, -0.220675185f, 0.0f, 0.0409245156f, -0.220675185f, 0.974488378f, 0.0f, 43.8339272f, 12.9911709f, 2.5225935f, 1.0f),
+            glm::mat4 (0.978408456f, -0.198333189f, 0.0f, 0.0f, 0.198333189f, 0.978408456f, 0.0f, 0.0f, 0.0f, 0.0f, 0.998308122f, 0.0f, 62.5209427f, 20.0711021f, 3.34108377f, 1.0f),
+            glm::mat4 (0.292874813f, -0.95605135f, -0.0137938717f, 0.0f, 0.95605135f, 0.292605758f, 0.0186496675f, 0.0f, -0.0137938717f, -0.0186496675f, 0.999730945f, 0.0f, 16.4274502f, 2.81301594f, 0.406957f, 1.0f),
+            glm::mat4 (0.29928422f, -0.95405978f, -0.0141027952f, 0.0f, 0.95405978f, 0.299000382f, 0.0192016661f, 0.0f, -0.0141027952f, -0.0192016661f, 0.999716163f, 0.0f, 35.5484772f, 8.66513348f, 0.77995038f, 1.0f),
+            glm::mat4 (0.305004776f, -0.952239752f, -0.0145449415f, 0.0f, 0.952239752f, 0.304700375f, 0.0199285839f, 0.0f, -0.0145449415f, -0.0199285839f, 0.999695599f, 0.0f, 54.629673f, 14.6451406f, 1.1639837f, 1.0f),
+            glm::mat4 (0.896007419f, 0.440215647f, 0.0f, 0.0f, -0.440215647f, 0.896007419f, 0.0f, 0.0f, 0.0f, 0.0f, 0.998308122f, 0.0f, 73.674469f, 20.7391472f, 1.56255543f, 1.0f),
+            glm::mat4 (0.179176033f, 0.035271652f, -0.983184516f, 0.0f, -0.035271652f, 0.998944938f, 0.029409131f, 0.0f, 0.983184516f, 0.029409131f, 0.180231094f, 0.0f, 3.6772728f, -0.784309387f, 41.3122559f, 1.0f),
+            glm::mat4 (0.978408456f, 0.198333189f, 0.0f, 0.0f, -0.198333189f, 0.978408456f, 0.0f, 0.0f, 0.0f, 0.0f, 0.998308122f, 0.0f, 10.821331f, 0.622031927f, 2.11100006f, 1.0f),
+            glm::mat4 (0.993320763f, -0.0996645018f, 0.0f, 0.0f, 0.0996645018f, 0.993320763f, 0.0f, 0.0f, 0.0f, 0.0f, 0.998308122f, 0.0f, 16.6750603f, 1.821172f, 0.210044235f, 1.0f),
+            glm::mat4 (0.909166455f, 0.413881868f, -0.0460237935f, 0.0f, -0.413881868f, 0.910275936f, 0.00997734629f, 0.0f, 0.0460237935f, 0.00997734629f, 0.998890519f, 0.0f, 26.9403934f, -4.43799114f, 4.36821508f, 1.0f),
+            glm::mat4 (0.997538626f, -0.0183099974f, -0.0676866844f, 0.0f, 0.0183099974f, 0.999832153f, -0.00062043505f, 0.0f, 0.0676866844f, -0.00062043505f, 0.997706413f, 0.0f, 46.8664246f, 4.63298035f, 3.3595202f, 1.0f),
+            glm::mat4 (0.763548195f, 0.643127739f, 0.0f, 0.0f, -0.643127739f, 0.763548195f, 0.0f, 0.0f, 0.0f, 0.0f, 0.998308122f, 0.0f, 65.9101639f, 4.28342915f, 2.06733227f, 1.0f),
+            glm::mat4 (0.925629735f, 0.378430337f, 0.0f, 0.0f, -0.378430337f, 0.925629735f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 18.9640808f, -2.62621808f, 2.22199988f, 1.0f),
+        }, { glm::mat4 (0.999274254f, 0.0380907804f, 0.0f, 0.0f, -0.0380907804f, 0.999274254f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 6.85852051f, -0.0854873657f, 0.221999988f, 1.0f), glm::mat4 (-0.105577685f, -0.994405448f, 0.0f, 0.0f, 0.994374275f, -0.105574362f, 0.0f, 0.0f, 0.0f, 0.0f, 0.999693215f, 0.0f, 26.9403992f, -4.43798828f, 4.36821508f, 1.0f) } },
+        { 0.0946564004f, {
+            glm::mat4 (0.999247015f, 0.0388002545f, 0.0f, 0.0f, -0.0388002545f, 0.999247015f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 1.8964082f, -0.26262182f, 0.222200006f, 1.0f),
+            glm::mat4 (0.905257881f, 0.424862534f, 0.0f, 0.0f, -0.424862534f, 0.905257881f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 41.672287f, 6.28562307f, 0.222200006f, 1.0f),
+            glm::mat4 (-1.14541256f, 0.357812971f, 0.0f, 0.0f, -0.238541991f, -0.763608515f, 0.0f, 0.0f, 0.0f, 0.0f, 1.10000002f, 0.0f, 1.8964082f, -0.26262182f, 5.22219992f, 1.0f),
+            glm::mat4 (0.882156312f, -0.360762656f, 0.302738369f, 0.0f, 0.361155927f, 0.93077451f, 0.056790594f, 0.0f, -0.302269101f, 0.0592375807f, 0.951380193f, 0.0f, 6.89264297f, -0.0686205477f, 0.222200006f, 1.0f),
+            glm::mat4 (0.931337535f, -0.236533806f, -0.27687934f, 0.0f, 0.236533806f, 0.971031368f, -0.0339098275f, 0.0f, 0.27687934f, -0.0339098275f, 0.960306168f, 0.0f, 26.8182983f, 1.55361176f, 5.3631649f, 1.0f),
+            glm::mat4 (-0.872000813f, 0.433440775f, 0.227474809f, 0.0f, -0.433440775f, -0.467743993f, -0.770289302f, 0.0f, -0.227474809f, -0.770289302f, 0.595743179f, 0.0f, 45.5682678f, -3.20835876f, -0.211054564f, 1.0f),
+            glm::mat4 (-0.105259985f, -0.994439065f, 0.0f, 0.0f, 0.994407892f, -0.105256677f, 0.0f, 0.0f, 0.0f, 0.0f, 0.999693215f, 0.0f, 28.0137215f, 5.51739073f, 4.36832142f, 1.0f),
+            glm::mat4 (0.993590653f, 0.113038257f, -0.000103099468f, 0.0f, -0.113038257f, 0.993588984f, -0.00181830442f, 0.0f, -0.000103099468f, 0.00181830442f, 0.999998331f, 0.0f, 4.70768309f, 19.8106728f, 0.0231988728f, 1.0f),
+            glm::mat4 (-0.508357167f, -0.861099899f, -0.00893762056f, 0.0f, 0.861099899f, -0.508410096f, 0.00510236202f, 0.0f, -0.00893762056f, -0.00510236202f, 0.999947011f, 0.0f, 2.44691801f, 39.6824532f, -0.0131672174f, 1.0f),
+            glm::mat4 (0.953720212f, 0.295020252f, 0.0f, 0.0f, -0.295020252f, 0.953720212f, 0.0f, 0.0f, 0.0f, 0.0f, 0.998308122f, 0.0f, 19.6689167f, 29.5142498f, 0.0888800174f, 1.0f),
+            glm::mat4 (-0.991904378f, -0.120804928f, -0.0393735431f, 0.0f, 0.120804928f, -0.800627112f, -0.586872339f, 0.0f, 0.0393735431f, -0.586872339f, 0.808722675f, 0.0f, 23.9118347f, 10.3274298f, 1.72860432f, 1.0f),
+            glm::mat4 (-0.930258751f, -0.364621609f, -0.0409088694f, 0.0f, 0.364621609f, -0.906263113f, -0.213873953f, 0.0f, 0.0409088694f, -0.213873953f, 0.976004303f, 0.0f, 43.7497368f, 12.7435284f, 2.51607513f, 1.0f),
+            glm::mat4 (0.978408456f, -0.198333219f, 0.0f, 0.0f, 0.198333219f, 0.978408456f, 0.0f, 0.0f, 0.0f, 0.0f, 0.998308122f, 0.0f, 62.3548737f, 20.0359612f, 3.3342526f, 1.0f),
+            glm::mat4 (0.293225825f, -0.955943942f, -0.0137829622f, 0.0f, 0.955943942f, 0.292957067f, 0.0186420772f, 0.0f, -0.0137829622f, -0.0186420772f, 0.999731243f, 0.0f, 16.4607887f, 2.83247471f, 0.407108724f, 1.0f),
+            glm::mat4 (0.299767673f, -0.953908145f, -0.014094091f, 0.0f, 0.953908145f, 0.299484015f, 0.0192000102f, 0.0f, -0.014094091f, -0.0192000102f, 0.999716341f, 0.0f, 35.5796661f, 8.69161797f, 0.779950261f, 1.0f),
+            glm::mat4 (0.30549252f, -0.952083349f, -0.0145489862f, 0.0f, 0.952083349f, 0.305187762f, 0.0199448504f, 0.0f, -0.0145489862f, -0.0199448504f, 0.999695241f, 0.0f, 54.6578293f, 14.6812973f, 1.16395044f, 1.0f),
+            glm::mat4 (0.895788491f, 0.440661013f, 0.0f, 0.0f, -0.440661013f, 0.895788491f, 0.0f, 0.0f, 0.0f, 0.0f, 0.998308122f, 0.0f, 73.6994934f, 20.7850494f, 1.56284738f, 1.0f),
+            glm::mat4 (0.8593449f, -0.0956991315f, -0.50236237f, 0.0f, 0.0956991315f, 0.995074451f, -0.0258562304f, 0.0f, 0.50236237f, -0.0258562304f, 0.864270449f, 0.0f, -3.23093414f, 2.20936203f, 10.3345404f, 1.0f),
+            glm::mat4 (0.978408456f, 0.198333219f, 0.0f, 0.0f, -0.198333219f, 0.978408456f, 0.0f, 0.0f, 0.0f, 0.0f, 0.998308122f, 0.0f, 10.8361435f, 0.642811537f, 2.11109996f, 1.0f),
+            glm::mat4 (0.993320763f, -0.0996645093f, 0.0f, 0.0f, 0.0996645093f, 0.993320763f, 0.0f, 0.0f, 0.0f, 0.0f, 0.998308122f, 0.0f, 16.7082558f, 1.84281385f, 0.210231185f, 1.0f),
+            glm::mat4 (0.852910697f, 0.520962179f, -0.0337898359f, 0.0f, -0.520962179f, 0.85352689f, 0.00950031076f, 0.0f, 0.0337898359f, 0.00950031076f, 0.999383807f, 0.0f, 26.9611206f, -4.42699957f, 4.36832142f, 1.0f),
+            glm::mat4 (0.993988037f, -0.0807494074f, -0.0739410669f, 0.0f, 0.0807494074f, 0.99672991f, -0.00299434946f, 0.0f, 0.0739410669f, -0.00299434946f, 0.997258127f, 0.0f, 44.1366272f, 6.06388855f, 3.68787789f, 1.0f),
+            glm::mat4 (0.763548195f, 0.643127739f, 0.0f, 0.0f, -0.643127739f, 0.763548195f, 0.0f, 0.0f, 0.0f, 0.0f, 0.998308122f, 0.0f, 65.931076f, 4.29335546f, 2.06662631f, 1.0f),
+            glm::mat4 (0.925360858f, 0.379087508f, 0.0f, 0.0f, -0.379087508f, 0.925360858f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 19.0000095f, -2.60075855f, 2.22219992f, 1.0f),
+        }, { glm::mat4 (0.999247015f, 0.0388002545f, 0.0f, 0.0f, -0.0388002545f, 0.999247015f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 6.89263916f, -0.0686187744f, 0.222200006f, 1.0f), glm::mat4 (-0.105259985f, -0.994439065f, 0.0f, 0.0f, 0.994407892f, -0.105256677f, 0.0f, 0.0f, 0.0f, 0.0f, 0.999693215f, 0.0f, 26.9611206f, -4.42700195f, 4.36832142f, 1.0f) } },
+    };
+    MdlAnimationData data; data.dependencyCount=10;
+    const std::vector<glm::mat4> locals = {
+        glm::mat4 (1.0f, 0.0f, 0.0f, 0.0f, -0.0f, 1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f),
+        glm::mat4 (0.968912422f, 0.247403959f, 0.0f, 0.0f, -0.247403959f, 0.968912422f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 40.0f, 5.0f, 0.0f, 1.0f),
+        glm::mat4 (-1.13066681f, 0.40198578f, 0.0f, 0.0f, -0.26799052f, -0.753777873f, 0.0f, 0.0f, 0.0f, 0.0f, 1.1f, 0.0f, 0.0f, 0.0f, 5.0f, 1.0f),
+        glm::mat4 (1.0f, 0.0f, 0.0f, 0.0f, -0.0f, 1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 5.0f, 0.0f, 0.0f, 1.0f),
+        glm::mat4 (1.0f, 0.0f, 0.0f, 0.0f, -0.0f, 1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 20.0f, 0.0f, 0.0f, 1.0f),
+        glm::mat4 (1.0f, 0.0f, 0.0f, 0.0f, -0.0f, 1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 20.0f, 0.0f, 0.0f, 1.0f),
+        glm::mat4 (1.0f, 0.0f, 0.0f, 0.0f, -0.0f, 1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 20.0f, 0.0f, 0.0f, 1.0f),
+        glm::mat4 (1.0f, 0.0f, 0.0f, 0.0f, -0.0f, 1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f, 20.0f, 0.0f, 1.0f),
+        glm::mat4 (1.0f, 0.0f, 0.0f, 0.0f, -0.0f, 1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f, 20.0f, 0.0f, 1.0f),
+        glm::mat4 (1.0f, 0.0f, 0.0f, 0.0f, -0.0f, 1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f, 20.0f, 0.0f, 1.0f),
+        glm::mat4 (1.0f, 0.0f, 0.0f, 0.0f, -0.0f, 1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f, -20.0f, 0.0f, 0.0f, 1.0f),
+        glm::mat4 (1.0f, 0.0f, 0.0f, 0.0f, -0.0f, 1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f, -20.0f, 0.0f, 0.0f, 1.0f),
+        glm::mat4 (1.0f, 0.0f, 0.0f, 0.0f, -0.0f, 1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f, -20.0f, 0.0f, 0.0f, 1.0f),
+        glm::mat4 (1.0f, 0.0f, 0.0f, 0.0f, -0.0f, 1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 10.0f, 0.0f, 0.0f, 1.0f),
+        glm::mat4 (1.0f, 0.0f, 0.0f, 0.0f, -0.0f, 1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f, 20.0f, 0.0f, 1.0f),
+        glm::mat4 (1.0f, 0.0f, 0.0f, 0.0f, -0.0f, 1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f, 20.0f, 0.0f, 1.0f),
+        glm::mat4 (1.0f, 0.0f, 0.0f, 0.0f, -0.0f, 1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f, 20.0f, 0.0f, 1.0f),
+        glm::mat4 (1.0f, 0.0f, 0.0f, 0.0f, -0.0f, 1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 15.0f, 0.0f, 0.0f, 1.0f),
+        glm::mat4 (1.0f, 0.0f, 0.0f, 0.0f, -0.0f, 1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 15.0f, 0.0f, 0.0f, 1.0f),
+        glm::mat4 (1.0f, 0.0f, 0.0f, 0.0f, -0.0f, 1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f, 10.0f, 0.0f, 1.0f),
+        glm::mat4 (1.0f, 0.0f, 0.0f, 0.0f, -0.0f, 1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 10.0f, 0.0f, 0.0f, 1.0f),
+        glm::mat4 (1.0f, 0.0f, 0.0f, 0.0f, -0.0f, 1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 20.0f, 0.0f, 0.0f, 1.0f),
+        glm::mat4 (1.0f, 0.0f, 0.0f, 0.0f, -0.0f, 1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 20.0f, 0.0f, 0.0f, 1.0f),
+        glm::mat4 (0.921060994f, -0.389418342f, 0.0f, 0.0f, 0.389418342f, 0.921060994f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f, -15.0f, 8.0f, 2.0f, 1.0f),
+    };
+    const std::vector<int> parents = { -1, 0, 0, 0, 3, 4, 5, 3, 7, 8, 3, 10, 11, 3, 13, 14, 15, 3, 17, 3, 6, 20, 21, 0 };
+    const std::vector<uint32_t> types = { 0, 0, 0, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 0 };
+    data.boneLengths = { 0.0f, 40.3112869f, 5.0f, 5.0f, 20.0f, 20.0f, 20.0f, 20.0f, 20.0f, 20.0f, 20.0f, 20.0f, 20.0f, 10.0f, 20.0f, 20.0f, 20.0f, 15.0f, 15.0f, 10.0f, 10.0f, 20.0f, 20.0f, 17.1172428f };
+    data.boneDirections.resize (24);
+    std::vector<glm::mat4> bind;
+    MdlAnimationClip clip; clip.frameCount=1;
+    for (uint32_t i=0; i<24; ++i) {
+        bind.push_back ((parents[i]<0 ? glm::mat4 (1) : bind[parents[i]]) * locals[i]);
+        data.bones.push_back ({ .type=types[i], .parent=parents[i], .bindLocal=locals[i], .inverseBindWorld=glm::inverse (bind.back ()) });
+        if (parents[i]>=0) data.boneDirections[parents[i]][i] = glm::normalize (glm::vec3 (locals[i][3]));
+    }
+    clip.boneFrames.push_back ({{ .translation=glm::vec3 (0.0f, 0.0f, 0.0f), .rotation=glm::normalize (glm::quat (glm::vec3 (0.0f, 0.0f, 0.0f))), .scale=glm::vec3 (1.0f, 1.0f, 1.0f) }});
+    clip.boneFrames.push_back ({{ .translation=glm::vec3 (40.0f, 5.0f, 0.0f), .rotation=glm::normalize (glm::quat (glm::vec3 (0.0f, 0.0f, 0.4f))), .scale=glm::vec3 (1.0f, 1.0f, 1.0f) }});
+    clip.boneFrames.push_back ({{ .translation=glm::vec3 (0.0f, 0.0f, 5.0f), .rotation=glm::normalize (glm::quat (glm::vec3 (0.0f, 0.0f, 2.8f))), .scale=glm::vec3 (1.2f, 0.8f, 1.1f) }});
+    clip.boneFrames.push_back ({{ .translation=glm::vec3 (5.0f, 0.0f, 0.0f), .rotation=glm::normalize (glm::quat (glm::vec3 (0.0f, 0.0f, 0.0f))), .scale=glm::vec3 (1.0f, 1.0f, 1.0f) }});
+    clip.boneFrames.push_back ({{ .translation=glm::vec3 (20.0f, 0.0f, 0.0f), .rotation=glm::normalize (glm::quat (glm::vec3 (0.0f, 0.0f, 0.0f))), .scale=glm::vec3 (1.0f, 1.0f, 1.0f) }});
+    clip.boneFrames.push_back ({{ .translation=glm::vec3 (20.0f, 0.0f, 0.0f), .rotation=glm::normalize (glm::quat (glm::vec3 (0.0f, 0.0f, 0.0f))), .scale=glm::vec3 (1.0f, 1.0f, 1.0f) }});
+    clip.boneFrames.push_back ({{ .translation=glm::vec3 (20.0f, 0.0f, 0.0f), .rotation=glm::normalize (glm::quat (glm::vec3 (0.0f, 0.0f, 0.0f))), .scale=glm::vec3 (1.0f, 1.0f, 1.0f) }});
+    clip.boneFrames.push_back ({{ .translation=glm::vec3 (0.0f, 20.0f, 0.0f), .rotation=glm::normalize (glm::quat (glm::vec3 (0.0f, 0.0f, 0.0f))), .scale=glm::vec3 (1.0f, 1.0f, 1.0f) }});
+    clip.boneFrames.push_back ({{ .translation=glm::vec3 (0.0f, 20.0f, 0.0f), .rotation=glm::normalize (glm::quat (glm::vec3 (0.0f, 0.0f, 0.0f))), .scale=glm::vec3 (1.0f, 1.0f, 1.0f) }});
+    clip.boneFrames.push_back ({{ .translation=glm::vec3 (0.0f, 20.0f, 0.0f), .rotation=glm::normalize (glm::quat (glm::vec3 (0.0f, 0.0f, 0.0f))), .scale=glm::vec3 (1.0f, 1.0f, 1.0f) }});
+    clip.boneFrames.push_back ({{ .translation=glm::vec3 (-20.0f, 0.0f, 0.0f), .rotation=glm::normalize (glm::quat (glm::vec3 (0.0f, 0.0f, 0.0f))), .scale=glm::vec3 (1.0f, 1.0f, 1.0f) }});
+    clip.boneFrames.push_back ({{ .translation=glm::vec3 (-20.0f, 0.0f, 0.0f), .rotation=glm::normalize (glm::quat (glm::vec3 (0.0f, 0.0f, 0.0f))), .scale=glm::vec3 (1.0f, 1.0f, 1.0f) }});
+    clip.boneFrames.push_back ({{ .translation=glm::vec3 (-20.0f, 0.0f, 0.0f), .rotation=glm::normalize (glm::quat (glm::vec3 (0.0f, 0.0f, 0.0f))), .scale=glm::vec3 (1.0f, 1.0f, 1.0f) }});
+    clip.boneFrames.push_back ({{ .translation=glm::vec3 (10.0f, 0.0f, 0.0f), .rotation=glm::normalize (glm::quat (glm::vec3 (0.0f, 0.0f, 0.0f))), .scale=glm::vec3 (1.0f, 1.0f, 1.0f) }});
+    clip.boneFrames.push_back ({{ .translation=glm::vec3 (0.0f, 20.0f, 0.0f), .rotation=glm::normalize (glm::quat (glm::vec3 (0.0f, 0.0f, 0.0f))), .scale=glm::vec3 (1.0f, 1.0f, 1.0f) }});
+    clip.boneFrames.push_back ({{ .translation=glm::vec3 (0.0f, 20.0f, 0.0f), .rotation=glm::normalize (glm::quat (glm::vec3 (0.0f, 0.0f, 0.0f))), .scale=glm::vec3 (1.0f, 1.0f, 1.0f) }});
+    clip.boneFrames.push_back ({{ .translation=glm::vec3 (0.0f, 20.0f, 0.0f), .rotation=glm::normalize (glm::quat (glm::vec3 (0.0f, 0.0f, 0.0f))), .scale=glm::vec3 (1.0f, 1.0f, 1.0f) }});
+    clip.boneFrames.push_back ({{ .translation=glm::vec3 (15.0f, 0.0f, 0.0f), .rotation=glm::normalize (glm::quat (glm::vec3 (0.0f, 0.0f, 0.0f))), .scale=glm::vec3 (1.0f, 1.0f, 1.0f) }});
+    clip.boneFrames.push_back ({{ .translation=glm::vec3 (15.0f, 0.0f, 0.0f), .rotation=glm::normalize (glm::quat (glm::vec3 (0.0f, 0.0f, 0.0f))), .scale=glm::vec3 (1.0f, 1.0f, 1.0f) }});
+    clip.boneFrames.push_back ({{ .translation=glm::vec3 (0.0f, 10.0f, 0.0f), .rotation=glm::normalize (glm::quat (glm::vec3 (0.0f, 0.0f, 0.0f))), .scale=glm::vec3 (1.0f, 1.0f, 1.0f) }});
+    clip.boneFrames.push_back ({{ .translation=glm::vec3 (10.0f, 0.0f, 0.0f), .rotation=glm::normalize (glm::quat (glm::vec3 (0.0f, 0.0f, 0.0f))), .scale=glm::vec3 (1.0f, 1.0f, 1.0f) }});
+    clip.boneFrames.push_back ({{ .translation=glm::vec3 (20.0f, 0.0f, 0.0f), .rotation=glm::normalize (glm::quat (glm::vec3 (0.0f, 0.0f, 0.0f))), .scale=glm::vec3 (1.0f, 1.0f, 1.0f) }});
+    clip.boneFrames.push_back ({{ .translation=glm::vec3 (20.0f, 0.0f, 0.0f), .rotation=glm::normalize (glm::quat (glm::vec3 (0.0f, 0.0f, 0.0f))), .scale=glm::vec3 (1.0f, 1.0f, 1.0f) }});
+    clip.boneFrames.push_back ({{ .translation=glm::vec3 (17.0f, -3.0f, 2.0f), .rotation=glm::normalize (glm::quat (glm::vec3 (0.0f, 0.0f, 0.35f))), .scale=glm::vec3 (1.0f, 1.0f, 1.0f) }});
+    data.bones[6].rope = MdlBoneRope { .gravity=true, .mass=1 };
+    data.bones[9].rope = MdlBoneRope { .gravity=true, .mass=1 };
+    data.bones[12].rope = MdlBoneRope { .gravity=true, .mass=1 };
+    data.bones[18].rope = MdlBoneRope { .gravity=true, .mass=1 };
+    data.bones[19].rope = MdlBoneRope { .gravity=true, .mass=1 };
+    data.bones[22].rope = MdlBoneRope { .gravity=true, .mass=1 };
+    data.controls.push_back ({ .bone=6, .type=0 });
+    clip.controlFrames.push_back ({{ .translation=glm::vec3 (45.0f, 10.0f, 5.0f), .rotation=glm::normalize (glm::quat (glm::vec3 (0.0f, 0.0f, -2.8f))) }});
+    data.controls.push_back ({ .bone=9, .type=0 });
+    clip.controlFrames.push_back ({{ .translation=glm::vec3 (5.0f, 45.0f, 0.0f), .rotation=glm::normalize (glm::quat (glm::vec3 (0.0f, 0.0f, 0.3f))) }});
+    data.controls.push_back ({ .bone=12, .type=0 });
+    clip.controlFrames.push_back ({{ .translation=glm::vec3 (60.0f, 25.0f, 8.0f), .rotation=glm::normalize (glm::quat (glm::vec3 (0.0f, 0.0f, -0.2f))) }});
+    data.controls.push_back ({ .bone=16, .type=0 });
+    clip.controlFrames.push_back ({{ .translation=glm::vec3 (90.0f, 25.0f, 5.0f), .rotation=glm::normalize (glm::quat (glm::vec3 (0.0f, 0.0f, 0.5f))) }});
+    data.controls.push_back ({ .bone=18, .type=0 });
+    clip.controlFrames.push_back ({{ .translation=glm::vec3 (-20.0f, -5.0f, 4.0f), .rotation=glm::normalize (glm::quat (glm::vec3 (0.0f, 0.0f, 0.2f))) }});
+    data.controls.push_back ({ .bone=19, .type=0 });
+    clip.controlFrames.push_back ({{ .translation=glm::vec3 (50.0f, 10.0f, 0.0f), .rotation=glm::normalize (glm::quat (glm::vec3 (0.0f, 0.0f, -0.1f))) }});
+    data.controls.push_back ({ .bone=22, .type=0 });
+    clip.controlFrames.push_back ({{ .translation=glm::vec3 (110.0f, -5.0f, 2.0f), .rotation=glm::normalize (glm::quat (glm::vec3 (0.0f, 0.0f, 0.7f))) }});
+    data.bones[0].dependencies.push_back ({ .flags=0, .weight=0, .source=23, .start=0.0f, .range=0.0f });
+    data.controls[0].dependencies.push_back ({ .flags=0, .weight=1, .source=2, .start=0.0f, .range=0.0f });
+    data.controls[0].dependencies.push_back ({ .flags=1, .weight=2, .source=1, .start=0.0f, .range=0.0f });
+    data.controls[1].dependencies.push_back ({ .flags=1, .weight=3, .source=1, .start=0.0f, .range=0.0f });
+    data.controls[2].dependencies.push_back ({ .flags=2, .weight=4, .source=1, .start=0.0f, .range=1.0f });
+    data.controls[3].dependencies.push_back ({ .flags=65538, .weight=5, .source=1, .start=5.0f, .range=50.0f });
+    data.controls[4].dependencies.push_back ({ .flags=65538, .weight=6, .source=1, .start=0.0f, .range=1.0f });
+    data.controls[5].dependencies.push_back ({ .flags=65538, .weight=7, .source=1, .start=0.0f, .range=1.0f });
+    data.controls[6].dependencies.push_back ({ .flags=1, .weight=8, .source=9, .start=0.0f, .range=0.0f });
+    clip.dependencyFlags = { 0, 0, 0, 0, 0, 0, 0, 0, 0, 1 };
+    clip.dependencyTracks = { { 0.1f }, { 0.45f }, { 0.15f }, { 0.4f }, { 0.6f }, { 0.7f }, { 0.5f }, { 0.8f }, { 0.35f }, { 0.8f } };
+    data.ikGroups.push_back ({ .root=3, .controlDependencies={ 0, 1, 2, 3, 4, 5 }, .nodes={ { .root=3, .branches={ { .flags=5, .maxLength=60.0f, .bones={ 3, 4, 5, 6 } }, { .flags=1, .maxLength=60.0f, .bones={ 3, 7, 8, 9 } }, { .flags=1, .maxLength=60.0f, .bones={ 3, 10, 11, 12 } }, { .flags=3, .maxLength=70.0f, .bones={ 3, 13, 14, 15, 16 } }, { .flags=5, .maxLength=30.0f, .bones={ 3, 17, 18 } }, { .flags=5, .maxLength=10.0f, .bones={ 3, 19 } } } } } });
+    data.ikGroups.push_back ({ .root=20, .controlDependencies={ 6 }, .nodes={ { .root=20, .branches={ { .flags=5, .maxLength=40.0f, .bones={ 20, 21, 22 } } } } } });
+    MdlPhysicsState state;
+    for (const auto& frame : frames) {
+        MdlPhysicsStep step { .state=state, .model=glm::translate (glm::mat4 (1), glm::vec3 (160,90,0)),
+            .rope=MdlRopeStep { .gravity={0,-90,0}, .deltaTime=frame.dt } };
+        const auto pose=MdlAnimationEvaluator::evaluate (data, {{ .animation=&clip }}, &step);
+        REQUIRE (state.ropePoints.size ()==24);
+        REQUIRE (pose.publishedWorldBones.size ()==24);
+        REQUIRE (pose.dependencyWeights.size ()==10);
+        CHECK (pose.dependencyWeights[9]==0);
+        for (size_t bone=0; bone<24; ++bone) {
+            const auto& published=bone==3 ? frame.owners[0] : bone==20 ? frame.owners[1] : frame.world[bone];
+            const auto skin=frame.world[bone]*data.bones[bone].inverseBindWorld;
+            for (int c=0; c<4; ++c) for (int a=0; a<4; ++a) {
+                CHECK (pose.worldBones[bone][c][a]==Catch::Approx(frame.world[bone][c][a]).margin(3e-4f));
+                CHECK (pose.publishedWorldBones[bone][c][a]==Catch::Approx(published[c][a]).margin(3e-4f));
+                CHECK (pose.skinBones[bone][c][a]==Catch::Approx(skin[c][a]).margin(3e-4f));
+            }
+        }
+    }
+    const std::vector<glm::vec3> current = { glm::vec3 (0.0f, 0.0f, 0.0f), glm::vec3 (0.0f, 0.0f, 0.0f), glm::vec3 (0.0f, 0.0f, 0.0f), glm::vec3 (166.892639f, 89.9313812f, 0.222200006f), glm::vec3 (186.388092f, 91.1127548f, 4.59200764f), glm::vec3 (205.288086f, 86.5856171f, -0.129817873f), glm::vec3 (188.013718f, 95.5173874f, 4.36832142f), glm::vec3 (0.0f, 0.0f, 0.0f), glm::vec3 (0.0f, 0.0f, 0.0f), glm::vec3 (0.0f, 0.0f, 0.0f), glm::vec3 (0.0f, 0.0f, 0.0f), glm::vec3 (0.0f, 0.0f, 0.0f), glm::vec3 (0.0f, 0.0f, 0.0f), glm::vec3 (0.0f, 0.0f, 0.0f), glm::vec3 (0.0f, 0.0f, 0.0f), glm::vec3 (0.0f, 0.0f, 0.0f), glm::vec3 (0.0f, 0.0f, 0.0f), glm::vec3 (171.932678f, 101.228271f, -8.26180172f), glm::vec3 (170.836151f, 90.6428146f, 2.11109996f), glm::vec3 (176.708252f, 91.8428116f, 0.210231185f), glm::vec3 (186.961121f, 85.572998f, 4.36832142f), glm::vec3 (204.536331f, 95.0881348f, 3.61074996f), glm::vec3 (225.931076f, 94.2933578f, 2.06662631f), glm::vec3 (0.0f, 0.0f, 0.0f) };
+    const std::vector<glm::vec3> previous = { glm::vec3 (0.0f, 0.0f, 0.0f), glm::vec3 (0.0f, 0.0f, 0.0f), glm::vec3 (0.0f, 0.0f, 0.0f), glm::vec3 (0.0f, 0.0f, 0.0f), glm::vec3 (186.51561f, 91.5029297f, 3.25760961f), glm::vec3 (205.650879f, 87.420639f, -0.886835217f), glm::vec3 (0.0f, 0.0f, 0.0f), glm::vec3 (0.0f, 0.0f, 0.0f), glm::vec3 (0.0f, 0.0f, 0.0f), glm::vec3 (0.0f, 0.0f, 0.0f), glm::vec3 (0.0f, 0.0f, 0.0f), glm::vec3 (0.0f, 0.0f, 0.0f), glm::vec3 (0.0f, 0.0f, 0.0f), glm::vec3 (0.0f, 0.0f, 0.0f), glm::vec3 (0.0f, 0.0f, 0.0f), glm::vec3 (0.0f, 0.0f, 0.0f), glm::vec3 (0.0f, 0.0f, 0.0f), glm::vec3 (176.02861f, 100.288033f, -5.54858923f), glm::vec3 (0.0f, 0.0f, 0.0f), glm::vec3 (0.0f, 0.0f, 0.0f), glm::vec3 (0.0f, 0.0f, 0.0f), glm::vec3 (204.968002f, 94.1759262f, 3.47043729f), glm::vec3 (0.0f, 0.0f, 0.0f), glm::vec3 (0.0f, 0.0f, 0.0f) };
+    for (size_t i=0; i<24; ++i) for (int a=0; a<3; ++a) {
+        CHECK (state.ropePoints[i].current[a]==Catch::Approx(current[i][a]).margin(3e-4f));
+        CHECK (state.ropePoints[i].previous[a]==Catch::Approx(previous[i][a]).margin(3e-4f));
+    }
+}
+
+TEST_CASE ("Ordinary dependency groups preserve owner-time worlds", "[mdl][animation][physics][rope][ordinary-dependencies]") {
+    // Native 1401fdf90:4334-4353 prepares dependencies and solves every owner;
+    // only the rope predictor is conditional. These positions follow directly
+    // from a half-weight ordinary dependency and a ten-unit vertical IK edge.
+    for (const bool controlDependency : { false, true }) {
+        CAPTURE (controlDependency);
+        MdlAnimationData data;
+        data.dependencyCount = controlDependency ? 2 : 1;
+        const std::array<int, 5> parents = { -1, -1, 1, 2, 3 };
+        const std::array<glm::vec3, 5> offsets = {{ { 10, 20, 0 }, {}, { 5, 0, 0 }, { 10, 0, 0 }, { 2, 0, 0 } }};
+        std::vector<glm::mat4> bind;
+        for (size_t bone = 0; bone < parents.size (); ++bone) {
+            const auto local = glm::translate (glm::mat4 (1), offsets[bone]);
+            bind.push_back ((parents[bone] < 0 ? glm::mat4 (1) : bind[parents[bone]]) * local);
+            data.bones.push_back ({ .type = bone == 2 || bone == 3 ? 2u : 0u, .parent = parents[bone],
+                .bindLocal = local, .inverseBindWorld = glm::inverse (bind.back ()) });
+        }
+        data.bones[1].dependencies = {{ .weight = 0, .source = 0 }};
+        data.bones[3].ikFollowEnd = true;
+        data.boneLengths = { 0, 0, 5, 10, 2 };
+        data.boneDirections.resize (5);
+        data.boneDirections[2][3] = { 1, 0, 0 };
+        data.controls = {{ .bone = 3, .bindWorld = glm::translate (glm::mat4 (1),
+            controlDependency ? glm::vec3 (20, 10, 0) : glm::vec3 (10, 20, 0)) }};
+        data.ikGroups = {{ .root = 2, .nodes = {{ .root = 2,
+            .branches = {{ .flags = 1, .maxLength = 10, .bones = { 2, 3 } }} }} }};
+        if (controlDependency) {
+            data.controls[0].dependencies = {{ .flags = 1, .weight = 1, .source = 0 }};
+            data.ikGroups[0].controlDependencies = { 0 };
+        }
+        MdlAnimationClip clip;
+        clip.frameCount = 1;
+        clip.dependencyTracks = {{ 0.5f }, { 1.0f }};
+        const std::vector<MdlActiveAnimation> layers = {{ .animation = &clip }};
+        const auto equalMatrix = [] (const glm::mat4& actual, const glm::mat4& expected) {
+            for (int c = 0; c < 4; ++c) for (int r = 0; r < 4; ++r)
+                CHECK (actual[c][r] == Catch::Approx (expected[c][r]).margin (1e-5f));
+        };
+
+        // CImage supplies a runtime rope step for every puppet, even when no
+        // branch has bit4. No predictor may initialize the point state here.
+        MdlPhysicsState state;
+        MdlPhysicsStep step { .state = state, .model = glm::translate (glm::mat4 (1), { 160, 90, 0 }),
+            .rope = MdlRopeStep { .gravity = { 0, -90, 0 }, .deltaTime = 0.1f } };
+        for (int frame = 0; frame < 2; ++frame) {
+            const auto pose = MdlAnimationEvaluator::evaluate (data, layers, &step);
+            const std::array<glm::vec3, 5> positions = {{ { 10, 20, 0 }, { 5, 10, 0 }, { 10, 10, 0 }, { 10, 20, 0 }, { 12, 20, 0 } }};
+            for (size_t bone = 0; bone < positions.size (); ++bone) for (int axis = 0; axis < 3; ++axis)
+                CHECK (pose.worldBones[bone][3][axis] == Catch::Approx (positions[bone][axis]).margin (1e-5f));
+            CHECK (pose.publishedWorldBones.size () == data.bones.size ());
+            if (pose.publishedWorldBones.size () == data.bones.size ())
+                equalMatrix (pose.publishedWorldBones[2], glm::translate (glm::mat4 (1), { 10, 10, 0 }));
+            CHECK (pose.worldBones[2][0][0] == Catch::Approx (0).margin (1e-5f));
+            CHECK (pose.worldBones[2][0][1] == Catch::Approx (1).margin (1e-5f));
+            equalMatrix (pose.skinBones[1], glm::translate (glm::mat4 (1), { 5, 10, 0 }));
+            equalMatrix (pose.skinBones[4], glm::translate (glm::mat4 (1), { -5, 20, 0 }));
+            for (const auto& point : state.ropePoints) {
+                CHECK_FALSE (point.initialized);
+                CHECK (point.current == glm::vec3 (0));
+                CHECK (point.previous == glm::vec3 (0));
+            }
+        }
+
+        // Setup and general-model callers do not request a runtime owner step.
+        MdlPhysicsState previewState;
+        MdlPhysicsStep preview { .state = previewState };
+        const auto nonStep = MdlAnimationEvaluator::evaluate (data, layers, &preview);
+        const auto noPhysics = MdlAnimationEvaluator::evaluate (data, layers);
+        CHECK (nonStep.publishedWorldBones.empty ());
+        CHECK (noPhysics.publishedWorldBones.empty ());
+        CHECK (previewState.ropePoints.empty ());
+        for (size_t bone = 0; bone < data.bones.size (); ++bone)
+            equalMatrix (nonStep.worldBones[bone], noPhysics.worldBones[bone]);
+
+        // Existing ordinary IK without dependency records keeps its legacy path.
+        data.dependencyCount = 0;
+        data.bones[1].dependencies.clear ();
+        data.controls[0].dependencies.clear ();
+        data.ikGroups[0].controlDependencies.clear ();
+        MdlPhysicsState ordinaryState;
+        MdlPhysicsStep ordinary { .state = ordinaryState, .rope = MdlRopeStep {} };
+        const auto runtime = MdlAnimationEvaluator::evaluate (data, layers, &ordinary);
+        const auto legacy = MdlAnimationEvaluator::evaluate (data, layers);
+        CHECK (runtime.publishedWorldBones.empty ());
+        CHECK (ordinaryState.ropePoints.empty ());
+        for (size_t bone = 0; bone < data.bones.size (); ++bone)
+            equalMatrix (runtime.worldBones[bone], legacy.worldBones[bone]);
+    }
+
+    // Synthetic whole-skeleton type-zero compatibility remains rope-only.
+    MdlAnimationData synthetic;
+    synthetic.dependencyCount = 1;
+    synthetic.bones = {{}, { .parent = 0,
+        .bindLocal = glm::translate (glm::mat4 (1), { 10, 0, 0 }) }};
+    synthetic.boneLengths = { 0, 10 };
+    synthetic.boneDirections.resize (2);
+    synthetic.boneDirections[0][1] = { 1, 0, 0 };
+    synthetic.controls = {{ .bone = 1, .bindWorld = glm::translate (glm::mat4 (1), { 0, 10, 0 }) }};
+    synthetic.ikGroups = {{ .nodes = {{ .branches = {{ .flags = 1, .maxLength = 10, .bones = { 0, 1 } }} }} }};
+    MdlPhysicsState syntheticState;
+    MdlPhysicsStep syntheticStep { .state = syntheticState, .rope = MdlRopeStep {} };
+    const auto syntheticPose = MdlAnimationEvaluator::evaluate (synthetic, {}, &syntheticStep);
+    CHECK (syntheticPose.publishedWorldBones.empty ());
+    CHECK (syntheticState.ropePoints.empty ());
+    CHECK (syntheticPose.worldBones[1][3].x == Catch::Approx (0).margin (1e-5f));
+    CHECK (syntheticPose.worldBones[1][3].y == Catch::Approx (10).margin (1e-5f));
 }

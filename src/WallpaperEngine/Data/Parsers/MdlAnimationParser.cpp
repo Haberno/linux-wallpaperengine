@@ -85,7 +85,7 @@ std::optional<WallpaperEngine::Data::Model::MdlBoneSpring> parseSpring (const nl
 	.translationInertia = 1.0f - number ("ti", 0.0f) / 100.0f,
 	.gravity = flag ("ge"),
 	.gravityDirection = vector ("gd"),
-	.mass = number ("m", 0.0f),
+	.mass = number ("m", 1000.0f),
 	.tip = vector ("tp"),
 	.maxDistance = number ("tm", 0.0f),
 	.limitTorque = flag ("lt"),
@@ -256,14 +256,24 @@ void parseControlChains (
     const auto dependencies = readValue<uint32_t> (data, offset, end);
     result.dependencyCount = dependencies;
     for (uint32_t row = 0; row < dependencies; ++row) {
-	boneIndex ();
-	readValue<uint32_t> (data, offset, end);
-	boneIndex ();
-	const auto flags = version == "MDLS0004" ? readValue<uint32_t> (data, offset, end) : 0;
-	if (flags & 2) {
-	    readValue<float> (data, offset, end);
-	    readValue<float> (data, offset, end);
-	}
+        const auto destination = boneIndex ();
+        MdlBoneDependency dependency;
+        dependency.weight = readValue<uint32_t> (data, offset, end);
+        dependency.source = boneIndex ();
+        dependency.flags = version == "MDLS0004" ? readValue<uint32_t> (data, offset, end) : 0;
+        if (dependency.weight >= dependencies) throw std::runtime_error ("invalid IK dependency weight index");
+        if (dependency.flags & 2) {
+            dependency.start = readValue<float> (data, offset, end);
+            dependency.range = std::max (readValue<float> (data, offset, end), std::numeric_limits<float>::epsilon ());
+        }
+        if (!(result.bones[destination].type & 2)) {
+            result.bones[destination].dependencies.push_back (dependency);
+        } else {
+            const auto control = std::find_if (result.controls.begin (), result.controls.end (), [&] (const auto& entry) {
+                return entry.bone == destination && entry.type == 0;
+            });
+            if (control != result.controls.end ()) control->dependencies.push_back (dependency);
+        }
     }
     const auto lengths = readValue<uint16_t> (data, offset, end);
     if (lengths > result.bones.size ()) throw std::runtime_error ("too many IK bone lengths");
@@ -287,11 +297,11 @@ void parseControlChains (
     for (uint16_t groupIndex = 0; groupIndex < groups; ++groupIndex) {
 	MdlIkGroup group;
 	group.root = boneIndex ();
-	group.hasDependencies = dependencies != 0;
 	const auto controlDependencies = readValue<uint32_t> (data, offset, end);
 	for (uint32_t index = 0; index < controlDependencies; ++index) {
-	    if (readValue<uint32_t> (data, offset, end) >= result.controls.size ())
-		throw std::runtime_error ("invalid IK control dependency");
+	    const auto control = readValue<uint32_t> (data, offset, end);
+	    if (control >= result.controls.size ()) throw std::runtime_error ("invalid IK control dependency");
+	    if (!result.controls[control].dependencies.empty ()) group.controlDependencies.push_back (control);
 	}
 	const auto nodes = readValue<uint16_t> (data, offset, end);
 	for (uint16_t nodeIndex = 0; nodeIndex < nodes; ++nodeIndex) {
@@ -320,7 +330,7 @@ void parseSkeleton (
     const std::vector<char>& data, const size_t sectionOffset, const std::string& filename, MdlAnimationData& result
 ) {
     const std::string version (data.data () + sectionOffset, std::strlen ("MDLS0004"));
-    const bool puppetControls = version == "MDLS0002" || version == "MDLS0004";
+    const bool puppetControls = version == "MDLS0002" || version == "MDLS0003" || version == "MDLS0004";
     const bool nameBeforeTransform = puppetControls || version == "MDLS0003";
     const bool nameAfterTransform = version == "MDLS0001";
     if (!nameBeforeTransform && !nameAfterTransform) {
@@ -383,13 +393,15 @@ void parseSkeleton (
 		    const auto value = constraints.find (key);
 		    return value != constraints.end () && value->is_boolean () && value->get<bool> ();
 		};
-		parsed.ikFollowEnd = enabled ("ik") && enabled ("ikfe");
-		parsed.ikAimToTarget = enabled ("ik") && enabled ("ikr");
+		// Native shares physics fields: an active spring/rigid branch skips rope-only options.
+		const bool physicsMetadata = (enabled ("se") || enabled ("re")) && (enabled ("r") || enabled ("t"));
+		parsed.ikFollowEnd = !physicsMetadata && enabled ("ik") && enabled ("ikfe");
+		parsed.ikAimToTarget = !physicsMetadata && enabled ("ik") && enabled ("ikr");
 		const auto distance = constraints.find ("ikrd");
 		if (parsed.ikAimToTarget && distance != constraints.end () && distance->is_number ())
 		    parsed.ikAimDistance = std::max (distance->get<float> (), 1.0f);
 		parsed.ikAngleLimits = enabled ("ikce");
-		if (parsed.ikAngleLimits && !enabled ("ik")) {
+		if (parsed.ikAngleLimits && !enabled ("ik") && !physicsMetadata) {
 		    const auto minimum = constraints.find ("ikrminl");
 		    const auto maximum = constraints.find ("ikrmaxl");
 		    if (minimum != constraints.end () && minimum->is_number ())
@@ -399,14 +411,15 @@ void parseSkeleton (
 		}
 		parsed.spring = parseSpring (constraints);
 		if (enabled ("ik")) {
-		    const auto number = [&] (const char* key) {
+		    const auto number = [&] (const char* key, const float fallback = 0.0f) {
 			const auto value = constraints.find (key);
-			return value != constraints.end () && value->is_number () ? value->get<float> () : 0.0f;
+			return value != constraints.end () && value->is_number () ? value->get<float> () : fallback;
 		    };
-		    const float friction = number ("tf") / 100.0f;
+		    const float friction = number ("tf");
 		    parsed.rope = MdlBoneRope {
-			.gravity = enabled ("ge"), .mass = number ("m"),
-			.friction = std::clamp (friction * friction, 0.0f, 1.0f), .stretch = enabled ("ikse"),
+			.gravity = enabled ("ge"), .mass = number ("m", 1000.0f),
+			.friction = physicsMetadata ? friction : std::clamp ((friction / 100.0f) * (friction / 100.0f), 0.0f, 1.0f),
+			.stretch = !physicsMetadata && enabled ("ikse"),
 		    };
 		}
 	    }

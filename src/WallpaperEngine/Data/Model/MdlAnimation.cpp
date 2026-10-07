@@ -137,6 +137,133 @@ MdlBoneFrame sampleControl (
 }
 
 /** Validated rope ownership, prepared before any persistent state changes. */
+// Dependency transforms use native Euler decomposition, not the pose quaternion blend.
+glm::mat4 blendDependency (const glm::mat4& current, const glm::mat4& target, const float weight) {
+    const auto angles = [] (const glm::mat4& value) {
+        const float z = std::atan2 (value[0][1], value[0][0]);
+        const float y = std::atan2 (-value[0][2], std::sqrt (value[1][2] * value[1][2] + value[2][2] * value[2][2]));
+        const float x = std::atan2 (std::sin (z) * value[2][0] - std::cos (z) * value[2][1],
+            std::cos (z) * value[1][1] - std::sin (z) * value[1][0]);
+        return glm::vec3 (std::fmod (x, glm::two_pi<float> ()),
+            std::fmod (y, glm::two_pi<float> ()), std::fmod (z, glm::two_pi<float> ()));
+    };
+    const auto from = angles (current);
+    auto to = angles (target);
+    // This is deliberately pi, and only the positive difference is adjusted.
+    for (int axis = 0; axis < 3; ++axis)
+        if (to[axis] - from[axis] > glm::pi<float> ()) to[axis] -= glm::pi<float> ();
+    const auto mixed = from * (1.0f - weight) + to * weight;
+    auto result = glm::eulerAngleZYX (mixed.z, mixed.y, mixed.x);
+    for (int column = 0; column < 3; ++column)
+        result[column] *= glm::length (current[column]) * (1.0f - weight) + glm::length (target[column]) * weight;
+    result[3] = glm::vec4 (glm::vec3 (current[3]) * (1.0f - weight) + glm::vec3 (target[3]) * weight, 1);
+    return result;
+}
+
+void prepareDependencies (
+    const MdlAnimationData& data, const MdlIkGroup& group,
+    std::vector<std::optional<glm::mat4>>& controls, MdlPose& pose
+) {
+    for (const auto index : group.controlDependencies) {
+        const auto& control = data.controls[index];
+        auto& current = *controls[control.bone];
+        for (const auto& dependency : control.dependencies) {
+            const auto& source = pose.worldBones[dependency.source];
+            const float weight = pose.dependencyWeights[dependency.weight];
+            if (!(dependency.flags & 0x10002)) {
+                if (dependency.flags & 1) {
+                    current[3] = glm::vec4 (glm::vec3 (current[3]) * (1.0f - weight) + glm::vec3 (source[3]) * weight, 1);
+                } else {
+                    current = blendDependency (current, source, weight);
+                }
+                continue;
+            }
+            for (const auto& node : group.nodes) for (const auto& chain : node.branches) {
+                if (chain.bones.back () != control.bone) continue;
+                const auto origin = glm::vec3 (source[3]);
+                const auto axis = glm::vec3 (source[0]) / glm::length (source[0]);
+                const auto difference = glm::vec3 (current[3]) - origin;
+                float projection = glm::dot (difference, axis);
+                if (!(dependency.flags & 0x10000)) {
+                    // 14026dce0: closest point on the source axis to the radial line through the control.
+                    const auto radial = glm::normalize (difference - projection * axis);
+                    const float aa = glm::dot (radial, radial), ab = glm::dot (radial, axis), bb = glm::dot (axis, axis);
+                    const float determinant = aa * bb - ab * ab;
+                    if (determinant != 0.0f) {
+                        auto target = current;
+                        const float along = (projection * aa - glm::dot (radial, difference) * ab) / determinant;
+                        target[3] = glm::vec4 (origin + axis * along, 1);
+                        current = blendDependency (current, target, weight);
+                    }
+                    continue;
+                }
+                const float rootDistance = glm::length (origin - glm::vec3 (pose.worldBones[chain.bones.front ()][3]));
+                if (chain.maxLength <= rootDistance || projection < 0.0f) {
+                    auto target = current;
+                    target[3] = glm::vec4 (origin, 1);
+                    current = blendDependency (current, target, weight);
+                    continue;
+                }
+                float remaining = std::min (chain.maxLength - rootDistance, projection);
+                auto target = source;
+                target[3] = glm::vec4 (origin + axis * remaining, 1);
+                current = blendDependency (current, target, weight);
+                for (size_t bone = chain.bones.size () - 2; bone > 0; --bone) {
+                    const float length = data.boneLengths[chain.bones[bone + 1]];
+                    projection -= length;
+                    if (projection < 0.0f) break;
+                    const float distance = std::max (projection - dependency.start, 0.0f);
+                    float influence = 1.0f;
+                    if (distance / dependency.range < 1.0f) {
+                        influence = distance / dependency.range;
+                        if (influence <= 0.0f) break;
+                    }
+                    remaining -= length;
+                    if (remaining < 0.0f) break;
+                    target = source;
+                    target[3] = glm::vec4 (glm::vec3 (source[3]) + axis * remaining, 1);
+                    auto& working = pose.worldBones[chain.bones[bone]];
+                    working = blendDependency (working, target, influence * weight);
+                }
+            }
+        }
+    }
+}
+
+void constrainDependencies (const MdlAnimationData& data, const MdlIkGroup& group, MdlPose& pose) {
+    for (const auto index : group.controlDependencies) {
+        const auto& control = data.controls[index];
+        for (const auto& dependency : control.dependencies) {
+            if (!(dependency.flags & 0x10000)) continue;
+            const auto& source = pose.worldBones[dependency.source];
+            for (const auto& node : group.nodes) for (const auto& chain : node.branches) {
+                if (chain.bones.back () != control.bone) continue;
+                const auto axis = glm::vec3 (source[0]) / glm::length (source[0]);
+                const float initialDistance = glm::length (glm::vec3 (source[3] - pose.worldBones[chain.bones.front ()][3]));
+                float remaining = initialDistance;
+                size_t index = 1;
+                for (int budget = 32; budget > 0 && index + 1 < chain.bones.size (); --budget, ++index) {
+                    remaining -= data.boneLengths[chain.bones[index]];
+                    if (remaining < 0.0f) break;
+                    const auto parent = glm::vec3 (pose.worldBones[chain.bones[index - 1]][3]);
+                    const auto span = glm::vec3 (pose.worldBones[chain.bones[index + 1]][3]) - parent;
+                    auto normal = glm::cross (glm::cross (span, axis), span);
+                    if (glm::dot (normal, normal) < 0.01f) continue;
+                    normal = glm::normalize (normal);
+                    auto& current = pose.worldBones[chain.bones[index]][3];
+                    const float side = glm::dot (normal, glm::vec3 (current) - parent);
+                    if (side > std::numeric_limits<float>::epsilon ()) {
+                        current -= glm::vec4 (normal * (side + side), 0);
+                        // Native resets to1 before the loop increment, so the next bone index is2.
+                        index = 1;
+                        remaining = initialDistance;
+                    }
+                }
+            }
+        }
+    }
+}
+
 struct RopePlan {
     std::vector<const MdlIkGroup*> owners;
     std::vector<bool> solved;
@@ -176,13 +303,22 @@ std::optional<RopePlan> prepareRopes (
 	}
 	byBone[control.bone] = static_cast<int32_t> (index);
     }
+    const auto validDependencies = [&] (const auto& entries) {
+        for (const auto& entry : entries) for (const auto& dependency : entry.dependencies)
+            if (dependency.source >= data.bones.size () || dependency.weight >= data.dependencyCount) return false;
+        return true;
+    };
+    if (!validDependencies (data.bones) || !validDependencies (data.controls)) return std::nullopt;
     std::vector<bool> childEdges (data.bones.size (), false);
     bool hasRope = false;
     for (const auto& group : data.ikGroups) {
-	if (group.hasDependencies || group.nodes.empty () || group.root >= data.bones.size ()
+	if (group.nodes.empty () || group.root >= data.bones.size ()
 	    || plan.owners[group.root]) {
 	    return std::nullopt;
 	}
+        for (const auto control : group.controlDependencies) {
+            if (control >= data.controls.size () || data.controls[control].type != 0) return std::nullopt;
+        }
 	plan.owners[group.root] = &group;
 	std::vector<bool> tips (data.bones.size (), false);
 	std::vector<bool> nodeRoots (data.bones.size (), false);
@@ -199,7 +335,7 @@ std::optional<RopePlan> prepareRopes (
 		for (size_t index = 0; index < chain.bones.size (); ++index) {
 		    const auto bone = chain.bones[index];
 		    if (bone >= data.bones.size () || bone >= data.boneLengths.size ()
-			|| bone >= data.boneDirections.size () || data.bones[bone].spring) {
+			|| bone >= data.boneDirections.size ()) {
 			return std::nullopt;
 		    }
 		    if (index
@@ -242,7 +378,9 @@ std::optional<RopePlan> prepareRopes (
 	    }
 	}
     }
-    if (!hasRope || std::find (usedControls.begin (), usedControls.end (), false) != usedControls.end ()) {
+    // Native prepares and solves dependency owners even when all branches are ordinary IK.
+    if ((!hasRope && data.dependencyCount == 0)
+        || std::find (usedControls.begin (), usedControls.end (), false) != usedControls.end ()) {
 	return std::nullopt;
     }
     const auto& first = data.ikGroups.front ();
@@ -252,17 +390,21 @@ std::optional<RopePlan> prepareRopes (
     for (size_t bone = 0; bone < data.bones.size (); ++bone) {
 	const auto& entry = data.bones[bone];
 	const bool ordered = entry.parent < 0 || static_cast<size_t> (entry.parent) < bone;
-	if (wholeSingle && (!ordered || (!plan.owners[bone] && !(entry.type & 2)))) {
+	if (hasRope && wholeSingle && (!ordered || (!plan.owners[bone] && !(entry.type & 2)))) {
 	    plan.legacyWholeSkeleton = true;
 	} else if (!ordered || (plan.solved[bone] && !plan.owners[bone] && !(entry.type & 2))) {
 	    return std::nullopt;
 	}
 	if (!plan.solved[bone]
-	    && (entry.type != 0 || entry.spring || entry.rope || entry.ikAngleLimits || entry.ikAimToTarget
-		|| entry.ikFollowEnd)) {
+	    && (entry.type != 0 || (!entry.spring && (entry.rope || entry.ikAngleLimits || entry.ikAimToTarget
+		|| entry.ikFollowEnd)))) {
 	    return std::nullopt;
 	}
     }
+    // Keep the compatibility route for synthetic, unordered skeletons unchanged.
+    if (plan.legacyWholeSkeleton
+        && std::any_of (data.bones.begin (), data.bones.end (), [] (const auto& bone) { return bone.spring.has_value (); }))
+        return std::nullopt;
     plan.bindWorld.resize (data.bones.size ());
     for (size_t bone = 0; bone < data.bones.size (); ++bone) {
 	const auto& entry = data.bones[bone];
@@ -281,9 +423,15 @@ std::optional<RopePlan> prepareRopes (
 
 /** Native rope prediction and shared rope/ordinary-IK group solve. */
 void solveRopeGroup (
-    const MdlAnimationData& data, const MdlIkGroup& group, const RopePlan& plan, MdlPhysicsStep& physics,
+    const MdlAnimationData& data, const MdlIkGroup& group, RopePlan& plan, MdlPhysicsStep& physics,
     const glm::mat4& toLocal, MdlPose& pose
 ) {
+    // Native solver normalizes with one reciprocal, then multiplies each component.
+    const auto directionOr = [] (const glm::vec3& value, const glm::vec3& fallback) {
+        const float length = glm::length (value);
+        return length > 1e-6f ? value * (1.0f / length) : fallback;
+    };
+    prepareDependencies (data, group, plan.controls, pose);
     auto& points = physics.state.ropePoints;
     const auto worldPoint = [&] (const glm::vec3& point) { return glm::vec3 (physics.model * glm::vec4 (point, 1)); };
     const auto localPoint = [&] (const glm::vec3& point) { return glm::vec3 (toLocal * glm::vec4 (point, 1)); };
@@ -472,6 +620,7 @@ void solveRopeGroup (
 		setPosition (node.root, sum / count);
 	    }
 	}
+        if (iteration == 0) constrainDependencies (data, group, pose);
 	bool converged = true;
 	for (const auto& node : group.nodes) {
 	    for (const auto& chain : node.branches) {
@@ -515,7 +664,7 @@ void solveRopeGroup (
 		const auto reference = data.boneDirections[bone].at (child);
 		const auto position = pose.worldBones[bone][3];
 		const auto direction = directionOr (glm::vec3 (pose.worldBones[child][3] - position), reference);
-		const auto rotation = glm::rotation (directionOr (reference, direction), direction);
+		const auto rotation = glm::rotation (reference, direction);
 		pose.worldBones[bone] = plan.bindWorld[bone] * glm::mat4_cast (rotation);
 		pose.worldBones[bone][3] = position;
 	    }
@@ -560,7 +709,7 @@ void solveRopeGroup (
 		const auto child = node.branches[index].bones[1];
 		const auto reference = data.boneDirections[node.root].at (child);
 		const auto direction = directionOr (glm::vec3 (pose.worldBones[child][3] - position), reference);
-		const auto branch = glm::rotation (directionOr (reference, direction), direction);
+		const auto branch = glm::rotation (reference, direction);
 		rotation = glm::slerp (rotation, branch, 1.0f / static_cast<float> (node.branches.size ()));
 	    }
 	    pose.worldBones[node.root] = plan.bindWorld[node.root] * glm::mat4_cast (rotation);
@@ -586,7 +735,7 @@ void applyBoneControls (
     for (const auto& group : data.ikGroups) {
 	// Coupled branches, scalar dependencies, joint limits and physics need their
 	// own constraint pass. Do not approximate those rigs with an independent chain.
-	if (group.hasDependencies || group.nodes.size () != 1 || group.nodes.front ().branches.size () != 1)
+	if (!group.controlDependencies.empty () || group.nodes.size () != 1 || group.nodes.front ().branches.size () != 1)
 	    continue;
 	const auto& chain = group.nodes.front ().branches.front ();
 	if (chain.bones.size () < 2 || chain.flags != 1 || chain.bones.front () != group.root) continue;
@@ -648,7 +797,7 @@ void applyBoneControls (
 	    const auto bone = chain.bones[index];
 	    const auto reference = data.boneDirections[bone].at (chain.bones[index + 1]);
 	    const auto direction = directionOr (points[index + 1] - points[index], reference);
-	    const auto rotation = glm::rotation (directionOr (reference, direction), direction);
+	    const auto rotation = glm::rotation (reference, direction);
 	    pose.worldBones[bone] = glm::mat4_cast (rotation) * glm::inverse (data.bones[bone].inverseBindWorld);
 	}
 	const auto& endBone = data.bones[tip];
@@ -780,6 +929,30 @@ float sampleScalarTrack (const MdlActiveAnimation& layer, const std::vector<floa
     const float next = track[std::min (firstFrame + 1, track.size () - 1)];
     return glm::mix (current, next, blend);
 }
+std::vector<float> sampleDependencies (
+    const MdlAnimationData& data, const std::vector<MdlActiveAnimation>& layers, MdlPhysicsStep* physics
+) {
+    auto values = physics ? physics->state.dependencyWeights : std::vector<float> {};
+    values.resize (data.dependencyCount, 0.0f);
+    bool first = true;
+    for (const auto& layer : layers) {
+        if (!layer.enabled || !layer.animation) continue;
+        const float weight = layer.weight;
+        if (first && (layer.additive || weight != 1.0f))
+            std::fill (values.begin (), values.end (), 0.0f);
+        first = false;
+        for (size_t row = 0; row < values.size () && row < layer.animation->dependencyTracks.size (); ++row) {
+            if (row < layer.animation->dependencyFlags.size () && (layer.animation->dependencyFlags[row] & 1)) continue;
+            const auto& track = layer.animation->dependencyTracks[row];
+            if (track.empty ()) continue;
+            const float sample = sampleScalarTrack (layer, track);
+            if (layer.additive) values[row] += sample * weight;
+            else values[row] = values[row] * (1.0f - weight) + sample * weight;
+        }
+    }
+    if (physics) physics->state.dependencyWeights = values;
+    return values;
+}
 } // namespace
 
 MdlPose MdlAnimationEvaluator::evaluate (
@@ -791,28 +964,37 @@ MdlPose MdlAnimationEvaluator::evaluate (
     pose.skinBones.resize (animationData.bones.size ());
     std::vector<glm::mat4> locals;
     if (!animationData.ikGroups.empty ()) locals.resize (animationData.bones.size ());
+    auto ropes = physics ? prepareRopes (animationData, activeAnimations, *physics) : std::nullopt;
+    if (ropes && physics->previewRope) {
+        // Native setup leaves previous348 absent. Preview only after admission, so
+        // standalone/rejected spring graphs retain their established state path.
+        physics = nullptr;
+        ropes.reset ();
+    }
     if (physics != nullptr && physics->state.bones.size () != animationData.bones.size ()) {
 	physics->state = { .bones = std::vector<MdlPhysicsState::Bone> (animationData.bones.size ()) };
     }
-    const auto ropes = physics ? prepareRopes (animationData, activeAnimations, *physics) : std::nullopt;
+    pose.dependencyWeights = sampleDependencies (animationData, activeAnimations, physics);
+    if (!ropes && physics && physics->ropeFallbackModel) physics->model = *physics->ropeFallbackModel;
     const bool ownerTraversal = ropes && !ropes->legacyWholeSkeleton;
+    const bool springAfterDependencies = ownerTraversal || animationData.dependencyCount != 0;
     glm::mat4 toLocal (1.0f);
     if (ropes) {
         toLocal = glm::inverse (physics->model);
         physics->state.ropePoints.resize (animationData.bones.size ());
-        if (ownerTraversal) {
-            if (physics->state.ropeWorldBones.size () == animationData.bones.size ()) {
-                pose.worldBones = physics->state.ropeWorldBones;
-            } else {
-                // First working poses use optional MDLS references; fixed reconstruction uses raw bind worlds.
-                for (size_t bone = 0; bone < animationData.bones.size (); ++bone) {
-                    const auto& entry = animationData.bones[bone];
-                    pose.worldBones[bone] = (entry.parent >= 0 ? pose.worldBones[entry.parent] : glm::mat4 (1.0f))
-                        * entry.referenceLocal.value_or (entry.bindLocal);
-                }
+    }
+    if (ownerTraversal || animationData.dependencyCount != 0) {
+        if (physics && physics->state.workingWorldBones.size () == animationData.bones.size ()) {
+            pose.worldBones = physics->state.workingWorldBones;
+        } else {
+            // Both forward dependencies and unvisited solver bones read these initial/reference worlds.
+            for (size_t bone = 0; bone < animationData.bones.size (); ++bone) {
+                const auto& entry = animationData.bones[bone];
+                pose.worldBones[bone] = (entry.parent >= 0 ? pose.worldBones[entry.parent] : glm::mat4 (1.0f))
+                    * entry.referenceLocal.value_or (entry.bindLocal);
             }
-            pose.publishedWorldBones.resize (animationData.bones.size ());
         }
+        if (ownerTraversal) pose.publishedWorldBones.resize (animationData.bones.size ());
     }
     // Native skips spring motion until it has a preceding frame.
     const bool simulate = physics != nullptr && !physics->state.previousWorld.empty ();
@@ -868,7 +1050,7 @@ MdlPose MdlAnimationEvaluator::evaluate (
 	const auto parent = animationData.bones[bone].parent;
 	const glm::mat4 parentWorld = parent >= 0 ? pose.worldBones[parent] : glm::mat4 (1.0f);
 	glm::mat4 localMatrix = poseMatrix (local ? *local : referencePose ());
-	if (simulate && skeletonBone.spring) {
+	if (simulate && skeletonBone.spring && !springAfterDependencies) {
 	    localMatrix *= stepSpring (
 		*skeletonBone.spring, *physics, physics->state.bones[bone], physics->state.previousWorld[bone],
 		parentWorld * localMatrix
@@ -876,6 +1058,19 @@ MdlPose MdlAnimationEvaluator::evaluate (
 	}
 	if (!locals.empty ()) locals[bone] = localMatrix;
 	pose.worldBones[bone] = parentWorld * localMatrix;
+        for (const auto& dependency : skeletonBone.dependencies) {
+            pose.worldBones[bone] = blendDependency (pose.worldBones[bone], pose.worldBones[dependency.source],
+                pose.dependencyWeights[dependency.weight]);
+        }
+        // The ordinary owner walk applies dependencies before spring inertia and publication.
+        if (springAfterDependencies && simulate && skeletonBone.spring) {
+            const auto spring = stepSpring (
+                *skeletonBone.spring, *physics, physics->state.bones[bone], physics->state.previousWorld[bone],
+                pose.worldBones[bone]
+            );
+            pose.worldBones[bone] *= spring;
+            if (!locals.empty ()) locals[bone] *= spring;
+        }
 	pose.skinBones[bone] = pose.worldBones[bone] * animationData.bones[bone].inverseBindWorld;
         if (ownerTraversal) {
             // Native publishes +340 before this owner's group, not before every group.
@@ -897,18 +1092,20 @@ MdlPose MdlAnimationEvaluator::evaluate (
         if (!ownerTraversal) {
             // Preserve the existing whole-skeleton synthetic route with unordered/type-zero bones.
             const auto& group = animationData.ikGroups.front ();
-            if (physics->state.ropeWorldBones.size () == animationData.bones.size ())
+            if (physics->state.workingWorldBones.size () == animationData.bones.size ())
                 for (size_t bone = 0; bone < animationData.bones.size (); ++bone)
                     if (bone != group.root && (animationData.bones[bone].type & 2))
-                        pose.worldBones[bone] = physics->state.ropeWorldBones[bone];
+                        pose.worldBones[bone] = physics->state.workingWorldBones[bone];
             solveRopeGroup (animationData, group, *ropes, *physics, toLocal, pose);
         }
-        physics->state.ropeWorldBones = pose.worldBones;
+        physics->state.workingWorldBones = pose.worldBones;
         for (size_t bone = 0; bone < animationData.bones.size (); ++bone)
             pose.skinBones[bone] = pose.worldBones[bone] * animationData.bones[bone].inverseBindWorld;
     } else if (!animationData.ikGroups.empty ()) {
         applyBoneControls (animationData, activeAnimations, locals, pose);
     }
+
+    if (physics && animationData.dependencyCount != 0) physics->state.workingWorldBones = pose.worldBones;
 
     // scalar blend tracks compose exactly like the bones do, one value per track row
     size_t blendRows = 0;
