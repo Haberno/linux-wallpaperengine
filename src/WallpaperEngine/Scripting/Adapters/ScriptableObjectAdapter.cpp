@@ -398,7 +398,7 @@ static JSValue scriptable_get_bone_transform (JSContext* ctx, JSValueConst thisV
     }
     const auto transform = index.has_value () ? container->object.getBoneTransform (*index) : std::nullopt;
     return transform.has_value ()
-	? make_script_mat4 (ctx, container->object.resolveWorldMatrix () * *transform)
+	? make_script_mat4 (ctx, *transform)
 	: JS_UNDEFINED;
 }
 

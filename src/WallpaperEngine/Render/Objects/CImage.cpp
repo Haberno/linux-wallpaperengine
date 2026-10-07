@@ -602,7 +602,7 @@ bool CImage::loadPuppetMesh (const glm::vec2& size) {
 	    );
 	    const auto bindPose = MdlAnimationEvaluator::evaluate (this->m_puppetAnimation, {});
 	    this->m_puppetWorldBones = bindPose.worldBones;
-	    this->m_puppetPublishedWorldBones.clear ();
+	    this->m_puppetPublishedSceneBones.clear ();
 	    sLog.out (
 		"Loaded puppet animation data ", *this->getImage ().model->puppet,
 		" bones=", this->m_puppetAnimation.bones.size (),
@@ -613,7 +613,7 @@ bool CImage::loadPuppetMesh (const glm::vec2& size) {
 	    sLog.error ("Could not load puppet animation data ", *this->getImage ().model->puppet, ": ", ex.what ());
 	    this->m_puppetAnimation = {};
 	    this->m_puppetWorldBones.clear ();
-	    this->m_puppetPublishedWorldBones.clear ();
+	    this->m_puppetPublishedSceneBones.clear ();
 	}
 
 	this->m_puppetDrawRanges = { MdlDrawRange { .indexCount = static_cast<uint32_t> (indices.size ()) } };
@@ -921,52 +921,10 @@ void CImage::updatePuppetPositionBuffer (const glm::vec2& size, const bool stepR
     const bool hasSpringBones = std::ranges::any_of (
         this->m_puppetAnimation.bones, [] (const auto& bone) { return bone.spring.has_value (); }
     );
-    bool ropeEnabled = stepRope && !scene.camera.projection.isPerspective;
-    if (ropeEnabled) {
-	const auto transform = this->resolveTransform (this->getImage ());
-	if (transform.angles != glm::vec3 (0.0f)) {
-	    // Native predicts scene-space points through the parent-composed image model.
-	    // Keep springs on their existing model until their rotated path is established.
-	    ropeEnabled = !this->getImage ().model->fullscreen
-		&& !this->getImage ().perspective->value->getBool ()
-		&& this->getImage ().alignment == "center"
-		&& transform.angles.x == 0.0f && transform.angles.y == 0.0f
-		&& !hasSpringBones;
-	    const Object* object = &this->getImage ();
-	    for (int depth = 0; ropeEnabled && object != nullptr; ++depth) {
-		if (depth > 32 || object->attachment.has_value ()) {
-		    ropeEnabled = false;
-		    break;
-		}
-		const auto* parent = object->parent.has_value () ? this->getScene ().getObject (*object->parent) : nullptr;
-		object = parent != nullptr ? &parent->getObject () : nullptr;
-	    }
-	    if (ropeEnabled) {
-		const glm::mat4 world = this->resolveWorldMatrix ();
-		const glm::mat4 rotation = glm::rotate (glm::mat4 (1.0f), transform.angles.z, glm::vec3 (0.0f, 0.0f, 1.0f));
-		// Admit only a unit planar basis matching the ordinary image renderer.
-		for (glm::length_t column = 0; column < 3; ++column) {
-		    ropeEnabled = ropeEnabled && glm::all (glm::lessThanEqual (glm::abs (world[column] - rotation[column]), glm::vec4 (1e-5f)));
-		}
-		if (ropeEnabled) {
-		    physics.model = glm::translate (glm::mat4 (1.0f), glm::vec3 (
-			-static_cast<float> (this->getScene ().getWidth ()) * 0.5f + parallax.x,
-			-static_cast<float> (this->getScene ().getHeight ()) * 0.5f - parallax.y, 0.0f
-		    )) * world;
-		}
-	    }
-	}
-    }
-    if (ropeEnabled) {
-        // Native physics uses authored scene coordinates; camera parallax is draw-only.
-        // Literal zero sibling points therefore precede the canvas origin.
-        // Preserve the spring fallback model when this skeleton cannot enter the rope solver.
-        if (!hasSpringBones) {
-            physics.model = glm::translate (glm::mat4 (1.0f), glm::vec3 (
-                this->getScene ().getWidth () * 0.5f - parallax.x,
-                this->getScene ().getHeight () * 0.5f + parallax.y, 0.0f
-            )) * physics.model;
-        }
+    if (stepRope && !hasSpringBones) {
+        // Native predicts authored scene-space points through the aligned layer Model.
+        // Camera projection, fullscreen geometry and parallax only affect drawing.
+        physics.model = this->resolveLayerModelMatrix ();
 	physics.rope = MdlRopeStep {
 	    .gravity = scene.physics.gravityDirection->evaluateVec3 (sceneTime)
 		* scene.physics.gravityStrength->evaluateFloat (sceneTime),
@@ -979,7 +937,7 @@ void CImage::updatePuppetPositionBuffer (const glm::vec2& size, const bool stepR
 	    physics.rope->windTime = this->getScene ().getTime ();
 	    physics.rope->windWidth = static_cast<float> (this->getScene ().getWidth ());
 	    // Admitted rope models already use native authored world X.
-	    physics.rope->windOriginX = hasSpringBones ? physics.rope->windWidth * 0.5f : 0.0f;
+	    physics.rope->windOriginX = 0.0f;
 	}
     }
 
@@ -988,7 +946,10 @@ void CImage::updatePuppetPositionBuffer (const glm::vec2& size, const bool stepR
     // animatedWorld * inverseBindWorld. The same evaluator now drives 3D models too.
     auto pose = MdlAnimationEvaluator::evaluate (this->m_puppetAnimation, this->m_puppetActiveLayers, &physics);
     this->m_puppetWorldBones = std::move (pose.worldBones);
-    this->m_puppetPublishedWorldBones = std::move (pose.publishedWorldBones);
+    this->m_puppetPublishedSceneBones = std::move (pose.publishedWorldBones);
+    // The public native buffer is sampled during evaluation, including the layer Model.
+    // A later script property write must not retroactively transform that cached pose.
+    for (auto& bone : this->m_puppetPublishedSceneBones) bone = physics.model * bone;
     this->m_puppetSkinBones = std::move (pose.skinBones);
 
     const auto& mesh = *this->getImage ().model->puppetMesh;
@@ -1012,6 +973,22 @@ void CImage::updatePuppetPositionBuffer (const glm::vec2& size, const bool stepR
     const auto morphTargets = preparePuppetMorphTargets (
 	body, pose.puppetMorphWeights, pose.puppetMorphMask, this->m_puppetWorldBones
     );
+
+    const bool ropeAdmitted = !this->m_puppetPublishedSceneBones.empty ();
+    const bool mapRopeToScene = ropeAdmitted && !this->getImage ().model->fullscreen;
+    glm::mat4 puppetToDraw (1.0f);
+    if (mapRopeToScene) {
+        glm::mat4 sceneBasis (1.0f);
+        if (!scene.camera.projection.isPerspective) {
+            sceneBasis = glm::scale (glm::translate (sceneBasis, glm::vec3 (
+                -this->getScene ().getWidth () * 0.5f, this->getScene ().getHeight () * 0.5f, 0.0f
+            )), glm::vec3 (1.0f, -1.0f, 1.0f));
+            sceneBasis = glm::translate (sceneBasis, glm::vec3 (parallax.x, -parallax.y, 0.0f));
+        }
+        // The ordinary quad bakes a flattened parent transform into its vertices.
+        // Compensate in its existing draw basis to retain the full affine puppet pose.
+        puppetToDraw = glm::inverse (this->m_sceneModelMatrix) * sceneBasis * physics.model;
+    }
 
     const bool morphColor = !body.morphTargets.empty () && (body.flags & 0x1000) != 0
 	&& (body.vertexTag & 0x10001) == 0x10000;
@@ -1069,17 +1046,21 @@ void CImage::updatePuppetPositionBuffer (const glm::vec2& size, const bool stepR
 	    }
 	}
 
-	// map the posed model-space position onto the object's scene-space quad (m_pos), the
-	// same mapping the plain quad's corners get; parts posed outside the image bounds
-	// simply extend beyond the quad instead of being clipped by an FBO
-	const float u = 0.5f + position.x / size.x;
-	const float v = 0.5f - position.y / size.y;
-	this->m_puppetPositions.push_back (this->m_pos.x + u * (this->m_pos.z - this->m_pos.x));
-	this->m_puppetPositions.push_back (this->m_pos.w + v * (this->m_pos.y - this->m_pos.w));
-	// puppet z encodes part layering, not scene depth (up to ±700 in e.g. 3100265648's
-	// gojo); the projection would clip it away, and draw order already comes from the
-	// index buffer, so flatten to the quad's plane
-	this->m_puppetPositions.push_back (0.0f);
+	// map the posed model-space position into the current draw basis. Stock image
+	// skinning keeps XYZ; tilted rope forces can create model-space Z displacement.
+        if (mapRopeToScene) {
+            position = glm::vec3 (puppetToDraw * glm::vec4 (position, 1.0f));
+        } else {
+            const float u = 0.5f + position.x / size.x;
+            const float v = 0.5f - position.y / size.y;
+            position = glm::vec3 (
+                this->m_pos.x + u * (this->m_pos.z - this->m_pos.x),
+                this->m_pos.w + v * (this->m_pos.y - this->m_pos.w), ropeAdmitted ? position.z : 0.0f
+            );
+        }
+        this->m_puppetPositions.push_back (position.x);
+        this->m_puppetPositions.push_back (position.y);
+        this->m_puppetPositions.push_back (position.z);
     }
 
     if (morphColor) {
@@ -2706,11 +2687,6 @@ CImage::ResolvedTransform CImage::updateGeometryBuffers () {
     this->updateScenePosition (origin, size, scale, sceneWidth, sceneHeight);
     this->uploadGeometryBuffers (size);
 
-    // puppet positions depend on the freshly updated scene quad (m_pos) and the animation time,
-    // so re-skin after the scene position is known
-    if (this->m_hasPuppetMesh) {
-	this->updatePuppetPositionBuffer (size, true);
-    }
     return transform;
 }
 
@@ -2766,6 +2742,7 @@ void CImage::updateScreenSpacePosition () {
 	    this->m_modelViewProjectionCopyInverse = this->m_modelViewProjectionScreenInverse;
 	}
 
+	if (this->m_hasPuppetMesh) this->updatePuppetPositionBuffer (this->m_size, true);
 	return;
     }
 
@@ -2859,6 +2836,9 @@ void CImage::updateScreenSpacePosition () {
 	this->m_modelViewProjectionCopy = this->m_modelViewProjectionScreen;
 	this->m_modelViewProjectionCopyInverse = this->m_modelViewProjectionScreenInverse;
     }
+    // Rope vertices compensate against the completed draw model; setup still samples
+    // without stepping, and each render update evaluates the puppet exactly once.
+    if (this->m_hasPuppetMesh) this->updatePuppetPositionBuffer (this->m_size, true);
 }
 
 auto CImage::calculatePerspectiveSceneMatrices (const glm::mat4& world, const glm::mat4& viewProjection)
@@ -2946,9 +2926,12 @@ std::optional<size_t> CImage::getBoneIndex (const std::string& name) const {
 }
 
 std::optional<glm::mat4> CImage::getBoneTransform (const size_t index) const {
-    const auto& bones = this->m_puppetPublishedWorldBones.empty () ? this->m_puppetWorldBones : this->m_puppetPublishedWorldBones;
-    if (index >= bones.size ()) return std::nullopt;
-    return bones[index];
+    if (!this->m_puppetPublishedSceneBones.empty ()) {
+        if (index >= this->m_puppetPublishedSceneBones.size ()) return std::nullopt;
+        return this->m_puppetPublishedSceneBones[index];
+    }
+    if (index >= this->m_puppetWorldBones.size ()) return std::nullopt;
+    return this->resolveWorldMatrix () * this->m_puppetWorldBones[index];
 }
 
 glm::mat3 CImage::calculateOrthographicAttachmentTextureMatrix (

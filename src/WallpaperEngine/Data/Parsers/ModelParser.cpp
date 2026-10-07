@@ -26,10 +26,13 @@ ModelUniquePtr ModelParser::load (const Project& project, const std::string& fil
 
 ModelUniquePtr ModelParser::parse (const JSON& file, const Project& project, const std::string& filename) {
     const auto material = file.require<std::string> ("material", "Model must have a material");
+    const bool fullscreen = file.optional ("fullscreen", false);
+    const bool passthrough = file.optional ("passthrough", false);
     const auto puppet = file.optional<std::string> ("puppet");
     std::optional<MdlMesh> puppetMesh;
 
-    if (puppet.has_value ()) {
+    // Native image initialization skips puppet resources for these model modes.
+    if (puppet.has_value () && !fullscreen && !passthrough) {
 	try {
 	    puppetMesh = MdlParser::load (project, *puppet);
 	} catch (const std::exception& ex) {
@@ -44,8 +47,8 @@ ModelUniquePtr ModelParser::parse (const JSON& file, const Project& project, con
 	.material = MaterialParser::load (project, material),
 	.solidlayer = file.optional ("solidlayer", false),
 	.instanced = file.optional ("instanced", false),
-	.fullscreen = file.optional ("fullscreen", false),
-	.passthrough = file.optional ("passthrough", false),
+	.fullscreen = fullscreen,
+	.passthrough = passthrough,
 	.autosize = file.optional ("autosize", false),
 	.nopadding = file.optional ("nopadding", false),
 	.width = file.optional<int> ("width"),

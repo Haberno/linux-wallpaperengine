@@ -1342,7 +1342,7 @@ std::optional<size_t> CModel::getBoneIndex (const std::string& name) const {
 std::optional<glm::mat4> CModel::getBoneTransform (const size_t index) const {
     if (this->m_worldBones.empty ()) this->updateAnimationPose ();
     if (index >= this->m_worldBones.size ()) return std::nullopt;
-    return this->m_worldBones[index];
+    return this->resolveWorldMatrix () * this->m_worldBones[index];
 }
 
 const float& CModel::getBrightness () const { return this->m_brightness; }
