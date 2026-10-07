@@ -216,6 +216,12 @@ struct MdlPhysicsState {
 struct MdlRopeStep {
     glm::vec3 gravity = glm::vec3 (0.0f);
     float deltaTime = 0.0f;
+    glm::vec3 windDirection = glm::vec3 (0.0f);
+    float windStrength = 0.0f;
+    float windTime = 0.0f;
+    float windWidth = 1.0f;
+    /** Offset from the renderer's centered scene coordinates to authored world X. */
+    float windOriginX = 0.0f;
 };
 
 struct MdlPhysicsStep {

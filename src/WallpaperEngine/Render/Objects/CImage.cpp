@@ -915,15 +915,23 @@ void CImage::updatePuppetPositionBuffer (const glm::vec2& size, const bool stepR
     };
     this->m_puppetPhysicsTime = sceneTime;
     const auto& scene = this->getScene ().getScene ();
-    // The current puppet model omits layer rotation. Wind and perspective ropes
-    // require their own world-force/model contracts before enabling this path.
-    if (stepRope && !scene.camera.projection.isPerspective && !scene.physics.windEnabled->value->getBool ()) {
+    // The current puppet model omits layer rotation; perspective ropes also
+    // require their own model contract before enabling this path.
+    if (stepRope && !scene.camera.projection.isPerspective) {
 	physics.rope = MdlRopeStep {
 	    .gravity = scene.physics.gravityDirection->evaluateVec3 (sceneTime)
 		* scene.physics.gravityStrength->evaluateFloat (sceneTime),
 	    // Native seeds and predicts immediately, including layers created late in a scene.
 	    .deltaTime = this->getScene ().getDeltaTime (),
 	};
+	if (scene.physics.windEnabled->value->getBool ()) {
+	    physics.rope->windDirection = scene.physics.windDirection->evaluateVec3 (sceneTime);
+	    physics.rope->windStrength = scene.physics.windStrength->evaluateFloat (sceneTime);
+	    physics.rope->windTime = this->getScene ().getTime ();
+	    physics.rope->windWidth = static_cast<float> (this->getScene ().getWidth ());
+	    // Native noise samples authored world X; the puppet model is centered on the canvas.
+	    physics.rope->windOriginX = physics.rope->windWidth * 0.5f;
+	}
     }
 
 

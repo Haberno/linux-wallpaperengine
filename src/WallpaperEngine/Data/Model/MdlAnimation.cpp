@@ -1,5 +1,7 @@
 #include "MdlAnimation.h"
 
+#include "WallpaperEngine/Render/Utils/NoiseUtils.h"
+
 #include <algorithm>
 #include <cmath>
 #include <limits>
@@ -176,7 +178,13 @@ bool applyRope (const MdlAnimationData& data, MdlPhysicsStep& physics, MdlPose& 
 	if (dtSquared > std::numeric_limits<float>::epsilon () && settings.friction > 0.01f
 	    && glm::dot (velocity, velocity) > 0.0001f)
 	    predicted += velocity * dtSquared * (1.0f / dtSquared) * settings.friction;
-	predicted += acceleration * dtSquared;
+	auto force = acceleration;
+	if (physics.rope->windStrength != 0.0f) {
+	    const float phase = (predicted.x + physics.rope->windOriginX) / physics.rope->windWidth * 10.0f;
+	    const float noise = std::max (WallpaperEngine::Render::Utils::simplexNoise2D (physics.rope->windTime, phase), 0.0f);
+	    force += noise * physics.rope->windDirection * physics.rope->windStrength;
+	}
+	predicted += force * dtSquared;
 	point.previous = point.current;
 	point.current = predicted;
 	pose.worldBones[bone][3] = glm::vec4 (localPoint (predicted), 1);

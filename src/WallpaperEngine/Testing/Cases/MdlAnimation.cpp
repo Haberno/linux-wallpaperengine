@@ -1385,3 +1385,35 @@ TEST_CASE ("Unsupported rope routes preserve authored pose and ordinary state", 
 	for (const auto& skin : pose.skinBones) CHECK (skin == glm::mat4 (1));
     }
 }
+
+TEST_CASE ("Rope wind replays native force phases independently of mass", "[mdl][animation][physics][rope][wind]") {
+    // Native wind01: binary 40e2ce02, 32 direct wind calls, four sequential
+    // updates per rig. These are the first predicted local poses of each rig.
+    struct Case { float mass; bool gravity; glm::vec3 model; glm::vec3 first; glm::vec3 second; };
+    const Case cases[] = {
+        { 1.0f, false, { 160.0f, 45.0f, 0.0f }, { -15.0f, 0.0f, 0.0f }, { 15.0631256f, -0.0157814026f, 0.0078904517f } },
+        { 4.0f, false, { 160.0f, 75.0f, 0.0f }, { -15.0f, 0.0f, 0.0f }, { 15.0631256f, -0.0157775879f, 0.0078904517f } },
+        { 2.0f, true, { 160.0f, 105.0f, 0.0f }, { -15.0f, -0.212257385f, 0.0f }, { 15.0631256f, -0.228042603f, 0.0078904517f } },
+        { 1.0f, false, { 220.0f, 135.0f, 0.0f }, { -14.8933716f, -0.0266571045f, 0.0133283241f }, { 15.0f, 0.0f, 0.0f } },
+    };
+    for (const auto& sample : cases) for (const bool centered : { false, true }) {
+        auto data = ropeRig (false, sample.gravity);
+        data.bones.back ().rope->mass = sample.mass;
+        MdlPhysicsState state;
+        const auto offset = centered ? glm::vec3 (160, 90, 0) : glm::vec3 (0);
+        MdlPhysicsStep physics {
+            .state = state,
+            .model = glm::translate (glm::mat4 (1), sample.model - offset),
+            .rope = MdlRopeStep {
+                .gravity = { 0, -90, 0 }, .deltaTime = 0.0343399011f,
+                .windDirection = { 2, -.5f, .25f }, .windStrength = 60,
+                .windTime = 6.0665226f, .windWidth = 320, .windOriginX = offset.x,
+            },
+        };
+        const auto pose = MdlAnimationEvaluator::evaluate (data, {}, &physics);
+        for (int axis = 0; axis < 3; ++axis) {
+            CHECK (pose.worldBones[1][3][axis] == Catch::Approx (sample.first[axis]).margin (2e-4f));
+            CHECK (pose.worldBones[2][3][axis] == Catch::Approx (sample.second[axis]).margin (2e-4f));
+        }
+    }
+}
