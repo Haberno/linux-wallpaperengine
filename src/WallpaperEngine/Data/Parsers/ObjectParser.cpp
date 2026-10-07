@@ -1060,17 +1060,18 @@ static std::optional<ControlPointRemap> parseControlPointRemap (
         || parsedTransform == Transform::Saw || parsedTransform == Transform::Triangle;
     const auto octaveValue = it.find ("transformoctaves");
     const int transformOctaves = parsedTransform != Transform::FbmNoise || octaveValue == it.end () ? 3
-        : octaveValue->is_boolean () ? static_cast<int> (octaveValue->get<bool> ()) : it.optional ("transformoctaves", 0);
+        : octaveValue->is_null () ? 0 : octaveValue->is_boolean () ? static_cast<int> (octaveValue->get<bool> ())
+        : it.optional ("transformoctaves", -1);
     const bool linearTransform = parsedTransform == Transform::Identity || periodic
         || parsedTransform == Transform::SimplexNoise
-        || (parsedTransform == Transform::FbmNoise && (initializer ? transformOctaves > 0 : transformOctaves == 3));
+        || (parsedTransform == Transform::FbmNoise && (initializer ? transformOctaves > 0 : transformOctaves >= 0));
     const bool speedOutput = parsedOutput == Output::Speed;
     const bool arithmetic = linearPair
         && (operation == "multiply" || operation == "add" || operation == "subtract");
     const bool noiseVelocity = !initializer && parsedInput == Input::LifetimeFraction
         && parsedOutput == Output::Velocity && parsedTransform == Transform::SimplexNoise;
     const bool noiseSpeed = !initializer && parsedInput == Input::LifetimeFraction
-        && speedOutput && parsedTransform == Transform::FbmNoise && transformOctaves == 3;
+        && speedOutput && parsedTransform == Transform::FbmNoise && transformOctaves >= 0;
     const auto parseComponent = [] (const std::string& component) -> std::optional<Component> {
         if (component == "all") return Component::All;
         if (component == "x") return Component::X;

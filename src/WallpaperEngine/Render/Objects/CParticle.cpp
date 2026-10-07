@@ -1663,7 +1663,7 @@ void WallpaperEngine::Render::Objects::applyParticleControlPointRemap (
         // independent random draws or numeric float-to-uint conversion differ.
         const uint32_t seed = std::bit_cast<uint32_t> (particle.oscillationRandom);
         if (remap.transform == ControlPointRemap::Transform::FbmNoise) {
-            const float noise = seededFbmNoise2D (seed, input, 0.0f) * .5f + .5f;
+            const float noise = seededFbmNoise2D (seed, input, 0.0f, remap.transformOctaves) * .5f + .5f;
             const float outputMin = remap.outputRangeMin->value->getFloat ();
             const float mapped = outputMin + noise * (remap.outputRangeMax->value->getFloat () - outputMin);
             // Native speed multiplication preserves direction; flags 3 clamp
@@ -1798,7 +1798,7 @@ void WallpaperEngine::Render::Objects::applyParticleControlPointRemap (
             case ControlPointRemap::Transform::FbmNoise:
                 normalized[axis] = (initializer ? particleRemapFbmNoise (normalized[axis], remap.transformInputScale, remap.transformOctaves)
                     : seededFbmNoise2D (std::bit_cast<uint32_t> (particle.oscillationRandom)
-                        ^ (axis == 1 ? 188294317u : axis == 2 ? 1228574339u : 0u), phase, 0.0f)) * .5f + .5f;
+                        ^ (axis == 1 ? 188294317u : axis == 2 ? 1228574339u : 0u), phase, 0.0f, remap.transformOctaves)) * .5f + .5f;
                 break;
             case ControlPointRemap::Transform::Sine: {
                 const float angle = initializer ? (normalized[axis] * glm::pi<float> ()) * remap.transformInputScale

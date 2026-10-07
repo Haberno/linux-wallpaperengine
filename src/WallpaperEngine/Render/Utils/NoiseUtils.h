@@ -106,10 +106,17 @@ inline float seededSimplexNoise2D (uint32_t seed, float x, float y) {
 
 // Native remap's default FBM: three octaves, gain .5, lacunarity 2 and
 // normalized initial amplitude. Each octave increments the integer seed.
-inline float seededFbmNoise2D (uint32_t seed, float x, float y) {
-    float amplitude = 1.0f / 1.75f;
+inline float seededFbmNoise2D (uint32_t seed, float x, float y, uint32_t octaves = 3) {
+    float normalization = 1.0f;
+    float amplitude = .5f;
+    for (uint32_t octave = 1; octave < octaves; ++octave) {
+	normalization += amplitude;
+	amplitude *= .5f;
+    }
+    // Native always evaluates the first seeded sample, including count zero.
+    amplitude = 1.0f / normalization;
     float sum = seededSimplexNoise2D (seed, x, y) * amplitude;
-    for (int octave = 1; octave < 3; ++octave) {
+    for (uint32_t octave = 1; octave < octaves; ++octave) {
 	++seed;
 	x *= 2.0f;
 	y *= 2.0f;
