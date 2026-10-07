@@ -140,6 +140,9 @@ void CWallpaper::setupShaders () {
 		    "uniform float g_Contrast;\n"
 		    "uniform float g_Saturation;\n"
 		    "uniform vec4 g_ColorCorrection;\n"
+                    "uniform float g_HDRSourceScale;\n"
+                    "uniform bool g_ScRGBPresentation;\n"
+                    "uniform float g_HDRHeadroom;\n"
 		    "uniform sampler3D g_ColorLut;\n"
 		    "uniform float g_ColorLutStrength;\n"
 		    "uniform float g_Fps;\n"
@@ -149,6 +152,7 @@ void CWallpaper::setupShaders () {
 		    "in vec2 v_TexCoord;\n"
 		    "in vec2 v_ScreenPos;\n"
 		    "out vec4 out_FragColor;\n"
+		    "vec3 sRGBToLinear (vec3 c) { return mix (c / 12.92, pow (max ((c + 0.055) / 1.055, 0.0), vec3 (2.4)), step (vec3 (0.04045), c)); }\n"
 		    "float hash21 (vec2 v) {\n"
 		    "return fract (sin (dot (v, vec2 (12.9898, 78.233))) * 43758.5453);\n"
 		    "}\n"
@@ -269,7 +273,7 @@ void CWallpaper::setupShaders () {
 		    "        value >= 100 ? value / 100 % 10 : 13,\n"
 		    "        value / 10 % 10, 14, value % 10);\n"
 		    "    if ((GLYPHS[chars[p.x / 4]] & (1 << (p.y * 3 + p.x % 4))) != 0)\n"
-		    "        out_FragColor = vec4 (0.65, 1.0, 0.65, 1.0);\n"
+		    "        out_FragColor = vec4 (g_ScRGBPresentation ? sRGBToLinear (vec3 (0.65, 1.0, 0.65)) : vec3 (0.65, 1.0, 0.65), 1.0);\n"
 		    "}\n"
 		    // Beside the FPS panel: "LOAD  1.23 S", plus one row per phase with details on.
 		    "void loadOverlay () {\n"
@@ -290,7 +294,7 @@ void CWallpaper::setupShaders () {
 		    "        : column == 6 ? (value >= 1000 ? value / 1000 : 13) : column == 7 ? value / 100 % 10\n"
 		    "        : column == 8 ? 14 : column == 9 ? value / 10 % 10 : column == 10 ? value % 10 : column == 11 ? 13 : 28;\n"
 		    "    if ((GLYPHS[c] & (1 << (p.y % 6 * 3 + p.x % 4))) != 0)\n"
-		    "        out_FragColor = vec4 (0.65, 1.0, 0.65, 1.0);\n"
+		    "        out_FragColor = vec4 (g_ScRGBPresentation ? sRGBToLinear (vec3 (0.65, 1.0, 0.65)) : vec3 (0.65, 1.0, 0.65), 1.0);\n"
 		    "}\n"
 		    "vec3 nativeColorCorrection (vec3 color, vec4 params) {\n"
 		    "    if (params == vec4 (1.0, 1.0, 1.0, 0.0)) return color;\n"
@@ -311,11 +315,13 @@ void CWallpaper::setupShaders () {
 		    "}\n"
 		    "void main () {\n"
 		    "vec3 sceneColor = texture (g_Texture0, v_TexCoord).rgb;\n"
+                    "if (g_HDRSourceScale > 0.0) sceneColor *= g_HDRSourceScale;\n"
 		    "sceneColor = nativeColorCorrection (sceneColor, g_ColorCorrection);\n"
 		    "if (g_ColorLutStrength > 0.0) sceneColor = mix (sceneColor, texture (g_ColorLut, sceneColor).rgb, g_ColorLutStrength);\n"
 		    // materials/util/fade.json uses the fade shader's default tint (0.315,
 		    // 0.135, 0.1125), multiplied by 0.7 in fade.frag. Scheme-color overrides
 		    // can replace this once Linux-side desktop scheme integration exists.
+                    "if (g_HDRSourceScale > 0.0) sceneColor = clamp (sceneColor, vec3 (0.0), vec3 (2.0 * g_HDRHeadroom));\n"
 		    "vec3 fadeColor = vec3 (0.2205, 0.0945, 0.07875);\n"
 		    "sceneColor = mix (sceneColor, fadeColor, g_SceneFadeAlpha);\n"
 		    // Perform output grading in the universal scene/video/web composite.
@@ -324,6 +330,15 @@ void CWallpaper::setupShaders () {
 		    "float luminance = dot (sceneColor, vec3 (0.2126, 0.7152, 0.0722));\n"
 		    "sceneColor = mix (vec3 (luminance), sceneColor, g_Saturation);\n"
 		    "sceneColor = (sceneColor - vec3 (0.5)) * g_Contrast + vec3 (0.5);\n"
+                    // Convert each wallpaper before transition blending. Ordinary SDR
+                    // bytes retain their existing path when the destination is SDR.
+                    "if (g_ScRGBPresentation && g_HDRSourceScale == 0.0) {\n"
+                    "    sceneColor = sRGBToLinear (sceneColor);\n"
+                    "} else if (!g_ScRGBPresentation && g_HDRSourceScale > 0.0) {\n"
+                    // Secondary 8-bit captures cannot transport HDR light. This is
+                    // the standard scRGB -> sRGB encoding, not a Windows tone map.
+                    "    sceneColor = mix (sceneColor * 12.92, 1.055 * pow (max (sceneColor, 0.0), vec3 (1.0 / 2.4)) - 0.055, step (vec3 (0.0031308), sceneColor));\n"
+                    "}\n"
 		    "out_FragColor = vec4 (sceneColor, transitionAlpha ());\n"
 		    "fpsOverlay ();\n"
 		    "loadOverlay ();\n"
@@ -394,6 +409,9 @@ void CWallpaper::setupShaders () {
     this->g_Contrast = glGetUniformLocation (this->m_shader, "g_Contrast");
     this->g_Saturation = glGetUniformLocation (this->m_shader, "g_Saturation");
     this->g_ColorCorrection = glGetUniformLocation (this->m_shader, "g_ColorCorrection");
+    this->g_HDRSourceScale = glGetUniformLocation (this->m_shader, "g_HDRSourceScale");
+    this->g_ScRGBPresentation = glGetUniformLocation (this->m_shader, "g_ScRGBPresentation");
+    this->g_HDRHeadroom = glGetUniformLocation (this->m_shader, "g_HDRHeadroom");
     this->g_ColorLut = glGetUniformLocation (this->m_shader, "g_ColorLut");
     this->g_ColorLutStrength = glGetUniformLocation (this->m_shader, "g_ColorLutStrength");
     this->g_Fps = glGetUniformLocation (this->m_shader, "g_Fps");
@@ -425,6 +443,25 @@ void CWallpaper::updateUVs (const glm::ivec4& viewport, const bool vflip) {
 	// Update wallpaper state
 	this->m_state.updateState (viewport, vflip, this->getWidth (), this->getHeight ());
     }
+}
+
+void CWallpaper::renderWithColorSpace (
+    const glm::ivec4& viewport, const bool vflip, const glm::ivec2& globalPosition,
+    const glm::ivec2& logicalSize, const bool scRGBPresentation, const float hdrHeadroom
+) {
+    // Presentation belongs to this draw. Secondary SDR captures use render()
+    // directly, and must never inherit the primary output's encoding.
+    struct RestorePresentation {
+        bool& encoding;
+        float& headroom;
+        const bool oldEncoding;
+        const float oldHeadroom;
+        ~RestorePresentation () { encoding = oldEncoding; headroom = oldHeadroom; }
+    } restore { this->m_scRGBPresentation, this->m_hdrHeadroom,
+        this->m_scRGBPresentation, this->m_hdrHeadroom };
+    this->m_scRGBPresentation = scRGBPresentation;
+    this->m_hdrHeadroom = hdrHeadroom;
+    this->render (viewport, vflip, globalPosition, logicalSize);
 }
 
 void CWallpaper::render (
@@ -564,6 +601,9 @@ void CWallpaper::render (
     glUniform1f (this->g_Saturation, this->m_saturation);
     const auto correction = this->getColorCorrection ();
     glUniform4f (this->g_ColorCorrection, correction.x, correction.y, correction.z, correction.w);
+    glUniform1f (this->g_HDRSourceScale, this->getHDRSourceScale ());
+    glUniform1i (this->g_ScRGBPresentation, this->m_scRGBPresentation);
+    glUniform1f (this->g_HDRHeadroom, this->m_hdrHeadroom);
     const auto [lut, strength] = this->getColorLut ();
     glActiveTexture (GL_TEXTURE1);
     glBindTexture (GL_TEXTURE_3D, lut);

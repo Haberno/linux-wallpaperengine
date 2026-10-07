@@ -20,6 +20,7 @@ struct zwlr_layer_shell_v1;
 struct zwlr_layer_surface_v1;
 struct zxdg_output_v1;
 struct zxdg_output_manager_v1;
+struct wp_color_management_surface_v1;
 
 namespace WallpaperEngine::Render::Drivers {
 class WaylandOpenGLDriver;
@@ -76,6 +77,9 @@ namespace Output {
 	 * Swaps buffers to present data on the viewport
 	 */
 	void swapOutput () override;
+        bool supportsScRGB () const override;
+        void setScRGBPresentation (bool enabled) override;
+        void destroyColorManagement ();
 
 	int frameBudget () const;
 
@@ -86,6 +90,8 @@ namespace Output {
 
     private:
 	WaylandOpenGLDriver* m_driver = nullptr;
+        wp_color_management_surface_v1* m_colorSurface = nullptr;
+        bool m_scRGBPresentation = false;
     };
 } // namespace Output
 } // namespace WallpaperEngine::Render::Drivers

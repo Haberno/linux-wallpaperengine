@@ -60,7 +60,15 @@ public:
     /**
      * Pause the renderer
      */
+    void renderWithColorSpace (
+        const glm::ivec4& viewport, bool vflip, const glm::ivec2& globalPosition,
+        const glm::ivec2& logicalSize, bool scRGBPresentation, float hdrHeadroom
+    );
     virtual void setPause (bool newState);
+    /** Decoded HDR input, independent of whether this output can present it. */
+    [[nodiscard]] virtual bool hasHDRSource () const { return false; }
+    /** Called once before the primary output frame, not by secondary SDR captures. */
+    virtual void prepareHDRPresentation (bool enabled) { }
 
     /**
      * @return The container to resolve files for this wallpaper
@@ -193,6 +201,8 @@ protected:
 
     /** Optional scene-local fade composited over the rendered wallpaper. */
     [[nodiscard]] virtual float getSceneFadeAlpha () const;
+    /** Zero for existing SDR bytes; otherwise linear RGB multiplier to scRGB/80 nits. */
+    [[nodiscard]] virtual float getHDRSourceScale () const { return 0.0f; }
     [[nodiscard]] virtual glm::vec4 getColorCorrection () const;
     [[nodiscard]] virtual std::pair<GLuint, float> getColorLut () const;
 
@@ -209,7 +219,12 @@ private:
     GLint g_SceneFadeAlpha = GL_NONE;
     GLint g_Contrast = GL_NONE;
     GLint g_Saturation = GL_NONE;
+    bool m_scRGBPresentation = false;
+    float m_hdrHeadroom = 1.0f;
     GLint g_ColorCorrection = GL_NONE;
+    GLint g_HDRSourceScale = GL_NONE;
+    GLint g_ScRGBPresentation = GL_NONE;
+    GLint g_HDRHeadroom = GL_NONE;
     GLint g_ColorLut = GL_NONE;
     GLint g_ColorLutStrength = GL_NONE;
     GLint g_Fps = GL_NONE;

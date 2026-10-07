@@ -26,11 +26,14 @@ public:
     [[nodiscard]] WallpaperState::TextureUVs getPresentationUVs () const override;
 
     void setPause (bool newState) override;
+    [[nodiscard]] bool hasHDRSource () const override;
+    void prepareHDRPresentation (bool enabled) override;
     bool setColorProperty (const std::string& key, const std::string& value);
 
 protected:
     void renderFrame (const glm::ivec4& viewport) override;
     [[nodiscard]] glm::vec4 getColorCorrection () const override;
+    [[nodiscard]] float getHDRSourceScale () const override;
     [[nodiscard]] std::pair<GLuint, float> getColorLut () const override;
 
     friend class CWallpaper;

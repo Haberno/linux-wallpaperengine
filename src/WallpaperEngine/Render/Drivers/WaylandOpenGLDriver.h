@@ -16,6 +16,8 @@
 #include "WallpaperEngine/Render/Drivers/Output/WaylandOutput.h"
 #include "WallpaperEngine/Render/Drivers/Output/WaylandOutputViewport.h"
 #include "WallpaperEngine/Render/Drivers/VideoDriver.h"
+#include "WaylandColorManagement.h"
+#include "WaylandEGLConfig.h"
 
 namespace WallpaperEngine::Application {
 class ApplicationContext;
@@ -44,6 +46,8 @@ public:
     struct SEGLContext {
 	EGLDisplay display = nullptr;
 	EGLConfig config = nullptr;
+	EGLConfig sdrConfig = nullptr;
+	WaylandEGLConfigProperties properties;
 	EGLContext context = nullptr;
 	PFNEGLCREATEPLATFORMWINDOWSURFACEEXTPROC eglCreatePlatformWindowSurfaceEXT = nullptr;
     };
@@ -56,6 +60,7 @@ public:
 	zwlr_layer_shell_v1* layerShell = nullptr;
 	wl_seat* seat = nullptr;
 	zxdg_output_manager_v1* xdgOutputManager = nullptr;
+	WaylandColorManagement colorManagement;
     };
 
     explicit WaylandOpenGLDriver (ApplicationContext& context, WallpaperApplication& app);
@@ -77,6 +82,8 @@ public:
     bool makeBuildContextCurrent () override;
     void releaseBuildContext () override;
 
+    // Only used during surface setup, before any wallpaper GL resources exist.
+    bool fallbackToSDR ();
     void onLayerClose (Output::WaylandOutputViewport*);
     Output::WaylandOutputViewport* surfaceToViewport (const wl_surface*) const;
 
@@ -106,6 +113,7 @@ private:
     void initWaylandRegistry ();
     void setupOutputLayerSurfaces ();
     void initEGL ();
+    EGLContext createEGLContext ();
     void initGLEW ();
     void finishEGL () const;
 

@@ -37,6 +37,7 @@ CVideo::CVideo (
     // The output driver paces presentation. Waiting for an MP4 frame here also
     // stalls every cooperative scene-loading slice while this video is outgoing.
     this->m_player->setNonBlocking ();
+    this->m_player->enableHDR ();
     // --silent disables audio (audio.enabled = false) and must mute video wallpapers too;
     // a volume of 0 mutes the mpv backend (matching what --volume 0 already does).
     const auto& audioSettings = this->getContext ().getApp ().getContext ().settings.audio;
@@ -94,6 +95,15 @@ std::pair<GLuint, float> CVideo::getColorLut () const {
 }
 
 CVideo::~CVideo () { this->m_player->decrementUsageCount (); }
+
+bool CVideo::hasHDRSource () const { return this->m_player->hasHDRSource (); }
+
+void CVideo::prepareHDRPresentation (const bool enabled) { this->m_player->setHDRPresentation (enabled); }
+
+float CVideo::getHDRSourceScale () const {
+    // mpv vo_gpu's linear reference is203 nits; Windows-scRGB's unit is80 nits.
+    return this->m_player->isHDRFrame () ? 203.0f / 80.0f : 0.0f;
+}
 
 void CVideo::renderFrame (const glm::ivec4& viewport) {
     // Texture creation must run after the output's graphics context becomes current.

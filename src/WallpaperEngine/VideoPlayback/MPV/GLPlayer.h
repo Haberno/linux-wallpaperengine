@@ -73,6 +73,11 @@ public:
     [[nodiscard]] bool getLoop () const { return m_loop; }
     void setLoop (bool loop);
 
+    /** Standalone video only; embedded textures retain the existing SDR contract. */
+    void enableHDR ();
+    void setHDRPresentation (bool enabled) const;
+    [[nodiscard]] bool hasHDRSource () const;
+    [[nodiscard]] bool isHDRFrame () const;
     void render () const;
 
     int getWidth () const;
@@ -80,6 +85,8 @@ public:
 
 private:
     void prepareGL ();
+    void queueHDRConfiguration (bool enabled) const;
+    void clearOutputFrame () const;
     void init ();
     void play ();
     void setSource (MemoryStreamProtocolUniquePtr source);
@@ -106,6 +113,17 @@ protected:
     std::optional<std::chrono::steady_clock::time_point> m_audioFadeNextTick;
     bool m_muted = false;
     bool m_nonBlocking = false;
+    bool m_hdrEnabled = false;
+    mutable bool m_hdrSource = false;
+    mutable bool m_hdrPresentation = false;
+    mutable bool m_hdrConfigured = false;
+    mutable bool m_hdrFrame = false;
+    mutable bool m_hdrDisabled = false;
+    mutable bool m_hdrConfigurationBroken = false;
+    mutable bool m_hdrConfigurationTarget = false;
+    mutable bool m_hdrConfigurationFailed = false;
+    mutable uint64_t m_hdrConfigurationBegin = 0;
+    mutable uint64_t m_hdrConfigurationEnd = 0;
     bool m_paused = false;
     bool m_activitySuspended = false;
     std::map<const Render::Wallpapers::CScene*, bool> m_sceneActivity;

@@ -16,6 +16,8 @@ extern "C" {
 #undef namespace
 #undef static
 
+#include "color-management-v1-protocol.h"
+
 #include <algorithm>
 #include <cerrno>
 #include <poll.h>
@@ -137,6 +139,8 @@ handleGlobal (void* data, struct wl_registry* registry, uint32_t name, const cha
 	driver->getWaylandContext ()->seat
 	    = static_cast<wl_seat*> (wl_registry_bind (registry, name, &wl_seat_interface, 1));
 	wl_seat_add_listener (driver->getWaylandContext ()->seat, &seatListener, driver);
+    } else if (strcmp (interface, wp_color_manager_v1_interface.name) == 0) {
+	driver->getWaylandContext ()->colorManagement.bind (registry, name, version);
     } else if (strcmp (interface, zxdg_output_manager_v1_interface.name) == 0) {
 	driver->getWaylandContext ()->xdgOutputManager = static_cast<zxdg_output_manager_v1*> (
 	    wl_registry_bind (registry, name, &zxdg_output_manager_v1_interface, std::min (version, 3u))
@@ -145,6 +149,7 @@ handleGlobal (void* data, struct wl_registry* registry, uint32_t name, const cha
 }
 
 static void handleGlobalRemoved (void* data, struct wl_registry* registry, uint32_t id) {
+    static_cast<WaylandOpenGLDriver*> (data)->getWaylandContext ()->colorManagement.removeGlobal (id);
     // todo: outputs
 }
 
@@ -214,11 +219,31 @@ void WaylandOpenGLDriver::initEGL () {
 	sLog.exception ("eglChooseConfig failed! (matched 0 configs)");
     }
 
+    m_eglContext.sdrConfig = m_eglContext.config;
+    queryWaylandEGLConfig (m_eglContext.display, m_eglContext.config, m_eglContext.properties);
+    if (m_waylandContext.colorManagement.hasScRGBProtocol ()) {
+        if (const auto config = chooseWaylandFloatConfig (m_eglContext.display, m_eglContext.properties))
+            m_eglContext.config = config;
+    }
+
     if (!eglBindAPI (EGL_OPENGL_API)) {
 	this->finishEGL ();
 	sLog.exception ("eglBindAPI failed!");
     }
 
+    m_eglContext.context = createEGLContext ();
+    if (m_eglContext.context == EGL_NO_CONTEXT && m_eglContext.properties.isScRGB ()) fallbackToSDR ();
+    if (m_eglContext.context == EGL_NO_CONTEXT) {
+        this->finishEGL ();
+        sLog.error ("eglCreateContext error " + std::to_string (eglGetError ()));
+        sLog.exception ("eglCreateContext failed!");
+    }
+    sLog.debug ("Wayland EGL config: RGBA=", m_eglContext.properties.red, "/", m_eglContext.properties.green,
+                "/", m_eglContext.properties.blue, "/", m_eglContext.properties.alpha,
+                " component=", m_eglContext.properties.componentType, " samples=", m_eglContext.properties.samples);
+}
+
+EGLContext WaylandOpenGLDriver::createEGLContext () {
     const EGLint CONTEXT_ATTRIBUTES[] = {
 	EGL_CONTEXT_MAJOR_VERSION_KHR,
 	3,
@@ -235,14 +260,39 @@ void WaylandOpenGLDriver::initEGL () {
 	EGL_NONE,
     };
 
-    m_eglContext.context
-	= eglCreateContext (m_eglContext.display, m_eglContext.config, EGL_NO_CONTEXT, CONTEXT_ATTRIBUTES);
+    return eglCreateContext (m_eglContext.display, m_eglContext.config, EGL_NO_CONTEXT, CONTEXT_ATTRIBUTES);
+}
 
-    if (m_eglContext.context == EGL_NO_CONTEXT) {
-	this->finishEGL ();
-	sLog.error ("eglCreateContext error " + std::to_string (eglGetError ()));
-	sLog.exception ("eglCreateContext failed!");
+bool WaylandOpenGLDriver::fallbackToSDR () {
+    if (!m_eglContext.properties.isScRGB ()) return false;
+    // All outputs are still in setup: no wallpaper resources exist yet. Rebuild
+    // their surfaces together so the shared context never mixes incompatible configs.
+    eglMakeCurrent (m_eglContext.display, EGL_NO_SURFACE, EGL_NO_SURFACE, EGL_NO_CONTEXT);
+    for (const auto& screen : m_screens) {
+        if (screen->eglSurface != EGL_NO_SURFACE) eglDestroySurface (m_eglContext.display, screen->eglSurface);
+        screen->eglSurface = EGL_NO_SURFACE;
     }
+    if (m_eglContext.context != EGL_NO_CONTEXT) eglDestroyContext (m_eglContext.display, m_eglContext.context);
+    m_eglContext.config = m_eglContext.sdrConfig;
+    m_eglContext.properties = {};
+    queryWaylandEGLConfig (m_eglContext.display, m_eglContext.config, m_eglContext.properties);
+    m_eglContext.context = createEGLContext ();
+    if (m_eglContext.context == EGL_NO_CONTEXT) return false;
+    for (const auto& screen : m_screens) {
+        if (!screen->eglWindow) continue;
+        screen->eglSurface = m_eglContext.eglCreatePlatformWindowSurfaceEXT (
+            m_eglContext.display, m_eglContext.config, screen->eglWindow, nullptr
+        );
+        if (screen->eglSurface == EGL_NO_SURFACE || !eglMakeCurrent (
+                m_eglContext.display, screen->eglSurface, screen->eglSurface, m_eglContext.context
+            )) return false;
+        if (!eglSwapInterval (m_eglContext.display, 0))
+            sLog.error ("Couldn't disable blocking EGL swaps for output ", screen->name);
+    }
+    sLog.debug ("Wayland EGL reverted to SDR: RGBA=", m_eglContext.properties.red, "/", m_eglContext.properties.green,
+                "/", m_eglContext.properties.blue, "/", m_eglContext.properties.alpha,
+                " component=", m_eglContext.properties.componentType, " samples=", m_eglContext.properties.samples);
+    return true;
 }
 
 bool WaylandOpenGLDriver::makeBuildContextCurrent () {
@@ -360,6 +410,7 @@ void WaylandOpenGLDriver::onLayerClose (Output::WaylandOutputViewport* viewport)
 	viewport->xdgOutput = nullptr;
     }
 
+    viewport->destroyColorManagement ();
     if (viewport->surface) {
 	wl_surface_destroy (viewport->surface);
     }
@@ -490,6 +541,7 @@ void WaylandOpenGLDriver::initGLEW () {
 WaylandOpenGLDriver::~WaylandOpenGLDriver () {
     // destroy xdg outputs
     for (const auto& screen : this->m_screens) {
+        screen->destroyColorManagement ();
 	if (screen->xdgOutput) {
 	    zxdg_output_v1_destroy (screen->xdgOutput);
 	    screen->xdgOutput = nullptr;
@@ -513,6 +565,8 @@ WaylandOpenGLDriver::~WaylandOpenGLDriver () {
 
     eglTerminate (m_eglContext.display);
     eglReleaseThread ();
+
+    m_waylandContext.colorManagement.reset ();
 
     // disconnect from wayland display
     if (this->m_waylandContext.display) {

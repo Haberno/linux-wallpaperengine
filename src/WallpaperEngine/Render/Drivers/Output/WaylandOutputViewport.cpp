@@ -1,5 +1,6 @@
 #include "WaylandOutputViewport.h"
 #include "WallpaperEngine/Logging/Log.h"
+#include "color-management-v1-protocol.h"
 
 #define class _class
 #define namespace _namespace
@@ -223,6 +224,9 @@ void WaylandOutputViewport::setupLS () {
     eglSurface = m_driver->getEGLContext ()->eglCreatePlatformWindowSurfaceEXT (
 	m_driver->getEGLContext ()->display, m_driver->getEGLContext ()->config, eglWindow, nullptr
     );
+    if (eglSurface == EGL_NO_SURFACE && !m_driver->fallbackToSDR ())
+        sLog.exception ("Failed to create an EGL window surface");
+    m_colorSurface = m_driver->getWaylandContext ()->colorManagement.getSurface (surface);
     wl_surface_commit (surface);
     wl_display_roundtrip (m_driver->getWaylandContext ()->display);
     wl_display_flush (m_driver->getWaylandContext ()->display);
@@ -243,10 +247,11 @@ void WaylandOutputViewport::setupLS () {
     }
 
     if (eglMakeCurrent (
-	    m_driver->getEGLContext ()->display, eglSurface, eglSurface, m_driver->getEGLContext ()->context
-	)
-	== EGL_FALSE) {
-	sLog.exception ("Failed to make egl current");
+            m_driver->getEGLContext ()->display, eglSurface, eglSurface, m_driver->getEGLContext ()->context
+        ) == EGL_FALSE) {
+        if (!m_driver->fallbackToSDR () || eglMakeCurrent (
+                m_driver->getEGLContext ()->display, eglSurface, eglSurface, m_driver->getEGLContext ()->context
+            ) == EGL_FALSE) sLog.exception ("Failed to make egl current");
     }
 
     // Surface frame callbacks already pace each output. A blocking swap on a
@@ -285,7 +290,24 @@ void WaylandOutputViewport::swapOutput () {
     // commit instead of issuing a second, bufferless commit after the swap.
     wl_surface_set_buffer_scale (surface, scale);
     wl_surface_damage_buffer (surface, 0, 0, INT32_MAX, INT32_MAX);
+    m_driver->getWaylandContext ()->colorManagement.queuePresentation (
+        m_colorSurface, m_scRGBPresentation && supportsScRGB ()
+    );
     eglSwapBuffers (m_driver->getEGLContext ()->display, this->eglSurface);
+}
+
+bool WaylandOutputViewport::supportsScRGB () const {
+    return surface && eglWindow && eglSurface != EGL_NO_SURFACE && m_colorSurface
+        && m_driver->getEGLContext ()->properties.isScRGB ()
+        && m_driver->getWaylandContext ()->colorManagement.ready ();
+}
+
+void WaylandOutputViewport::setScRGBPresentation (bool enabled) { m_scRGBPresentation = enabled; }
+
+void WaylandOutputViewport::destroyColorManagement () {
+    if (m_colorSurface) wp_color_management_surface_v1_destroy (m_colorSurface);
+    m_colorSurface = nullptr;
+    m_scRGBPresentation = false;
 }
 
 int WaylandOutputViewport::frameBudget () const {

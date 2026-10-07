@@ -202,6 +202,13 @@ if(WAYLAND_SUPPORT_FOUND)
     add_custom_command(OUTPUT ${WAYLAND_OUTPUT_DIR}/xdg-output-unstable-v1-protocol.c
         COMMAND ${WaylandScanner} private-code ${WAYLAND_PROTOCOLS_DIR}/unstable/xdg-output/xdg-output-unstable-v1.xml ${WAYLAND_OUTPUT_DIR}/xdg-output-unstable-v1-protocol.c)
 
+    add_custom_command(OUTPUT ${WAYLAND_OUTPUT_DIR}/color-management-v1-protocol.h
+        COMMAND ${WaylandScanner} client-header ${CMAKE_CURRENT_SOURCE_DIR}/protocols/color-management-v1.xml ${WAYLAND_OUTPUT_DIR}/color-management-v1-protocol.h
+        DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/protocols/color-management-v1.xml)
+    add_custom_command(OUTPUT ${WAYLAND_OUTPUT_DIR}/color-management-v1-protocol.c
+        COMMAND ${WaylandScanner} private-code ${CMAKE_CURRENT_SOURCE_DIR}/protocols/color-management-v1.xml ${WAYLAND_OUTPUT_DIR}/color-management-v1-protocol.c
+        DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/protocols/color-management-v1.xml)
+
     include_directories(${WAYLAND_SUPPORT_INCLUDE_DIRS})
     include_directories(${WAYLAND_OUTPUT_DIR})
     set(WAYLAND_LIBRARIES
@@ -211,6 +218,12 @@ if(WAYLAND_SUPPORT_FOUND)
         wayland-egl
         ${OPENGL_egl_LIBRARY})
     set(WAYLAND_SOURCES
+        src/WallpaperEngine/Render/Drivers/WaylandColorManagement.h
+        src/WallpaperEngine/Render/Drivers/WaylandColorManagement.cpp
+        src/WallpaperEngine/Render/Drivers/WaylandEGLConfig.h
+        src/WallpaperEngine/Render/Drivers/WaylandEGLConfig.cpp
+        ${WAYLAND_OUTPUT_DIR}/color-management-v1-protocol.h
+        ${WAYLAND_OUTPUT_DIR}/color-management-v1-protocol.c
         src/WallpaperEngine/Render/Drivers/WaylandOpenGLDriver.h
         src/WallpaperEngine/Render/Drivers/WaylandOpenGLDriver.cpp
         src/WallpaperEngine/Render/Drivers/Detectors/WaylandFullScreenDetector.cpp

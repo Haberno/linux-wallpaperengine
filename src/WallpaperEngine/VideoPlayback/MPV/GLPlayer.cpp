@@ -65,6 +65,42 @@ void GLPlayer::decrementUsageCount () {
     }
 }
 
+void GLPlayer::enableHDR () {
+    if (this->m_handle) sLog.exception ("Cannot enable HDR after video playback has started");
+    this->m_hdrEnabled = true;
+}
+
+void GLPlayer::setHDRPresentation (const bool enabled) const {
+    const std::lock_guard lock (this->m_playbackMutex);
+    this->m_hdrPresentation = enabled;
+}
+
+bool GLPlayer::hasHDRSource () const {
+    const std::lock_guard lock (this->m_playbackMutex);
+    return this->m_hdrEnabled && this->m_hdrSource && !this->m_hdrDisabled;
+}
+
+bool GLPlayer::isHDRFrame () const {
+    const std::lock_guard lock (this->m_playbackMutex);
+    return this->m_hdrFrame;
+}
+
+void GLPlayer::queueHDRConfiguration (const bool enabled) const {
+    this->m_hdrConfigurationTarget = enabled;
+    this->m_hdrConfigurationFailed = false;
+    this->m_hdrConfigurationBegin = this->m_nextCommandId + 1;
+    // vo_gpu emits linear RGB relative to its 203-nit reference white. A 10000-nit
+    // target avoids tone mapping PQ; the owner converts this to Windows-scRGB/80.
+    this->queueCommand ({ "set", "target-trc", enabled ? "linear" : "auto" });
+    this->queueCommand ({ "set", "target-prim", enabled ? "bt.709" : "auto" });
+    this->queueCommand ({ "set", "target-peak", enabled ? "10000" : "auto" });
+    this->queueCommand ({ "set", "tone-mapping", enabled ? "clip" : "auto" });
+    this->queueCommand ({ "set", "gamut-mapping-mode", enabled ? "clip" : "auto" });
+    this->m_hdrConfigurationEnd = this->queueCommand (
+        { "set", "fbo-format", enabled ? "rgba16f" : "rgba8" }
+    );
+}
+
 void GLPlayer::setNonBlocking () {
     if (this->m_handle) {
 	sLog.exception ("Cannot set nonblocking mode after playback has started");
@@ -318,8 +354,24 @@ void GLPlayer::completeCommand (const int error) const {
 	}
 	this->m_pendingSeek.reset ();
     }
+    const uint64_t id = command.id;
     this->m_commands.pop_front ();
     this->m_commandInFlight = false;
+    if (this->m_hdrConfigurationEnd != 0 && id >= this->m_hdrConfigurationBegin
+        && id <= this->m_hdrConfigurationEnd) {
+        this->m_hdrConfigurationFailed |= error < 0;
+        if (id == this->m_hdrConfigurationEnd) {
+            this->m_hdrConfigurationEnd = 0;
+            if (this->m_hdrConfigurationFailed) {
+                this->m_hdrDisabled = true;
+                if (this->m_hdrConfigurationTarget) this->queueHDRConfiguration (false);
+                else this->m_hdrConfigurationBroken = true;
+            } else {
+                this->m_hdrConfigured = this->m_hdrConfigurationTarget;
+                this->m_dimensionsChanged = true;
+            }
+        }
+    }
 }
 
 void GLPlayer::processEvent (const mpv_event& event) const {
@@ -332,6 +384,13 @@ void GLPlayer::processEvent (const mpv_event& event) const {
 	this->completeCommand (event.error);
     } else if (event.event_id == MPV_EVENT_PROPERTY_CHANGE) {
 	const auto* property = static_cast<mpv_event_property*> (event.data);
+        if (this->m_hdrEnabled && std::string_view (property->name) == "video-params/gamma") {
+            const char* gamma = property->format == MPV_FORMAT_STRING && property->data != nullptr
+                ? *static_cast<char**> (property->data) : nullptr;
+            this->m_hdrSource = gamma != nullptr
+                && (std::string_view (gamma) == "pq" || std::string_view (gamma) == "hlg");
+            return;
+        }
 	if (property->format == MPV_FORMAT_DOUBLE && property->data != nullptr) {
 	    const double value = *static_cast<double*> (property->data);
 	    if (std::string_view (property->name) == "time-pos") {
@@ -359,25 +418,49 @@ void GLPlayer::render () const {
 	return;
     }
 
-    int64_t width, height;
+    int64_t width;
+    int64_t height;
     bool dimensionsChanged;
+    bool hdr;
+    bool configuring;
     {
 	const std::lock_guard lock (this->m_playbackMutex);
+        const bool desiredHDR = this->m_hdrEnabled && this->m_hdrSource
+            && this->m_hdrPresentation && !this->m_hdrDisabled;
+        if (this->m_hdrConfigurationEnd == 0 && !this->m_hdrConfigurationBroken
+            && desiredHDR != this->m_hdrConfigured) this->queueHDRConfiguration (desiredHDR);
+        configuring = this->m_hdrConfigurationEnd != 0 || this->m_hdrConfigurationBroken;
+        hdr = this->m_hdrConfigured;
 	width = this->m_width;
 	height = this->m_height;
 	dimensionsChanged = this->m_dimensionsChanged;
 	this->m_dimensionsChanged = false;
     }
+    const GLint format = hdr ? GL_RGBA16F : GL_RGBA8;
+    if (configuring) {
+        // A partially applied set of target options has no publishable encoding.
+        // Service libmpv without drawing it; black is valid in either destination.
+        int skip = 1;
+        int block = 0;
+        mpv_render_param pending[] = { { MPV_RENDER_PARAM_SKIP_RENDERING, &skip },
+            { MPV_RENDER_PARAM_BLOCK_FOR_TARGET_TIME, &block }, { MPV_RENDER_PARAM_INVALID, nullptr } };
+        mpv_render_context_render (this->m_renderContext, pending);
+        this->clearOutputFrame ();
+        const std::lock_guard lock (this->m_playbackMutex);
+        this->m_hdrFrame = false;
+        this->m_dimensionsChanged |= dimensionsChanged;
+        return;
+    }
     if (dimensionsChanged) {
 	glBindTexture (GL_TEXTURE_2D, this->m_outputTexture);
-	glTexImage2D (GL_TEXTURE_2D, 0, GL_RGBA8, width, height, 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
+	glTexImage2D (GL_TEXTURE_2D, 0, format, width, height, 0, GL_RGBA, hdr ? GL_FLOAT : GL_UNSIGNED_BYTE, nullptr);
     }
 
     // render the next
     glViewport (0, 0, width, height);
 
     mpv_opengl_fbo fbo { static_cast<int> (this->m_fbo), static_cast<int> (width), static_cast<int> (height),
-			 GL_RGBA8 };
+			 format };
 
     // no need to flip as it'll be handled by the wallpaper rendering code
     int flip_y = 0;
@@ -388,7 +471,32 @@ void GLPlayer::render () const {
 				  { MPV_RENDER_PARAM_BLOCK_FOR_TARGET_TIME, &block },
 				  { MPV_RENDER_PARAM_INVALID, nullptr } };
 
-    mpv_render_context_render (this->m_renderContext, params);
+    const int error = mpv_render_context_render (this->m_renderContext, params);
+    if (error < 0 && this->m_hdrEnabled) {
+        this->clearOutputFrame ();
+        const std::lock_guard lock (this->m_playbackMutex);
+        this->m_hdrFrame = false;
+        if (hdr) {
+            this->m_hdrDisabled = true;
+            this->queueHDRConfiguration (false);
+        }
+        return;
+    }
+    const std::lock_guard lock (this->m_playbackMutex);
+    this->m_hdrFrame = hdr;
+}
+
+void GLPlayer::clearOutputFrame () const {
+    glBindFramebuffer (GL_FRAMEBUFFER, this->m_fbo);
+    GLboolean mask[4];
+    glGetBooleanv (GL_COLOR_WRITEMASK, mask);
+    const bool scissor = glIsEnabled (GL_SCISSOR_TEST);
+    glDisable (GL_SCISSOR_TEST);
+    glColorMask (GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
+    constexpr GLfloat black[] = { 0.0f, 0.0f, 0.0f, 1.0f };
+    glClearBufferfv (GL_COLOR, 0, black);
+    glColorMask (mask[0], mask[1], mask[2], mask[3]);
+    if (scissor) glEnable (GL_SCISSOR_TEST);
 }
 
 int GLPlayer::getWidth () const {
@@ -471,6 +579,8 @@ void GLPlayer::init () {
     mpv_observe_property (this->m_handle, 0, "eof-reached", MPV_FORMAT_FLAG);
     mpv_observe_property (this->m_handle, 0, "dwidth", MPV_FORMAT_INT64);
     mpv_observe_property (this->m_handle, 0, "dheight", MPV_FORMAT_INT64);
+    if (this->m_hdrEnabled)
+        mpv_observe_property (this->m_handle, 0, "video-params/gamma", MPV_FORMAT_STRING);
 
     // initialize gl context for mpv
     mpv_opengl_init_params gl_init_params { get_proc_address, this };
@@ -552,6 +662,11 @@ void GLPlayer::stop () {
 	this->m_eventThread.join ();
     }
     this->m_loaded = false;
+    this->m_hdrSource = false;
+    this->m_hdrConfigured = false;
+    this->m_hdrFrame = false;
+    this->m_hdrConfigurationEnd = 0;
+    this->m_hdrConfigurationBroken = false;
     this->m_audioFadeNextTick.reset ();
     this->m_commands.clear ();
     this->m_commandInFlight = false;

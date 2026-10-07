@@ -29,5 +29,9 @@ public:
      * Swaps buffers to present data on the viewport
      */
     virtual void swapOutput () = 0;
+
+    virtual bool supportsScRGB () const { return false; }
+    virtual void setScRGBPresentation (bool) { }
+    virtual float getHDRHeadroom () const { return 1.0f; }
 };
 } // namespace WallpaperEngine::Render::Drivers::Output

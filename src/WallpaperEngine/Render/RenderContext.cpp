@@ -30,6 +30,35 @@ void RenderContext::render (Drivers::Output::OutputViewport* viewport) {
 
     // render the background
     if (const auto ref = this->m_wallpapers.find (viewport->name); ref != this->m_wallpapers.end ()) {
+        // Shared span owners render their source once per frame. Require all
+        // primary consumers to support HDR so decoder mode is independent of
+        // which output the driver renders first. Secondary captures stay SDR.
+        const auto canPresentHDR = [this] (const std::shared_ptr<CWallpaper>& wallpaper) {
+            if (!wallpaper->hasHDRSource ()) return false;
+            for (const auto& [name, output] : this->getOutput ().getViewports ()) {
+                const auto current = this->m_wallpapers.find (name);
+                const auto transition = this->m_transitions.find (name);
+                const bool outgoing = transition != this->m_transitions.end ()
+                    && transition->second.from == wallpaper
+                    && (transition->second.startTime < 0.0f
+                        || this->m_driver.getRenderTime () - transition->second.startTime < TRANSITION_DURATION);
+                if (((current != this->m_wallpapers.end () && current->second == wallpaper) || outgoing)
+                    && !output->supportsScRGB ()) return false;
+            }
+            return true;
+        };
+        const auto outgoing = this->m_transitions.find (viewport->name);
+        const bool incomingHDR = canPresentHDR (ref->second);
+        const bool outgoingActive = outgoing != this->m_transitions.end ()
+            && (outgoing->second.startTime < 0.0f
+                || this->m_driver.getRenderTime () - outgoing->second.startTime < TRANSITION_DURATION);
+        const bool outgoingHDR = outgoingActive && canPresentHDR (outgoing->second.from);
+        const bool scRGB = viewport->supportsScRGB () && (incomingHDR || outgoingHDR);
+        // Both sides of a transition must encode the same physical destination.
+        const float hdrHeadroom = viewport->getHDRHeadroom ();
+        viewport->setScRGBPresentation (scRGB);
+        ref->second->prepareHDRPresentation (incomingHDR);
+        if (outgoing != this->m_transitions.end ()) outgoing->second.from->prepareHDRPresentation (outgoingHDR);
 	// transition: draw the outgoing wallpaper first, then reveal the new one on top
 	if (const auto transition = this->m_transitions.find (viewport->name);
 	    transition != this->m_transitions.end ()) {
@@ -48,9 +77,9 @@ void RenderContext::render (Drivers::Output::OutputViewport* viewport) {
 	    } else {
 		transition->second.from->setFpsOverlay (-1.0f);
 		transition->second.from->setLoadOverlay ({ -1.0f }, false);
-		transition->second.from->render (
+		transition->second.from->renderWithColorSpace (
 		    viewport->viewport, this->getOutput ().renderVFlip (), viewport->globalPosition,
-		    viewport->logicalSize
+		    viewport->logicalSize, scRGB, hdrHeadroom
 		);
 		ref->second->setTransition (transition->second.mode, progress, transition->second.center);
 	    }
@@ -73,8 +102,8 @@ void RenderContext::render (Drivers::Output::OutputViewport* viewport) {
 												: LoadTimes { -1.0f },
 	    settings.showLoadDetails
 	);
-	ref->second->render (
-	    viewport->viewport, this->getOutput ().renderVFlip (), viewport->globalPosition, viewport->logicalSize
+	ref->second->renderWithColorSpace (
+	    viewport->viewport, this->getOutput ().renderVFlip (), viewport->globalPosition, viewport->logicalSize, scRGB, hdrHeadroom
 	);
 	ref->second->setTransition (TransitionMode_None, 1.0f);
     }
