@@ -4605,3 +4605,302 @@ TEST_CASE ("control point direction retains native reciprocal estimate before sa
     CHECK (particle.position.z == -2);
 }
 #endif
+
+TEST_CASE ("two point remap admits both relative vector output modes", "[particle][remap][remap-relative-output]") {
+    for (const auto output : { "deltatocontrolpoint", "directiontocontrolpoint" }) {
+        for (const bool initializer : { true, false }) {
+            WallpaperEngine::Data::Model::Project project {};
+            auto data = WallpaperEngine::Data::JSON::JSON::parse (R"({"id":456,"particle":{}})");
+            auto node = WallpaperEngine::Data::JSON::JSON::parse (R"({"input":"positionbetweentwocontrolpoints","operation":"subtract","outputcomponent":"y","transformfunction":"triangle"})");
+            node["name"] = initializer ? "remapinitialvalue" : "remapvalue";
+            node["output"] = output;
+            data["particle"][initializer ? "initializer" : "operator"] = { node };
+            const auto object = WallpaperEngine::Data::Parsers::ObjectParser::parse (data, project);
+            CHECK ((initializer ? object->as<Particle> ()->initializers.size () : object->as<Particle> ()->operators.size ()) == 1);
+        }
+    }
+}
+
+TEST_CASE ("relative vector outputs match native reconstruction selectors arithmetic and blends", "[particle][remap][remap-relative-output]") {
+    using WallpaperEngine::Render::Objects::applyParticleControlPointRemap;
+    using WallpaperEngine::Render::Objects::ControlPointData;
+    const struct { int kind; int option; int component; int operation; float weight; glm::vec3 position; glm::vec3 mapped; glm::vec3 native; } samples[] = {
+        { 0, 17, 0, 0, 1, { 2, -3, 11 }, { 2, -3, 4 }, { 3, -4, 7 } },
+        { 0, 17, 0, 1, 1, { 2, -3, 11 }, { 2, -3, 4 }, { -1, -19, 11 } },
+        { 0, 17, 0, 2, 1, { 2, -3, 11 }, { 2, -3, 4 }, { 0, 0, 7 } },
+        { 0, 17, 0, 3, 1, { 2, -3, 11 }, { 2, -3, 4 }, { 4, -6, 15 } },
+        { 0, 17, 1, 0, 1, { 2, -3, 11 }, { 2, -3, 4 }, { 3, -3, 11 } },
+        { 0, 17, 1, 1, 1, { 2, -3, 11 }, { 2, -3, 4 }, { -1, -3, 11 } },
+        { 0, 17, 1, 2, 1, { 2, -3, 11 }, { 2, -3, 4 }, { 0, -3, 11 } },
+        { 0, 17, 1, 3, 1, { 2, -3, 11 }, { 2, -3, 4 }, { 4, -3, 11 } },
+        { 0, 17, 2, 0, 1, { 2, -3, 11 }, { 2, -3, 4 }, { 2, -4, 11 } },
+        { 0, 17, 2, 1, 1, { 2, -3, 11 }, { 2, -3, 4 }, { 2, -19, 11 } },
+        { 0, 17, 2, 2, 1, { 2, -3, 11 }, { 2, -3, 4 }, { 2, 0, 11 } },
+        { 0, 17, 2, 3, 1, { 2, -3, 11 }, { 2, -3, 4 }, { 2, -6, 11 } },
+        { 0, 17, 3, 0, 1, { 2, -3, 11 }, { 2, -3, 4 }, { 2, -3, 7 } },
+        { 0, 17, 3, 1, 1, { 2, -3, 11 }, { 2, -3, 4 }, { 2, -3, 11 } },
+        { 0, 17, 3, 2, 1, { 2, -3, 11 }, { 2, -3, 4 }, { 2, -3, 7 } },
+        { 0, 17, 3, 3, 1, { 2, -3, 11 }, { 2, -3, 4 }, { 2, -3, 15 } },
+        { 0, 17, 4, 0, 1, { 2, -3, 11 }, { 2, -3, 4 }, { 2, -3, 11 } },
+        { 0, 17, 4, 1, 1, { 2, -3, 11 }, { 2, -3, 4 }, { 2, -3, 11 } },
+        { 0, 17, 4, 2, 1, { 2, -3, 11 }, { 2, -3, 4 }, { 2, -3, 11 } },
+        { 0, 17, 4, 3, 1, { 2, -3, 11 }, { 2, -3, 4 }, { 2, -3, 11 } },
+        { 0, 18, 0, 0, 1, { 2, -3, 11 }, { 2, -3, 4 }, { 3.143046618f, -4.214570045f, 7.286093235f } },
+        { 0, 18, 0, 1, 1, { 2, -3, 11 }, { 2, -3, 4 }, { 2.76393199f, -11.47213554f, 11 } },
+        { 0, 18, 0, 2, 1, { 2, -3, 11 }, { 2, -3, 4 }, { 2.868566036f, -3.884827375f, 7.720870972f } },
+        { 0, 18, 0, 3, 1, { 2, -3, 11 }, { 2, -3, 4 }, { 6.465988636f, -9.303696632f, 15.18853951f } },
+        { 0, 18, 1, 0, 1, { 2, -3, 11 }, { 2, -3, 4 }, { 0.3576164246f, -5.143046379f, 11 } },
+        { 0, 18, 1, 1, 1, { 2, -3, 11 }, { 2, -3, 4 }, { 0.8397483826f, -4.226499081f, 11 } },
+        { 0, 18, 1, 2, 1, { 2, -3, 11 }, { 2, -3, 4 }, { 0.2211050987f, -5.52957058f, 11 } },
+        { 0, 18, 1, 3, 1, { 2, -3, 11 }, { 2, -3, 4 }, { 9.341215134f, -4.519305229f, 11 } },
+        { 0, 18, 2, 0, 1, { 2, -3, 11 }, { 2, -3, 4 }, { 4.019419193f, -2.097096443f, 11 } },
+        { 0, 18, 2, 1, 1, { 2, -3, 11 }, { 2, -3, 4 }, { 3.787321806f, -11.85071278f, 11 } },
+        { 0, 18, 2, 2, 1, { 2, -3, 11 }, { 2, -3, 4 }, { 4.220187187f, -2.061184883f, 11 } },
+        { 0, 18, 2, 3, 1, { 2, -3, 11 }, { 2, -3, 4 }, { 3.684412956f, -11.82381821f, 11 } },
+        { 0, 18, 3, 0, 1, { 2, -3, 11 }, { 2, -3, 4 }, { 4.272393227f, -6.029857635f, 6.149287224f } },
+        { 0, 18, 3, 1, 1, { 2, -3, 11 }, { 2, -3, 4 }, { 2, -3, 11 } },
+        { 0, 18, 3, 2, 1, { 2, -3, 11 }, { 2, -3, 4 }, { 4.272393227f, -6.029857635f, 6.149287224f } },
+        { 0, 18, 3, 3, 1, { 2, -3, 11 }, { 2, -3, 4 }, { 4.272393227f, -6.029857635f, 15.85071278f } },
+        { 0, 18, 4, 0, 1, { 2, -3, 11 }, { 2, -3, 4 }, { 2, -3, 11 } },
+        { 0, 18, 4, 1, 1, { 2, -3, 11 }, { 2, -3, 4 }, { 2, -3, 11 } },
+        { 0, 18, 4, 2, 1, { 2, -3, 11 }, { 2, -3, 4 }, { 2, -3, 11 } },
+        { 0, 18, 4, 3, 1, { 2, -3, 11 }, { 2, -3, 4 }, { 2, -3, 11 } },
+        { 1, 17, 0, 0, 1, { 2, -3, 11 }, { 2, -3, 4 }, { 3, -4, 7 } },
+        { 1, 17, 0, 1, 1, { 2, -3, 11 }, { 2, -3, 4 }, { -1, -19, 11 } },
+        { 1, 17, 0, 2, 1, { 2, -3, 11 }, { 2, -3, 4 }, { 0, 0, 7 } },
+        { 1, 17, 0, 3, 1, { 2, -3, 11 }, { 2, -3, 4 }, { 4, -6, 15 } },
+        { 1, 17, 1, 0, 1, { 2, -3, 11 }, { 2, -3, 4 }, { 3, -3, 11 } },
+        { 1, 17, 1, 1, 1, { 2, -3, 11 }, { 2, -3, 4 }, { -1, -3, 11 } },
+        { 1, 17, 1, 2, 1, { 2, -3, 11 }, { 2, -3, 4 }, { 0, -3, 11 } },
+        { 1, 17, 1, 3, 1, { 2, -3, 11 }, { 2, -3, 4 }, { 4, -3, 11 } },
+        { 1, 17, 2, 0, 1, { 2, -3, 11 }, { 2, -3, 4 }, { 2, -4, 11 } },
+        { 1, 17, 2, 1, 1, { 2, -3, 11 }, { 2, -3, 4 }, { 2, -19, 11 } },
+        { 1, 17, 2, 2, 1, { 2, -3, 11 }, { 2, -3, 4 }, { 2, 0, 11 } },
+        { 1, 17, 2, 3, 1, { 2, -3, 11 }, { 2, -3, 4 }, { 2, -6, 11 } },
+        { 1, 17, 3, 0, 1, { 2, -3, 11 }, { 2, -3, 4 }, { 2, -3, 7 } },
+        { 1, 17, 3, 1, 1, { 2, -3, 11 }, { 2, -3, 4 }, { 2, -3, 11 } },
+        { 1, 17, 3, 2, 1, { 2, -3, 11 }, { 2, -3, 4 }, { 2, -3, 7 } },
+        { 1, 17, 3, 3, 1, { 2, -3, 11 }, { 2, -3, 4 }, { 2, -3, 15 } },
+        { 1, 17, 4, 0, 1, { 2, -3, 11 }, { 2, -3, 4 }, { 2, -3, 11 } },
+        { 1, 17, 4, 1, 1, { 2, -3, 11 }, { 2, -3, 4 }, { 2, -3, 11 } },
+        { 1, 17, 4, 2, 1, { 2, -3, 11 }, { 2, -3, 4 }, { 2, -3, 11 } },
+        { 1, 17, 4, 3, 1, { 2, -3, 11 }, { 2, -3, 4 }, { 2, -3, 11 } },
+        { 1, 18, 0, 0, 1, { 2, -3, 11 }, { 2, -3, 4 }, { 3.143175364f, -4.214763165f, 7.286350727f } },
+        { 1, 18, 0, 1, 1, { 2, -3, 11 }, { 2, -3, 4 }, { 2.763959169f, -11.47208214f, 11 } },
+        { 1, 18, 0, 2, 1, { 2, -3, 11 }, { 2, -3, 4 }, { 2.868617773f, -3.884897232f, 7.720881462f } },
+        { 1, 18, 0, 3, 1, { 2, -3, 11 }, { 2, -3, 4 }, { 6.4660182f, -9.303729057f, 15.1884594f } },
+        { 1, 18, 1, 0, 1, { 2, -3, 11 }, { 2, -3, 4 }, { 0.3580908775f, -5.143406391f, 11 } },
+        { 1, 18, 1, 1, 1, { 2, -3, 11 }, { 2, -3, 4 }, { 0.8398728371f, -4.22658205f, 11 } },
+        { 1, 18, 1, 2, 1, { 2, -3, 11 }, { 2, -3, 4 }, { 0.2215471268f, -5.529810429f, 11 } },
+        { 1, 18, 1, 3, 1, { 2, -3, 11 }, { 2, -3, 4 }, { 9.340593338f, -4.519985199f, 11 } },
+        { 1, 18, 2, 0, 1, { 2, -3, 11 }, { 2, -3, 4 }, { 4.0194664f, -2.096884251f, 11 } },
+        { 1, 18, 2, 1, 1, { 2, -3, 11 }, { 2, -3, 4 }, { 3.787331581f, -11.85067368f, 11 } },
+        { 1, 18, 2, 2, 1, { 2, -3, 11 }, { 2, -3, 4 }, { 4.220296383f, -2.06152153f, 11 } },
+        { 1, 18, 2, 3, 1, { 2, -3, 11 }, { 2, -3, 4 }, { 3.684811115f, -11.82296181f, 11 } },
+        { 1, 18, 3, 0, 1, { 2, -3, 11 }, { 2, -3, 4 }, { 4.272471905f, -6.02996254f, 6.149369717f } },
+        { 1, 18, 3, 1, 1, { 2, -3, 11 }, { 2, -3, 4 }, { 2.000549316f, -3.000732422f, 11 } },
+        { 1, 18, 3, 2, 1, { 2, -3, 11 }, { 2, -3, 4 }, { 4.272471905f, -6.02996254f, 6.149369717f } },
+        { 1, 18, 3, 3, 1, { 2, -3, 11 }, { 2, -3, 4 }, { 4.272471905f, -6.02996254f, 15.85062981f } },
+        { 1, 18, 4, 0, 1, { 2, -3, 11 }, { 2, -3, 4 }, { 2.000549316f, -3.000732422f, 11 } },
+        { 1, 18, 4, 1, 1, { 2, -3, 11 }, { 2, -3, 4 }, { 2.000549316f, -3.000732422f, 11 } },
+        { 1, 18, 4, 2, 1, { 2, -3, 11 }, { 2, -3, 4 }, { 2.000549316f, -3.000732422f, 11 } },
+        { 1, 18, 4, 3, 1, { 2, -3, 11 }, { 2, -3, 4 }, { 2.000549316f, -3.000732422f, 11 } },
+        { 2, 17, 0, 0, 0, { 2, -3, 11 }, { 2, -3, 4 }, { 2, -3, 11 } },
+        { 2, 17, 0, 0, 0.5f, { 2, -3, 11 }, { 2, -3, 4 }, { 2.5f, -3.5f, 9 } },
+        { 2, 17, 0, 0, 1, { 2, -3, 11 }, { 2, -3, 4 }, { 3, -4, 7 } },
+        { 2, 17, 0, 1, 0, { 2, -3, 11 }, { 2, -3, 4 }, { 2, -3, 11 } },
+        { 2, 17, 0, 1, 0.5f, { 2, -3, 11 }, { 2, -3, 4 }, { 0.5f, -11, 11 } },
+        { 2, 17, 0, 1, 1, { 2, -3, 11 }, { 2, -3, 4 }, { -1, -19, 11 } },
+        { 2, 17, 0, 2, 0, { 2, -3, 11 }, { 2, -3, 4 }, { 2, -3, 11 } },
+        { 2, 17, 0, 2, 0.5f, { 2, -3, 11 }, { 2, -3, 4 }, { 1, -1.5f, 9 } },
+        { 2, 17, 0, 2, 1, { 2, -3, 11 }, { 2, -3, 4 }, { 0, 0, 7 } },
+        { 2, 17, 0, 3, 0, { 2, -3, 11 }, { 2, -3, 4 }, { 2, -3, 11 } },
+        { 2, 17, 0, 3, 0.5f, { 2, -3, 11 }, { 2, -3, 4 }, { 3, -4.5f, 13 } },
+        { 2, 17, 0, 3, 1, { 2, -3, 11 }, { 2, -3, 4 }, { 4, -6, 15 } },
+        { 2, 17, 1, 0, 1, { 2, -3, 11 }, { 2, -3, 4 }, { 3, -3, 11 } },
+        { 2, 17, 1, 1, 1, { 2, -3, 11 }, { 2, -3, 4 }, { -1, -3, 11 } },
+        { 2, 17, 1, 2, 1, { 2, -3, 11 }, { 2, -3, 4 }, { 0, -3, 11 } },
+        { 2, 17, 1, 3, 1, { 2, -3, 11 }, { 2, -3, 4 }, { 4, -3, 11 } },
+        { 2, 17, 2, 0, 0, { 2, -3, 11 }, { 2, -3, 4 }, { 2, -3, 11 } },
+        { 2, 17, 2, 0, 0.5f, { 2, -3, 11 }, { 2, -3, 4 }, { 2, -3.5f, 11 } },
+        { 2, 17, 2, 0, 1, { 2, -3, 11 }, { 2, -3, 4 }, { 2, -4, 11 } },
+        { 2, 17, 2, 1, 0, { 2, -3, 11 }, { 2, -3, 4 }, { 2, -3, 11 } },
+        { 2, 17, 2, 1, 0.5f, { 2, -3, 11 }, { 2, -3, 4 }, { 2, -11, 11 } },
+        { 2, 17, 2, 1, 1, { 2, -3, 11 }, { 2, -3, 4 }, { 2, -19, 11 } },
+        { 2, 17, 2, 2, 0, { 2, -3, 11 }, { 2, -3, 4 }, { 2, -3, 11 } },
+        { 2, 17, 2, 2, 0.5f, { 2, -3, 11 }, { 2, -3, 4 }, { 2, -1.5f, 11 } },
+        { 2, 17, 2, 2, 1, { 2, -3, 11 }, { 2, -3, 4 }, { 2, 0, 11 } },
+        { 2, 17, 2, 3, 0, { 2, -3, 11 }, { 2, -3, 4 }, { 2, -3, 11 } },
+        { 2, 17, 2, 3, 0.5f, { 2, -3, 11 }, { 2, -3, 4 }, { 2, -4.5f, 11 } },
+        { 2, 17, 2, 3, 1, { 2, -3, 11 }, { 2, -3, 4 }, { 2, -6, 11 } },
+        { 2, 17, 3, 0, 1, { 2, -3, 11 }, { 2, -3, 4 }, { 2, -3, 7 } },
+        { 2, 17, 3, 1, 1, { 2, -3, 11 }, { 2, -3, 4 }, { 2, -3, 11 } },
+        { 2, 17, 3, 2, 1, { 2, -3, 11 }, { 2, -3, 4 }, { 2, -3, 7 } },
+        { 2, 17, 3, 3, 1, { 2, -3, 11 }, { 2, -3, 4 }, { 2, -3, 15 } },
+        { 2, 17, 4, 0, 1, { 2, -3, 11 }, { 2, -3, 4 }, { 2, -3, 11 } },
+        { 2, 17, 4, 1, 1, { 2, -3, 11 }, { 2, -3, 4 }, { 2, -3, 11 } },
+        { 2, 17, 4, 2, 1, { 2, -3, 11 }, { 2, -3, 4 }, { 2, -3, 11 } },
+        { 2, 17, 4, 3, 1, { 2, -3, 11 }, { 2, -3, 4 }, { 2, -3, 11 } },
+        { 2, 18, 0, 0, 0, { 2, -3, 11 }, { 2, -3, 4 }, { 2.000549316f, -3.000732422f, 11 } },
+        { 2, 18, 0, 0, 0.5f, { 2, -3, 11 }, { 2, -3, 4 }, { 2.868617773f, -3.884897232f, 7.720881462f } },
+        { 2, 18, 0, 0, 1, { 2, -3, 11 }, { 2, -3, 4 }, { 3.143175364f, -4.214763165f, 7.286350727f } },
+        { 2, 18, 0, 1, 0, { 2, -3, 11 }, { 2, -3, 4 }, { 2.000549316f, -3.000732422f, 11 } },
+        { 2, 18, 0, 1, 0.5f, { 2, -3, 11 }, { 2, -3, 4 }, { 1.263684511f, -10.3211689f, 11 } },
+        { 2, 18, 0, 1, 1, { 2, -3, 11 }, { 2, -3, 4 }, { 2.763959169f, -11.47208214f, 11 } },
+        { 2, 18, 0, 2, 0, { 2, -3, 11 }, { 2, -3, 4 }, { 2.000549316f, -3.000732422f, 11 } },
+        { 2, 18, 0, 2, 0.5f, { 2, -3, 11 }, { 2, -3, 4 }, { 2.67607379f, -3.659348011f, 8.094992638f } },
+        { 2, 18, 0, 2, 1, { 2, -3, 11 }, { 2, -3, 4 }, { 2.868617773f, -3.884897232f, 7.720881462f } },
+        { 2, 18, 0, 3, 0, { 2, -3, 11 }, { 2, -3, 4 }, { 2.000549316f, -3.000732422f, 11 } },
+        { 2, 18, 0, 3, 0.5f, { 2, -3, 11 }, { 2, -3, 4 }, { 5.927532673f, -8.623128891f, 15.63702679f } },
+        { 2, 18, 0, 3, 1, { 2, -3, 11 }, { 2, -3, 4 }, { 6.4660182f, -9.303729057f, 15.1884594f } },
+        { 2, 18, 1, 0, 1, { 2, -3, 11 }, { 2, -3, 4 }, { 0.3580908775f, -5.143406391f, 11 } },
+        { 2, 18, 1, 1, 1, { 2, -3, 11 }, { 2, -3, 4 }, { 0.8398728371f, -4.22658205f, 11 } },
+        { 2, 18, 1, 2, 1, { 2, -3, 11 }, { 2, -3, 4 }, { 0.2215471268f, -5.529810429f, 11 } },
+        { 2, 18, 1, 3, 1, { 2, -3, 11 }, { 2, -3, 4 }, { 9.340593338f, -4.519985199f, 11 } },
+        { 2, 18, 2, 0, 0, { 2, -3, 11 }, { 2, -3, 4 }, { 2.000549316f, -3.000732422f, 11 } },
+        { 2, 18, 2, 0, 0.5f, { 2, -3, 11 }, { 2, -3, 4 }, { 3.494782448f, -2.233133316f, 11 } },
+        { 2, 18, 2, 0, 1, { 2, -3, 11 }, { 2, -3, 4 }, { 4.0194664f, -2.096884251f, 11 } },
+        { 2, 18, 2, 1, 0, { 2, -3, 11 }, { 2, -3, 4 }, { 2.000549316f, -3.000732422f, 11 } },
+        { 2, 18, 2, 1, 0.5f, { 2, -3, 11 }, { 2, -3, 4 }, { 2.000549316f, -10.99926758f, 11 } },
+        { 2, 18, 2, 1, 1, { 2, -3, 11 }, { 2, -3, 4 }, { 3.787331581f, -11.85067368f, 11 } },
+        { 2, 18, 2, 2, 0, { 2, -3, 11 }, { 2, -3, 4 }, { 2.000549316f, -3.000732422f, 11 } },
+        { 2, 18, 2, 2, 0.5f, { 2, -3, 11 }, { 2, -3, 4 }, { 3.73808527f, -2.162370682f, 11 } },
+        { 2, 18, 2, 2, 1, { 2, -3, 11 }, { 2, -3, 4 }, { 4.220296383f, -2.06152153f, 11 } },
+        { 2, 18, 2, 3, 0, { 2, -3, 11 }, { 2, -3, 4 }, { 2.000549316f, -3.000732422f, 11 } },
+        { 2, 18, 2, 3, 0.5f, { 2, -3, 11 }, { 2, -3, 4 }, { 1.746445417f, -10.79655838f, 11 } },
+        { 2, 18, 2, 3, 1, { 2, -3, 11 }, { 2, -3, 4 }, { 3.684811115f, -11.82296181f, 11 } },
+        { 2, 18, 3, 0, 1, { 2, -3, 11 }, { 2, -3, 4 }, { 4.272471905f, -6.02996254f, 6.149369717f } },
+        { 2, 18, 3, 1, 1, { 2, -3, 11 }, { 2, -3, 4 }, { 2.000549316f, -3.000732422f, 11 } },
+        { 2, 18, 3, 2, 1, { 2, -3, 11 }, { 2, -3, 4 }, { 4.272471905f, -6.02996254f, 6.149369717f } },
+        { 2, 18, 3, 3, 1, { 2, -3, 11 }, { 2, -3, 4 }, { 4.272471905f, -6.02996254f, 15.85062981f } },
+        { 2, 18, 4, 0, 1, { 2, -3, 11 }, { 2, -3, 4 }, { 2.000549316f, -3.000732422f, 11 } },
+        { 2, 18, 4, 1, 1, { 2, -3, 11 }, { 2, -3, 4 }, { 2.000549316f, -3.000732422f, 11 } },
+        { 2, 18, 4, 2, 1, { 2, -3, 11 }, { 2, -3, 4 }, { 2.000549316f, -3.000732422f, 11 } },
+        { 2, 18, 4, 3, 1, { 2, -3, 11 }, { 2, -3, 4 }, { 2.000549316f, -3.000732422f, 11 } },
+        { 0, 17, 0, 0, 1, { 5, -7, 11 }, { 2, -3, 4 }, { 3, -4, 7 } },
+        { 0, 17, 0, 1, 1, { 5, -7, 11 }, { 2, -3, 4 }, { 5, -7, 11 } },
+        { 0, 17, 0, 2, 1, { 5, -7, 11 }, { 2, -3, 4 }, { 3, -4, 7 } },
+        { 0, 17, 0, 3, 1, { 5, -7, 11 }, { 2, -3, 4 }, { 7, -10, 15 } },
+        { 0, 18, 0, 0, 1, { 5, -7, 11 }, { 2, -3, 4 }, { 5, -7, 11 } },
+        { 0, 18, 0, 2, 1, { 5, -7, 11 }, { 2, -3, 4 }, { 5, -7, 11 } },
+        { 0, 18, 0, 3, 1, { 5, -7, 11 }, { 2, -3, 4 }, { 5, -7, 11 } },
+        { 0, 18, 0, 2, 1, { 2, -3, 11 }, { 0, 0, 0 }, { 2, -3, 11 } },
+        { 0, 18, 0, 3, 1, { 2, -3, 11 }, { 0, 0, 0 }, { 2, -3, 11 } },
+        { 1, 18, 0, 0, 1, { 2, -3, 11 }, { 0, 0, 0 }, { 5, -7, 11 } },
+        { 1, 18, 0, 1, 1, { 2, -3, 11 }, { 0, 0, 0 }, { 5, -7, 11 } },
+        { 1, 18, 0, 2, 1, { 2, -3, 11 }, { 0, 0, 0 }, { 2.000549316f, -3.000732422f, 11 } },
+        { 1, 18, 0, 3, 1, { 2, -3, 11 }, { 0, 0, 0 }, { 2.000549316f, -3.000732422f, 11 } },
+        { 2, 18, 0, 0, 1, { 2, -3, 11 }, { 0, 0, 0 }, { 5, -7, 11 } },
+        { 2, 18, 0, 1, 1, { 2, -3, 11 }, { 0, 0, 0 }, { 5, -7, 11 } },
+        { 2, 18, 0, 2, 1, { 2, -3, 11 }, { 0, 0, 0 }, { 2.000549316f, -3.000732422f, 11 } },
+        { 2, 18, 0, 3, 1, { 2, -3, 11 }, { 0, 0, 0 }, { 2.000549316f, -3.000732422f, 11 } },
+    };
+    const char* components[] = { "all", "x", "y", "z", "sum", "average", "max", "min" };
+    const char* operations[] = { "remap", "multiply", "add", "subtract" };
+    const glm::vec3 reflection (1, -1, 1);
+    for (const auto& sample : samples) {
+        const bool initializer = sample.kind == 0;
+        WallpaperEngine::Data::Model::Project project {};
+        auto data = WallpaperEngine::Data::JSON::JSON::parse (R"({"id":457,"particle":{}})");
+        auto node = WallpaperEngine::Data::JSON::JSON::parse (R"({"input":"positionbetweentwocontrolpoints","outputcontrolpoint0":2,"outputcontrolpoint1":3,"flags":0})");
+        node["name"] = initializer ? "remapinitialvalue" : "remapvalue";
+        node["output"] = sample.option == 17 ? "deltatocontrolpoint" : "directiontocontrolpoint";
+        node["outputcomponent"] = components[sample.component];
+        node["operation"] = operations[sample.operation];
+        const std::string mapped = std::to_string (sample.mapped.x) + " " + std::to_string (sample.mapped.y) + " " + std::to_string (sample.mapped.z);
+        node["outputrangemin"] = mapped;
+        node["outputrangemax"] = mapped;
+        if (sample.kind == 2) node["blendinend"] = .5f;
+        data["particle"][initializer ? "initializer" : "operator"] = { node };
+        const auto object = WallpaperEngine::Data::Parsers::ObjectParser::parse (data, project);
+        const auto* definition = object->as<Particle> ();
+        REQUIRE ((initializer ? definition->initializers.size () : definition->operators.size ()) == 1);
+        const auto& remap = initializer ? definition->initializers.front ()->as<ControlPointRemapInitializer> ()->remap
+            : definition->operators.front ()->as<ControlPointRemapOperator> ()->remap;
+        std::vector<ControlPointData> points (4);
+        points[0].position = { 101, 103, 107 };
+        points[1].position = { 109, 113, 127 };
+        points[2].position = glm::vec3 (5, -7, 11) * reflection;
+        points[3].position = points[2].position + glm::vec3 (64, 0, 0);
+        const auto before = points;
+        ParticleInstance particle;
+        particle.position = sample.position * reflection;
+        particle.velocity = { 17, -19, 23 };
+        particle.color = { .2f, .3f, .4f };
+        particle.lifetime = 4;
+        particle.age = sample.weight * 2;
+        applyParticleControlPointRemap (particle, remap, points, initializer);
+        const glm::vec3 expected = sample.native * reflection;
+        CAPTURE (sample.kind, sample.option, sample.component, sample.operation, sample.weight, sample.position);
+        // Non-SSE builds use portable normalization; x86 preserves native estimates.
+#if defined(__SSE__)
+        const float tolerance = .000003f;
+#else
+        const float tolerance = .003f;
+#endif
+        CHECK (particle.position.x == Catch::Approx (expected.x).margin (tolerance));
+        CHECK (particle.position.y == Catch::Approx (expected.y).margin (tolerance));
+        CHECK (particle.position.z == Catch::Approx (expected.z).margin (tolerance));
+        CHECK (particle.velocity == glm::vec3 (17, -19, 23));
+        CHECK (particle.color == glm::vec3 (.2f, .3f, .4f));
+        for (size_t i = 0; i < points.size (); ++i) CHECK (points[i].position == before[i].position);
+    }
+}
+
+TEST_CASE ("relative direction nonfinite native cases keep finite particle state", "[particle][remap][remap-relative-output]") {
+    using WallpaperEngine::Render::Objects::applyParticleControlPointRemap;
+    using WallpaperEngine::Render::Objects::ControlPointData;
+    for (const bool initializer : { true, false }) {
+        WallpaperEngine::Data::Model::Project project {};
+        auto data = WallpaperEngine::Data::JSON::JSON::parse (R"({"id":458,"particle":{}})");
+        auto node = WallpaperEngine::Data::JSON::JSON::parse (R"({"input":"positionbetweentwocontrolpoints","output":"directiontocontrolpoint","operation":"remap","flags":0})");
+        node["name"] = initializer ? "remapinitialvalue" : "remapvalue";
+        node["outputrangemin"] = node["outputrangemax"] = initializer ? "0 0 0" : "2 -3 4";
+        data["particle"][initializer ? "initializer" : "operator"] = { node };
+        const auto object = WallpaperEngine::Data::Parsers::ObjectParser::parse (data, project);
+        const auto* definition = object->as<Particle> ();
+        REQUIRE ((initializer ? definition->initializers.size () : definition->operators.size ()) == 1);
+        const auto& remap = initializer ? definition->initializers.front ()->as<ControlPointRemapInitializer> ()->remap
+            : definition->operators.front ()->as<ControlPointRemapOperator> ()->remap;
+        std::vector<ControlPointData> points (2);
+        points[1].position = { 64, 0, 0 };
+        ParticleInstance particle;
+        particle.position = initializer ? glm::vec3 (3, -4, 0) : glm::vec3 (0);
+        particle.lifetime = 4;
+        const auto before = particle.position;
+        applyParticleControlPointRemap (particle, remap, points, initializer);
+        CHECK (particle.position == before);
+    }
+}
+
+TEST_CASE ("relative direction initializer keeps tiny source vector before arithmetic", "[particle][remap][remap-relative-output][remap-relative-tiny]") {
+    using WallpaperEngine::Render::Objects::applyParticleControlPointRemap;
+    using WallpaperEngine::Render::Objects::ControlPointData;
+    const glm::vec3 native[] = {
+        { -2.2136608990e-08f, 3.3204912597e-08f, -4.4273217981e-08f },
+        { -5.9604644775e-08f, 0.0000000000e+00f, 0.0000000000e+00f },
+        { -2.2136608990e-08f, 3.3204912597e-08f, -4.4273217981e-08f },
+        { 2.2136608990e-08f, -3.3204912597e-08f, 4.4273217981e-08f },
+    };
+    const char* operations[] = { "remap", "multiply", "add", "subtract" };
+    for (int operation = 0; operation < 4; ++operation) {
+        WallpaperEngine::Data::Model::Project project {};
+        auto data = WallpaperEngine::Data::JSON::JSON::parse (R"({"id":459,"particle":{}})");
+        auto node = WallpaperEngine::Data::JSON::JSON::parse (R"({"name":"remapinitialvalue","input":"positionbetweentwocontrolpoints","output":"directiontocontrolpoint","outputrangemin":"2 -3 4","outputrangemax":"2 -3 4","flags":0})");
+        node["operation"] = operations[operation];
+        data["particle"]["initializer"] = { node };
+        const auto object = WallpaperEngine::Data::Parsers::ObjectParser::parse (data, project);
+        REQUIRE (object->as<Particle> ()->initializers.size () == 1);
+        const auto& remap = object->as<Particle> ()->initializers.front ()->as<ControlPointRemapInitializer> ()->remap;
+        std::vector<ControlPointData> points (2);
+        points[1].position = { 64, 0, 0 };
+        ParticleInstance particle;
+        particle.position = { -0x1p-24f, 0, 0 };
+        particle.lifetime = 4;
+        applyParticleControlPointRemap (particle, remap, points, true);
+        CAPTURE (operation);
+        CHECK (particle.position.x == Catch::Approx (native[operation].x).margin (1e-13f));
+        CHECK (particle.position.y == Catch::Approx (-native[operation].y).margin (1e-13f));
+        CHECK (particle.position.z == Catch::Approx (native[operation].z).margin (1e-13f));
+    }
+}

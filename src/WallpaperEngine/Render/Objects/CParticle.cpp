@@ -1534,6 +1534,15 @@ EmitterFunc CParticle::createSphereEmitter (const ParticleEmitter& emitter) {
 
 static float particleOperatorBlend (float lifetimePosition, glm::vec4 blendTimes);
 
+static float particleRemapInverseLength (const float squared) {
+#if defined(__SSE__)
+    // Exact normalization can cross a following periodic-transform boundary.
+    return _mm_cvtss_f32 (_mm_rsqrt_ss (_mm_set_ss (squared)));
+#else
+    return 1.0f / std::sqrt (squared);
+#endif
+}
+
 void WallpaperEngine::Render::Objects::applyParticleControlPointRemap (
     ParticleInstance& particle, const ControlPointRemap& remap,
     const std::vector<ControlPointData>& controlPoints, const bool initializer, const bool angularVelocityAvailable,
@@ -1630,14 +1639,7 @@ void WallpaperEngine::Render::Objects::applyParticleControlPointRemap (
                 // distances produce nonfinite values and remain outside this subset.
                 if (squared > 0.0f && squared < std::numeric_limits<float>::min ()) return;
                 if (squared > 0.0f) {
-#if defined(__SSE__)
-                    // Preserve the native estimate: exact normalization can cross
-                    // a following saw/square phase boundary even on axis vectors.
-                    const float inverseLength = _mm_cvtss_f32 (_mm_rsqrt_ss (_mm_set_ss (squared)));
-#else
-                    const float inverseLength = 1.0f / std::sqrt (squared);
-#endif
-                    inputValue *= inverseLength;
+                    inputValue *= particleRemapInverseLength (squared);
                 } else inputValue = glm::vec3 (0.0f);
             }
             inputValue *= glm::vec3 (1.0f, -1.0f, 1.0f);
@@ -1733,6 +1735,57 @@ void WallpaperEngine::Render::Objects::applyParticleControlPointRemap (
         const float result = operate (distance);
         const float blended = weight == 1.0f ? result : distance + (result - distance) * weight;
         particle.position = start + direction * blended;
+    } else if (remap.output == ControlPointRemap::Output::DeltaToPoint
+               || remap.output == ControlPointRemap::Output::DirectionToPoint) {
+        using Component = ControlPointRemap::Component;
+        const glm::vec3 coordinateScale (1.0f, -1.0f, 1.0f);
+        glm::vec3 relative = (start - particle.position) * coordinateScale;
+        const bool direction = remap.output == ControlPointRemap::Output::DirectionToPoint;
+        float radius = 0.0f;
+        if (direction) {
+            const float squared = glm::dot (relative, relative);
+            if (initializer) {
+                radius = std::sqrt (squared);
+                if (radius > epsilon) relative /= radius;
+            } else {
+                // Native zero/subnormal source radius produces nonfinite output.
+                if (squared < std::numeric_limits<float>::min ()) return;
+                const float inverseLength = particleRemapInverseLength (squared);
+                radius = squared * inverseLength;
+                relative *= inverseLength;
+            }
+        }
+        glm::vec3 operated = mapped;
+        switch (remap.operation) {
+            case ControlPointRemap::Operation::Remap: break;
+            case ControlPointRemap::Operation::Multiply: operated = relative * mapped; break;
+            case ControlPointRemap::Operation::Add: operated = relative + mapped; break;
+            case ControlPointRemap::Operation::Subtract: operated = relative - mapped; break;
+        }
+        for (int axis = 0; axis < 3; ++axis) {
+            if (remap.outputComponent == Component::All
+                || static_cast<int> (remap.outputComponent) == static_cast<int> (Component::X) + axis)
+                relative[axis] = weight == 1.0f ? operated[axis]
+                    : relative[axis] + (operated[axis] - relative[axis]) * weight;
+        }
+        if (direction) {
+            const float squared = glm::dot (relative, relative);
+            if (initializer) {
+                // Native normalizes the operated vector unconditionally; zero is
+                // nonfinite there and remains outside the finite initializer subset.
+                if (squared == 0.0f) return;
+                relative = (relative * (1.0f / std::sqrt (squared))) * radius;
+            } else if (squared == 0.0f) {
+                // Unlike a zero source radius, zero operated direction is masked.
+                relative = glm::vec3 (0.0f);
+            } else {
+                if (squared < std::numeric_limits<float>::min ()) return;
+                relative *= particleRemapInverseLength (squared) * radius;
+            }
+        }
+        // Delta/direction selectors reduce which intermediate components change;
+        // even output reduction names still reconstruct the resulting position.
+        particle.position = start - relative * coordinateScale;
     } else if (remap.output == ControlPointRemap::Output::Velocity || remap.output == ControlPointRemap::Output::Position
                || remap.output == ControlPointRemap::Output::Color) {
         using Component = ControlPointRemap::Component;

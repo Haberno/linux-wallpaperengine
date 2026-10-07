@@ -1041,6 +1041,7 @@ static std::optional<ControlPointRemap> parseControlPointRemap (
         : input == "color" ? Input::Color : input == "position" ? Input::Position : input == "velocity" ? std::optional (Input::Velocity) : std::nullopt;
     const std::optional<Output> parsedOutput = output == "positionbetweentwocontrolpoints" ? Output::BetweenPoints
         : output == "distancetocontrolpoint" ? Output::DistanceToPoint
+        : output == "deltatocontrolpoint" ? Output::DeltaToPoint : output == "directiontocontrolpoint" ? Output::DirectionToPoint
         : output == "maxlifetime" ? Output::MaxLifetime : output == "size" ? Output::Size
         : output == "opacity" ? Output::Opacity : output == "speed" ? Output::Speed
         : output == "velocity" ? Output::Velocity : output == "rotation" ? Output::Rotation
