@@ -140,17 +140,12 @@ ObjectUniquePtr ObjectParser::parse (const JSON& it, const Project& project) {
 	    });
 	}
 	sLog.error ("Unsupported shape type: ", shapeIt->dump ());
-    } else if (cameraIt != it.end ()) {
-	// already handled by WallpaperParser, nothing to render for it
-    } else {
-	if (!it.optional ("solid", false)) {
-	    // dump the object for now, might want to change later
-	    // TODO: RE-EVALUATE IF THIS MAKES SENSE, THERE'S OBJECTS THAT CONTAIN OTHER OBJECTS AND THUS AREN'T REALLY
-	    // ANYTHING SPECIAL
-	    sLog.error ("Unknown object type found: ", it.dump ());
-	}
+    } else if (cameraIt != it.end () && cameraIt->is_string ()) {
+	// Projection is handled by WallpaperParser; retain the native false draw gate.
+	basedata.cameraLayer = true;
     }
 
+    // Native file and script factories retain untyped objects as generic layers.
     return std::make_unique<Object> (std::move (basedata));
 }
 
@@ -396,6 +391,7 @@ ObjectParser::parseImage (const JSON& it, const Project& project, ObjectData bas
 	    .scale = it.user ("scale", properties, glm::vec3 (1.0f)),
 	    .angles = it.user ("angles", properties, glm::vec3 (0.0f)),
 	    .visible = it.user ("visible", properties, true),
+	    .ledSource = it.user ("ledsource", properties, false),
 	    .alpha = it.user ("alpha", properties, 1.0f),
 	    .color = it.color ("color", properties, Builders::ColorBuilder::White),
 	    .alignment = it.optional ("horizontalalign", it.optional ("alignment", std::string ("center"))),

@@ -49,6 +49,7 @@ public:
 
     void setup () override;
     void render () override;
+    [[nodiscard]] bool isVolumetricBarrier () const override;
     void prepareRenderEffects ();
 
     [[nodiscard]] const Image& getImage () const;

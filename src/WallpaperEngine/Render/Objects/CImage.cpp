@@ -198,6 +198,7 @@ CImage::CImage (Wallpapers::CScene& scene, const Image& image) :
     this->registerProperty ("scale", *image.scale);
     this->registerProperty ("angles", *image.angles);
     this->registerProperty ("visible", *image.visible);
+    this->registerProperty ("ledsource", *image.ledSource);
     this->registerProperty ("alpha", *image.alpha);
     this->registerProperty ("color", *image.color);
     this->registerProperty ("parallaxDepth", *image.parallaxDepth);
@@ -2248,6 +2249,13 @@ void CImage::prepareRenderEffects () {
     }
 }
 
+bool CImage::isVolumetricBarrier () const {
+    // Native image gate 1401ea2d0 admits retained/LED sources even when hidden.
+    return CObject::isVolumetricBarrier () || this->m_image.ledSource->value->getBool ()
+	|| (this->m_mainFBO != nullptr && this->getScene ().isRenderTargetRetained (*this->m_mainFBO))
+	|| (this->m_subFBO != nullptr && this->getScene ().isRenderTargetRetained (*this->m_subFBO));
+}
+
 void CImage::render () {
     // do not try to render something that did not initialize successfully
     if (!this->m_initialized) {
@@ -2261,6 +2269,7 @@ void CImage::render () {
     this->updateFinalPassVisibility ();
     size_t renderPassCount = this->m_passes.size ();
     if (!this->m_finalPassDrawsToScene && !this->m_hasPuppetMesh && this->m_compositionFBO == nullptr
+	&& !this->m_image.ledSource->value->getBool ()
 	&& !this->getScene ().isRenderTargetRetained (*this->m_mainFBO)
 	&& !this->getScene ().isRenderTargetRetained (*this->m_subFBO)) {
 	// Keep the complete prefix feeding persistent targets and swap commands.

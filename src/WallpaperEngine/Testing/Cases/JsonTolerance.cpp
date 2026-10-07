@@ -650,3 +650,48 @@ TEST_CASE ("shader comma vectors preserve text and wrapped property bindings", "
     project.properties.at ("scheme")->update (glm::vec3 (0.2f, 0.6f, 0.1f), DynamicValue::UpdateSource::Script);
     REQUIRE (values.at ("tint")->value->getVec3 () == glm::vec3 (0.2f, 0.6f, 0.1f));
 }
+
+TEST_CASE ("generic layers preserve unrecognized configuration and live visibility", "[volume-admission]") {
+    const Project project {};
+    const auto data = JSON::parse (R"({
+        "id":91,"name":"Generic barrier","visible":false,"parent":90,
+        "customMetadata":{"kept":true}
+    })");
+    const auto object = ObjectParser::parse (data, project);
+    CHECK (typeid (*object) == typeid (Object));
+    CHECK_FALSE (object->cameraLayer);
+    CHECK (object->parent == 90);
+    CHECK_FALSE (object->groupVisible->value->getBool ());
+    CHECK (JSON::parse (object->initialConfiguration) == data);
+    object->groupVisible->value->update (true, DynamicValue::Script);
+    CHECK (object->groupVisible->value->getBool ());
+}
+
+TEST_CASE ("image LED sources retain native defaults and live boolean state", "[volume-admission]") {
+    auto filesystem = std::make_unique<Container> ();
+    filesystem->getVFS ().add ("models/source.json", R"({"material":"materials/source.json"})");
+    filesystem->getVFS ().add ("materials/source.json", R"({"passes":[{"shader":"copy"}]})");
+    Project project {};
+    project.assetLocator = std::make_unique<WallpaperEngine::Assets::AssetLocator> (std::move (filesystem));
+    auto data = JSON::parse (R"({"id":92,"name":"LED source","image":"models/source.json"})");
+    const auto defaults = ObjectParser::parse (data, project);
+    CHECK_FALSE (defaults->as<Image> ()->ledSource->value->getBool ());
+    data["ledsource"] = true;
+    const auto enabled = ObjectParser::parse (data, project);
+    auto& source = *enabled->as<Image> ()->ledSource->value;
+    CHECK (source.getBool ());
+    source.update (false, DynamicValue::Script);
+    CHECK_FALSE (source.getBool ());
+}
+
+TEST_CASE ("camera admission remains false for standalone layer parsing", "[volume-admission]") {
+    const Project project {};
+    auto data = JSON::parse (R"({"id":93,"name":"Runtime camera","visible":true})");
+    for (const JSON camera : { JSON ("default"), JSON (""), JSON (nullptr), JSON (true), JSON (7),
+                               JSON::object (), JSON::array () }) {
+        data["camera"] = camera;
+        const auto object = ObjectParser::parse (data, project);
+        CHECK (object->cameraLayer == camera.is_string ());
+        CHECK (object->groupVisible->value->getBool ());
+    }
+}

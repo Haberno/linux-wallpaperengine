@@ -187,6 +187,27 @@ bool CObject::isVisibleThroughParents () const {
     return true;
 }
 
+bool CObject::isVolumetricBarrier () const {
+    // Native camera gate 1400a36d0 always returns false; ordinary objects use
+    // their own live visibility followed by the same test on each ancestor.
+    if (this->m_object.cameraLayer) return false;
+
+    constexpr int kMaxParentDepth = 32;
+    const Object* current = &this->m_object;
+    for (int depth = 0; depth <= kMaxParentDepth; ++depth) {
+	const auto& visible = current->is<Image> () ? current->as<Image> ()->visible
+	    : current->is<Particle> ()             ? current->as<Particle> ()->visible
+	    : current->is<Text> ()                 ? current->as<Text> ()->visible
+						   : current->groupVisible;
+	if (visible != nullptr && visible->value != nullptr && !visible->value->getBool ()) return false;
+	if (!current->parent.has_value ()) break;
+	const auto* parent = this->m_scene.getObject (*current->parent);
+	if (parent == nullptr) break;
+	current = &parent->getObject ();
+    }
+    return true;
+}
+
 glm::mat4 CObject::resolveWorldMatrix () const {
     constexpr int kMaxParentDepth = 32;
 

@@ -1561,6 +1561,15 @@ void CText::ensureCompositeVao () {
     glBindVertexArray (0);
 }
 
+bool CText::isVolumetricBarrier () const {
+    // Native 1402577e0 requires a valid text layout and nonempty live string,
+    // then admits visible layers or retained/LED sources (image flags0x1100).
+    return this->m_valid && !this->m_text.text->value->getString ().empty ()
+	&& (CObject::isVolumetricBarrier () || this->m_text.ledSource->value->getBool ()
+	    || (this->m_publishedFBO != nullptr
+		&& this->getScene ().isRenderTargetRetained (*this->m_publishedFBO)));
+}
+
 void CText::render () {
     if (!m_valid) {
 	return;

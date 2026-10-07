@@ -1247,10 +1247,9 @@ void CScene::renderFrame (const glm::ivec4& viewport) {
 	    }
 	    continue;
 	}
-	// Native 14018aac0/140198d00 combines contiguous light draws before the
-	// next drawable non-light object. Native image gate 1401ea2d0 also admits
-	// hidden texture sources, including those under a hidden parent.
-	if (enabledByDebug (cur) && (cur->getObject ().is<Image> () || cur->isVisibleThroughParents ())) {
+	// Native 14018aac0/140198d00 flushes at admitted non-light objects,
+	// including generic barriers and hidden retained image/text sources.
+	if (enabledByDebug (cur) && cur->isVolumetricBarrier ()) {
 	    renderVolumes ();
 	}
 	if (auto* composition = dynamic_cast<Objects::CImage*> (cur);

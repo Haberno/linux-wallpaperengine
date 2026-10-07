@@ -105,6 +105,7 @@ public:
 
     void setup () override;
     void render () override;
+    [[nodiscard]] bool isVolumetricBarrier () const override;
     void prepareRenderEffects () { updateEffectVisibility (); }
     [[nodiscard]] glm::vec2 getSize ();
     [[nodiscard]] std::optional<glm::mat3> transformAttachmentToTexture (

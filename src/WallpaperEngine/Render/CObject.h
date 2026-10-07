@@ -22,6 +22,8 @@ public:
 
     virtual void setup ();
     virtual void render ();
+    /** Whether this layer consumes pending volumetric light draws before rendering. */
+    [[nodiscard]] virtual bool isVolumetricBarrier () const;
 
     [[nodiscard]] Wallpapers::CScene& getScene () const;
     [[nodiscard]] const AssetLocator& getAssetLocator () const;

@@ -43,6 +43,8 @@ struct ObjectData {
     std::string initialConfiguration;
     /** Visible hit layers stop cursor events from reaching lower layers. */
     bool disablePropagation = false;
+    /** Cameras retain a generic data object but never admit volumetric draws. */
+    bool cameraLayer = false;
 };
 
 /**
@@ -135,6 +137,8 @@ struct ImageData {
     UserSettingUniquePtr angles;
     /** If the image is visible or not */
     UserSettingUniquePtr visible;
+    /** Keep the image available as an offscreen LED source even when hidden. */
+    UserSettingUniquePtr ledSource;
     /** The alpha of the image */
     UserSettingUniquePtr alpha;
     /** The color of the image */
