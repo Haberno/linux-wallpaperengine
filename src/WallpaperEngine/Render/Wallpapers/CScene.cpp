@@ -370,9 +370,9 @@ CScene::CScene (
 	    } catch (const std::exception& error) {
 		sLog.error ("Cannot precache shader defaults for ", pass->shader, ": ", error.what ());
 	    }
-	    for (const auto& [slot, name] : textures) {
+	    const auto acquireTexture = [&] (const std::string& name) {
 		if (name.empty () || name.starts_with ("_rt_") || name.starts_with ("_alias_")
-		    || name.starts_with ('$') || !precachedTextures.insert (name).second) continue;
+		    || name.starts_with ('$') || !precachedTextures.insert (name).second) return;
 		try {
 		    // Shader-only defaults are discovered after the initial texture batch.
 		    const auto prepared = context.prepareTextureFallbacks (
@@ -389,7 +389,12 @@ CScene::CScene (
 		}
 		// Service outgoing frames between dependencies, including cache misses.
 		this->loadingCheckpoint (true);
+	    };
+	    // Authored slots and format opt-ins affect compilation even when inactive.
+	    for (const auto& [slot, name] : textures) {
+		if (pass->textures.contains (slot) || formatRequests.contains (slot)) acquireTexture (name);
 	    }
+	    std::shared_ptr<const Shaders::ShaderProgramCache::SharedProgram> program;
 	    // Native material acquisition selects only pass zero and retains its shader resource.
 	    if (pass == material->passes.front () && shaderMetadataReady) {
 		try {
@@ -405,7 +410,7 @@ CScene::CScene (
 		    for (const auto& [slot, name] : textures) {
 			if (const auto metadata = precachedTextureMetadata.find (name); metadata != precachedTextureMetadata.end ()) {
 			    const std::string prefix = "TEX" + std::to_string (slot);
-			    combos.insert_or_assign (prefix + "COMPONENTS", metadata->second.second);
+			    if (pass->textures.contains (slot)) combos.insert_or_assign (prefix + "COMPONENTS", metadata->second.second);
 			    if (formatRequests.contains (slot)) combos.insert_or_assign (prefix + "FORMAT", metadata->second.first);
 			}
 		    }
@@ -414,11 +419,20 @@ CScene::CScene (
 		    );
 		    const auto [vertex, fragment] = Shaders::GLSLContext::get ().toGlsl (shader.vertex (), shader.fragment ());
 		    std::shared_ptr<Shaders::ShaderProgramCache::SharingGroup> group;
-		    this->m_precachedPrograms.emplace_back (context.getShaderProgramCache ().interfaceProgram (vertex, fragment, group));
+		    program = context.getShaderProgramCache ().interfaceProgram (vertex, fragment, group);
+		    this->m_precachedPrograms.emplace_back (program);
 		} catch (const std::exception& error) {
 		    sLog.error ("Cannot precache shader program ", pass->shader, ": ", error.what ());
 		}
 		this->loadingCheckpoint (true);
+	    }
+	    if (program) {
+		// Native fills missing providers only for reflected texture bindings.
+		for (const auto& [slot, name] : textures) {
+		    if (!pass->textures.contains (slot) && !formatRequests.contains (slot)
+			&& glGetUniformLocation (program->id, ("g_Texture" + std::to_string (slot)).c_str ()) >= 0)
+			acquireTexture (name);
+		}
 	    }
 	}
     }

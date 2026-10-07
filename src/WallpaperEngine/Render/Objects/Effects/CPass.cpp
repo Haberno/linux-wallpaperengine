@@ -870,9 +870,8 @@ void CPass::setupShaders () {
     // The high texture flag nibble is the matching packed-component occupancy
     // mask consumed by sampler metadata's `components` array.
     const bool imageFormatRequests = m_renderable.is<CImage> ();
-    bool preserveImageBaseComponents = false;
     std::map<int, int> textureFormats;
-    const auto registerTextureMetadata = [this, &textureFormats, imageFormatRequests, &preserveImageBaseComponents] (
+    const auto registerTextureMetadata = [this, &textureFormats, imageFormatRequests] (
 	const int index, const std::shared_ptr<const TextureProvider>& texture, const bool overwrite = true
     ) {
 	      if (texture == nullptr) {
@@ -891,7 +890,8 @@ void CPass::setupShaders () {
 	      if (!imageFormatRequests) {
 		  this->m_combos.insert_or_assign (prefix + "FORMAT", static_cast<int> (texture->getFormat ()));
 	      }
-	      if (overwrite || index != 0 || !preserveImageBaseComponents) {
+	      // Native component combos come from existing slots, never shader defaults.
+	      if (overwrite) {
 		  this->m_combos.insert_or_assign (
 		      prefix + "COMPONENTS", static_cast<int> ((texture->getFlags () & TextureFlags_ComponentMask) >> 20)
 		  );
@@ -988,8 +988,7 @@ void CPass::setupShaders () {
 	&& (m_shader->getVertex ().getTextures ().contains (0)
 	    || m_shader->getFragment ().getTextures ().contains (0))) {
 	textureFormats.erase (0);
-	// Only format precedence changes; keep the preprocessed component metadata.
-	preserveImageBaseComponents = true;
+	// Shader defaults keep the preprocessed component metadata.
     }
 
     // Samplers the shader declares itself (the "formatcombo":true defaults, like generic4's
