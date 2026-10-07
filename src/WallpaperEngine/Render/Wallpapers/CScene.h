@@ -305,6 +305,7 @@ protected:
     friend class CWallpaper;
 
 private:
+    const char* validateModelDataMaterial (const Scripting::ModelDataShape& shape) const;
     struct VideoActivity {
 	std::weak_ptr<const CTexture> texture;
 	uint32_t lastUsedFrame = 0;

@@ -1,6 +1,7 @@
 #include "WallpaperEngine/Render/Objects/CImage.h"
 #include "WallpaperEngine/Render/Objects/CLight.h"
 #include "WallpaperEngine/Render/Objects/CModel.h"
+#include "WallpaperEngine/Render/Objects/ModelInputSignature.h"
 #include "WallpaperEngine/Render/Objects/CParticle.h"
 #include "WallpaperEngine/Render/Objects/CSound.h"
 #include "WallpaperEngine/Render/Objects/CText.h"
@@ -2092,6 +2093,30 @@ Render::CObject* CScene::createLayer (const std::string& modelPath, const std::s
     return this->createLayer (std::move (layer), workshopId);
 }
 
+const char* CScene::validateModelDataMaterial (const Scripting::ModelDataShape& shape) const {
+    try {
+        const auto material = MaterialParser::load (getScene ().project, shape.material, true);
+        if (material->passes.size () != 1) return "Model shader validation currently requires one material pass";
+        const auto& pass = *material->passes.front ();
+        const auto& assets = getAssetLocator ();
+        const auto semantics = Objects::modelInputSemantics (assets.vertexShader (pass.shader), [&] (const std::string& name) {
+            return assets.includeShader (name);
+        });
+        // Keep compilation failure ahead of signature mismatch, as in native.
+        // No pass, script owner, texture provider or live program is created here.
+        const ComboMap overrides;
+        const TextureMap textureOverrides;
+        Shaders::Shader shader (assets, pass.shader, pass.combos, overrides, pass.textures, textureOverrides, pass.constants);
+        const auto compiled = Shaders::GLSLContext::get ().toGlsl (shader.vertex (), shader.fragment ());
+        if (compiled.first.empty () || compiled.second.empty ()) return "Material or shader missing";
+        if (!semantics) return "Model shader input declaration requires wider native validation";
+        if ((*semantics & shape.vertexFormat) != *semantics) return "Incompatible vertex format";
+        return nullptr;
+    } catch (const std::exception&) {
+        return "Material or shader missing";
+    }
+}
+
 uint32_t CScene::createModelData (
     std::vector<Scripting::ModelDataShape> shapes, std::optional<std::pair<glm::vec3, glm::vec3>> bounds
 ) {
@@ -2100,6 +2125,9 @@ uint32_t CScene::createModelData (
 	MaterialParser::load (getScene ().project, shape.material, true);
     }
     auto resource = std::make_unique<Objects::ModelData> (std::move (shapes));
+    resource->validateMaterial = [this] (const Scripting::ModelDataShape& shape) {
+        return validateModelDataMaterial (shape);
+    };
     if (bounds) {
 	resource->mesh.boundingBoxMin = bounds->first;
 	resource->mesh.boundingBoxMax = bounds->second;

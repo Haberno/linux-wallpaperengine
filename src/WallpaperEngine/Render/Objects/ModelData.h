@@ -5,6 +5,7 @@
 
 #include <GL/glew.h>
 #include <memory>
+#include <functional>
 #include <unordered_map>
 
 namespace WallpaperEngine::Render::Objects {
@@ -31,6 +32,7 @@ public:
     std::vector<Shape> shapes;
     Data::Model::MdlMesh mesh;
     uint64_t materialRevision = 0;
+    std::function<const char* (const Scripting::ModelDataShape&)> validateMaterial;
 
 private:
     static void updateLayout (Shape& shape);
