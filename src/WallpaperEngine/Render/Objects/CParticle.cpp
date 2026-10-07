@@ -1633,8 +1633,8 @@ void WallpaperEngine::Render::Objects::applyParticleControlPointRemap (
     const float systemTime, const float layerTime
 ) {
     const float weight = initializer ? 1.0f : particleOperatorBlend (particle.getLifetimePos (), remap.blendTimes);
-    if (remap.transform == ControlPointRemap::Transform::SimplexNoise
-        || remap.transform == ControlPointRemap::Transform::FbmNoise) {
+    if (!initializer && (remap.transform == ControlPointRemap::Transform::SimplexNoise
+        || remap.transform == ControlPointRemap::Transform::FbmNoise)) {
         const float minimum = remap.inputRangeMin->value->getFloat ();
         float span = remap.inputRangeMax->value->getFloat () - minimum;
         if (span == 0.0f) span = std::numeric_limits<float>::epsilon ();
@@ -1769,6 +1769,11 @@ void WallpaperEngine::Render::Objects::applyParticleControlPointRemap (
         // Native transforms each normalized component before output saturation.
         const float phase = normalized[axis] * remap.transformInputScale;
         switch (remap.transform) {
+            case ControlPointRemap::Transform::SimplexNoise:
+                // Initializers use the unseeded scalar kernel14027b090; operators
+                // take their separate seeded path above.
+                normalized[axis] = simplexNoise1D (phase) * .5f + .5f;
+                break;
             case ControlPointRemap::Transform::Sine: {
                 const float angle = initializer ? (normalized[axis] * glm::pi<float> ()) * remap.transformInputScale
                     : normalized[axis] * (remap.transformInputScale * glm::pi<float> ());
