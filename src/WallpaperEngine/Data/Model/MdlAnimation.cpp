@@ -136,7 +136,7 @@ MdlBoneFrame sampleControl (
     return value;
 }
 
-/** Native 14026eb60/14026e340/140271910: standalone and serial rope chains. */
+/** Native 14026eb60/14026e340/140271910: standalone, serial and sibling rope chains. */
 bool applyRope (
     const MdlAnimationData& data, const std::vector<MdlActiveAnimation>& layers,
     const std::vector<glm::mat4>& locals, MdlPhysicsStep& physics, MdlPose& pose
@@ -144,16 +144,21 @@ bool applyRope (
     if (!physics.rope || data.ikGroups.size () != 1) return false;
     const auto& group = data.ikGroups.front ();
     if (group.hasDependencies || group.nodes.empty () || group.nodes.size () > 2) return false;
+    const bool siblings = group.nodes.size () == 1 && group.nodes[0].branches.size () == 2;
+    if (siblings && (group.root != 0 || !data.controls.empty ())) return false;
+    const size_t chainCount = siblings ? 2 : group.nodes.size ();
+    std::array<const MdlIkChain*, 2> chains {};
     std::vector<bool> solved (data.bones.size (), false);
     std::array<std::optional<glm::mat4>, 2> endControls;
-    for (size_t nodeIndex = 0; nodeIndex < group.nodes.size (); ++nodeIndex) {
-	const auto& node = group.nodes[nodeIndex];
-	if (node.branches.size () != 1) return false;
-	const auto& chain = node.branches.front ();
+    for (size_t nodeIndex = 0; nodeIndex < chainCount; ++nodeIndex) {
+	const auto& node = group.nodes[siblings ? 0 : nodeIndex];
+	if (node.branches.size () != (siblings ? 2 : 1)) return false;
+	const auto& chain = node.branches[siblings ? nodeIndex : 0];
+	chains[nodeIndex] = &chain;
 	if ((chain.flags != 4 && chain.flags != 5) || chain.bones.size () < 2
 	    || chain.bones.front () != node.root) return false;
 	if (nodeIndex == 0 && node.root != group.root) return false;
-	if (nodeIndex && node.root != group.nodes[nodeIndex - 1].branches.front ().bones.back ()) return false;
+	if (nodeIndex && !siblings && node.root != group.nodes[nodeIndex - 1].branches.front ().bones.back ()) return false;
 	for (size_t index = 0; index < chain.bones.size (); ++index) {
 	    const auto bone = chain.bones[index];
 	    if (bone >= data.bones.size () || bone >= data.boneLengths.size ()
@@ -167,6 +172,7 @@ bool applyRope (
 	}
 	const auto tip = chain.bones.back ();
 	if (!data.bones[tip].rope || chain.maxLength <= 0.0f) return false;
+	if (siblings && (chain.flags != 4 || data.bones[tip].ikFollowEnd || data.bones[tip].ikAimToTarget)) return false;
 	if (chain.flags == 5) {
 	    // Aim-to-target and controlled free ends take separate native solver branches.
 	    if (data.controls.size () != 1 || data.controls[0].bone != tip || data.controls[0].type != 0
@@ -182,10 +188,11 @@ bool applyRope (
 	    || data.bones[terminal].ikFollowEnd) return false;
     }
     const bool hasDescendants = std::find (solved.begin (), solved.end (), false) != solved.end ();
+    if (siblings && hasDescendants) return false;
     if ((hasDescendants || group.nodes.size () == 2) && group.root != 0) return false;
     for (size_t bone = 0; bone < data.bones.size (); ++bone) {
 	if (solved[bone]) {
-	    if ((hasDescendants || group.nodes.size () == 2) && !(data.bones[bone].type & 2)) return false;
+	    if ((siblings || hasDescendants || group.nodes.size () == 2) && !(data.bones[bone].type & 2)) return false;
 	    continue;
 	}
 	const auto& child = data.bones[bone];
@@ -206,9 +213,10 @@ bool applyRope (
 	    if (solved[bone] && bone != group.root && (data.bones[bone].type & 2))
 		pose.worldBones[bone] = physics.state.ropeWorldBones[bone];
     }
-    // Prediction visits nodes in reverse; a shared boundary retains that exact ordering.
-    for (size_t nodeIndex = group.nodes.size (); nodeIndex-- > 0;) {
-	const auto& chain = group.nodes[nodeIndex].branches.front ();
+    // Reverse serial nodes, but visit sibling branches forward with one shared root seed.
+    for (size_t step = 0; step < chainCount; ++step) {
+	const size_t nodeIndex = siblings ? step : chainCount - step - 1;
+	const auto& chain = *chains[nodeIndex];
 	const auto tip = chain.bones.back ();
 	const auto& settings = *data.bones[tip].rope;
 	const auto& endControl = endControls[nodeIndex];
@@ -255,9 +263,9 @@ bool applyRope (
     }
     // Corrections carry into the next predictor; this frame retains its predicted translations.
     for (const bool forward : { false, true }) {
-	for (size_t step = 0; step < group.nodes.size (); ++step) {
-	    const size_t nodeIndex = forward ? step : group.nodes.size () - step - 1;
-	    const auto& chain = group.nodes[nodeIndex].branches.front ();
+	for (size_t step = 0; step < chainCount; ++step) {
+	    const size_t nodeIndex = forward ? step : chainCount - step - 1;
+	    const auto& chain = *chains[nodeIndex];
 	    const auto root = chain.bones.front ();
 	    const auto tip = chain.bones.back ();
 	    const auto& settings = *data.bones[tip].rope;
@@ -287,11 +295,11 @@ bool applyRope (
 	    }
 	}
     }
-    for (size_t nodeIndex = 0; nodeIndex < group.nodes.size (); ++nodeIndex) {
-	const auto& chain = group.nodes[nodeIndex].branches.front ();
+    for (size_t nodeIndex = 0; nodeIndex < chainCount; ++nodeIndex) {
+	const auto& chain = *chains[nodeIndex];
 	const auto tip = chain.bones.back ();
 	const auto& endControl = endControls[nodeIndex];
-	for (size_t index = 0; index + 1 < chain.bones.size (); ++index) {
+	for (size_t index = siblings ? 1 : 0; index + 1 < chain.bones.size (); ++index) {
 	    const auto bone = chain.bones[index];
 	    const auto child = chain.bones[index + 1];
 	    const auto reference = data.boneDirections[bone].at (child);
@@ -312,6 +320,20 @@ bool applyRope (
 		pose.worldBones[tip][column] = value * inverse;
 	    }
 	}
+    }
+    if (siblings) {
+	// Native folds each branch forward from identity with constant 1/N, without normalization.
+	glm::quat rotation (1.0f, 0.0f, 0.0f, 0.0f);
+	const auto position = pose.worldBones[group.root][3];
+	for (size_t index = 0; index < chainCount; ++index) {
+	    const auto child = chains[index]->bones[1];
+	    const auto reference = data.boneDirections[group.root].at (child);
+	    const auto direction = directionOr (glm::vec3 (pose.worldBones[child][3] - position), reference);
+	    const auto branch = glm::rotation (directionOr (reference, direction), direction);
+	    rotation = glm::slerp (rotation, branch, 1.0f / static_cast<float> (chainCount));
+	}
+	pose.worldBones[group.root] = glm::inverse (data.bones[group.root].inverseBindWorld) * glm::mat4_cast (rotation);
+	pose.worldBones[group.root][3] = position;
     }
     // Ordinary descendants are evaluated after the group's solve in native bone order.
     for (size_t bone = 0; bone < data.bones.size (); ++bone)
