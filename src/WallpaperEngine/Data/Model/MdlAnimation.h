@@ -58,8 +58,10 @@ struct MdlBone {
     std::optional<glm::mat4> referenceLocal;
     bool ikFollowEnd = false;
     bool ikAimToTarget = false;
-    float ikAimDistance = 1.0f;
+    float ikAimDistance = 50.0f;
     bool ikAngleLimits = false;
+    float ikMinAngle = 0.0f; // ikrminl, radians
+    float ikMaxAngle = 0.0f; // ikrmaxl, radians
     std::optional<MdlBoneSpring> spring;
     std::optional<MdlBoneRope> rope;
 };

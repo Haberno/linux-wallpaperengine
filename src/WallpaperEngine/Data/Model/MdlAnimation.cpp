@@ -141,6 +141,7 @@ struct RopePlan {
     std::vector<const MdlIkGroup*> owners;
     std::vector<bool> solved;
     std::vector<std::optional<glm::mat4>> controls;
+    std::vector<std::optional<glm::mat4>> poles;
     std::vector<glm::mat4> bindWorld;
     bool legacyWholeSkeleton = false;
 };
@@ -159,15 +160,21 @@ std::optional<RopePlan> prepareRopes (
 	.owners = std::vector<const MdlIkGroup*> (data.bones.size (), nullptr),
 	.solved = std::vector<bool> (data.bones.size (), false),
 	.controls = std::vector<std::optional<glm::mat4>> (data.bones.size ()),
+	.poles = std::vector<std::optional<glm::mat4>> (data.bones.size ()),
     };
     std::vector<int32_t> controlByBone (data.bones.size (), -1);
+    std::vector<int32_t> poleByBone (data.bones.size (), -1);
     std::vector<bool> usedControls (data.controls.size (), false);
     for (size_t index = 0; index < data.controls.size (); ++index) {
 	const auto& control = data.controls[index];
-	if (control.type != 0 || control.bone >= data.bones.size () || controlByBone[control.bone] != -1) {
+	if (control.type > 1 || control.bone >= data.bones.size ()) {
 	    return std::nullopt;
 	}
-	controlByBone[control.bone] = static_cast<int32_t> (index);
+	auto& byBone = control.type == 0 ? controlByBone : poleByBone;
+	if (byBone[control.bone] != -1) {
+	    return std::nullopt;
+	}
+	byBone[control.bone] = static_cast<int32_t> (index);
     }
     std::vector<bool> childEdges (data.bones.size (), false);
     bool hasRope = false;
@@ -185,15 +192,14 @@ std::optional<RopePlan> prepareRopes (
 	    }
 	    nodeRoots[node.root] = true;
 	    for (const auto& chain : node.branches) {
-		if ((chain.flags != 0 && chain.flags != 1 && chain.flags != 4 && chain.flags != 5)
+		if ((chain.flags & ~7u)
 		    || chain.bones.size () < 2 || chain.bones.front () != node.root || chain.maxLength <= 0.0f) {
 		    return std::nullopt;
 		}
 		for (size_t index = 0; index < chain.bones.size (); ++index) {
 		    const auto bone = chain.bones[index];
 		    if (bone >= data.bones.size () || bone >= data.boneLengths.size ()
-			|| bone >= data.boneDirections.size () || data.bones[bone].spring
-			|| data.bones[bone].ikAngleLimits) {
+			|| bone >= data.boneDirections.size () || data.bones[bone].spring) {
 			return std::nullopt;
 		    }
 		    if (index
@@ -215,11 +221,12 @@ std::optional<RopePlan> prepareRopes (
 		    if (!data.bones[tip].rope) {
 			return std::nullopt;
 		    }
-		} else if (chain.minLength != 0.0f) {
-		    return std::nullopt;
+		}
+		if (poleByBone[tip] >= 0) {
+		    usedControls[poleByBone[tip]] = true;
 		}
 		if (chain.flags & 1) {
-		    if (controlByBone[tip] < 0 || data.bones[tip].ikAimToTarget || data.bones[tip].ikFollowEnd) {
+		    if (controlByBone[tip] < 0) {
 			return std::nullopt;
 		    }
 		    usedControls[controlByBone[tip]] = true;
@@ -264,6 +271,9 @@ std::optional<RopePlan> prepareRopes (
 	    : (entry.parent >= 0 ? plan.bindWorld[entry.parent] : glm::mat4 (1.0f)) * entry.bindLocal;
 	if (controlByBone[bone] >= 0) {
 	    plan.controls[bone] = poseMatrix (sampleControl (data, layers, controlByBone[bone]));
+	}
+	if (poleByBone[bone] >= 0) {
+	    plan.poles[bone] = poseMatrix (sampleControl (data, layers, poleByBone[bone]));
 	}
     }
     return plan;
@@ -376,6 +386,31 @@ void solveRopeGroup (
     const auto position = [&] (const uint32_t bone) { return glm::vec3 (pose.worldBones[bone][3]); };
     const auto setPosition
 	= [&] (const uint32_t bone, const glm::vec3& value) { pose.worldBones[bone][3] = glm::vec4 (value, 1.0f); };
+    // Native 14026df30 limits the projected XY direction in the preceding segment's frame.
+    const auto limitDirection = [&] (const uint32_t bone, glm::vec3 direction) {
+	const auto& settings = data.bones[bone];
+	const auto preceding = directionOr (position (bone) - position (settings.parent), glm::vec3 (1, 0, 0));
+	const auto basis = glm::mat3_cast (glm::rotation (glm::vec3 (1, 0, 0), preceding));
+	const float projectedLength = glm::length (glm::vec2 (direction));
+	if (projectedLength == 0.0f) {
+	    return direction;
+	}
+	const auto local = glm::inverse (basis) * glm::vec3 (direction.x, direction.y, 0) / projectedLength;
+	const float angle = std::atan2 (local.y, local.x);
+	float correction = angle < settings.ikMinAngle ? settings.ikMinAngle - angle : 0.0f;
+	if (angle > settings.ikMaxAngle
+	    && (correction == 0.0f || std::abs (settings.ikMaxAngle - angle) < std::abs (correction))) {
+	    correction = settings.ikMaxAngle - angle;
+	}
+	if (correction != 0.0f) {
+	    const auto adjusted = basis * glm::vec3 (
+		glm::rotate (glm::mat4 (1), correction, glm::vec3 (0, 0, 1)) * glm::vec4 (local, 0)
+	    );
+	    direction.x = adjusted.x * projectedLength;
+	    direction.y = adjusted.y * projectedLength;
+	}
+	return direction;
+    };
     for (int iteration = 0; iteration < 10; ++iteration) {
 	for (size_t nodeIndex = group.nodes.size (); nodeIndex-- > 0;) {
 	    const auto& node = group.nodes[nodeIndex];
@@ -388,17 +423,47 @@ void solveRopeGroup (
 		    continue;
 		}
 		const auto tip = chain.bones.back ();
-		const auto target = chain.flags & 1 ? glm::vec3 ((*plan.controls[tip])[3]) : position (tip);
+		auto target = chain.flags & 1 ? glm::vec3 ((*plan.controls[tip])[3]) : position (tip);
 		const auto delta = target - position (node.root);
 		const auto axis = directionOr (delta, glm::vec3 (1.0f, 0.0f, 0.0f));
-		const bool reachable = glm::length (delta) < chain.maxLength;
+		float distance = glm::length (delta);
+		if (chain.minLength > 0.0f && distance < chain.minLength) {
+		    target += axis * (chain.minLength - distance);
+		    distance = chain.minLength;
+		}
+		glm::vec3 pole (0.0f);
+		if (plan.poles[tip]) {
+		    pole = glm::vec3 ((*plan.poles[tip])[3]) - target;
+		    pole -= axis * glm::dot (pole, axis);
+		}
+		const auto normal = glm::cross (axis, pole);
+		const bool reachable = distance < chain.maxLength || (chain.flags & 2);
 		setPosition (tip, target);
+		float accumulatedLength = 0.0f;
 		for (size_t index = chain.bones.size () - 1; index > 0; --index) {
 		    const auto child = chain.bones[index];
 		    const auto parent = chain.bones[index - 1];
-		    const auto direction
-			= reachable ? directionOr (position (parent) - position (child), -axis) : -axis;
+		    glm::vec3 direction = -axis;
+		    if (reachable) {
+			direction = position (parent) - position (child);
+			if (index > 1 && data.bones[parent].ikAngleLimits) {
+			    direction = -limitDirection (parent, -directionOr (direction, -axis));
+			}
+			if (index == chain.bones.size () - 1
+			    || accumulatedLength + data.boneLengths[child] < chain.maxLength * 0.5f) {
+			    if (glm::dot (pole, pole) > 0.01f) {
+				const auto plane = glm::normalize (normal);
+				direction -= plane * glm::dot (direction, plane);
+			    }
+			    const float side = glm::dot (direction, pole);
+			    if (side < 0.0f) {
+				direction -= 2.0f * pole * side;
+			    }
+			}
+			direction = directionOr (direction, -axis);
+		    }
 		    setPosition (parent, position (child) + direction * data.boneLengths[child]);
+		    accumulatedLength += data.boneLengths[child];
 		}
 		sum += position (node.root);
 		count += 1.0f;
@@ -421,7 +486,10 @@ void solveRopeGroup (
 		    const auto child = chain.bones[index];
 		    const auto parent = chain.bones[index - 1];
 		    const auto fallback = data.boneDirections[parent].at (child);
-		    const auto direction = directionOr (position (child) - position (parent), fallback);
+		    auto direction = directionOr (position (child) - position (parent), fallback);
+		    if (index > 1 && data.bones[parent].ikAngleLimits) {
+			direction = limitDirection (parent, direction);
+		    }
 		    setPosition (child, position (parent) + direction * data.boneLengths[child]);
 		}
 		if (chain.flags & 1) {
@@ -451,7 +519,14 @@ void solveRopeGroup (
 		pose.worldBones[bone] = plan.bindWorld[bone] * glm::mat4_cast (rotation);
 		pose.worldBones[bone][3] = position;
 	    }
-	    if (endControl) {
+	    if ((chain.flags & 1) && data.bones[tip].ikFollowEnd) {
+		if (chain.bones.size () > 2) {
+		    const auto parent = chain.bones[chain.bones.size () - 2];
+		    for (int column = 0; column < 3; ++column) {
+			pose.worldBones[tip][column] = pose.worldBones[parent][column];
+		    }
+		}
+	    } else if (chain.flags & 1) {
 		// Native 140214eb0 normalizes each control column with one inverse-square-root
 		// iteration; even a unit column retains its characteristic 0.998308 length.
 		for (int column = 0; column < 3; ++column) {
@@ -460,6 +535,20 @@ void solveRopeGroup (
 		    float inverse = std::bit_cast<float> (0x5f375a86u - (std::bit_cast<uint32_t> (squared) >> 1));
 		    inverse = (1.5f - squared * 0.5f * inverse * inverse) * inverse;
 		    pose.worldBones[tip][column] = value * inverse;
+		}
+		if (data.bones[tip].ikAimToTarget) {
+		    const auto delta = glm::vec3 ((*endControl)[3] - pose.worldBones[tip][3]);
+		    const float squared = glm::dot (delta, delta);
+		    if (squared > 1.0f) {
+			const float distance = std::sqrt (squared);
+			const float weight = std::min ((distance - 1.0f) / data.bones[tip].ikAimDistance, 1.0f);
+			const auto aim = glm::rotation (glm::vec3 (1, 0, 0), delta / distance);
+			const auto control = glm::quat_cast (glm::mat3 (pose.worldBones[tip]));
+			const auto basis = glm::mat4_cast (glm::slerp (control, aim, weight));
+			for (int column = 0; column < 3; ++column) {
+			    pose.worldBones[tip][column] = basis[column];
+			}
+		    }
 		}
 	    }
 	}

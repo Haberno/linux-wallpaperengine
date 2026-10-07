@@ -382,12 +382,20 @@ void parseSkeleton (
 		    const auto value = constraints.find (key);
 		    return value != constraints.end () && value->is_boolean () && value->get<bool> ();
 		};
-		parsed.ikFollowEnd = enabled ("ikfe");
-		parsed.ikAimToTarget = enabled ("ikr");
+		parsed.ikFollowEnd = enabled ("ik") && enabled ("ikfe");
+		parsed.ikAimToTarget = enabled ("ik") && enabled ("ikr");
 		const auto distance = constraints.find ("ikrd");
-		if (distance != constraints.end () && distance->is_number ())
-		    parsed.ikAimDistance = std::max (distance->get<float> (), 1e-5f);
+		if (parsed.ikAimToTarget && distance != constraints.end () && distance->is_number ())
+		    parsed.ikAimDistance = std::max (distance->get<float> (), 1.0f);
 		parsed.ikAngleLimits = enabled ("ikce");
+		if (parsed.ikAngleLimits && !enabled ("ik")) {
+		    const auto minimum = constraints.find ("ikrminl");
+		    const auto maximum = constraints.find ("ikrmaxl");
+		    if (minimum != constraints.end () && minimum->is_number ())
+			parsed.ikMinAngle = minimum->get<float> ();
+		    if (maximum != constraints.end () && maximum->is_number ())
+			parsed.ikMaxAngle = maximum->get<float> ();
+		}
 		parsed.spring = parseSpring (constraints);
 		if (enabled ("ik")) {
 		    const auto number = [&] (const char* key) {
