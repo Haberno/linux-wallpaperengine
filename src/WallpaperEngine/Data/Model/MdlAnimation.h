@@ -137,6 +137,9 @@ struct MdlAnimationClip {
     std::vector<uint32_t> controlFlags;
     /** MDLA0002+ stores one additional pose track per MDLS bone control. */
     std::vector<std::vector<MdlBoneFrame>> controlFrames;
+    std::vector<uint32_t> dependencyFlags;
+    /** MDLA0002+ implicit scalar tracks, indexed by the unfiltered MDLS dependency count. */
+    std::vector<std::vector<float>> dependencyTracks;
     /**
      * blendTracks[row][frame], the per-frame scalars a clip drives alongside its bones.
      * They become g_BlendMap in the puppettexturechannels shader, fading a channelmap
@@ -157,6 +160,7 @@ struct MdlAnimationData {
     /** Signed MDLS0004 depth defaults, separate from bone transforms. */
     std::vector<int32_t> defaultDepths;
     std::vector<MdlBoneControl> controls;
+    uint32_t dependencyCount = 0;
     std::vector<float> boneLengths;
     std::vector<std::map<uint32_t, glm::vec3>> boneDirections;
     std::vector<MdlIkGroup> ikGroups;

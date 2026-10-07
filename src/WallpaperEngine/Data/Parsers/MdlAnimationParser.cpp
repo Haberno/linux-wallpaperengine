@@ -254,6 +254,7 @@ void parseControlChains (
 	}
     }
     const auto dependencies = readValue<uint32_t> (data, offset, end);
+    result.dependencyCount = dependencies;
     for (uint32_t row = 0; row < dependencies; ++row) {
 	boneIndex ();
 	readValue<uint32_t> (data, offset, end);
@@ -652,6 +653,8 @@ std::optional<size_t> readAnimationEvents (
 		animation.boneFlags = source.boneFlags;
 		animation.controlFrames = crop (source.controlFrames);
 		animation.controlFlags = source.controlFlags;
+		animation.dependencyTracks = crop (source.dependencyTracks);
+		animation.dependencyFlags = source.dependencyFlags;
 		animation.blendTracks = crop (source.blendTracks);
 		animation.depthTracks = crop (source.depthTracks);
 		animation.morphTracks = source.morphTracks;
@@ -779,6 +782,23 @@ void parseAnimations (
 			frame.scale[component] = readValue<float> (data, offset, sectionEnd);
 		    }
 		}
+	    }
+	    // Native MDLA0002+ stores one scalar track per serialized MDLS
+	    // dependency, without a leading count. The later blend channels differ.
+	    animation.dependencyTracks.resize (result.dependencyCount);
+	    animation.dependencyFlags.resize (result.dependencyCount);
+	    for (uint32_t dependency = 0; dependency < result.dependencyCount; ++dependency) {
+		animation.dependencyFlags[dependency] = readValue<uint32_t> (data, offset, sectionEnd);
+		const auto bytes = readValue<uint32_t> (data, offset, sectionEnd);
+		if (bytes != (static_cast<size_t> (animation.frameCount) + 1) * sizeof (float)) {
+		    throw std::runtime_error ("unexpected dependency scalar track size in " + filename);
+		}
+		if (bytes > sectionEnd - offset) {
+		    throw std::runtime_error ("dependency scalar track ends unexpectedly in " + filename);
+		}
+		auto& frames = animation.dependencyTracks[dependency];
+		frames.resize (static_cast<size_t> (animation.frameCount) + 1);
+		for (auto& value : frames) value = readValue<float> (data, offset, sectionEnd);
 	    }
 	}
 	readBlendTracks (data, offset, sectionEnd, animation);
