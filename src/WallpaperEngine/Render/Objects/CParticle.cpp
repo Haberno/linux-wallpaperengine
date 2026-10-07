@@ -596,7 +596,9 @@ void CParticle::render () {
 	}
 	refreshInstanceParameters ();
     }
-    if (!m_particle.visible->value->getBool () || !isVisibleThroughParents ()) return;
+    const bool visible = m_particle.visible->value->getBool () && isVisibleThroughParents ();
+    updateRemapClocks (getScene ().getDeltaTime (), visible);
+    if (!visible) return;
 
     // All systems in this scene frame share one double driver sample. Narrow only
     // the interval; float timestamps lose individual frames after long uptimes.
@@ -639,8 +641,8 @@ void CParticle::render () {
     }
     for (auto& child : m_followChildren) {
 	for (auto& instance : child.instances) {
-	    if (instance.parentSerial != 0 || instance.renderer->hasLivingParticles ())
-		instance.renderer->m_propagateColorOverride = m_propagateColorOverride;
+	    if (instance.parentSerial == 0 && !instance.renderer->hasLivingParticles ()) continue;
+	    instance.renderer->m_propagateColorOverride = m_propagateColorOverride;
 	    instance.renderer->render ();
 	}
     }
@@ -672,32 +674,74 @@ void CParticle::emitParticles (const uint32_t count) {
     if (count > 0 && m_pendingEmission == 0) {
 	m_pendingControlPoints = m_controlPoints;
 	m_pendingBirthTransform = m_controlPointTransform;
+	m_pendingSystemTime = m_remapSystemTime;
+	m_pendingLayerTime = remapLayerTime ();
     }
     m_pendingEmission += std::min (count, m_maxParticles - m_pendingEmission);
 }
 
 void CParticle::stop () {
+    if (m_particleParent == nullptr) m_remapLayerTime = 0.0f;
+    clearParticles (true);
+}
+
+void CParticle::clearParticles (const bool stopEmission) {
     m_eventParentSerial = 0;
     m_pendingEmission = 0;
     m_pendingControlPoints.clear ();
-    m_emitting = false;
+    if (stopEmission) m_emitting = false;
+    m_remapSystemTime = 0.0f;
     m_particleCount = 0;
     m_retiredParticleCount = 0;
     m_emitters.clear ();
     setupEmitters ();
     for (auto& child : m_children) {
-	child.renderer->stop ();
+	child.renderer->clearParticles (stopEmission);
     }
     for (auto& child : m_followChildren) {
 	for (auto& instance : child.instances) {
 	    // Native stop discards active children but keeps already-free pool slots.
 	    // Our renderers stay allocated; the next use of an active slot is fresh.
-	    if (instance.parentSerial != 0 || instance.renderer->hasLivingParticles ())
-		instance.hasStarted = false;
+	    if (instance.parentSerial == 0 && !instance.renderer->hasLivingParticles ()) continue;
+	    instance.hasStarted = false;
 	    instance.parentSerial = 0;
 	    instance.renderer->stop ();
 	}
     }
+}
+
+void CParticle::updateRemapClocks (const float frameDelta, const bool visible) {
+    if (m_particleParent == nullptr) {
+        // Native hidden-live clearing resets the layer and permanent systems,
+        // while an already empty hidden layer retains its layer clock.
+        if (!visible && m_particleCount != 0) {
+            m_remapLayerTime = 0.0f;
+            clearParticles (false);
+        }
+        m_remapDelta = frameDelta * getInstanceOverride ().rate->value->getFloat ();
+        if (visible) m_remapLayerTime += m_remapDelta;
+    } else {
+        // Native permanent and active pooled children receive the same signed
+        // parent interval; their own reset points keep independent clocks.
+        m_remapDelta = m_particleParent->m_remapDelta;
+    }
+    m_remapSystemTime += m_remapDelta;
+    if (!visible) {
+        for (auto& child : m_children) child.renderer->updateRemapClocks (frameDelta, false);
+        for (auto& child : m_followChildren) {
+            for (auto& instance : child.instances) {
+                if (instance.parentSerial != 0 || instance.renderer->hasLivingParticles ())
+                    instance.renderer->updateRemapClocks (frameDelta, false);
+            }
+        }
+    }
+}
+
+float CParticle::remapLayerTime () const {
+    if (m_initializingManualEmission) return m_pendingLayerTime;
+    const CParticle* root = this;
+    while (root->m_particleParent != nullptr) root = root->m_particleParent;
+    return root->m_initializingManualEmission ? root->m_pendingLayerTime : root->m_remapLayerTime;
 }
 
 bool CParticle::hasLivingParticles () const {
@@ -1551,7 +1595,8 @@ static float particleRemapInverseLength (const float squared) {
 void WallpaperEngine::Render::Objects::applyParticleControlPointRemap (
     ParticleInstance& particle, const ControlPointRemap& remap,
     const std::vector<ControlPointData>& controlPoints, const bool initializer, const bool angularVelocityAvailable,
-    const float runtime, const float timeOfDay, const glm::vec3 layerOrigin, const float initializerPhase
+    const float runtime, const float timeOfDay, const glm::vec3 layerOrigin, const float initializerPhase,
+    const float systemTime, const float layerTime
 ) {
     const float weight = initializer ? 1.0f : particleOperatorBlend (particle.getLifetimePos (), remap.blendTimes);
     if (remap.transform == ControlPointRemap::Transform::SimplexNoise
@@ -1624,10 +1669,10 @@ void WallpaperEngine::Render::Objects::applyParticleControlPointRemap (
         case ControlPointRemap::Input::Size: input = initializer ? particle.initial.size : particle.size; break;
         // Alpha arrays alias until an alpha-writing operator separates them.
         case ControlPointRemap::Input::Opacity: input = initializer ? particle.initial.alpha : particle.alpha; break;
-        // Ordinary and blended system-time inputs use the owner clock too.
-        // Initializer system time and layer time remain gated until their lifecycle is modeled.
-        case ControlPointRemap::Input::Runtime:
-        case ControlPointRemap::Input::ParticleSystemTime: input = runtime; break;
+        case ControlPointRemap::Input::Runtime: input = runtime; break;
+        // Native initializer reads system+3f0; operators deliberately read runtime.
+        case ControlPointRemap::Input::ParticleSystemTime: input = initializer ? systemTime : runtime; break;
+        case ControlPointRemap::Input::LayerTime: input = layerTime; break;
         case ControlPointRemap::Input::TimeOfDay: input = timeOfDay; break;
         case ControlPointRemap::Input::Speed: input = glm::length (particle.velocity); break;
         case ControlPointRemap::Input::Rotation: input = particle.rotation.z; break;
@@ -1888,7 +1933,8 @@ InitializerFunc CParticle::createControlPointRemapInitializer (const ControlPoin
     return [this, &remap] (ParticleInstance& particle) {
         applyParticleControlPointRemap (particle, remap, m_controlPoints, true, m_hasAngularVelocity, getScene ().getTime (), g_Daytime,
             remap.input == ControlPointRemap::Input::LayerOrigin ? remapLayerOrigin () : glm::vec3 (0.0f),
-            m_particle.animationMode == "randomframe" ? particle.oscillationRandom : 0.0f);
+            m_particle.animationMode == "randomframe" ? particle.oscillationRandom : 0.0f,
+            m_initializingManualEmission ? m_pendingSystemTime : m_remapSystemTime, remapLayerTime ());
     };
 }
 
@@ -1904,13 +1950,14 @@ OperatorFunc CParticle::createControlPointRemapOperator (const ControlPointRemap
                      const std::vector<ControlPointData>& controlPoints, float, float) {
         const glm::vec3 layerOrigin = remap.input == ControlPointRemap::Input::LayerOrigin
             ? remapLayerOrigin () : glm::vec3 (0.0f);
+        const float layerTime = remapLayerTime ();
         for (uint32_t i = 0; i < count; ++i) {
             if (!particles[i].alive) continue;
             if ((remap.transform == ControlPointRemap::Transform::SimplexNoise
                  || remap.transform == ControlPointRemap::Transform::FbmNoise) && particles[i].oscillationRandom < 0.0f) {
                 particles[i].oscillationRandom = WallpaperEngine::Maths::randomFloat (m_rng, 0.0f, 1.0f);
             }
-            applyParticleControlPointRemap (particles[i], remap, controlPoints, false, m_hasAngularVelocity, getScene ().getTime (), g_Daytime, layerOrigin);
+            applyParticleControlPointRemap (particles[i], remap, controlPoints, false, m_hasAngularVelocity, getScene ().getTime (), g_Daytime, layerOrigin, 0.0f, m_remapSystemTime, layerTime);
         }
     };
 }

@@ -192,7 +192,7 @@ void applyParticleControlPointRemap (
     ParticleInstance& particle, const ControlPointRemap& remap,
     const std::vector<ControlPointData>& controlPoints, bool initializer, bool angularVelocityAvailable = false,
     float runtime = 0.0f, float timeOfDay = 0.0f, glm::vec3 layerOrigin = glm::vec3 (0.0f),
-    float initializerPhase = 0.0f
+    float initializerPhase = 0.0f, float systemTime = 0.0f, float layerTime = 0.0f
 );
 
 /**
@@ -253,6 +253,9 @@ protected:
 
     // Initializer creators
     [[nodiscard]] glm::vec3 remapLayerOrigin () const;
+    [[nodiscard]] float remapLayerTime () const;
+    void updateRemapClocks (float frameDelta, bool visible);
+    void clearParticles (bool stopEmission);
     InitializerFunc createControlPointRemapInitializer (const ControlPointRemapInitializer& init);
     InitializerFunc createColorRandomInitializer (const ColorRandomInitializer& init);
     InitializerFunc createInheritInitialEventColorInitializer (const InheritInitialEventColorInitializer& init);
@@ -365,6 +368,8 @@ private:
     uint32_t m_pendingEmission = 0;
     std::vector<ControlPointData> m_pendingControlPoints;
     glm::mat4 m_pendingBirthTransform { 1.0f };
+    float m_pendingSystemTime = 0.0f;
+    float m_pendingLayerTime = 0.0f;
     uint32_t m_maxParticles { DEFAULT_MAX_PARTICLES };
 
     std::vector<EmitterFunc> m_emitters;
@@ -383,6 +388,9 @@ private:
 
     double m_time { 0.0 };
     float m_simulationTime { 0.0f };
+    float m_remapSystemTime = 0.0f;
+    float m_remapLayerTime = 0.0f;
+    float m_remapDelta = 0.0f;
 
     // CPass-based rendering
     Effects::CPass* m_pass { nullptr };

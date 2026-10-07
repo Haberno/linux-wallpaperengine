@@ -1035,7 +1035,7 @@ static std::optional<ControlPointRemap> parseControlPointRemap (
         : input == "speed" ? Input::Speed : input == "rotation" ? Input::Rotation
         : input == "angularspeed" ? Input::AngularSpeed : input == "runtime" ? Input::Runtime
         : input == "timeofday" ? Input::TimeOfDay
-        : input == "particlesystemtime" ? Input::ParticleSystemTime
+        : input == "particlesystemtime" ? Input::ParticleSystemTime : input == "layertime" ? Input::LayerTime
         : input == "controlpoint" ? Input::ControlPoint : input == "deltatocontrolpoint" ? Input::DeltaToPoint
         : input == "directiontocontrolpoint" ? Input::DirectionToPoint : input == "layerorigin" ? Input::LayerOrigin
         : input == "color" ? Input::Color : input == "position" ? Input::Position : input == "velocity" ? std::optional (Input::Velocity) : std::nullopt;
@@ -1056,7 +1056,7 @@ static std::optional<ControlPointRemap> parseControlPointRemap (
     // These initializer getters mutate the selected CP; operator getters only read it.
     const bool linearPair = (parsedInput == Input::BetweenPoints && parsedOutput.has_value ())
         || (parsedOutput == Output::BetweenPoints && parsedInput.has_value ()
-            && (!initializer || (parsedInput != Input::ParticleSystemTime && !pointInput)));
+            && (!initializer || !pointInput));
     const bool periodic = parsedTransform == Transform::Sine || parsedTransform == Transform::Square
         || parsedTransform == Transform::Saw || parsedTransform == Transform::Triangle;
     const bool linearTransform = parsedTransform == Transform::Identity || periodic;
