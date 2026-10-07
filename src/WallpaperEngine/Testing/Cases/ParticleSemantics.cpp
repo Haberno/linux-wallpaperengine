@@ -4978,3 +4978,80 @@ TEST_CASE ("layer origin remaps native parent composed coordinates through share
         }
     }
 }
+
+TEST_CASE ("initializer lifetime fraction admits only the measured two point output", "[particle][remap][remap-initializer-phase]") {
+    WallpaperEngine::Data::Model::Project project {};
+    const auto data = WallpaperEngine::Data::JSON::JSON::parse (R"({"id":550,"particle":{"initializer":[
+        {"name":"remapinitialvalue","input":"lifetimefraction","output":"positionbetweentwocontrolpoints","operation":"remap"},
+        {"name":"remapinitialvalue","input":"lifetimefraction","output":"size","operation":"remap"},
+        {"name":"remapinitialvalue","input":"lifetimefraction","output":"positionbetweentwocontrolpoints","operation":"remap","transformfunction":"simplexnoise"}
+    ]}})");
+    const auto object = WallpaperEngine::Data::Parsers::ObjectParser::parse (data, project);
+    const auto* definition = object->as<Particle> ();
+    REQUIRE (definition != nullptr);
+    REQUIRE (definition->initializers.size () == 1);
+    const auto* remap = definition->initializers.front ()->as<ControlPointRemapInitializer> ();
+    REQUIRE (remap != nullptr);
+    CHECK (remap->remap.input == ControlPointRemap::Input::LifetimeFraction);
+}
+
+TEST_CASE ("initializer lifetime fraction uses birth phase independently of age and lifetime", "[particle][remap][remap-initializer-phase]") {
+    using WallpaperEngine::Render::Objects::applyParticleControlPointRemap;
+    using WallpaperEngine::Render::Objects::ControlPointData;
+    const struct { float phase, remap, multiply, add, subtract; } samples[] = {
+        { 0, 0, 0, .25f, .25f }, { .125f, .125f, .03125f, .375f, .125f },
+        { .875f, .875f, .21875f, 1.125f, -.625f }
+    };
+    std::vector<ControlPointData> points (2);
+    points[0].position = { -60, 0, 0 };
+    points[1].position = { 60, 0, 0 };
+    for (const auto& sample : samples) {
+        const struct { const char* name; float expected; } operations[] = {
+            { "remap", sample.remap }, { "multiply", sample.multiply },
+            { "add", sample.add }, { "subtract", sample.subtract }
+        };
+        for (const auto& operation : operations) {
+            WallpaperEngine::Data::Model::Project project {};
+            auto data = WallpaperEngine::Data::JSON::JSON::parse (R"({"id":551,"particle":{"initializer":[{
+                "name":"remapinitialvalue","input":"lifetimefraction","output":"positionbetweentwocontrolpoints","operation":"remap"
+            }]}})");
+            data["particle"]["initializer"][0]["operation"] = operation.name;
+            const auto object = WallpaperEngine::Data::Parsers::ObjectParser::parse (data, project);
+            const auto* definition = object->as<Particle> ();
+            REQUIRE (definition != nullptr);
+            REQUIRE (definition->initializers.size () == 1);
+            const auto* parsed = definition->initializers.front ()->as<ControlPointRemapInitializer> ();
+            REQUIRE (parsed != nullptr);
+            for (const float lifetime : { 0.0f, 4.0f, 12.0f }) {
+                INFO ("phase=" << sample.phase << ", operation=" << operation.name << ", lifetime=" << lifetime);
+                ParticleInstance particle;
+                particle.position = { -30, -45, 40 };
+                particle.velocity = { 7, -11, 13 };
+                particle.lifetime = lifetime;
+                particle.age = 3;
+                particle.oscillationRandom = .625f; // mode-zero source is still exactly zero
+                applyParticleControlPointRemap (particle, parsed->remap, points, true, false,
+                    5, .6f, glm::vec3 (0), sample.phase);
+                CHECK (particle.position == glm::vec3 (-60 + 120 * operation.expected, -45, 40));
+                CHECK (particle.velocity == glm::vec3 (7, -11, 13));
+                CHECK (particle.lifetime == lifetime);
+                CHECK (particle.age == 3);
+                CHECK (particle.oscillationRandom == .625f);
+            }
+        }
+    }
+    // The same native enum intentionally uses age/maxlife in the operator dispatcher.
+    WallpaperEngine::Data::Model::Project project {};
+    auto data = WallpaperEngine::Data::JSON::JSON::parse (R"({"id":552,"particle":{"operator":[{
+        "name":"remapvalue","input":"lifetimefraction","output":"positionbetweentwocontrolpoints","operation":"remap"
+    }]}})");
+    const auto object = WallpaperEngine::Data::Parsers::ObjectParser::parse (data, project);
+    const auto* definition = object->as<Particle> ();
+    REQUIRE (definition->operators.size () == 1);
+    ParticleInstance particle;
+    particle.position = { 0, -45, 40 };
+    particle.age = 1; particle.lifetime = 4;
+    const auto& remap = definition->operators.front ()->as<ControlPointRemapOperator> ()->remap;
+    applyParticleControlPointRemap (particle, remap, points, false, false, 5, .6f, glm::vec3 (0), .875f);
+    CHECK (particle.position == glm::vec3 (-30, -45, 40));
+}

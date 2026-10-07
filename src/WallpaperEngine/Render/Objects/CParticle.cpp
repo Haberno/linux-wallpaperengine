@@ -948,9 +948,6 @@ void CParticle::update (float dt) {
     }
     for (uint32_t i = firstNewParticle; i < m_particleCount; ++i) {
 	m_particles[i].serial = ++m_nextParticleSerial;
-	if (m_particle.animationMode == "randomframe") {
-	    m_particles[i].oscillationRandom = WallpaperEngine::Maths::randomFloat (m_rng, 0.0f, 1.0f);
-	}
     }
 
     std::vector<ControlPointData> worldControlPoints;
@@ -1300,8 +1297,10 @@ EmitterFunc CParticle::createBoxEmitter (const ParticleEmitter& emitter) {
 		p.initial.size = p.size;
 		p.initial.lifetime = p.lifetime;
 
-		// Reset oscillator state for reused particles
-		p.oscillationRandom = -1.0f;
+		// Reset oscillator state for reused particles. Native publishes randomframe
+		// phase before initializer dispatch, shared with later animation/oscillation.
+		p.oscillationRandom = m_particle.animationMode == "randomframe"
+		    ? WallpaperEngine::Maths::randomFloat (m_rng, 0.0f, 1.0f) : -1.0f;
 		p.trailHistory.clear ();
 		p.trailLastFrameValid = false;
 
@@ -1522,8 +1521,10 @@ EmitterFunc CParticle::createSphereEmitter (const ParticleEmitter& emitter) {
 	    p.initial.size = p.size;
 	    p.initial.lifetime = p.lifetime;
 
-	    // Reset oscillator state for reused particles
-	    p.oscillationRandom = -1.0f;
+	    // Reset oscillator state for reused particles. Keep the birth phase available
+	    // to initializers and retain the same fraction for later consumers.
+	    p.oscillationRandom = m_particle.animationMode == "randomframe"
+		? WallpaperEngine::Maths::randomFloat (m_rng, 0.0f, 1.0f) : -1.0f;
 	    p.trailHistory.clear ();
 	    p.trailLastFrameValid = false;
 
@@ -1550,7 +1551,7 @@ static float particleRemapInverseLength (const float squared) {
 void WallpaperEngine::Render::Objects::applyParticleControlPointRemap (
     ParticleInstance& particle, const ControlPointRemap& remap,
     const std::vector<ControlPointData>& controlPoints, const bool initializer, const bool angularVelocityAvailable,
-    const float runtime, const float timeOfDay, const glm::vec3 layerOrigin
+    const float runtime, const float timeOfDay, const glm::vec3 layerOrigin, const float initializerPhase
 ) {
     const float weight = initializer ? 1.0f : particleOperatorBlend (particle.getLifetimePos (), remap.blendTimes);
     if (remap.transform == ControlPointRemap::Transform::SimplexNoise
@@ -1615,7 +1616,10 @@ void WallpaperEngine::Render::Objects::applyParticleControlPointRemap (
             input = glm::length (particle.position - controlPoints[remap.inputControlPoint0].position);
             break;
         case ControlPointRemap::Input::MaxLifetime: input = particle.lifetime; break;
-        case ControlPointRemap::Input::LifetimeFraction: input = particle.getLifetimePos (); break;
+        case ControlPointRemap::Input::LifetimeFraction:
+            // Initializer enum0 reads the birth animation phase; operators use age/maxlife.
+            input = initializer ? initializerPhase : particle.getLifetimePos ();
+            break;
         // Native size input reads birth +0x278 or working +0x270.
         case ControlPointRemap::Input::Size: input = initializer ? particle.initial.size : particle.size; break;
         // Alpha arrays alias until an alpha-writing operator separates them.
@@ -1883,7 +1887,8 @@ InitializerFunc CParticle::createControlPointRemapInitializer (const ControlPoin
     includeControlPoint (remap.outputControlPoint1);
     return [this, &remap] (ParticleInstance& particle) {
         applyParticleControlPointRemap (particle, remap, m_controlPoints, true, m_hasAngularVelocity, getScene ().getTime (), g_Daytime,
-            remap.input == ControlPointRemap::Input::LayerOrigin ? remapLayerOrigin () : glm::vec3 (0.0f));
+            remap.input == ControlPointRemap::Input::LayerOrigin ? remapLayerOrigin () : glm::vec3 (0.0f),
+            m_particle.animationMode == "randomframe" ? particle.oscillationRandom : 0.0f);
     };
 }
 

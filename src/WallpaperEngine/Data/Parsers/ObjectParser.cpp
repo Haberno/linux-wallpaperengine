@@ -1056,7 +1056,7 @@ static std::optional<ControlPointRemap> parseControlPointRemap (
     // These initializer getters mutate the selected CP; operator getters only read it.
     const bool linearPair = (parsedInput == Input::BetweenPoints && parsedOutput.has_value ())
         || (parsedOutput == Output::BetweenPoints && parsedInput.has_value ()
-            && (!initializer || (parsedInput != Input::LifetimeFraction && parsedInput != Input::ParticleSystemTime && !pointInput)));
+            && (!initializer || (parsedInput != Input::ParticleSystemTime && !pointInput)));
     const bool periodic = parsedTransform == Transform::Sine || parsedTransform == Transform::Square
         || parsedTransform == Transform::Saw || parsedTransform == Transform::Triangle;
     const bool linearTransform = parsedTransform == Transform::Identity || periodic;
