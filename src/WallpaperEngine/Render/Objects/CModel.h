@@ -108,6 +108,9 @@ private:
     const Model3D& m_model;
     std::shared_ptr<ModelData> m_modelData;
     std::vector<MaterialUniquePtr> m_runtimeMaterials;
+    std::vector<const Material*> m_materials;
+    std::vector<uint64_t> m_materialShapeIds;
+    uint64_t m_structureRevision = UINT64_MAX;
     uint64_t m_materialRevision = 0;
     /** Legacy SceneScript compatibility: published model layers read thisLayer.size. */
     Data::Model::DynamicValue m_size;

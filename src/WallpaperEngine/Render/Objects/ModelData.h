@@ -14,6 +14,7 @@ class ModelData {
 public:
     struct Shape {
 	Scripting::ModelDataShape input;
+	uint64_t id = 0;
 	std::string geometryMaterial;
 	uint32_t geometryVertexFormat = 0;
 	Data::Model::MdlMesh layout;
@@ -32,9 +33,11 @@ public:
     std::vector<Shape> shapes;
     Data::Model::MdlMesh mesh;
     uint64_t materialRevision = 0;
+    uint64_t structureRevision = 0;
     std::function<const char* (const Scripting::ModelDataShape&)> validateMaterial;
 
 private:
+    uint64_t m_nextShapeId = 0;
     static void updateLayout (Shape& shape);
 };
 

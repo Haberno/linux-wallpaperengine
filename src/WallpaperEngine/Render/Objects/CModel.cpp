@@ -52,6 +52,7 @@ ModelData::ModelData (std::vector<Scripting::ModelDataShape> input) {
     bool hasPositions = false;
     for (auto& source : input) {
 	Shape shape;
+	shape.id = m_nextShapeId++;
 	shape.input = std::move (source);
 	shape.geometryMaterial = shape.input.material;
 	shape.geometryVertexFormat = shape.input.vertexFormat;
@@ -184,15 +185,21 @@ const char* ModelData::replaceData (std::vector<Scripting::ModelDataShape> repla
     // Native validates only a supplied material on recreation. Omitted material
     // retains the path and bypasses that gate. Scene-owned resources validate
     // supplied materials; resources without a validator keep their known history.
-    if (replacements.size () > shapes.size ()) {
-	return "IModelData.replaceData currently requires the existing shape count";
-    }
     for (size_t index = 0; index < replacements.size (); ++index) {
 	const auto& replacement = replacements[index];
-	const auto& original = shapes[index].input;
+	if (replacement.deleteShape) {
+	    if (index >= shapes.size ()) return "Cannot delete a missing model shape";
+	    continue;
+	}
+	const bool appended = index >= shapes.size ();
+	const Shape empty;
+	const auto& original = appended ? empty.input : shapes[index].input;
+	if (appended && (replacement.material.empty () || !validateMaterial)) {
+	    return "Appending model shapes requires a supplied material and scene validation";
+	}
 	const bool layoutChanged = replacement.vertexFormat != 0 && replacement.vertexFormat != original.vertexFormat;
 	const size_t originalIndexCount = original.indexWidth == 0 ? 0 : original.indices.size () / original.indexWidth;
-	const bool recreate = layoutChanged || (replacement.deleteIndices && original.indexWidth != 0)
+	const bool recreate = appended || layoutChanged || (replacement.deleteIndices && original.indexWidth != 0)
 	    || (replacement.hasVertices && (!original.vertexDynamic || replacement.vertexFloatCount > original.vertices.size ()))
 	    || (replacement.indexWidth != 0 && (!original.indexDynamic || replacement.indexCount > originalIndexCount));
 	const bool suppliedMaterial = !replacement.material.empty ();
@@ -200,8 +207,7 @@ const char* ModelData::replaceData (std::vector<Scripting::ModelDataShape> repla
 	    || (replacement.vertexFormat & shapes[index].geometryVertexFormat) != shapes[index].geometryVertexFormat)) {
 	    return "IModelData.replaceData requires compiled shader validation for changed material or missing original semantics";
 	}
-	if (replacement.deleteShape
-	    || (layoutChanged && (replacement.vertexFormat & ~0x800fu) != 0)
+	if ((layoutChanged && (replacement.vertexFormat & ~0x800fu) != 0)
 	    || (!layoutChanged && replacement.vertexFormat != 0 && replacement.strideBytes != original.strideBytes)
 	    || (!recreate && original.indexWidth == 0 && replacement.indexWidth != 0)
 	    || (recreate && (!replacement.hasVertices
@@ -234,11 +240,24 @@ const char* ModelData::replaceData (std::vector<Scripting::ModelDataShape> repla
     GLint previous = 0;
     glGetIntegerv (GL_ARRAY_BUFFER_BINDING, &previous);
     for (size_t index = 0; index < replacements.size (); ++index) {
-	auto& shape = shapes[index];
 	auto& replacement = replacements[index];
+	if (replacement.deleteShape) continue;
+	const bool appended = index >= shapes.size ();
+	if (appended) {
+	    shapes.emplace_back ();
+	    auto& added = shapes.back ();
+	    added.id = m_nextShapeId++;
+	    added.geometryMaterial = replacement.material;
+	    added.geometryVertexFormat = replacement.vertexFormat;
+	    glGenBuffers (1, &added.vertexBuffer);
+	    mesh.submeshes.emplace_back ();
+	    mesh.submeshes.back ().materialPath = replacement.material;
+	    ++structureRevision;
+	}
+	auto& shape = shapes[index];
 	const bool layoutChanged = replacement.vertexFormat != 0 && replacement.vertexFormat != shape.input.vertexFormat;
 	const size_t originalIndexCount = shape.input.indexWidth == 0 ? 0 : shape.input.indices.size () / shape.input.indexWidth;
-	const bool recreate = layoutChanged || (replacement.deleteIndices && shape.input.indexWidth != 0)
+	const bool recreate = appended || layoutChanged || (replacement.deleteIndices && shape.input.indexWidth != 0)
 	    || (replacement.hasVertices && (!shape.input.vertexDynamic || replacement.vertexFloatCount > shape.input.vertices.size ()))
 	    || (replacement.indexWidth != 0 && (!shape.input.indexDynamic || replacement.indexCount > originalIndexCount));
 	if (!recreate) {
@@ -319,6 +338,30 @@ const char* ModelData::replaceData (std::vector<Scripting::ModelDataShape> repla
 	    }
 	}
     }
+    // Native null markers refer to the original input indices. Compact only
+    // after the entire replacement traversal succeeds; errors retain the prefix.
+    size_t removed = 0;
+    for (size_t index = 0; index < replacements.size (); ++index) {
+        if (!replacements[index].deleteShape) continue;
+        const auto current = index - removed++;
+        if (static_cast<GLuint> (previous) == shapes[current].vertexBuffer
+            || static_cast<GLuint> (previous) == shapes[current].indexBuffer) previous = 0;
+        glDeleteBuffers (1, &shapes[current].vertexBuffer);
+        glDeleteBuffers (1, &shapes[current].indexBuffer);
+        shapes.erase (shapes.begin () + static_cast<std::ptrdiff_t> (current));
+        mesh.submeshes.erase (mesh.submeshes.begin () + static_cast<std::ptrdiff_t> (current));
+        ++structureRevision;
+        ++materialRevision;
+    }
+    if (removed != 0 && !shapes.empty ()) {
+        const auto& first = shapes.front ().layout;
+        mesh.vertexTag = first.vertexTag;
+        mesh.strideBytes = first.strideBytes;
+        mesh.positionOffset = first.positionOffset;
+        mesh.normalOffset = first.normalOffset;
+        mesh.tangentOffset = first.tangentOffset;
+        mesh.uvOffset = first.uvOffset;
+    }
     glBindBuffer (GL_ARRAY_BUFFER, static_cast<GLuint> (previous));
     return nullptr;
 }
@@ -340,9 +383,16 @@ CModel::CModel (Wallpapers::CScene& scene, const Model3D& model) :
     this->registerProperty ("size", this->m_size);
     this->registerProperty ("castshadow", *model.castShadow->value);
     this->registerProperty ("perspective", *model.perspective->value);
-    if (m_modelData) m_materialRevision = m_modelData->materialRevision;
+    if (m_modelData) {
+        m_materialRevision = m_modelData->materialRevision;
+        m_runtimeMaterials.resize (model.materials.size ());
+        for (size_t index = 0; index < model.materials.size (); ++index) {
+            m_materialShapeIds.push_back (m_modelData->shapes[index].id);
+            m_materials.push_back (model.materials[index].get ());
+        }
+    }
     for (size_t index = 0; index < model.materials.size (); ++index) {
-        registerMaterialProperties (index, *model.materials[index]);
+        registerMaterialProperties (m_modelData ? m_materialShapeIds[index] : index, *model.materials[index]);
     }
     const auto addLayer = [&] (const ImageAnimationLayer* settings, const MdlAnimationClip* clip) {
 	auto layer = std::make_unique<AnimationLayer> ();
@@ -380,7 +430,7 @@ CModel::CModel (Wallpapers::CScene& scene, const Model3D& model) :
 
 CModel::~CModel () {
     for (size_t index = 0; index < m_runtimeMaterials.size (); ++index) {
-        if (m_runtimeMaterials[index]) unregisterMaterialProperties (index, *m_runtimeMaterials[index]);
+        if (m_runtimeMaterials[index]) unregisterMaterialProperties (m_materialShapeIds[index], *m_runtimeMaterials[index]);
     }
 
     for (const auto& pass : this->m_passes) {
@@ -409,6 +459,19 @@ void CModel::setup () {
     }
 
     CRenderable::setup ();
+
+    if (m_modelData) {
+        // Initial material init hooks can change the resource before setup.
+        // Build from the current shapes through the same owned staging path.
+        m_initialized = true;
+        --m_materialRevision;
+        syncModelDataMaterials ();
+        if (getScene ().getLights ().shadowViewCount > 0) {
+            setupShadowProgram ();
+            m_shadowBounds = ModelBounds (m_modelData->mesh, 0);
+        }
+        return;
+    }
 
     this->m_skinningEnabled = this->m_model.mesh.skinned && !this->m_model.animationData.bones.empty ();
     this->m_morphingEnabled = !m_modelData && !m_model.animationData.bones.empty ()
@@ -580,34 +643,56 @@ void CModel::syncModelDataMaterials () {
     // Synchronize after hooks, including hidden consumers, before shadow/sort.
     // New material init hooks may publish another revision for the next frame.
     m_materialRevision = m_modelData->materialRevision;
-    m_runtimeMaterials.resize (m_modelData->shapes.size ());
-    std::vector<MaterialUniquePtr> replacements (m_runtimeMaterials.size ());
+    const auto structureRevision = m_modelData->structureRevision;
+    const bool structureChanged = m_structureRevision != structureRevision;
+    std::vector<uint64_t> shapeIds;
+    std::vector<size_t> previousIndices;
+    std::vector<MaterialUniquePtr> replacements (m_modelData->shapes.size ());
     std::vector<const Material*> materials;
     try {
-        for (size_t index = 0; index < m_runtimeMaterials.size (); ++index) {
-            const auto& current = m_runtimeMaterials[index] ? m_runtimeMaterials[index] : m_model.materials[index];
-            const auto& path = m_modelData->shapes[index].input.material;
-            if (path != current->filename) {
-                replacements[index] = Data::Parsers::MaterialParser::load (getScene ().getScene ().project, path, true);
+        for (size_t index = 0; index < m_modelData->shapes.size (); ++index) {
+            const auto& shape = m_modelData->shapes[index];
+            const auto found = std::ranges::find (m_materialShapeIds, shape.id);
+            const auto previous = static_cast<size_t> (found - m_materialShapeIds.begin ());
+            const auto* current = found == m_materialShapeIds.end () ? nullptr : m_materials[previous];
+            if (!current || shape.input.material != current->filename) {
+                replacements[index] = Data::Parsers::MaterialParser::load (getScene ().getScene ().project, shape.input.material, true);
                 if (replacements[index]->passes.empty ()) throw std::runtime_error ("Model material has no passes");
             }
-            materials.push_back (replacements[index] ? replacements[index].get () : current.get ());
+            shapeIds.push_back (shape.id);
+            previousIndices.push_back (previous);
+            materials.push_back (replacements[index] ? replacements[index].get () : current);
         }
     } catch (const std::exception& error) {
         sLog.error ("Model material replacement failed: ", error.what ());
         return;
     }
-    if (std::ranges::none_of (replacements, [] (const auto& material) { return material != nullptr; })) return;
+    if (!structureChanged && std::ranges::none_of (replacements, [] (const auto& material) { return material != nullptr; })) return;
     const auto previousTexture = m_texture;
     const auto previousAnimationTime = m_animationTime;
     auto previousClasses = std::move (m_renderSortClasses);
     auto previousPasses = std::move (m_passes);
+    std::vector<SubmeshBuffers> previousSubmeshes;
     std::vector<std::pair<bool, bool>> previousShadow;
-    for (const auto& buffers : m_submeshes) previousShadow.emplace_back (buffers.castsShadow, buffers.shadowCulling);
+    if (structureChanged) {
+        previousSubmeshes = std::move (m_submeshes);
+        m_submeshes.resize (materials.size ());
+        for (size_t index = 0; index < materials.size (); ++index) {
+            auto& buffers = m_submeshes[index];
+            const auto& shape = m_modelData->shapes[index];
+            buffers.vertexBuffer = shape.vertexBuffer;
+            buffers.indexBuffer = shape.indexBuffer;
+            buffers.vertexCount = static_cast<GLsizei> (shape.input.vertices.size () * sizeof (float) / shape.input.strideBytes);
+            buffers.indexType = shape.input.indexWidth == 2 ? GL_UNSIGNED_SHORT : GL_UNSIGNED_INT;
+            buffers.indexCount = shape.input.indexWidth == 0 ? 0 : static_cast<GLsizei> (shape.input.indices.size () / shape.input.indexWidth);
+        }
+    } else {
+        for (const auto& buffers : m_submeshes) previousShadow.emplace_back (buffers.castsShadow, buffers.shadowCulling);
+    }
     try {
-        if (replacements[0]) {
+        if (materials.empty () || m_materials.empty () || materials[0] != m_materials[0]) {
             m_texture.reset ();
-            detectTexture (*replacements[0]);
+            if (!materials.empty ()) detectTexture (*materials[0]);
             if (!m_texture) m_texture = std::make_shared<CFBO> ("", TextureFormat_ARGB8888, TextureFlags_NoFlags, 1, 1, 1, 1, 1);
             m_animationTime = 0.0;
             for (const auto& frame : m_texture->getFrames ()) m_animationTime += frame->frametime;
@@ -617,25 +702,46 @@ void CModel::syncModelDataMaterials () {
         for (auto* pass : m_passes) delete pass;
         m_passes = std::move (previousPasses);
         m_renderSortClasses = std::move (previousClasses);
-        for (size_t index = 0; index < m_submeshes.size (); ++index) {
-            m_submeshes[index].castsShadow = previousShadow[index].first;
-            m_submeshes[index].shadowCulling = previousShadow[index].second;
+        if (structureChanged) {
+            m_submeshes = std::move (previousSubmeshes);
+        } else {
+            for (size_t index = 0; index < m_submeshes.size (); ++index) {
+                m_submeshes[index].castsShadow = previousShadow[index].first;
+                m_submeshes[index].shadowCulling = previousShadow[index].second;
+            }
         }
         m_texture = previousTexture;
         m_animationTime = previousAnimationTime;
         sLog.error ("Model material replacement failed: ", error.what ());
         return;
     }
-    // Passes and queued scripts retain references into material constants.
-    // Retire them before replacing their owners, preserving unrelated keys.
+    // Stable resource identities preserve survivor property keys through index
+    // compaction. Passes retire before any referenced material owner is released.
     for (auto* pass : previousPasses) delete pass;
-    for (size_t index = 0; index < replacements.size (); ++index) {
-        if (!replacements[index]) continue;
-        const auto& current = m_runtimeMaterials[index] ? m_runtimeMaterials[index] : m_model.materials[index];
-        unregisterMaterialProperties (index, *current);
-        m_runtimeMaterials[index] = std::move (replacements[index]);
-        registerMaterialProperties (index, *m_runtimeMaterials[index], true);
+    for (const auto& buffers : previousSubmeshes) {
+        if (buffers.shadowVao != GL_NONE) glDeleteVertexArrays (1, &buffers.shadowVao);
     }
+    for (size_t previous = 0; previous < m_materialShapeIds.size (); ++previous) {
+        const auto found = std::ranges::find (shapeIds, m_materialShapeIds[previous]);
+        if (found == shapeIds.end () || materials[found - shapeIds.begin ()] != m_materials[previous]) {
+            unregisterMaterialProperties (m_materialShapeIds[previous], *m_materials[previous]);
+        }
+    }
+    std::vector<MaterialUniquePtr> owners (materials.size ());
+    std::vector<size_t> registrations;
+    for (size_t index = 0; index < materials.size (); ++index) {
+        if (replacements[index]) {
+            owners[index] = std::move (replacements[index]);
+            registrations.push_back (index);
+        } else {
+            owners[index] = std::move (m_runtimeMaterials[previousIndices[index]]);
+        }
+    }
+    m_runtimeMaterials = std::move (owners);
+    m_materials = std::move (materials);
+    m_materialShapeIds = std::move (shapeIds);
+    m_structureRevision = structureRevision;
+    for (const auto index : registrations) registerMaterialProperties (m_materialShapeIds[index], *m_materials[index], true);
     getScene ().getScriptEngine ().initializeQueuedScripts (this);
 }
 
@@ -694,6 +800,7 @@ void CModel::setupGeometryCallback (Effects::CPass* pass, size_t submeshIndex) {
     pass->setGeometryCallback (
 	[this, pass, submeshIndex, revision = uint64_t (0), vertexTag = uint32_t (0),
 	 locations = std::array<GLint, 7> { -1, -1, -1, -1, -1, -1, -1 }] () mutable {
+	    if (m_modelData && m_structureRevision != m_modelData->structureRevision) return;
 	    const auto& mesh = m_modelData ? m_modelData->shapes[submeshIndex].layout : m_model.mesh;
 	    if (revision == pass->getShaderRevision () && vertexTag == mesh.vertexTag) {
 		return;
@@ -774,6 +881,7 @@ void CModel::setupGeometryCallback (Effects::CPass* pass, size_t submeshIndex) {
 	    }
 	},
 	[this, submeshIndex] () {
+	    if (m_modelData && m_structureRevision != m_modelData->structureRevision) return;
 	    // Compensate only the renderer's output/orthographic Y conversions.
 	    // Authored negative scales can intentionally turn a skybox inside out.
 	    const auto& camera = this->getScene ().getCamera ();
@@ -1077,7 +1185,8 @@ void CModel::prepareRender () {
 }
 
 void CModel::renderPasses (const std::optional<RenderSortClass> renderClass) {
-    if (!this->m_frameVisible || !m_mainViewVisible) return;
+    if (!this->m_frameVisible || !m_mainViewVisible
+        || (m_modelData && m_structureRevision != m_modelData->structureRevision)) return;
 
 #if !NDEBUG
     const std::string debugName
@@ -1105,6 +1214,7 @@ void CModel::renderPasses (const std::optional<RenderSortClass> renderClass) {
 
 void CModel::renderShadow (const glm::mat4& lightViewProjection) {
     if (!this->m_frameVisible || !this->m_shadowProgram
+        || (m_modelData && m_structureRevision != m_modelData->structureRevision)
 	|| !this->m_model.castShadow->value->getBool ()
 	|| !(m_renderBounds ? modelAnimationVolumeIntersects (*m_renderBounds, m_modelMatrix, lightViewProjection,
             getScene ().getCamera ().usesReverseDepth ())
