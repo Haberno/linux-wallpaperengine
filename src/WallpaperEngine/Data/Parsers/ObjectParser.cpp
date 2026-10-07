@@ -1059,7 +1059,8 @@ static std::optional<ControlPointRemap> parseControlPointRemap (
     const bool periodic = parsedTransform == Transform::Sine || parsedTransform == Transform::Square
         || parsedTransform == Transform::Saw || parsedTransform == Transform::Triangle;
     const bool linearTransform = parsedTransform == Transform::Identity || periodic
-        || (initializer && parsedTransform == Transform::SimplexNoise);
+        || (initializer && (parsedTransform == Transform::SimplexNoise
+            || (parsedTransform == Transform::FbmNoise && it.optional ("transformoctaves", 3) == 3)));
     const bool speedOutput = parsedOutput == Output::Speed;
     const bool arithmetic = linearPair
         && (operation == "multiply" || operation == "add" || operation == "subtract");
