@@ -3,6 +3,7 @@
 #include "WallpaperEngine/Render/Utils/NoiseUtils.h"
 
 #include <algorithm>
+#include <bit>
 #include <cmath>
 #include <limits>
 
@@ -118,14 +119,33 @@ glm::vec3 directionOr (const glm::vec3& vector, const glm::vec3& fallback) {
     return length > 1e-6f ? vector / length : fallback;
 }
 
-/** Native 14026eb60/14026e340/140271910: independent, uncontrolled rope chains. */
-bool applyRope (const MdlAnimationData& data, MdlPhysicsStep& physics, MdlPose& pose) {
+MdlBoneFrame sampleControl (
+    const MdlAnimationData& data, const std::vector<MdlActiveAnimation>& layers, const size_t index
+) {
+    const auto& control = data.controls[index];
+    const auto reference = matrixPose (control.referenceWorld.value_or (control.bindWorld));
+    auto value = reference;
+    for (const auto& layer : layers) {
+	if (!layer.animation || layer.weight <= 0.0f || index >= layer.animation->controlFrames.size ())
+	    continue;
+	if (index < layer.animation->controlFlags.size () && (layer.animation->controlFlags[index] & 1))
+	    continue;
+	const auto& frames = layer.animation->controlFrames[index];
+	if (!frames.empty ()) composeLayer (value, reference, samplePose (layer, frames), layer);
+    }
+    return value;
+}
+
+/** Native 14026eb60/14026e340/140271910: independent rope chains. */
+bool applyRope (
+    const MdlAnimationData& data, const std::vector<MdlActiveAnimation>& layers, MdlPhysicsStep& physics, MdlPose& pose
+) {
     if (!physics.rope || data.ikGroups.size () != 1) return false;
     const auto& group = data.ikGroups.front ();
     if (group.hasDependencies || group.nodes.size () != 1 || group.nodes.front ().branches.size () != 1)
 	return false;
     const auto& chain = group.nodes.front ().branches.front ();
-    if (chain.flags != 4 || chain.bones.size () < 2 || chain.bones.front () != group.root
+    if ((chain.flags != 4 && chain.flags != 5) || chain.bones.size () < 2 || chain.bones.front () != group.root
 	|| group.nodes.front ().root != group.root) return false;
     // Other skeleton bones need verified descendant/attachment propagation first.
     if (chain.bones.size () != data.bones.size ()) return false;
@@ -141,6 +161,13 @@ bool applyRope (const MdlAnimationData& data, MdlPhysicsStep& physics, MdlPose& 
     }
     const auto tip = chain.bones.back ();
     if (!data.bones[tip].rope || chain.maxLength <= 0.0f) return false;
+    std::optional<glm::mat4> endControl;
+    if (chain.flags == 5) {
+	// Aim-to-target and controlled free ends take separate native solver branches.
+	if (data.controls.size () != 1 || data.controls[0].bone != tip || data.controls[0].type != 0
+	    || data.bones[tip].ikAimToTarget || data.bones[tip].ikFollowEnd) return false;
+	endControl = poseMatrix (sampleControl (data, layers, 0));
+    }
     const auto& settings = *data.bones[tip].rope;
     const float determinant = glm::determinant (glm::mat3 (physics.model));
     if (determinant == 0.0f || !std::isfinite (determinant)) return false;
@@ -154,7 +181,7 @@ bool applyRope (const MdlAnimationData& data, MdlPhysicsStep& physics, MdlPose& 
     points[root].current = worldPoint (glm::vec3 (pose.worldBones[root][3]));
     if (!data.bones[tip].ikFollowEnd) {
 	const glm::vec3 origin (pose.worldBones[root][3]);
-	glm::vec3 target (pose.worldBones[tip][3]);
+	glm::vec3 target (endControl ? (*endControl)[3] : pose.worldBones[tip][3]);
 	const auto delta = target - origin;
 	const float length = glm::length (delta);
 	if (!settings.stretch && length > chain.maxLength) target = origin + delta / length * chain.maxLength;
@@ -225,6 +252,17 @@ bool applyRope (const MdlAnimationData& data, MdlPhysicsStep& physics, MdlPose& 
 	pose.worldBones[bone] = glm::mat4_cast (rotation) * glm::inverse (data.bones[bone].inverseBindWorld);
 	pose.worldBones[bone][3] = position;
     }
+    if (endControl) {
+	// Native 140214eb0 normalizes each control column with one inverse-square-root
+	// iteration; even a unit column retains its characteristic 0.998308 length.
+	for (int column = 0; column < 3; ++column) {
+	    const auto value = (*endControl)[column];
+	    const float squared = value.w * value.w + value.z * value.z + value.y * value.y + value.x * value.x;
+	    float inverse = std::bit_cast<float> (0x5f375a86u - (std::bit_cast<uint32_t> (squared) >> 1));
+	    inverse = (1.5f - squared * 0.5f * inverse * inverse) * inverse;
+	    pose.worldBones[tip][column] = value * inverse;
+	}
+    }
     for (size_t bone = 0; bone < data.bones.size (); ++bone)
 	pose.skinBones[bone] = pose.worldBones[bone] * data.bones[bone].inverseBindWorld;
     return true;
@@ -236,20 +274,8 @@ void applyBoneControls (
     const std::vector<glm::mat4>& locals, MdlPose& pose
 ) {
     std::vector<MdlBoneFrame> controls;
-    for (size_t index = 0; index < data.controls.size (); ++index) {
-	const auto& control = data.controls[index];
-	const auto reference = matrixPose (control.referenceWorld.value_or (control.bindWorld));
-	auto value = reference;
-	for (const auto& layer : layers) {
-	    if (!layer.animation || layer.weight <= 0.0f || index >= layer.animation->controlFrames.size ())
-		continue;
-	    if (index < layer.animation->controlFlags.size () && (layer.animation->controlFlags[index] & 1))
-		continue;
-	    const auto& frames = layer.animation->controlFrames[index];
-	    if (!frames.empty ()) composeLayer (value, reference, samplePose (layer, frames), layer);
-	}
-	controls.push_back (value);
-    }
+    for (size_t index = 0; index < data.controls.size (); ++index)
+	controls.push_back (sampleControl (data, layers, index));
     const auto findControl = [&] (const uint32_t bone, const uint32_t type) -> const MdlBoneFrame* {
 	for (size_t index = 0; index < data.controls.size (); ++index)
 	    if (data.controls[index].bone == bone && data.controls[index].type == type) return &controls[index];
@@ -532,7 +558,7 @@ MdlPose MdlAnimationEvaluator::evaluate (
 	    physics->state.previousWorld[bone] = physics->model * pose.worldBones[bone];
     }
 
-    if (!animationData.ikGroups.empty () && !(physics && applyRope (animationData, *physics, pose)))
+    if (!animationData.ikGroups.empty () && !(physics && applyRope (animationData, activeAnimations, *physics, pose)))
 	applyBoneControls (animationData, activeAnimations, locals, pose);
 
     // scalar blend tracks compose exactly like the bones do, one value per track row

@@ -1465,3 +1465,84 @@ TEST_CASE ("MDLA masks solver-owned bone tracks while preserving authored masks"
         CHECK (pose.worldBones[0][3].x == ((expected[type][flags] & 1) ? 45 : 75));
     }
 }
+
+TEST_CASE ("Controlled ropes retain native target, stretch and endpoint basis", "[mdl][animation][physics][rope][controlled]") {
+    // Native controlled01, wallpaper64.exe 40e2ce02, 2026-10-06: these first-step
+    // positions, corrected state and basis values are direct 140271910 readbacks.
+    struct Case {
+	bool stretch;
+	float angle;
+	glm::vec3 model;
+	std::array<glm::vec2, 4> positions;
+	std::array<glm::vec2, 3> basisX;
+	std::array<glm::vec3, 3> endBasis;
+	std::array<glm::vec2, 4> corrected;
+    };
+    const Case cases[] = {
+	{ false, 0.0f, { 160.0f, 45.0f, 0.0f },
+	  {{ { -45.0f, 0.0f }, { -15.0f, -0.1069526672f }, { 15.0f, -0.1069526672f }, { 45.0f, 0.0f } }},
+	  {{ { 0.9999936223f, -0.003565066727f }, { 1.0f, 0.0f }, { 0.9999936223f, 0.003565066727f } }},
+	  {{ { 0.9983081222f, 0.0f, 0.0f }, { 0.0f, 0.9983081222f, 0.0f }, { 0.0f, 0.0f, 0.9983081222f } }},
+	  {{ { 115.0f, 45.0f }, { 145.0f, 44.89304733f }, { 175.0f, 44.89304733f }, { 205.0f, 45.0f } }},
+	},
+	{ true, 0.0f, { 160.0f, 75.0f, 0.0f },
+	  {{ { -45.0f, 0.0f }, { -15.0f, -0.1069564819f }, { 15.0f, -0.1069564819f }, { 75.0f, 0.0f } }},
+	  {{ { 0.9999936223f, -0.003565193852f }, { 1.0f, 0.0f }, { 0.9999983907f, 0.001782605308f } }},
+	  {{ { 0.9983081222f, 0.0f, 0.0f }, { 0.0f, 0.9983081222f, 0.0f }, { 0.0f, 0.0f, 0.9983081222f } }},
+	  {{ { 115.0f, 75.0f }, { 152.499939f, 74.87874603f }, { 192.4999084f, 74.92822266f }, { 235.0f, 75.0f } }},
+	},
+	{ true, 0.5f, { 160.0f, 105.0f, 0.0f },
+	  {{ { -45.0f, 0.0f }, { -15.0f, -0.1069564819f }, { 15.0f, -0.1069564819f }, { 75.0f, 0.0f } }},
+	  {{ { 0.9999936223f, -0.003565193852f }, { 1.0f, 0.0f }, { 0.9999983907f, 0.001782605308f } }},
+	  {{ { 0.8760977983f, 0.4786144495f, 0.0f }, { -0.4786144495f, 0.8760977983f, 0.0f }, { 0.0f, 0.0f, 0.9983081222f } }},
+	  {{ { 115.0f, 105.0f }, { 152.499939f, 104.878746f }, { 192.4999084f, 104.9282227f }, { 235.0f, 105.0f } }},
+	},
+    };
+    for (const auto& sample : cases) {
+	CAPTURE (sample.stretch, sample.angle);
+	auto data = ropeRig ();
+	data.ikGroups[0].nodes[0].branches[0].flags = 5;
+	data.bones.back ().rope->stretch = sample.stretch;
+	// The authored control is at bind; the active control track moves and rotates it.
+	data.controls = {{ .bone = 3, .bindWorld = glm::translate (glm::mat4 (1), glm::vec3 (45, 0, 0)) }};
+	MdlAnimationClip clip;
+	clip.controlFrames = {{ { .translation = { 75, 0, 0 }, .rotation = glm::angleAxis (sample.angle, glm::vec3 (0, 0, 1)) } }};
+	MdlPhysicsState state;
+	MdlPhysicsStep physics {
+	    .state = state, .model = glm::translate (glm::mat4 (1), sample.model),
+	    .rope = MdlRopeStep { .gravity = { 0, -90, 0 }, .deltaTime = 0.03447270021f },
+	};
+	const auto pose = MdlAnimationEvaluator::evaluate (data, {{ .animation = &clip }}, &physics);
+	REQUIRE (state.ropePoints.size () == 4);
+	for (size_t bone = 0; bone < 4; ++bone) {
+	    for (int axis = 0; axis < 2; ++axis) {
+		CHECK (pose.worldBones[bone][3][axis] == Catch::Approx (sample.positions[bone][axis]).margin (2e-4f));
+		CHECK (state.ropePoints[bone].current[axis] == Catch::Approx (sample.corrected[bone][axis]).margin (2e-4f));
+		if (bone < 3)
+		    CHECK (pose.worldBones[bone][0][axis] == Catch::Approx (sample.basisX[bone][axis]).margin (2e-4f));
+	    }
+	    CHECK (pose.skinBones[bone] == pose.worldBones[bone] * data.bones[bone].inverseBindWorld);
+	}
+	for (int column = 0; column < 3; ++column) for (int axis = 0; axis < 3; ++axis)
+	    CHECK (pose.worldBones.back ()[column][axis] == Catch::Approx (sample.endBasis[column][axis]).margin (2e-6f));
+    }
+}
+
+TEST_CASE ("Unmeasured controlled rope branches retain their authored pose", "[mdl][animation][physics][rope][controlled]") {
+    for (int route = 0; route < 5; ++route) {
+	CAPTURE (route);
+	auto data = ropeRig ();
+	data.ikGroups[0].nodes[0].branches[0].flags = 5;
+	data.controls = {{ .bone = 3, .bindWorld = glm::translate (glm::mat4 (1), glm::vec3 (75, 0, 0)) }};
+	if (route == 0) data.controls[0].bone = 2;
+	if (route == 1) data.controls[0].type = 1;
+	if (route == 2) data.controls.push_back (data.controls[0]);
+	if (route == 3) data.bones.back ().ikAimToTarget = true;
+	if (route == 4) data.bones.back ().ikFollowEnd = true;
+	MdlPhysicsState state;
+	MdlPhysicsStep physics { .state = state, .rope = MdlRopeStep { .gravity = { 0, -90, 0 }, .deltaTime = 0.1f } };
+	const auto pose = MdlAnimationEvaluator::evaluate (data, {}, &physics);
+	CHECK (state.ropePoints.empty ());
+	for (const auto& skin : pose.skinBones) CHECK (skin == glm::mat4 (1));
+    }
+}
