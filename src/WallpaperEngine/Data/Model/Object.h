@@ -276,6 +276,7 @@ struct ControlPointRemap {
     glm::vec4 blendTimes { 0.0f, 0.0f, 1.0f, 1.0f };
     Component inputComponent { Component::All };
     Component outputComponent { Component::All };
+    uint32_t transformOctaves { 3 };
 };
 
 class ControlPointRemapInitializer : public ParticleInitializerBase {

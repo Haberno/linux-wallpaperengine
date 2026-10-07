@@ -1256,7 +1256,7 @@ TEST_CASE ("two-control-point remaps retain only the measured linear subset", "[
                 {"name":"remapinitialvalue","input":"positionbetweentwocontrolpoints","output":"velocity","operation":"remap"},
                 {"name":"remapinitialvalue","output":"positionbetweentwocontrolpoints","operation":"remap"},
                 {"name":"remapinitialvalue","input":"positionbetweentwocontrolpoints","output":"velocity"},
-                {"name":"remapinitialvalue","input":"positionbetweentwocontrolpoints","output":"velocity","operation":"remap","transformfunction":"fbmnoise","transformoctaves":4}
+                {"name":"remapinitialvalue","input":"positionbetweentwocontrolpoints","output":"velocity","operation":"remap","transformfunction":"fbmnoise","transformoctaves":0}
             ],"operator":[
                 {"name":"remapvalue","input":"positionbetweentwocontrolpoints","output":"velocity","operation":"remap"},
                 {"name":"remapvalue","input":"maxlifetime","output":"positionbetweentwocontrolpoints","operation":"remap"},
@@ -1447,11 +1447,11 @@ TEST_CASE ("two-control-point position arithmetic rejects unmeasured settings", 
         WallpaperEngine::Data::JSON::JSON::parse (R"({"id":386,"particle":{"operator":[
             {"name":"remapvalue","input":"maxlifetime","output":"positionbetweentwocontrolpoints","operation":"divide"},
             {"name":"remapvalue","input":"maxlifetime","output":"positionbetweentwocontrolpoints","operation":"add","flags":4},
-            {"name":"remapvalue","input":"maxlifetime","output":"positionbetweentwocontrolpoints","operation":"add","transformfunction":"simplexnoise"},
+            {"name":"remapvalue","input":"maxlifetime","output":"positionbetweentwocontrolpoints","operation":"add","transformfunction":"unknown"},
             {"name":"remapvalue","input":"lifetimefraction","output":"speed","operation":"multiply","transformfunction":"fbmnoise","flags":3,"transformoctaves":2},
             {"name":"remapvalue","input":"maxlifetime","output":"positionbetweentwocontrolpoints","operation":"add","outputcomponent":"w"},
             {"name":"remapvalue","input":"positionbetweentwocontrolpoints","output":"velocity","operation":"divide"},
-            {"name":"remapvalue","input":"positionbetweentwocontrolpoints","output":"controlpoint","operation":"add"}
+            {"name":"remapvalue","input":"size","output":"controlpoint","operation":"add"}
         ]}})"), project);
     const auto* definition = object->as<Particle> ();
     REQUIRE (definition != nullptr);
@@ -3781,7 +3781,7 @@ TEST_CASE ("periodic transforms admit measured two point paths and keep control 
                 const auto object = WallpaperEngine::Data::Parsers::ObjectParser::parse (data, project);
                 const auto* particle = object->as<Particle> ();
                 CHECK ((initializer ? particle->initializers.size () : particle->operators.size ()) == 1);
-                node["input"] = "positionbetweentwocontrolpoints";
+                node["input"] = "size";
                 node["output"] = "controlpoint";
                 data["particle"][initializer ? "initializer" : "operator"] = { node };
                 const auto unsupported = WallpaperEngine::Data::Parsers::ObjectParser::parse (data, project);
@@ -4924,7 +4924,7 @@ TEST_CASE ("layer origin input admits only measured two point destinations", "[p
     Project project {};
     const auto data = WallpaperEngine::Data::JSON::JSON::parse (R"({"id":464,"particle":{"operator":[
         {"name":"remapvalue","input":"layerorigin","output":"opacity"},
-        {"name":"remapvalue","input":"layerorigin","output":"positionbetweentwocontrolpoints","transformfunction":"simplexnoise"}
+        {"name":"remapvalue","input":"layerorigin","output":"positionbetweentwocontrolpoints","transformfunction":"fbmnoise","transformoctaves":0}
     ]}})");
     const auto object = WallpaperEngine::Data::Parsers::ObjectParser::parse (data, project);
     CHECK (object->as<Particle> ()->operators.empty ());
@@ -4999,7 +4999,7 @@ TEST_CASE ("owned remap clocks admit only two point destinations", "[particle][r
     const auto object = WallpaperEngine::Data::Parsers::ObjectParser::parse (
         WallpaperEngine::Data::JSON::JSON::parse (R"({"id":467,"particle":{"initializer":[
             {"name":"remapinitialvalue","input":"particlesystemtime","output":"size"},
-            {"name":"remapinitialvalue","input":"layertime","output":"positionbetweentwocontrolpoints","transformfunction":"fbmnoise","transformoctaves":4}
+            {"name":"remapinitialvalue","input":"layertime","output":"positionbetweentwocontrolpoints","transformfunction":"fbmnoise","transformoctaves":0}
         ]}})"), project);
     CHECK (object->as<Particle> ()->initializers.empty ());
 }
@@ -5053,7 +5053,7 @@ TEST_CASE ("initializer lifetime fraction admits only the measured two point out
     const auto data = WallpaperEngine::Data::JSON::JSON::parse (R"({"id":550,"particle":{"initializer":[
         {"name":"remapinitialvalue","input":"lifetimefraction","output":"positionbetweentwocontrolpoints","operation":"remap"},
         {"name":"remapinitialvalue","input":"lifetimefraction","output":"size","operation":"remap"},
-        {"name":"remapinitialvalue","input":"lifetimefraction","output":"positionbetweentwocontrolpoints","operation":"remap","transformfunction":"simplexnoise"}
+        {"name":"remapinitialvalue","input":"lifetimefraction","output":"positionbetweentwocontrolpoints","operation":"remap","transformfunction":"fbmnoise","transformoctaves":0}
     ]}})");
     const auto object = WallpaperEngine::Data::Parsers::ObjectParser::parse (data, project);
     const auto* definition = object->as<Particle> ();
@@ -5313,9 +5313,9 @@ TEST_CASE ("initializer CP output recomputes its aliased B endpoint for each bir
     }
 }
 
-TEST_CASE ("initializer FBM admits only default three octaves on two-point endpoints", "[particle][remap][remap-initializer-fbm]") {
+TEST_CASE ("initializer FBM admits positive counts while operators retain three octaves", "[particle][remap][remap-initializer-fbm]") {
     using namespace WallpaperEngine::Data::Model;
-    for (const int octaves : {-1, 0, 1, 2, 3, 4}) {
+    for (const int octaves : {-1, 0, 1, 2, 3, 4, 8}) {
         auto data = WallpaperEngine::Data::JSON::JSON::parse (R"({"id":933,"particle":{"initializer":[{
             "name":"remapinitialvalue","input":"positionbetweentwocontrolpoints","output":"size",
             "operation":"remap","transformfunction":"fbmnoise"
@@ -5323,9 +5323,9 @@ TEST_CASE ("initializer FBM admits only default three octaves on two-point endpo
         data["particle"]["initializer"][0]["transformoctaves"] = octaves;
         Project project {};
         const auto object = WallpaperEngine::Data::Parsers::ObjectParser::parse (data, project);
-        CHECK (object->as<Particle> ()->initializers.size () == (octaves == 3 ? 1 : 0));
+        CHECK (object->as<Particle> ()->initializers.size () == (octaves > 0 ? 1 : 0));
     }
-    // Existing operator FBM is seeded and retains its separate lifetime/speed gate.
+    // Seeded operator FBM retains three octaves for the lifetime/speed and B endpoint families.
     for (const int octaves : {2, 3}) {
         auto data = WallpaperEngine::Data::JSON::JSON::parse (R"({"id":934,"particle":{"operator":[{
             "name":"remapvalue","input":"lifetimefraction","output":"speed","flags":3,
@@ -5339,7 +5339,7 @@ TEST_CASE ("initializer FBM admits only default three octaves on two-point endpo
         node["input"] = "positionbetweentwocontrolpoints"; node["output"] = "size";
         node["operation"] = "remap"; node["flags"] = 0;
         object = WallpaperEngine::Data::Parsers::ObjectParser::parse (data, project);
-        CHECK (object->as<Particle> ()->operators.empty ());
+        CHECK (object->as<Particle> ()->operators.size () == (octaves == 3 ? 1 : 0));
     }
     auto data = WallpaperEngine::Data::JSON::JSON::parse (R"({"id":935,"particle":{"initializer":[{
         "name":"remapinitialvalue","input":"maxlifetime","output":"speed","flags":3,
@@ -5430,4 +5430,166 @@ TEST_CASE ("initializer FBM preserves asymmetric vector ranges and reflected poi
     applyParticleControlPointRemap (p, object->as<Particle> ()->initializers[0]->as<ControlPointRemapInitializer> ()->remap, points, true);
     CHECK (p.position.x == Catch::Approx (46.95988083f).margin (.00004f));
     CHECK (p.position.y == -8); CHECK (p.position.z == 7);
+}
+
+TEST_CASE ("initializer FBM retains nondefault positive octave counts", "[particle][remap][remap-noise-combinations]") {
+    using WallpaperEngine::Render::Objects::applyParticleControlPointRemap;
+    using WallpaperEngine::Render::Objects::ControlPointData;
+    // Independent native scalar samples at +/-.25 and +/-.5; every following
+    // octave here samples an integer lattice point and contributes zero.
+    const struct { int count; float divisor; } counts[] = {{1,1},{2,1.5f},{4,1.875f},{8,1.9921875f}};
+    std::vector<ControlPointData> points (2); points[1].position = {64,0,0};
+    for (const auto sample : counts) for (const float scale : {2.0f,-2.0f,0.0f})
+        for (const uint32_t flags : {0u,2u}) for (const auto operation : {"remap","multiply","add","subtract"}) {
+            auto data = WallpaperEngine::Data::JSON::JSON::parse (R"({"id":950,"particle":{"initializer":[{
+                "name":"remapinitialvalue","input":"positionbetweentwocontrolpoints","output":"size",
+                "transformfunction":"fbmnoise","outputrangemin":-2,"outputrangemax":4
+            }]}})");
+            auto& node = data["particle"]["initializer"][0];
+            node["transformoctaves"] = sample.count; node["transforminputscale"] = scale;
+            node["flags"] = flags; node["operation"] = operation;
+            WallpaperEngine::Data::Model::Project project {};
+            const auto object = WallpaperEngine::Data::Parsers::ObjectParser::parse (data, project);
+            REQUIRE (object->as<Particle> ()->initializers.size () == 1);
+            float noise = scale > 0 ? .599402666f : scale < 0 ? -.555988610f : 0;
+            if (sample.count > 1) noise += (scale > 0 ? .437431663f : scale < 0 ? -.187470704f : 0) * .5f;
+            float mapped = -2 + (noise / sample.divisor * .5f + .5f) * 6;
+            if (flags & 2u) mapped = std::clamp (mapped,0.0f,1.0f);
+            const float expected = std::string (operation) == "multiply" ? 3 * mapped
+                : std::string (operation) == "add" ? 3 + mapped : std::string (operation) == "subtract" ? 3 - mapped : mapped;
+            for (const float seed : {.125f,.875f}) {
+                ParticleInstance p; p.position = {8,7,-2}; p.initial.size = p.size = 3; p.oscillationRandom = seed;
+                applyParticleControlPointRemap (p, object->as<Particle> ()->initializers[0]->as<ControlPointRemapInitializer> ()->remap, points, true);
+                CHECK (p.size == Catch::Approx (expected).margin (.00001f)); CHECK (p.initial.size == p.size);
+                CHECK (p.oscillationRandom == seed); CHECK (p.position == glm::vec3 (8,7,-2));
+            }
+        }
+    auto data = WallpaperEngine::Data::JSON::JSON::parse (R"({"id":955,"particle":{"initializer":[{
+        "name":"remapinitialvalue","input":"positionbetweentwocontrolpoints","output":"velocity",
+        "transformfunction":"fbmnoise","transformoctaves":4,"operation":"remap","flags":0,
+        "inputrangemin":"0 .25 .125","inputrangemax":"1 1.25 1.125","outputrangemax":"8 16 24"
+    }]}})");
+    WallpaperEngine::Data::Model::Project project {};
+    const auto object = WallpaperEngine::Data::Parsers::ObjectParser::parse (data, project);
+    REQUIRE (object->as<Particle> ()->initializers.size () == 1);
+    ParticleInstance p; p.position = {8,4,-2};
+    applyParticleControlPointRemap (p, object->as<Particle> ()->initializers[0]->as<ControlPointRemapInitializer> ()->remap, points, true);
+    CHECK (p.velocity.x == Catch::Approx (((.599402666f + .437431663f * .5f) / 1.875f * .5f + .5f) * 8).margin (.00001f));
+    CHECK (p.velocity.y == Catch::Approx (-((-.555988610f - .187470704f * .5f) / 1.875f * .5f + .5f) * 16).margin (.00001f));
+    CHECK (p.velocity.z == 12);
+}
+
+TEST_CASE ("seeded operator noise composes two-point scalar endpoints with flags and arithmetic", "[particle][remap][remap-noise-combinations]") {
+    using WallpaperEngine::Render::Objects::applyParticleControlPointRemap;
+    using WallpaperEngine::Render::Objects::ControlPointData;
+    // Native1400fbe90/1400fbc70 outputs for exact seed bits0x3f000000.
+    const struct { float phase, simplex, fbm, clampedSimplex, clampedFbm; } samples[] = {
+        {-.1f,0,0,0,0}, // Scale0 control below replaces this coordinate.
+        {.25f,.8035542369f,.4432454109f,.8035542369f,.4432454109f},
+        {2.5f,-.5152724385f,-.4984532297f,.3829292357f,-.04425158352f},
+        {-1.25f,-.1699448228f,-.1052399129f,0,0}
+    };
+    std::vector<ControlPointData> points (2); points[1].position = {64,0,0};
+    for (const auto& sample : samples) for (const auto transform : {"simplexnoise","fbmnoise"})
+        for (const uint32_t flags : {0u,1u,2u,3u}) for (const auto operation : {"remap","multiply","add","subtract"}) {
+            auto data = WallpaperEngine::Data::JSON::JSON::parse (R"({"id":951,"particle":{"operator":[{
+                "name":"remapvalue","input":"positionbetweentwocontrolpoints","output":"size",
+                "outputrangemin":-2,"outputrangemax":4,"blendinstart":0,"blendinend":0.5
+            }]}})");
+            auto& node = data["particle"]["operator"][0];
+            node["transformfunction"] = transform; node["transforminputscale"] = sample.phase == -.1f ? 0 : 1;
+            node["flags"] = flags; node["operation"] = operation;
+            WallpaperEngine::Data::Model::Project project {};
+            const auto object = WallpaperEngine::Data::Parsers::ObjectParser::parse (data, project);
+            REQUIRE (object->as<Particle> ()->operators.size () == 1);
+            const bool fbm = std::string (transform) == "fbmnoise";
+            const float noise = flags & 1u ? (fbm ? sample.clampedFbm : sample.clampedSimplex) : (fbm ? sample.fbm : sample.simplex);
+            float mapped = -2 + (noise * .5f + .5f) * 6;
+            if (flags & 2u) mapped = std::clamp (mapped,0.0f,1.0f);
+            const float operated = std::string (operation) == "multiply" ? 3 * mapped
+                : std::string (operation) == "add" ? 3 + mapped : std::string (operation) == "subtract" ? 3 - mapped : mapped;
+            ParticleInstance p; p.position = {sample.phase * 64,7,-2}; p.size = 3; p.initial.size = 11;
+            p.lifetime = 8; p.age = 2; p.oscillationRandom = .5f;
+            applyParticleControlPointRemap (p, object->as<Particle> ()->operators[0]->as<ControlPointRemapOperator> ()->remap, points, false);
+            CHECK (p.size == Catch::Approx (3 + (operated - 3) * .5f).margin (.00002f));
+            CHECK (p.initial.size == 11); CHECK (p.oscillationRandom == .5f);
+            CHECK (p.position == glm::vec3 (sample.phase * 64,7,-2));
+        }
+}
+
+TEST_CASE ("seeded operator vector noise retains distinct channels and output selectors", "[particle][remap][remap-noise-combinations]") {
+    using WallpaperEngine::Render::Objects::applyParticleControlPointRemap;
+    using WallpaperEngine::Render::Objects::ControlPointData;
+    // Independent native outputs at .25 for base seed and both channel XORs.
+    const struct { const char* transform; glm::vec3 noise; } samples[] = {
+        {"simplexnoise",{.8035542369f,-.3070549369f,-.350943476f}},
+        {"fbmnoise",{.4432454109f,.03882350028f,-.05349685252f}}
+    };
+    std::vector<ControlPointData> points (2); points[1].position = {64,0,0};
+    const char* components[] = {"all","x","y","z","sum"};
+    for (const auto& sample : samples) for (unsigned selected = 0; selected < 5; ++selected)
+        for (const auto operation : {"remap","multiply","add","subtract"}) for (const bool blended : {false,true}) {
+            auto data = WallpaperEngine::Data::JSON::JSON::parse (R"({"id":952,"particle":{"operator":[{
+                "name":"remapvalue","input":"positionbetweentwocontrolpoints","output":"velocity",
+                "flags":0,"transforminputscale":1,"outputrangemin":"-2 3 7","outputrangemax":"4 13 19"
+            }]}})");
+            auto& node = data["particle"]["operator"][0]; node["transformfunction"] = sample.transform;
+            node["operation"] = operation; node["outputcomponent"] = components[selected];
+            if (blended) { node["blendinstart"] = 0; node["blendinend"] = .5f; }
+            WallpaperEngine::Data::Model::Project project {};
+            const auto object = WallpaperEngine::Data::Parsers::ObjectParser::parse (data, project);
+            REQUIRE (object->as<Particle> ()->operators.size () == 1);
+            glm::vec3 mapped = glm::vec3 (-2,3,7) + (sample.noise * .5f + .5f) * glm::vec3 (6,10,12);
+            glm::vec3 target = mapped * glm::vec3 (1,-1,1);
+            if (std::string (operation) == "multiply") target = glm::vec3 (9,8,7) * mapped;
+            else if (std::string (operation) == "add") target += glm::vec3 (9,8,7);
+            else if (std::string (operation) == "subtract") target = glm::vec3 (9,8,7) - target;
+            else if (blended && selected == 0) target = glm::vec3 (mapped.x) * glm::vec3 (1,-1,1);
+            ParticleInstance p; p.position = {16,4,-2}; p.velocity = {9,8,7}; p.lifetime = 8; p.age = 2; p.oscillationRandom = .5f;
+            applyParticleControlPointRemap (p, object->as<Particle> ()->operators[0]->as<ControlPointRemapOperator> ()->remap, points, false);
+            for (unsigned axis = 0; axis < 3; ++axis) {
+                const float expected = selected < 4 && (selected == 0 || selected == axis + 1)
+                    ? (blended ? glm::vec3 (9,8,7)[axis] + (target[axis] - glm::vec3 (9,8,7)[axis]) * .5f : target[axis])
+                    : glm::vec3 (9,8,7)[axis];
+                CHECK (p.velocity[axis] == Catch::Approx (expected).margin (.00002f));
+            }
+            CHECK (p.position == glm::vec3 (16,4,-2)); CHECK (p.oscillationRandom == .5f);
+        }
+    // Vector selectors reduce input before the scalar B destination's seed call.
+    for (const auto& sample : samples) {
+        auto data = WallpaperEngine::Data::JSON::JSON::parse (R"({"id":953,"particle":{"operator":[{
+            "name":"remapvalue","input":"position","inputcomponent":"y","output":"positionbetweentwocontrolpoints",
+            "flags":0,"transforminputscale":1,"inputrangemax":64,"operation":"remap"
+        }]}})");
+        data["particle"]["operator"][0]["transformfunction"] = sample.transform;
+        WallpaperEngine::Data::Model::Project project {};
+        const auto object = WallpaperEngine::Data::Parsers::ObjectParser::parse (data, project);
+        REQUIRE (object->as<Particle> ()->operators.size () == 1);
+        ParticleInstance p; p.position = {8,-16,7}; p.oscillationRandom = .5f;
+        applyParticleControlPointRemap (p, object->as<Particle> ()->operators[0]->as<ControlPointRemapOperator> ()->remap, points, false);
+        CHECK (p.position.x == Catch::Approx ((sample.noise.x * .5f + .5f) * 64).margin (.00004f));
+        CHECK (p.position.y == -16); CHECK (p.position.z == 7);
+    }
+}
+
+TEST_CASE ("initializer FBM count parsing retains native truncation and rejects zero", "[particle][remap][remap-noise-combinations]") {
+    const auto values = WallpaperEngine::Data::JSON::JSON::parse (R"([null,false,true,1.75])");
+    for (unsigned index = 0; index < values.size (); ++index) {
+        auto data = WallpaperEngine::Data::JSON::JSON::parse (R"({"id":954,"particle":{"initializer":[{
+            "name":"remapinitialvalue","input":"positionbetweentwocontrolpoints","output":"size",
+            "transformfunction":"fbmnoise","operation":"remap"
+        }]}})");
+        data["particle"]["initializer"][0]["transformoctaves"] = values[index];
+        WallpaperEngine::Data::Model::Project project {};
+        const auto object = WallpaperEngine::Data::Parsers::ObjectParser::parse (data, project);
+        CHECK (object->as<Particle> ()->initializers.size () == (index < 2 ? 0 : 1));
+        if (index >= 2) {
+            REQUIRE (object->as<Particle> ()->initializers.size () == 1);
+            std::vector<WallpaperEngine::Render::Objects::ControlPointData> points (2); points[1].position = {64,0,0};
+            ParticleInstance p; p.position = {8,0,0};
+            WallpaperEngine::Render::Objects::applyParticleControlPointRemap (p,
+                object->as<Particle> ()->initializers[0]->as<ControlPointRemapInitializer> ()->remap, points, true);
+            CHECK (p.size == Catch::Approx (.599402666f * .5f + .5f).margin (.00001f));
+        }
+    }
 }

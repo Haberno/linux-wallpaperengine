@@ -1058,16 +1058,19 @@ static std::optional<ControlPointRemap> parseControlPointRemap (
         || (parsedOutput == Output::BetweenPoints && parsedInput.has_value ());
     const bool periodic = parsedTransform == Transform::Sine || parsedTransform == Transform::Square
         || parsedTransform == Transform::Saw || parsedTransform == Transform::Triangle;
+    const auto octaveValue = it.find ("transformoctaves");
+    const int transformOctaves = parsedTransform != Transform::FbmNoise || octaveValue == it.end () ? 3
+        : octaveValue->is_boolean () ? static_cast<int> (octaveValue->get<bool> ()) : it.optional ("transformoctaves", 0);
     const bool linearTransform = parsedTransform == Transform::Identity || periodic
-        || (initializer && (parsedTransform == Transform::SimplexNoise
-            || (parsedTransform == Transform::FbmNoise && it.optional ("transformoctaves", 3) == 3)));
+        || parsedTransform == Transform::SimplexNoise
+        || (parsedTransform == Transform::FbmNoise && (initializer ? transformOctaves > 0 : transformOctaves == 3));
     const bool speedOutput = parsedOutput == Output::Speed;
     const bool arithmetic = linearPair
         && (operation == "multiply" || operation == "add" || operation == "subtract");
     const bool noiseVelocity = !initializer && parsedInput == Input::LifetimeFraction
         && parsedOutput == Output::Velocity && parsedTransform == Transform::SimplexNoise;
     const bool noiseSpeed = !initializer && parsedInput == Input::LifetimeFraction
-        && speedOutput && parsedTransform == Transform::FbmNoise && it.optional ("transformoctaves", 3) == 3;
+        && speedOutput && parsedTransform == Transform::FbmNoise && transformOctaves == 3;
     const auto parseComponent = [] (const std::string& component) -> std::optional<Component> {
         if (component == "all") return Component::All;
         if (component == "x") return Component::X;
@@ -1124,6 +1127,7 @@ static std::optional<ControlPointRemap> parseControlPointRemap (
         .blendTimes = blendTimes,
         .inputComponent = *inputComponent,
         .outputComponent = *outputComponent,
+        .transformOctaves = static_cast<uint32_t> (transformOctaves),
     };
 }
 

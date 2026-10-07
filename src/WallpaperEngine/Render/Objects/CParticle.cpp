@@ -1626,14 +1626,14 @@ static float particleRemapInverseLength (const float squared) {
 #endif
 }
 
-static float particleRemapFbmNoise (const float input, const float inputScale) {
-    // Native initializer14027b4b0 uses unseeded scalar noise. The parser admits
-    // only the default three octaves; preserve its float accumulation order.
+static float particleRemapFbmNoise (const float input, const float inputScale, const uint32_t octaves) {
+    // Native initializer14027b4b0 consumes the authored count with unseeded
+    // scalar noise; preserve its float accumulation order.
     float frequency = inputScale;
     float amplitude = 1.0f;
     float sum = 0.0f;
     float amplitudeSum = 0.0f;
-    for (int octave = 0; octave < 3; ++octave) {
+    for (uint32_t octave = 0; octave < octaves; ++octave) {
         sum += simplexNoise1D (frequency * input) * amplitude;
         amplitudeSum += amplitude;
         frequency *= 2.0f;
@@ -1651,8 +1651,9 @@ void WallpaperEngine::Render::Objects::applyParticleControlPointRemap (
     const bool controlPointOutput = remap.output == ControlPointRemap::Output::ControlPoint;
     if (controlPointOutput && (!initializer || pointOutput == nullptr)) return;
     const float weight = initializer ? 1.0f : particleOperatorBlend (particle.getLifetimePos (), remap.blendTimes);
-    if (!initializer && (remap.transform == ControlPointRemap::Transform::SimplexNoise
-        || remap.transform == ControlPointRemap::Transform::FbmNoise)) {
+    if (!initializer && remap.input == ControlPointRemap::Input::LifetimeFraction
+        && ((remap.output == ControlPointRemap::Output::Velocity && remap.transform == ControlPointRemap::Transform::SimplexNoise)
+            || (remap.output == ControlPointRemap::Output::Speed && remap.transform == ControlPointRemap::Transform::FbmNoise))) {
         const float minimum = remap.inputRangeMin->value->getFloat ();
         float span = remap.inputRangeMax->value->getFloat () - minimum;
         if (span == 0.0f) span = std::numeric_limits<float>::epsilon ();
@@ -1788,12 +1789,16 @@ void WallpaperEngine::Render::Objects::applyParticleControlPointRemap (
         const float phase = normalized[axis] * remap.transformInputScale;
         switch (remap.transform) {
             case ControlPointRemap::Transform::SimplexNoise:
-                // Initializers use the unseeded scalar kernel14027b090; operators
-                // take their separate seeded path above.
-                normalized[axis] = simplexNoise1D (phase) * .5f + .5f;
+                // Native operators use shared float-bit seeds, with separate
+                // XOR seeds per output channel; initializers are unseeded.
+                normalized[axis] = (initializer ? simplexNoise1D (phase) : seededSimplexNoise2D (
+                    std::bit_cast<uint32_t> (particle.oscillationRandom) ^ (axis == 1 ? 188294317u : axis == 2 ? 1228574339u : 0u),
+                    phase, 0.0f)) * .5f + .5f;
                 break;
             case ControlPointRemap::Transform::FbmNoise:
-                normalized[axis] = particleRemapFbmNoise (normalized[axis], remap.transformInputScale) * .5f + .5f;
+                normalized[axis] = (initializer ? particleRemapFbmNoise (normalized[axis], remap.transformInputScale, remap.transformOctaves)
+                    : seededFbmNoise2D (std::bit_cast<uint32_t> (particle.oscillationRandom)
+                        ^ (axis == 1 ? 188294317u : axis == 2 ? 1228574339u : 0u), phase, 0.0f)) * .5f + .5f;
                 break;
             case ControlPointRemap::Transform::Sine: {
                 const float angle = initializer ? (normalized[axis] * glm::pi<float> ()) * remap.transformInputScale
