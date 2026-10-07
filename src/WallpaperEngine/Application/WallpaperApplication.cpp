@@ -1377,12 +1377,16 @@ bool WallpaperApplication::applyPreparedSwitch (PreparedSwitch& job) {
 	    // are still referenced through the crossfade, so keeping both sets pinned over the
 	    // scene build exhausts memory on 4K wallpapers. trim() may evict some of these and
 	    // the build reloads them (texture.sync_load counts it) — that is the cheaper failure.
+	    std::set<std::string> conditionalTextures;
 	    for (auto& [name, texture] : job.readyTextures) {
+		if (const auto compiled = std::dynamic_pointer_cast<const Render::CTexture> (texture);
+		    compiled && compiled->getHeader ().variantSource) conditionalTextures.insert (name);
 		this->m_renderContext->storeTexture (name, assetLocator, std::move (texture), job.textureReduction);
 	    }
 
 	    // Media textures and non-Wayland fallbacks still need main-context construction.
 	    for (auto& [name, texture] : job.textures) {
+		if (texture->variantSource) conditionalTextures.insert (name);
 		this->m_renderContext->storeTexture (
 		    name, assetLocator,
 		    std::make_shared<Render::CTexture> (*this->m_renderContext, std::move (texture), job.textureReduction),
@@ -1391,6 +1395,22 @@ bool WallpaperApplication::applyPreparedSwitch (PreparedSwitch& job) {
 		checkpoint (true);
 	    }
 
+	    // The prefetched base is unbound. Prepare this project's selected patches
+	    // before scene construction and retain that binding until its passes own it.
+	    std::vector<std::shared_ptr<const Render::TextureProvider>> preparedVariants;
+	    if (!conditionalTextures.empty ()) {
+		const auto quality = m_renderContext->getTextureReduction (
+		    *nextProject.wallpaper, m_renderContext->getTextureQualityOutputSize (job.screen)
+		);
+		preparedVariants = m_renderContext->prepareTextureFallbacks (
+		    conditionalTextures, assetLocator, nextProject.properties, quality
+		);
+	    }
+	    // Eager unsupported bases keep the switch cache's ordinary eviction policy.
+	    std::erase_if (preparedVariants, [] (const auto& provider) {
+		const auto texture = std::dynamic_pointer_cast<const Render::CTexture> (provider);
+		return !texture || !texture->getHeader ().variantSelectionPrepared;
+	    });
 	    const auto buildStart = std::chrono::steady_clock::now ();
 	    std::unique_ptr<Render::CWallpaper> renderWallpaper;
 	    if (nextProject.wallpaper->is<Scene> ()) {
@@ -1829,6 +1849,7 @@ void WallpaperApplication::prepareOutputs () {
     // thread; batching them hands the whole set to the decode pool at once (6x on heavy ones)
     // Keep prepared providers alive until their initial scenes have bound them.
     std::vector<std::shared_ptr<Render::CTexture>> stagedTextures;
+    std::vector<std::shared_ptr<const Render::TextureProvider>> stagedVariants;
     if (this->makeAnyViewportCurrent ()) {
 	const auto prefetchStart = std::chrono::steady_clock::now ();
 	auto readMs = std::chrono::duration<double, std::milli>::zero ();
@@ -1843,7 +1864,9 @@ void WallpaperApplication::prepareOutputs () {
 	    readMs += std::chrono::steady_clock::now () - readStart;
 
 	    std::vector<std::shared_ptr<Render::CTexture::MipStream>> mipStreams;
+	    std::set<std::string> conditionalTextures;
 	    for (auto& [name, texture] : textures) {
+		const bool conditional = bool (texture->variantSource);
 		try {
 		    auto prepared = Render::CTexture::createStreaming (
 			*m_renderContext, std::move (texture), textureReduction, mipStreams
@@ -1852,6 +1875,7 @@ void WallpaperApplication::prepareOutputs () {
 		    m_renderContext->storeTexture (
 			name, *info->assetLocator, std::move (prepared), textureReduction
 		    );
+		    if (conditional) conditionalTextures.insert (name);
 		    staged++;
 		} catch (const std::exception& e) {
 		    // resolveTexture will load this asset normally during the scene build
@@ -1859,6 +1883,12 @@ void WallpaperApplication::prepareOutputs () {
 		}
 	    }
 	    queueTextureStreams (std::move (mipStreams));
+	    if (!conditionalTextures.empty ()) {
+		auto variants = m_renderContext->prepareTextureFallbacks (
+		    conditionalTextures, *info->assetLocator, info->properties, textureReduction
+		);
+		stagedVariants.insert (stagedVariants.end (), variants.begin (), variants.end ());
+	    }
 	}
 
 	if (Debug::RenderHealth::enabled ()) {
