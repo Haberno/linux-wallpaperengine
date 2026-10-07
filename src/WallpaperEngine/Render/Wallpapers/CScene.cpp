@@ -517,6 +517,7 @@ CScene::CScene (
     sLog.out ("Scene post-processing: hdr=", this->m_hdrEnabled ? 1 : 0);
 
     this->loadingCheckpoint (true);
+    this->m_constructing = false;
     constructionGuard.cancel ();
 }
 

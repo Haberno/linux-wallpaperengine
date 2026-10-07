@@ -61,6 +61,7 @@ public:
      * construction boundaries may allow cancellation to unwind the scene. */
     void loadingCheckpoint (bool canCancel = false) const;
     [[nodiscard]] bool isLoading () const { return static_cast<bool> (m_loadingCheckpoint); }
+    [[nodiscard]] bool isConstructing () const { return m_constructing; }
     [[nodiscard]] double getRenderTime () const;
     /** The captured driver timestamp shared by every object in the current scene frame. */
     [[nodiscard]] double getFrameRenderTime () const {
@@ -374,6 +375,7 @@ private:
     glm::vec2 m_parallaxDisplacement = {};
     /** Parallax position fed to shaders via g_ParallaxPosition, 0.5,0.5 = centered */
     glm::vec2 m_parallaxPosition = { 0.5f, 0.5f };
+    bool m_constructing = true;
     std::function<void (bool)> m_loadingCheckpoint;
     float m_loadingRenderTime = 0.0f;
     std::chrono::steady_clock::time_point m_loadingTimerTime;

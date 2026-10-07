@@ -898,8 +898,8 @@ void CPass::setupShaders () {
 	      }
 	  };
 
-    // Failed selected images can expose a cold authored source during live refresh.
-    // Keep its prepared provider alive until setupUniforms installs the binding.
+    // Initial shader defaults and failed selected images can expose cold sources.
+    // Keep their prepared providers alive until setupUniforms installs the bindings.
     std::vector<std::shared_ptr<const TextureProvider>> preparedUserFallbacks;
     const auto registerAuthoredTextures
 	= [this, &registerTextureMetadata, &preparedUserFallbacks] (const TextureMap& textures, const bool overwrite = true) {
@@ -913,15 +913,17 @@ void CPass::setupShaders () {
 		      if (m_userTextureEntries.contains (index)) {
 			  try { selected = resolveUserTexture (index); }
 			  catch (const std::runtime_error&) { }
-			  if (m_shaderRevision != 0 && overwrite && !selected && !name.starts_with ('$')
-			      && std::filesystem::path (m_userTextureValues.at (index)).is_absolute ()) {
-			      const auto& scene = m_renderable.getScene ();
-			      const auto prepared = getContext ().prepareTextureFallbacks (
-				  { name }, m_renderable.getAssetLocator (), scene.getScene ().project.properties,
-				  scene.getTextureReduction ()
-			      );
-			      preparedUserFallbacks.insert (preparedUserFallbacks.end (), prepared.begin (), prepared.end ());
-			  }
+		      }
+		      const auto& scene = m_renderable.getScene ();
+		      if (!selected && !name.starts_with ('$')
+			  && ((!overwrite && scene.isConstructing ())
+			      || (m_userTextureEntries.contains (index) && m_shaderRevision != 0 && overwrite
+				  && std::filesystem::path (m_userTextureValues.at (index)).is_absolute ()))) {
+			  const auto prepared = getContext ().prepareTextureFallbacks (
+			      { name }, m_renderable.getAssetLocator (), scene.getScene ().project.properties,
+			      scene.getTextureReduction ()
+			  );
+			  preparedUserFallbacks.insert (preparedUserFallbacks.end (), prepared.begin (), prepared.end ());
 		      }
 		      registerTextureMetadata (index, selected ? selected : this->m_renderable.getScene ().resolveTexture (name), overwrite);
 		  } catch (const std::runtime_error&) {
