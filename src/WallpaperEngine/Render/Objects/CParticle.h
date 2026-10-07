@@ -191,7 +191,7 @@ void applyParticleBetweenControlPointConstraint (
 void applyParticleControlPointRemap (
     ParticleInstance& particle, const ControlPointRemap& remap,
     const std::vector<ControlPointData>& controlPoints, bool initializer, bool angularVelocityAvailable = false,
-    float runtime = 0.0f, float timeOfDay = 0.0f
+    float runtime = 0.0f, float timeOfDay = 0.0f, glm::vec3 layerOrigin = glm::vec3 (0.0f)
 );
 
 /**
@@ -251,6 +251,7 @@ protected:
     EmitterFunc createSphereEmitter (const ParticleEmitter& emitter);
 
     // Initializer creators
+    [[nodiscard]] glm::vec3 remapLayerOrigin () const;
     InitializerFunc createControlPointRemapInitializer (const ControlPointRemapInitializer& init);
     InitializerFunc createColorRandomInitializer (const ColorRandomInitializer& init);
     InitializerFunc createInheritInitialEventColorInitializer (const InheritInitialEventColorInitializer& init);

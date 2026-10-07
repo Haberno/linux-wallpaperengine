@@ -1260,7 +1260,7 @@ TEST_CASE ("two-control-point remaps retain only the measured linear subset", "[
             ],"operator":[
                 {"name":"remapvalue","input":"positionbetweentwocontrolpoints","output":"velocity","operation":"remap"},
                 {"name":"remapvalue","input":"maxlifetime","output":"positionbetweentwocontrolpoints","operation":"remap"},
-                {"name":"remapvalue","input":"layerorigin","output":"positionbetweentwocontrolpoints","operation":"remap"},
+                {"name":"remapvalue","input":"layertime","output":"positionbetweentwocontrolpoints","operation":"remap"},
                 {"name":"remapvalue","input":"positionbetweentwocontrolpoints","output":"velocity","operation":"remap","flags":4},
                 {"name":"remapvalue","input":"lifetimefraction","output":"velocity","operation":"remap","transformfunction":"simplexnoise","inputcomponent":"x"},
                 {"name":"remapvalue","input":"positionbetweentwocontrolpoints","output":"velocity","operation":"remap","outputcomponent":"w"},
@@ -1451,7 +1451,7 @@ TEST_CASE ("two-control-point position arithmetic rejects unmeasured settings", 
             {"name":"remapvalue","input":"lifetimefraction","output":"speed","operation":"multiply","transformfunction":"fbmnoise","flags":3,"transformoctaves":2},
             {"name":"remapvalue","input":"maxlifetime","output":"positionbetweentwocontrolpoints","operation":"add","outputcomponent":"w"},
             {"name":"remapvalue","input":"positionbetweentwocontrolpoints","output":"velocity","operation":"divide"},
-            {"name":"remapvalue","input":"layerorigin","output":"positionbetweentwocontrolpoints","operation":"add"}
+            {"name":"remapvalue","input":"layertime","output":"positionbetweentwocontrolpoints","operation":"add"}
         ]}})"), project);
     const auto* definition = object->as<Particle> ();
     REQUIRE (definition != nullptr);
@@ -3781,7 +3781,7 @@ TEST_CASE ("periodic transforms admit measured two point paths and keep control 
                 const auto object = WallpaperEngine::Data::Parsers::ObjectParser::parse (data, project);
                 const auto* particle = object->as<Particle> ();
                 CHECK ((initializer ? particle->initializers.size () : particle->operators.size ()) == 1);
-                node[positionInput ? "output" : "input"] = positionInput ? "controlpoint" : "layerorigin";
+                node[positionInput ? "output" : "input"] = positionInput ? "controlpoint" : "layertime";
                 data["particle"][initializer ? "initializer" : "operator"] = { node };
                 const auto unsupported = WallpaperEngine::Data::Parsers::ObjectParser::parse (data, project);
                 CHECK ((initializer ? unsupported->as<Particle> ()->initializers.size ()
@@ -4039,7 +4039,7 @@ TEST_CASE ("scalar selector admission preserves unknown names and unrelated nois
         WallpaperEngine::Data::JSON::JSON::parse (R"({"id":445,"particle":{"operator":[
             {"name":"remapvalue","input":"size","output":"positionbetweentwocontrolpoints","inputcomponent":"w"},
             {"name":"remapvalue","input":"size","output":"positionbetweentwocontrolpoints","outputcomponent":"magnitude"},
-            {"name":"remapvalue","input":"layerorigin","output":"positionbetweentwocontrolpoints","inputcomponent":"x"},
+            {"name":"remapvalue","input":"layertime","output":"positionbetweentwocontrolpoints","inputcomponent":"x"},
             {"name":"remapvalue","input":"lifetimefraction","output":"velocity","transformfunction":"simplexnoise","inputcomponent":"x"},
             {"name":"remapvalue","input":"lifetimefraction","output":"speed","operation":"multiply","transformfunction":"fbmnoise","flags":3,"outputcomponent":"sum"}
         ]}})"), project);
@@ -4902,5 +4902,79 @@ TEST_CASE ("relative direction initializer keeps tiny source vector before arith
         CHECK (particle.position.x == Catch::Approx (native[operation].x).margin (1e-13f));
         CHECK (particle.position.y == Catch::Approx (-native[operation].y).margin (1e-13f));
         CHECK (particle.position.z == Catch::Approx (native[operation].z).margin (1e-13f));
+    }
+}
+
+TEST_CASE ("layer origin input admits only measured two point destinations", "[particle][remap][remap-layer-origin]") {
+    using namespace WallpaperEngine::Data::Model;
+    for (const bool initializer : { false, true }) {
+        for (const auto* component : { "all", "x", "y", "z", "sum", "average", "max", "min" }) {
+            Project project {};
+            auto data = WallpaperEngine::Data::JSON::JSON::parse (R"({"id":463,"particle":{}})");
+            auto node = WallpaperEngine::Data::JSON::JSON::parse (R"({"input":"layerorigin","output":"positionbetweentwocontrolpoints"})");
+            node["name"] = initializer ? "remapinitialvalue" : "remapvalue";
+            node["inputcomponent"] = component;
+            data["particle"][initializer ? "initializer" : "operator"] = { node };
+            const auto object = WallpaperEngine::Data::Parsers::ObjectParser::parse (data, project);
+            const auto* definition = object->as<Particle> ();
+            CHECK ((initializer ? definition->initializers.size () : definition->operators.size ()) == 1);
+        }
+    }
+    Project project {};
+    const auto data = WallpaperEngine::Data::JSON::JSON::parse (R"({"id":464,"particle":{"operator":[
+        {"name":"remapvalue","input":"layerorigin","output":"opacity"},
+        {"name":"remapvalue","input":"layerorigin","output":"positionbetweentwocontrolpoints","transformfunction":"simplexnoise"}
+    ]}})");
+    const auto object = WallpaperEngine::Data::Parsers::ObjectParser::parse (data, project);
+    CHECK (object->as<Particle> ()->operators.empty ());
+}
+
+TEST_CASE ("layer origin remaps native parent composed coordinates through shared selectors", "[particle][remap][remap-layer-origin]") {
+    using namespace WallpaperEngine::Data::Model;
+    using WallpaperEngine::Render::Objects::applyParticleControlPointRemap;
+    using WallpaperEngine::Render::Objects::ControlPointData;
+    // Exact native world-getter observations: root, rotated/scaled parent, cached matrix.
+    const glm::vec3 nativeOrigins[] = { { 5, -7, 11 }, { 31, 30, 14 }, { -23, 29, -31 } };
+    const char* components[] = { "all", "x", "y", "z", "sum", "average", "max", "min" };
+    const float selected[][8] = {
+        { 5, 5, -7, 11, 9, 3, 11, -7 },
+        { 31, 31, 30, 14, 75, 25, 31, 14 },
+        { -23, -23, 29, -31, -25, -25.0f / 3.0f, 29, -31 }
+    };
+    for (const bool initializer : { false, true }) {
+        for (int sample = 0; sample < 3; ++sample) {
+            for (int selector = 0; selector < 8; ++selector) {
+                Project project {};
+                auto data = WallpaperEngine::Data::JSON::JSON::parse (R"({"id":465,"particle":{}})");
+                auto node = WallpaperEngine::Data::JSON::JSON::parse (R"({
+                    "input":"layerorigin","output":"positionbetweentwocontrolpoints","operation":"remap","flags":0,
+                    "inputrangemin":"0 3 5","inputrangemax":"64 11 21","outputrangemin":0,"outputrangemax":1
+                })");
+                node["name"] = initializer ? "remapinitialvalue" : "remapvalue";
+                node["inputcomponent"] = components[selector];
+                data["particle"][initializer ? "initializer" : "operator"] = { node };
+                const auto object = WallpaperEngine::Data::Parsers::ObjectParser::parse (data, project);
+                const auto* definition = object->as<Particle> ();
+                REQUIRE ((initializer ? definition->initializers.size () : definition->operators.size ()) == 1);
+                const auto& remap = initializer
+                    ? definition->initializers.front ()->as<ControlPointRemapInitializer> ()->remap
+                    : definition->operators.front ()->as<ControlPointRemapOperator> ()->remap;
+                std::vector<ControlPointData> points (2);
+                points[0].position = { 10, -20, 30 };
+                points[1].position = { 74, -20, 30 };
+                ParticleInstance particle;
+                particle.position = { -100, -27, 35 };
+                particle.velocity = { 7, -9, 11 };
+                particle.lifetime = 4;
+                particle.age = 1;
+                applyParticleControlPointRemap (particle, remap, points, initializer, false, 997, 991, nativeOrigins[sample]);
+                CHECK (particle.position.x == Catch::Approx (10 + selected[sample][selector]).margin (.00003));
+                CHECK (particle.position.y == -27);
+                CHECK (particle.position.z == 35);
+                CHECK (particle.velocity == glm::vec3 (7, -9, 11));
+                CHECK (points[0].position == glm::vec3 (10, -20, 30));
+                CHECK (points[1].position == glm::vec3 (74, -20, 30));
+            }
+        }
     }
 }

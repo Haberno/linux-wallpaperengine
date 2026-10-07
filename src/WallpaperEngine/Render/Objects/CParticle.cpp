@@ -1547,7 +1547,7 @@ static float particleRemapInverseLength (const float squared) {
 void WallpaperEngine::Render::Objects::applyParticleControlPointRemap (
     ParticleInstance& particle, const ControlPointRemap& remap,
     const std::vector<ControlPointData>& controlPoints, const bool initializer, const bool angularVelocityAvailable,
-    const float runtime, const float timeOfDay
+    const float runtime, const float timeOfDay, const glm::vec3 layerOrigin
 ) {
     const float weight = initializer ? 1.0f : particleOperatorBlend (particle.getLifetimePos (), remap.blendTimes);
     if (remap.transform == ControlPointRemap::Transform::SimplexNoise
@@ -1603,6 +1603,7 @@ void WallpaperEngine::Render::Objects::applyParticleControlPointRemap (
         case ControlPointRemap::Input::ControlPoint:
         case ControlPointRemap::Input::DeltaToPoint:
         case ControlPointRemap::Input::DirectionToPoint:
+        case ControlPointRemap::Input::LayerOrigin:
         case ControlPointRemap::Input::Color:
         case ControlPointRemap::Input::Position:
         case ControlPointRemap::Input::Velocity: break;
@@ -1627,11 +1628,14 @@ void WallpaperEngine::Render::Objects::applyParticleControlPointRemap (
     }
     const bool pointInput = remap.input == ControlPointRemap::Input::ControlPoint
         || remap.input == ControlPointRemap::Input::DeltaToPoint || remap.input == ControlPointRemap::Input::DirectionToPoint;
-    const bool vectorInput = pointInput || remap.input == ControlPointRemap::Input::Position
+    const bool vectorInput = pointInput || remap.input == ControlPointRemap::Input::LayerOrigin
+        || remap.input == ControlPointRemap::Input::Position
         || remap.input == ControlPointRemap::Input::Velocity || remap.input == ControlPointRemap::Input::Color;
     glm::vec3 inputValue (input);
     if (vectorInput) {
-        if (pointInput) {
+        if (remap.input == ControlPointRemap::Input::LayerOrigin) {
+            inputValue = layerOrigin;
+        } else if (pointInput) {
             inputValue = controlPoints[remap.inputControlPoint0].position;
             if (remap.input != ControlPointRemap::Input::ControlPoint) inputValue -= particle.position;
             if (remap.input == ControlPointRemap::Input::DirectionToPoint) {
@@ -1858,6 +1862,16 @@ void WallpaperEngine::Render::Objects::applyParticleControlPointRemap (
     }
 }
 
+glm::vec3 CParticle::remapLayerOrigin () const {
+    const CParticle* root = this;
+    while (root->m_particleParent != nullptr) root = root->m_particleParent;
+    // Native system+8 keeps the root layer for children. Its matrix translation
+    // includes scene parents; queued manual births retain their resolved snapshot.
+    const auto& transform = root->m_initializingManualEmission
+        ? root->m_pendingBirthTransform : root->m_controlPointTransform;
+    return glm::vec3 (transform[3]) * glm::vec3 (1.0f, -1.0f, 1.0f);
+}
+
 InitializerFunc CParticle::createControlPointRemapInitializer (const ControlPointRemapInitializer& init) {
     const auto& remap = init.remap;
     includeControlPoint (remap.inputControlPoint0);
@@ -1865,7 +1879,8 @@ InitializerFunc CParticle::createControlPointRemapInitializer (const ControlPoin
     includeControlPoint (remap.outputControlPoint0);
     includeControlPoint (remap.outputControlPoint1);
     return [this, &remap] (ParticleInstance& particle) {
-        applyParticleControlPointRemap (particle, remap, m_controlPoints, true, m_hasAngularVelocity, getScene ().getTime (), g_Daytime);
+        applyParticleControlPointRemap (particle, remap, m_controlPoints, true, m_hasAngularVelocity, getScene ().getTime (), g_Daytime,
+            remap.input == ControlPointRemap::Input::LayerOrigin ? remapLayerOrigin () : glm::vec3 (0.0f));
     };
 }
 
@@ -1879,13 +1894,15 @@ OperatorFunc CParticle::createControlPointRemapOperator (const ControlPointRemap
     includeControlPoint (remap.outputControlPoint1);
     return [this, &remap] (std::vector<ParticleInstance>& particles, uint32_t count,
                      const std::vector<ControlPointData>& controlPoints, float, float) {
+        const glm::vec3 layerOrigin = remap.input == ControlPointRemap::Input::LayerOrigin
+            ? remapLayerOrigin () : glm::vec3 (0.0f);
         for (uint32_t i = 0; i < count; ++i) {
             if (!particles[i].alive) continue;
             if ((remap.transform == ControlPointRemap::Transform::SimplexNoise
                  || remap.transform == ControlPointRemap::Transform::FbmNoise) && particles[i].oscillationRandom < 0.0f) {
                 particles[i].oscillationRandom = WallpaperEngine::Maths::randomFloat (m_rng, 0.0f, 1.0f);
             }
-            applyParticleControlPointRemap (particles[i], remap, controlPoints, false, m_hasAngularVelocity, getScene ().getTime (), g_Daytime);
+            applyParticleControlPointRemap (particles[i], remap, controlPoints, false, m_hasAngularVelocity, getScene ().getTime (), g_Daytime, layerOrigin);
         }
     };
 }

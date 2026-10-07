@@ -1037,7 +1037,7 @@ static std::optional<ControlPointRemap> parseControlPointRemap (
         : input == "timeofday" ? Input::TimeOfDay
         : input == "particlesystemtime" ? Input::ParticleSystemTime
         : input == "controlpoint" ? Input::ControlPoint : input == "deltatocontrolpoint" ? Input::DeltaToPoint
-        : input == "directiontocontrolpoint" ? Input::DirectionToPoint
+        : input == "directiontocontrolpoint" ? Input::DirectionToPoint : input == "layerorigin" ? Input::LayerOrigin
         : input == "color" ? Input::Color : input == "position" ? Input::Position : input == "velocity" ? std::optional (Input::Velocity) : std::nullopt;
     const std::optional<Output> parsedOutput = output == "positionbetweentwocontrolpoints" ? Output::BetweenPoints
         : output == "distancetocontrolpoint" ? Output::DistanceToPoint
