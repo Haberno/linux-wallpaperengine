@@ -445,6 +445,8 @@ private:
     int m_ropeSubdivision { 4 }; // Catmull-Rom subdivisions between points (smoothing)
     int m_ropeSegments { 8 }; // ropetrail: historical position snapshots per particle
     float m_ropeUVScale { 1.0f };
+    float m_ropeMeanLifetime { 0.0f };
+    float m_ropeEmitterRate { 0.0f };
     bool m_ropeUVScrolling { false };
     bool m_ropeUVSmoothing { true }; // rope only
     bool m_ropeFadeAlpha { false };

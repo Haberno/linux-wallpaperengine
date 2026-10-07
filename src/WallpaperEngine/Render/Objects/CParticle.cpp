@@ -1104,6 +1104,9 @@ void CParticle::setupEmitters () {
 	}
 
 	if (func) {
+	    if (m_ropeEmitterRate == 0.0f) {
+		m_ropeEmitterRate = emitter.rate;
+	    }
 	    if (emitter.instantaneous > 0 || emitter.rate > 0.0f) ++m_pendingEmitterCount;
 	    m_emitters.push_back (std::move (func));
 	}
@@ -1929,6 +1932,10 @@ void CParticle::setupInitializers () {
 	    func = createAlphaRandomInitializer (*initializer->as<AlphaRandomInitializer> ());
 	} else if (initializer->is<LifetimeRandomInitializer> ()) {
 	    const auto& lifeInit = *initializer->as<LifetimeRandomInitializer> ();
+	    if (m_ropeMeanLifetime == 0.0f) {
+		const float minimum = lifeInit.min->value->getFloat ();
+		m_ropeMeanLifetime = minimum + 0.5f * (lifeInit.max->value->getFloat () - minimum);
+	    }
 	    m_uniformLifetimes = (lifeInit.min->value->getFloat () == lifeInit.max->value->getFloat ());
 	    func = createLifetimeRandomInitializer (lifeInit);
 	} else if (initializer->is<VelocityRandomInitializer> ()) {
@@ -3962,8 +3969,24 @@ void CParticle::renderRope () {
     uint32_t indexOffset = 0;
     const uint32_t totalSubSegments = totalPoints - 1;
     const float uvScale = (m_ropeUVScale > 0.0f) ? m_ropeUVScale : 1.0f;
-    const float trailLength = static_cast<float> (totalSubSegments) / uvScale + 1.0f;
-    const float usableLength = trailLength - 1.0f;
+    float trailLength = static_cast<float> (totalSubSegments) / uvScale + 1.0f;
+    if (m_ropeUVScrolling) {
+	const auto& settings = getInstanceOverride ();
+	const float lifetime = m_ropeMeanLifetime * settings.lifetime->value->getFloat ();
+	const float rate = m_ropeEmitterRate * settings.count->value->getFloat ();
+	float predictedRate = rate;
+	if (static_cast<float> (aliveCount) < rate * lifetime) {
+	    const auto fps = static_cast<uint32_t> (
+		getScene ().getContext ().getApp ().getContext ().settings.render.maximumFPS
+	    );
+	    predictedRate = std::min (rate, static_cast<float> (fps));
+	}
+	const float reciprocalUVScale = m_ropeUVScale == 0.0f ? 1.0f : 1.0f / m_ropeUVScale;
+	const float nativeLength = (predictedRate * lifetime - 1.0f) * reciprocalUVScale;
+	// Native packs this length before the stock shader subtracts one. Preserve
+	// that consumed denominator while converting to our sub-segment units.
+	trailLength = (nativeLength - 1.0f) * subdivision + 1.0f;
+    }
 
     // UV smoothing: distribute UV proportional to arc length instead of uniform index.
     // Per wiki: only when all particle lifetimes match and scrolling is disabled.
@@ -3982,7 +4005,7 @@ void CParticle::renderRope () {
     // Native ordinary-rope scrolling advances by retired particles. Convert its
     // particle ordinal to the sub-segment units used by our interpolated mesh.
     float scrollOffset = 0.0f;
-    if (m_ropeUVScrolling && usableLength > 0.0f) {
+    if (m_ropeUVScrolling) {
 	scrollOffset = static_cast<float> (m_retiredParticleCount) * subdivision;
     }
 
