@@ -1,0 +1,297 @@
+{
+  "authority": "standards-derived source values, not native acceptance pixels",
+  "reference_standard": "https://www.itu.int/dms_pubrec/itu-r/rec/bt/R-REC-BT.2100-2-201807-S%21%21PDF-E.pdf",
+  "reference_tables": [
+    4,
+    5,
+    6,
+    9
+  ],
+  "windows_acceptance": false,
+  "decoder_output_curve_asserted": false,
+  "geometry": {
+    "width": 320,
+    "height": 180,
+    "fps": 10,
+    "frames": 40,
+    "range": [
+      64,
+      940
+    ],
+    "chroma_neutral": 512,
+    "endian": "little",
+    "format": "yuv420p10le"
+  },
+  "hlg_reference": {
+    "peak_nits": 1000,
+    "black_nits": 0,
+    "system_gamma": 1.2,
+    "note": "One explicit reference display, not a decoder or Windows policy"
+  },
+  "bands": [
+    {
+      "index": 0,
+      "sample_xy": [
+        16,
+        80
+      ],
+      "requested_pq_nits": 0,
+      "y10": 64,
+      "cb10": 512,
+      "cr10": 512,
+      "normalized_signal": 0.0,
+      "pq_eotf_nits": 0.0,
+      "hlg_inverse_oetf_scene": 0.0,
+      "hlg_reference_eotf_nits": 0.0,
+      "sdr_encoded_code_value": 0.0
+    },
+    {
+      "index": 1,
+      "sample_xy": [
+        48,
+        80
+      ],
+      "requested_pq_nits": 1,
+      "y10": 195,
+      "cb10": 512,
+      "cr10": 512,
+      "normalized_signal": 0.1495433789954338,
+      "pq_eotf_nits": 0.9921312639972388,
+      "hlg_inverse_oetf_scene": 0.007454407400457316,
+      "hlg_reference_eotf_nits": 2.7983095144535333,
+      "sdr_encoded_code_value": 0.1495433789954338
+    },
+    {
+      "index": 2,
+      "sample_xy": [
+        80,
+        80
+      ],
+      "requested_pq_nits": 10,
+      "y10": 327,
+      "cb10": 512,
+      "cr10": 512,
+      "normalized_signal": 0.3002283105022831,
+      "pq_eotf_nits": 10.067313475113068,
+      "hlg_inverse_oetf_scene": 0.030045679475685105,
+      "hlg_reference_eotf_nits": 14.905221555970822,
+      "sdr_encoded_code_value": 0.3002283105022831
+    },
+    {
+      "index": 3,
+      "sample_xy": [
+        112,
+        80
+      ],
+      "requested_pq_nits": 80,
+      "y10": 490,
+      "cb10": 512,
+      "cr10": 512,
+      "normalized_signal": 0.4863013698630137,
+      "pq_eotf_nits": 80.36080925446784,
+      "hlg_inverse_oetf_scene": 0.07882967411021455,
+      "hlg_reference_eotf_nits": 47.42722094381328,
+      "sdr_encoded_code_value": 0.4863013698630137
+    },
+    {
+      "index": 4,
+      "sample_xy": [
+        144,
+        80
+      ],
+      "requested_pq_nits": 100,
+      "y10": 509,
+      "cb10": 512,
+      "cr10": 512,
+      "normalized_signal": 0.5079908675799086,
+      "pq_eotf_nits": 99.91279848944153,
+      "hlg_inverse_oetf_scene": 0.08605736216091371,
+      "hlg_reference_eotf_nits": 52.69211559421608,
+      "sdr_encoded_code_value": 0.5079908675799086
+    },
+    {
+      "index": 5,
+      "sample_xy": [
+        176,
+        80
+      ],
+      "requested_pq_nits": 203,
+      "y10": 573,
+      "cb10": 512,
+      "cr10": 512,
+      "normalized_signal": 0.5810502283105022,
+      "pq_eotf_nits": 203.70295787737396,
+      "hlg_inverse_oetf_scene": 0.11751227707490793,
+      "hlg_reference_eotf_nits": 76.57727187064543,
+      "sdr_encoded_code_value": 0.5810502283105022
+    },
+    {
+      "index": 6,
+      "sample_xy": [
+        208,
+        80
+      ],
+      "requested_pq_nits": 400,
+      "y10": 636,
+      "cb10": 512,
+      "cr10": 512,
+      "normalized_signal": 0.6529680365296804,
+      "pq_eotf_nits": 401.45493782263355,
+      "hlg_inverse_oetf_scene": 0.16394176196607776,
+      "hlg_reference_eotf_nits": 114.18985409310785,
+      "sdr_encoded_code_value": 0.6529680365296804
+    },
+    {
+      "index": 7,
+      "sample_xy": [
+        240,
+        80
+      ],
+      "requested_pq_nits": 1000,
+      "y10": 723,
+      "cb10": 512,
+      "cr10": 512,
+      "normalized_signal": 0.752283105022831,
+      "pq_eotf_nits": 1004.1919039801087,
+      "hlg_inverse_oetf_scene": 0.26806214563471586,
+      "hlg_reference_eotf_nits": 206.0072891928267,
+      "sdr_encoded_code_value": 0.752283105022831
+    },
+    {
+      "index": 8,
+      "sample_xy": [
+        272,
+        80
+      ],
+      "requested_pq_nits": 4000,
+      "y10": 855,
+      "cb10": 512,
+      "cr10": 512,
+      "normalized_signal": 0.9029680365296804,
+      "pq_eotf_nits": 4014.7177018309767,
+      "hlg_inverse_oetf_scene": 0.5911777632929016,
+      "hlg_reference_eotf_nits": 532.183870844035,
+      "sdr_encoded_code_value": 0.9029680365296804
+    },
+    {
+      "index": 9,
+      "sample_xy": [
+        304,
+        80
+      ],
+      "requested_pq_nits": 10000,
+      "y10": 940,
+      "cb10": 512,
+      "cr10": 512,
+      "normalized_signal": 1.0,
+      "pq_eotf_nits": 10000.0,
+      "hlg_inverse_oetf_scene": 1.0000000269348075,
+      "hlg_reference_eotf_nits": 1000.000032321769,
+      "sdr_encoded_code_value": 1.0
+    }
+  ],
+  "identical_companion_raw_planes": [
+    "sdr10",
+    "pq10",
+    "hlg10"
+  ],
+  "companion_light_meaning": "Same encoded values with different metadata; not physically equal light",
+  "actual_decoded_frame_metadata": {
+    "sdr10": {
+      "width": 320,
+      "height": 180,
+      "pix_fmt": "yuv420p10le",
+      "color_range": "tv",
+      "color_space": "bt709",
+      "color_primaries": "bt709",
+      "color_transfer": "bt709",
+      "side_data_list": [
+        {
+          "side_data_type": "H.26[45] User Data Unregistered SEI message"
+        }
+      ],
+      "bitdepth": 10
+    },
+    "pq10": {
+      "width": 320,
+      "height": 180,
+      "pix_fmt": "yuv420p10le",
+      "color_range": "tv",
+      "color_space": "bt2020nc",
+      "color_primaries": "bt2020",
+      "color_transfer": "smpte2084",
+      "side_data_list": [
+        {
+          "side_data_type": "H.26[45] User Data Unregistered SEI message"
+        }
+      ],
+      "bitdepth": 10
+    },
+    "hlg10": {
+      "width": 320,
+      "height": 180,
+      "pix_fmt": "yuv420p10le",
+      "color_range": "tv",
+      "color_space": "bt2020nc",
+      "color_primaries": "bt2020",
+      "color_transfer": "arib-std-b67",
+      "side_data_list": [
+        {
+          "side_data_type": "H.26[45] User Data Unregistered SEI message"
+        }
+      ],
+      "bitdepth": 10
+    }
+  },
+  "markers": {
+    "checker_xy": [
+      [
+        4,
+        4
+      ],
+      [
+        12,
+        4
+      ],
+      [
+        20,
+        4
+      ],
+      [
+        28,
+        4
+      ]
+    ],
+    "checker_codes": [
+      64,
+      940,
+      64,
+      940
+    ],
+    "temporal_xy": [
+      [
+        40,
+        170
+      ],
+      [
+        120,
+        170
+      ],
+      [
+        200,
+        170
+      ],
+      [
+        280,
+        170
+      ]
+    ],
+    "temporal_phase": "floor(frame / 5) % 4",
+    "phase_first_frames": [
+      0,
+      5,
+      10,
+      15
+    ]
+  }
+}
