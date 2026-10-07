@@ -1657,3 +1657,77 @@ TEST_CASE ("Whole-skeleton single rope retains nonzero-root admission", "[mdl][a
     REQUIRE (state.ropePoints.size () == 4);
     CHECK (state.ropePoints[1].initialized);
 }
+
+TEST_CASE ("Serial ropes admit a pinned working-pose endpoint without a control", "[mdl][animation][physics][rope][serial-uncontrolled]") {
+    // Source contract: flags4 takes the existing endpoint pose, flags5 a control.
+    // This synthetic caller regression does not claim a native numeric capture.
+    MdlAnimationData data;
+    data.boneLengths = { 0, 20, 20, 20, 20, 20, 20 };
+    data.boneDirections.resize (7);
+    for (uint32_t bone = 0; bone < 7; ++bone) {
+	data.bones.push_back ({ .type = 3, .parent = static_cast<int32_t> (bone) - 1,
+	    .bindLocal = glm::translate (glm::mat4 (1), glm::vec3 (bone ? 20 : -60, 0, 0)),
+	    .inverseBindWorld = glm::translate (glm::mat4 (1), glm::vec3 (60 - 20 * static_cast<int> (bone), 0, 0)) });
+	if (bone) data.boneDirections[bone - 1][bone] = { 1, 0, 0 };
+    }
+    data.bones[3].ikFollowEnd = true;
+    data.bones[3].rope = data.bones[6].rope = MdlBoneRope { .gravity = true, .mass = 1 };
+    data.ikGroups = {{ .nodes = {
+	{ .root = 0, .branches = {{ .flags = 4, .maxLength = 60, .bones = { 0, 1, 2, 3 } }} },
+	{ .root = 3, .branches = {{ .flags = 4, .maxLength = 60, .bones = { 3, 4, 5, 6 } }} },
+    } }};
+    MdlPhysicsState state;
+    MdlPhysicsStep physics { .state = state,
+	.rope = MdlRopeStep { .gravity = { 0, -90, 0 }, .deltaTime = 0.1f } };
+    const auto first = MdlAnimationEvaluator::evaluate (data, {}, &physics);
+    REQUIRE (state.ropePoints.size () == 7);
+    REQUIRE (state.ropeWorldBones.size () == 7);
+    CHECK (state.ropePoints[0].initialized);
+    CHECK (state.ropePoints[3].initialized);
+    CHECK_FALSE (state.ropePoints[6].initialized);
+    for (size_t bone = 1; bone < 6; ++bone) {
+	CHECK (first.worldBones[bone][3].y == Catch::Approx (-0.9f).margin (1e-6f));
+	CHECK (state.ropePoints[bone].previous.y == 0.0f);
+    }
+    CHECK (glm::vec3 (first.worldBones[6][3]) == glm::vec3 (60, 0, 0));
+    CHECK (first.worldBones[6][0] == glm::vec4 (1, 0, 0, 0));
+    CHECK (first.worldBones[6][1] == glm::vec4 (0, 1, 0, 0));
+    const auto previousPoints = state.ropePoints;
+    const auto second = MdlAnimationEvaluator::evaluate (data, {}, &physics);
+    for (size_t bone = 1; bone < 6; ++bone) {
+	// Reverse traversal refreshes the second node root from its retained working pose.
+	const auto current = bone == 3 ? glm::vec3 (first.worldBones[bone][3]) : previousPoints[bone].current;
+	const auto predicted = 2.0f * current - previousPoints[bone].previous
+	    + glm::vec3 (0, -0.9f, 0);
+	for (int axis = 0; axis < 3; ++axis) {
+	    CHECK (second.worldBones[bone][3][axis] == Catch::Approx (predicted[axis]).margin (2e-5f));
+	    CHECK (state.ropePoints[bone].previous[axis] == current[axis]);
+	}
+    }
+    // The terminal target follows its retained working pose, clamped from the prior shared root.
+    const glm::vec3 origin (first.worldBones[3][3]);
+    const glm::vec3 delta = glm::vec3 (first.worldBones[6][3]) - origin;
+    const glm::vec3 target = origin + delta / glm::length (delta) * 60.0f;
+    for (int axis = 0; axis < 3; ++axis)
+	CHECK (second.worldBones[6][3][axis] == Catch::Approx (target[axis]).margin (2e-5f));
+    CHECK (second.worldBones[6][0] == first.worldBones[6][0]);
+    CHECK (second.worldBones[6][1] == first.worldBones[6][1]);
+    for (size_t bone = 0; bone < 7; ++bone) {
+	const auto skin = second.worldBones[bone] * data.bones[bone].inverseBindWorld;
+	for (int column = 0; column < 4; ++column) CHECK (second.skinBones[bone][column] == skin[column]);
+    }
+    for (int route = 0; route < 5; ++route) {
+	auto rejected = data;
+	if (route == 0) rejected.bones[6].ikFollowEnd = true;
+	if (route == 1) rejected.bones[3].ikFollowEnd = false;
+	if (route == 2) rejected.ikGroups[0].hasDependencies = true;
+	if (route == 3) rejected.bones[4].type = 0;
+	if (route == 4) rejected.ikGroups[0].nodes[1].branches[0].flags = 5;
+	MdlPhysicsState rejectedState;
+	MdlPhysicsStep rejectedStep { .state = rejectedState, .rope = physics.rope };
+	const auto unchanged = MdlAnimationEvaluator::evaluate (rejected, {}, &rejectedStep);
+	CHECK (rejectedState.ropePoints.empty ());
+	CHECK (rejectedState.ropeWorldBones.empty ());
+	CHECK (unchanged.worldBones[4][3].y == 0.0f);
+    }
+}

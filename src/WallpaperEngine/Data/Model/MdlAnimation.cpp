@@ -175,10 +175,11 @@ bool applyRope (
 	}
     }
     if (group.nodes.size () == 2) {
-	// Native coupled01 measures one free branch ending at the controlled branch's root.
+	// A free first branch feeds a pinned endpoint taken from its pose or a control.
 	const auto& first = group.nodes[0].branches.front ();
+	const auto terminal = group.nodes[1].branches.front ().bones.back ();
 	if (first.flags != 4 || !data.bones[first.bones.back ()].ikFollowEnd
-	    || group.nodes[1].branches.front ().flags != 5) return false;
+	    || data.bones[terminal].ikFollowEnd) return false;
     }
     const bool hasDescendants = std::find (solved.begin (), solved.end (), false) != solved.end ();
     if ((hasDescendants || group.nodes.size () == 2) && group.root != 0) return false;
