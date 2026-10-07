@@ -166,6 +166,8 @@ struct ControlPointData {
     glm::vec3 displacement { 0.0f };
     glm::vec3 previousPosition { 0.0f };
     bool hasPreviousPosition { false };
+    glm::vec3 simulationPosition { 0.0f };
+    glm::vec3 birthPreviousPosition { 0.0f };
 
     void sampleVelocity (const glm::vec3& simulationPosition, float frameTime);
 };
@@ -382,6 +384,10 @@ private:
 
     std::vector<ControlPointData> m_controlPoints;
     bool m_initializingManualEmission { false };
+    bool m_hasMutatingRemapInitializer { false };
+    void applyInitialControlPointRemap (ParticleInstance& particle, const ControlPointRemap& remap);
+    void finalizeParticleBirths (uint32_t first, uint32_t firstManual);
+    void finishManualParticleBirths (uint32_t firstNewParticle);
 
     std::vector<float> m_vertices;
     std::vector<uint32_t> m_indices;

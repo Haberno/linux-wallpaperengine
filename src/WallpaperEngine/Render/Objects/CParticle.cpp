@@ -605,8 +605,10 @@ void CParticle::render () {
     float dt = advanceParticleRenderTime (getScene ().getFrameRenderTime (), m_time);
 
     // Control-point motion uses elapsed frame time, before simulation rate and
-    // the physics stability cap. Sample even when emission/rate is paused.
-    updateControlPoints (dt);
+    // the physics stability cap. Mutating owners retain native current/previous
+    // state while held; their resolver runs only at a positive simulation step.
+    if (!m_hasMutatingRemapInitializer || (dt > 0.0f && getInstanceOverride ().rate->value->getFloat () > 0.0f))
+        updateControlPoints (dt);
 
     bool simulated = false;
     if (dt > 0.0f) {
@@ -671,6 +673,20 @@ void CParticle::pause () {
 }
 
 void CParticle::emitParticles (const uint32_t count) {
+    if (m_hasMutatingRemapInitializer) {
+        // These getters change the live point. A second script call must see it
+        // before another resolve, so this owner cannot use the pending counter.
+        m_pendingBirthTransform = m_controlPointTransform;
+        m_pendingSystemTime = m_remapSystemTime;
+        m_pendingLayerTime = remapLayerTime ();
+        const uint32_t first = m_particleCount;
+        m_initializingManualEmission = true;
+        for (auto& emitter : m_emitters) emitter (m_particles, m_particleCount, 0.0f, std::max (1u, count));
+        m_initializingManualEmission = false;
+        finalizeParticleBirths (first, first);
+        finishManualParticleBirths (first);
+        return;
+    }
     if (count > 0 && m_pendingEmission == 0) {
 	m_pendingControlPoints = m_controlPoints;
 	m_pendingBirthTransform = m_controlPointTransform;
@@ -929,8 +945,9 @@ void CParticle::updateControlPoints (const float frameTime) {
     m_controlPointTransform = particleToWorld;
     const glm::mat3 worldToParticle = glm::mat3 (flipY * worldToLocal * flipY);
     for (auto& cp : m_controlPoints) {
-	cp.sampleVelocity (worldSpace ? glm::vec3 (particleToWorld * glm::vec4 (cp.position, 1.0f))
-	    : cp.position, frameTime);
+        cp.simulationPosition = worldSpace ? glm::vec3 (particleToWorld * glm::vec4 (cp.position, 1.0f)) : cp.position;
+        cp.birthPreviousPosition = cp.hasPreviousPosition ? cp.previousPosition : cp.simulationPosition;
+        cp.sampleVelocity (cp.simulationPosition, frameTime);
 	// Native initializer opcode 8 measures in simulation space, then undoes
 	// the layer transform for local-authored points before the birth transform.
 	if (worldSpace && (cp.flags & 2) == 0) {
@@ -990,9 +1007,7 @@ void CParticle::update (float dt) {
 	m_pendingControlPoints.clear ();
 	m_pendingEmission = 0;
     }
-    for (uint32_t i = firstNewParticle; i < m_particleCount; ++i) {
-	m_particles[i].serial = ++m_nextParticleSerial;
-    }
+    finalizeParticleBirths (firstNewParticle, firstManualParticle);
 
     std::vector<ControlPointData> worldControlPoints;
     const auto* operatorControlPoints = &m_controlPoints;
@@ -1002,36 +1017,19 @@ void CParticle::update (float dt) {
 	// the emitter model again made scaled meteor trails too wide and steep.
 	const glm::mat4 flipY = glm::scale (glm::mat4 (1.0f), glm::vec3 (1.0f, -1.0f, 1.0f));
 	const glm::mat4 localToWorld = flipY * particleWorldMatrix () * flipY;
-	for (uint32_t i = firstNewParticle; i < m_particleCount; ++i) {
-	    auto& particle = m_particles[i];
-	    const auto& birthTransform = i < firstManualParticle ? localToWorld : m_pendingBirthTransform;
-	    particle.position = glm::vec3 (birthTransform * glm::vec4 (particle.position, 1.0f));
-	    particle.previousPosition = glm::vec3 (birthTransform * glm::vec4 (particle.previousPosition, 1.0f));
-	    particle.velocity = glm::mat3 (birthTransform) * particle.velocity;
-	}
 	// Emitters and child inheritance still need layer-local points. Operators
 	// act in the same space as the already spawned particles.
 	worldControlPoints = m_controlPoints;
 	for (auto& point : worldControlPoints) {
-	    point.position = glm::vec3 (localToWorld * glm::vec4 (point.position, 1.0f));
+            point.position = m_hasMutatingRemapInitializer ? point.simulationPosition
+                : glm::vec3 (localToWorld * glm::vec4 (point.position, 1.0f));
 	}
 	operatorControlPoints = &worldControlPoints;
     }
 
     if (dt <= 0.0f) {
-	// Native emitParticles() invokes birth initializers and children, not the
-	// simulation operators (some of which change alpha/size even at zero dt).
-	// Birth size is separate from the working half-size: the first positive
-	// simulation step copies it, while a held new particle still displays .5.
-	for (uint32_t i = firstNewParticle; i < m_particleCount; ++i) {
-	    auto& particle = m_particles[i];
-	    particle.size = 0.5f;
-	    // Native separates working alpha/color only when an operator needs it.
-	    if (m_hasAlphaOperators) particle.alpha = getInstanceOverride ().alpha->value->getFloat ();
-	    if (m_hasColorOperators) particle.color = m_instanceColor;
-	}
-	updateFollowChildren (firstNewParticle);
-	return;
+        finishManualParticleBirths (firstNewParticle);
+        return;
     }
 
     // Native 140237754 repeats only operator dispatch at configured FPS 1..20.
@@ -1053,7 +1051,46 @@ void CParticle::update (float dt) {
 
     updateRopeTrailHistory (dt);
     updateFollowChildren (firstNewParticle);
+    if (m_hasMutatingRemapInitializer) {
+        // Native publishes previous matrices after emission and operators.
+        for (auto& point : m_controlPoints) {
+            point.previousPosition = point.simulationPosition;
+            point.birthPreviousPosition = point.simulationPosition;
+        }
+    }
 
+}
+
+void CParticle::finalizeParticleBirths (const uint32_t firstNewParticle, const uint32_t firstManual) {
+    for (uint32_t i = firstNewParticle; i < m_particleCount; ++i) {
+        m_particles[i].serial = ++m_nextParticleSerial;
+    }
+    if ((m_particle.flags & 1) == 0) return;
+    const glm::mat4 flipY = glm::scale (glm::mat4 (1.0f), glm::vec3 (1.0f, -1.0f, 1.0f));
+    const glm::mat4 localToWorld = firstNewParticle < firstManual
+        ? flipY * particleWorldMatrix () * flipY : m_pendingBirthTransform;
+    for (uint32_t i = firstNewParticle; i < m_particleCount; ++i) {
+        auto& particle = m_particles[i];
+        const auto& transform = i < firstManual ? localToWorld : m_pendingBirthTransform;
+        particle.position = glm::vec3 (transform * glm::vec4 (particle.position, 1.0f));
+        particle.previousPosition = glm::vec3 (transform * glm::vec4 (particle.previousPosition, 1.0f));
+        particle.velocity = glm::mat3 (transform) * particle.velocity;
+    }
+}
+
+void CParticle::finishManualParticleBirths (const uint32_t firstNewParticle) {
+	// Native emitParticles() invokes birth initializers and children, not the
+	// simulation operators (some of which change alpha/size even at zero dt).
+	// Birth size is separate from the working half-size: the first positive
+	// simulation step copies it, while a held new particle still displays .5.
+	for (uint32_t i = firstNewParticle; i < m_particleCount; ++i) {
+	    auto& particle = m_particles[i];
+	    particle.size = 0.5f;
+	    // Native separates working alpha/color only when an operator needs it.
+	    if (m_hasAlphaOperators) particle.alpha = getInstanceOverride ().alpha->value->getFloat ();
+	    if (m_hasColorOperators) particle.color = m_instanceColor;
+	}
+	updateFollowChildren (firstNewParticle);
 }
 
 void CParticle::updateRopeTrailHistory (float dt) {
@@ -1275,14 +1312,13 @@ EmitterFunc CParticle::createBoxEmitter (const ParticleEmitter& emitter) {
 
 	    }
 	    const glm::vec3 emitterOrigin = resolveEmitterOrigin (transformedEmitterOrigin);
-	    // Emit particles
+            glm::vec3 spawnOrigin = emitterOrigin;
+            if (controlPointIndex >= 0 && controlPointIndex < static_cast<int> (m_controlPoints.size ())) {
+                spawnOrigin += m_controlPoints[controlPointIndex].position;
+            }
+	    // Native caches the origin before the birth loop; initializers may mutate it.
 	    for (uint32_t i = 0; i < toEmit && count < particles.size (); i++) {
 		auto& p = particles[count];
-
-		glm::vec3 spawnOrigin = emitterOrigin;
-		if (controlPointIndex >= 0 && controlPointIndex < static_cast<int> (m_controlPoints.size ())) {
-		    spawnOrigin += m_controlPoints[controlPointIndex].position;
-		}
 
 		// Generate random position within box volume centered on origin
 		// This creates a centered box (or hollow box if distanceMin > 0)
@@ -1459,15 +1495,13 @@ EmitterFunc CParticle::createSphereEmitter (const ParticleEmitter& emitter) {
 	}
 
 	const glm::vec3 emitterOrigin = resolveEmitterOrigin (transformedEmitterOrigin);
-	for (uint32_t i = 0; i < toEmit && count < particles.size (); i++) {
-	    auto& p = particles[count];
-
-	    // Determine spawn origin (control point or emitter origin)
-	    glm::vec3 spawnOrigin = emitterOrigin;
-	    if (controlPointIndex >= 0 && controlPointIndex < static_cast<int> (m_controlPoints.size ())) {
-		spawnOrigin += m_controlPoints[controlPointIndex].position;
-	    }
-
+            glm::vec3 spawnOrigin = emitterOrigin;
+            if (controlPointIndex >= 0 && controlPointIndex < static_cast<int> (m_controlPoints.size ())) {
+                spawnOrigin += m_controlPoints[controlPointIndex].position;
+            }
+	    // Native caches the origin before the birth loop; initializers may mutate it.
+	    for (uint32_t i = 0; i < toEmit && count < particles.size (); i++) {
+		auto& p = particles[count];
 	    // Spawn at random position on ellipsoid surface
 	    glm::vec3 randomPos;
 
@@ -1692,12 +1726,16 @@ void WallpaperEngine::Render::Objects::applyParticleControlPointRemap (
             if (remap.input != ControlPointRemap::Input::ControlPoint) inputValue -= particle.position;
             if (remap.input == ControlPointRemap::Input::DirectionToPoint) {
                 const float squared = glm::dot (inputValue, inputValue);
-                // Native masks exact zero before rsqrt; nonzero subnormal squared
+                // Operators mask exact zero before rsqrt; nonzero subnormal squared
                 // distances produce nonfinite values and remain outside this subset.
-                if (squared > 0.0f && squared < std::numeric_limits<float>::min ()) return;
-                if (squared > 0.0f) {
-                    inputValue *= particleRemapInverseLength (squared);
-                } else inputValue = glm::vec3 (0.0f);
+                if (initializer) {
+                    // The birth getter uses sqrt/divide, without the operator's zero mask.
+                    inputValue *= 1.0f / std::sqrt (squared);
+                } else {
+                    if (squared > 0.0f && squared < std::numeric_limits<float>::min ()) return;
+                    if (squared > 0.0f) inputValue *= particleRemapInverseLength (squared);
+                    else inputValue = glm::vec3 (0.0f);
+                }
             }
             inputValue *= glm::vec3 (1.0f, -1.0f, 1.0f);
         } else {
@@ -1924,13 +1962,41 @@ glm::vec3 CParticle::remapLayerOrigin () const {
     return glm::vec3 (transform[3]) * glm::vec3 (1.0f, -1.0f, 1.0f);
 }
 
+void CParticle::applyInitialControlPointRemap (ParticleInstance& particle, const ControlPointRemap& remap) {
+    const bool world = (m_particle.flags & 1) != 0;
+    const auto& transform = m_initializingManualEmission ? m_pendingBirthTransform : m_controlPointTransform;
+    auto& point = m_controlPoints[remap.inputControlPoint0];
+    // Native changes only current XYZ, before reading the output pair. Keep the
+    // authored point and previous simulation position intact for later initializers.
+    point.simulationPosition = glm::vec3 (0.0f);
+    point.position = world ? glm::vec3 (glm::inverse (transform) * glm::vec4 (0, 0, 0, 1)) : glm::vec3 (0.0f);
+    point.displacement = -point.birthPreviousPosition;
+    if (!world) {
+        applyParticleControlPointRemap (particle, remap, m_controlPoints, true);
+        return;
+    }
+    auto points = m_controlPoints;
+    for (auto& value : points) value.position = value.simulationPosition;
+    auto simulationParticle = particle;
+    simulationParticle.position = glm::vec3 (transform * glm::vec4 (particle.position, 1.0f));
+    applyParticleControlPointRemap (simulationParticle, remap, points, true);
+    particle.position = glm::vec3 (glm::inverse (transform) * glm::vec4 (simulationParticle.position, 1.0f));
+}
+
 InitializerFunc CParticle::createControlPointRemapInitializer (const ControlPointRemapInitializer& init) {
     const auto& remap = init.remap;
     includeControlPoint (remap.inputControlPoint0);
     includeControlPoint (remap.inputControlPoint1);
     includeControlPoint (remap.outputControlPoint0);
     includeControlPoint (remap.outputControlPoint1);
-    return [this, &remap] (ParticleInstance& particle) {
+    const bool mutatesPoint = remap.input == ControlPointRemap::Input::ControlPoint
+        || remap.input == ControlPointRemap::Input::DeltaToPoint || remap.input == ControlPointRemap::Input::DirectionToPoint;
+    m_hasMutatingRemapInitializer |= mutatesPoint;
+    return [this, &remap, mutatesPoint] (ParticleInstance& particle) {
+        if (mutatesPoint) {
+            applyInitialControlPointRemap (particle, remap);
+            return;
+        }
         applyParticleControlPointRemap (particle, remap, m_controlPoints, true, m_hasAngularVelocity, getScene ().getTime (), g_Daytime,
             remap.input == ControlPointRemap::Input::LayerOrigin ? remapLayerOrigin () : glm::vec3 (0.0f),
             m_particle.animationMode == "randomframe" ? particle.oscillationRandom : 0.0f,
@@ -2129,12 +2195,25 @@ InitializerFunc CParticle::createInheritControlPointVelocityInitializer (
     return [this, minValue, maxValue, speedOverride, point] (ParticleInstance& particle) {
 	// Use one scalar for all axes; independent samples would change direction.
 	const float weight = WallpaperEngine::Maths::randomFloat (m_rng, minValue->getFloat (), maxValue->getFloat ());
-	// Native scripted bursts run between simulation ticks, after current
-	// control-point matrices have been copied to previous: their delta is zero.
-	if (!m_initializingManualEmission && point >= 0 && point < static_cast<int> (m_controlPoints.size ())) {
-	    const float speedMultiplier = (m_particle.flags & 16) != 0 ? 1.0f : speedOverride->getFloat ();
-	    particle.velocity += m_controlPoints[point].velocity * weight * speedMultiplier;
-	}
+        // Unmutated scripted points have already been copied to previous. A
+        // preceding remap getter can change that delta within the same birth.
+        if (point >= 0 && point < static_cast<int> (m_controlPoints.size ())
+            && (!m_initializingManualEmission || m_hasMutatingRemapInitializer)) {
+            const auto& cp = m_controlPoints[point];
+            glm::vec3 velocity = cp.velocity;
+            if (m_hasMutatingRemapInitializer) {
+                // Opcode8 divides live current-minus-previous by context+150:
+                // the previous raw scene interval, including scripted dt0 births.
+                const float interval = getScene ().getPreviousDeltaTime ();
+                velocity = (cp.simulationPosition - cp.birthPreviousPosition) / interval;
+                if ((m_particle.flags & 1) != 0 && (cp.flags & 2) == 0) {
+                    const auto& transform = m_initializingManualEmission ? m_pendingBirthTransform : m_controlPointTransform;
+                    velocity = glm::inverse (glm::mat3 (transform)) * velocity;
+                }
+            }
+            const float speedMultiplier = (m_particle.flags & 16) != 0 ? 1.0f : speedOverride->getFloat ();
+            particle.velocity += velocity * weight * speedMultiplier;
+        }
     };
 }
 

@@ -120,6 +120,7 @@ public:
     /** Scene-relative timestamp for subtracting animation intervals before narrowing. */
     [[nodiscard]] double getElapsedTime () const { return this->m_sceneElapsedTime; }
     [[nodiscard]] float getDeltaTime () const;
+    [[nodiscard]] float getPreviousDeltaTime () const { return m_previousSceneDeltaTime; }
     [[nodiscard]] float getFps () const;
 
     /**
@@ -381,6 +382,7 @@ private:
     std::chrono::steady_clock::time_point m_loadingTimerTime;
     std::optional<double> m_previousSceneTime = std::nullopt;
     float m_sceneDeltaTime = 0.0f;
+    float m_previousSceneDeltaTime = 0.0f;
     double m_sceneElapsedTime = 0.0;
     double m_sceneTime = 0.0;
     const CameraPathSource* m_activeCameraPathSource = nullptr;

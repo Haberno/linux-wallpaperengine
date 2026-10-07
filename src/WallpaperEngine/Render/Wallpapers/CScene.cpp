@@ -957,6 +957,7 @@ void CScene::renderFrame (const glm::ivec4& viewport) {
     // already a float and quantizes frame intervals after long process uptimes.
     const double currentTime = this->isLoading ()
         ? this->m_loadingRenderTime : this->getContext ().getDriver ().getRenderTime ();
+    this->m_previousSceneDeltaTime = this->m_sceneDeltaTime;
     this->m_sceneDeltaTime = calculateSceneDeltaTime (currentTime, this->m_previousSceneTime);
     this->m_previousSceneTime = currentTime;
     this->m_sceneElapsedTime += this->m_sceneDeltaTime;

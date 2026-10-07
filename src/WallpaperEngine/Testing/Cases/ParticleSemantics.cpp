@@ -4481,7 +4481,7 @@ TEST_CASE ("color output matches native birth working arithmetic selectors and b
     }
 }
 
-TEST_CASE ("control point vector inputs admit operators and preserve initializer ownership gate", "[particle][remap][remap-control-point-input]") {
+TEST_CASE ("control point vector inputs admit the recovered initializer and operator family", "[particle][remap][remap-control-point-input]") {
     for (const auto input : { "controlpoint", "deltatocontrolpoint", "directiontocontrolpoint" }) {
         for (const bool initializer : { true, false }) {
             WallpaperEngine::Data::Model::Project project {};
@@ -4492,7 +4492,7 @@ TEST_CASE ("control point vector inputs admit operators and preserve initializer
             data["particle"][initializer ? "initializer" : "operator"] = { node };
             const auto object = WallpaperEngine::Data::Parsers::ObjectParser::parse (data, project);
             const auto* particle = object->as<Particle> ();
-            if (initializer) CHECK (particle->initializers.empty ());
+            if (initializer) REQUIRE (particle->initializers.size () == 1);
             else REQUIRE (particle->operators.size () == 1);
         }
     }
@@ -5123,4 +5123,46 @@ TEST_CASE ("initializer lifetime fraction uses birth phase independently of age 
     const auto& remap = definition->operators.front ()->as<ControlPointRemapOperator> ()->remap;
     applyParticleControlPointRemap (particle, remap, points, false, false, 5, .6f, glm::vec3 (0), .875f);
     CHECK (particle.position == glm::vec3 (-30, -45, 40));
+}
+
+TEST_CASE ("initializer point inputs admit only the recovered two-point family", "[particle][remap][remap-initializer-cp]") {
+    for (const auto input : { "controlpoint", "deltatocontrolpoint", "directiontocontrolpoint" }) {
+        auto data = WallpaperEngine::Data::JSON::JSON::parse (R"({"id":910,"particle":{"initializer":[{
+            "name":"remapinitialvalue","output":"positionbetweentwocontrolpoints","operation":"remap"
+        }]}})");
+        data["particle"]["initializer"][0]["input"] = input;
+        WallpaperEngine::Data::Model::Project project {};
+        auto parsed = WallpaperEngine::Data::Parsers::ObjectParser::parse (data, project);
+        REQUIRE (parsed->as<Particle> ()->initializers.size () == 1);
+        data["particle"]["initializer"][0]["output"] = "controlpoint";
+        parsed = WallpaperEngine::Data::Parsers::ObjectParser::parse (data, project);
+        CHECK (parsed->as<Particle> ()->initializers.empty ());
+    }
+}
+
+TEST_CASE ("initializer point direction uses scalar sqrt division after current-point mutation", "[particle][remap][remap-initializer-cp]") {
+    using WallpaperEngine::Render::Objects::applyParticleControlPointRemap;
+    using WallpaperEngine::Render::Objects::ControlPointData;
+    for (const auto input : { "controlpoint", "deltatocontrolpoint", "directiontocontrolpoint" }) {
+        auto data = WallpaperEngine::Data::JSON::JSON::parse (R"({"id":911,"particle":{"initializer":[{
+            "name":"remapinitialvalue","output":"positionbetweentwocontrolpoints","operation":"remap",
+            "inputcomponent":"x","flags":0,"inputrangemin":0,"inputrangemax":1,
+            "outputrangemin":0,"outputrangemax":1,"outputcontrolpoint0":0,"outputcontrolpoint1":1
+        }]}})");
+        data["particle"]["initializer"][0]["input"] = input;
+        WallpaperEngine::Data::Model::Project project {};
+        const auto parsed = WallpaperEngine::Data::Parsers::ObjectParser::parse (data, project);
+        REQUIRE (parsed->as<Particle> ()->initializers.size () == 1);
+        const auto& remap = parsed->as<Particle> ()->initializers.front ()->as<ControlPointRemapInitializer> ()->remap;
+        std::vector<ControlPointData> points (2);
+        points[1].position = {100,0,0}; // Factory has already zeroed the selected live input/output point.
+        for (const float scale : {1.0f, 1e-9f}) {
+            ParticleInstance p;p.position = {3*scale,-4*scale,0};
+            applyParticleControlPointRemap (p, remap, points, true);
+            const float expected = std::string(input)=="controlpoint" ? 0.0f
+                : std::string(input)=="deltatocontrolpoint" ? -300.0f*scale : -60.0f;
+            CHECK (p.position.x == Catch::Approx(expected).margin(.00002f));
+            CHECK (p.position.y == -4*scale);
+        }
+    }
 }

@@ -1051,12 +1051,10 @@ static std::optional<ControlPointRemap> parseControlPointRemap (
         : transform == "saw" ? Transform::Saw : transform == "triangle" ? Transform::Triangle
         : transform == "simplexnoise" ? Transform::SimplexNoise
         : transform == "fbmnoise" ? std::optional (Transform::FbmNoise) : std::nullopt;
-    const bool pointInput = parsedInput == Input::ControlPoint || parsedInput == Input::DeltaToPoint
-        || parsedInput == Input::DirectionToPoint;
-    // These initializer getters mutate the selected CP; operator getters only read it.
+    // Initializer point inputs use the live mutation/birth owner in CParticle.
+    // They are admitted only with the measured two-point position destination.
     const bool linearPair = (parsedInput == Input::BetweenPoints && parsedOutput.has_value ())
-        || (parsedOutput == Output::BetweenPoints && parsedInput.has_value ()
-            && (!initializer || !pointInput));
+        || (parsedOutput == Output::BetweenPoints && parsedInput.has_value ());
     const bool periodic = parsedTransform == Transform::Sine || parsedTransform == Transform::Square
         || parsedTransform == Transform::Saw || parsedTransform == Transform::Triangle;
     const bool linearTransform = parsedTransform == Transform::Identity || periodic;
