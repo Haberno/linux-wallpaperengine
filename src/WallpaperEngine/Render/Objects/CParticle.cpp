@@ -653,6 +653,12 @@ void CParticle::render () {
 	    if (instance.parentSerial == 0 && !instance.renderer->hasLivingParticles ()) continue;
 	    instance.renderer->m_propagateColorOverride = m_propagateColorOverride;
 	    instance.renderer->render ();
+	    // Native releases completed event children immediately after their update.
+	    if (instance.parentSerial != 0 && instance.renderer->m_simulationTime > 0.0f
+		&& !instance.renderer->hasLivingParticles () && !instance.renderer->hasPendingEmission ()) {
+		instance.parentSerial = 0;
+		instance.renderer->pause ();
+	    }
 	}
     }
 }
@@ -1001,17 +1007,6 @@ void CParticle::updateControlPoints (const float frameTime, const bool refreshOn
 }
 
 void CParticle::update (float dt) {
-    // Release drained bursts before another death on this frame needs the slot.
-    for (auto& child : m_followChildren) {
-	if (child.settings->type != "eventdeath") continue;
-	for (auto& instance : child.instances) {
-	    if (instance.parentSerial != 0 && instance.renderer->m_simulationTime > 0.0f
-		&& !instance.renderer->hasLivingParticles () && !instance.renderer->hasPendingEmission ()) {
-		instance.parentSerial = 0;
-		instance.renderer->pause ();
-	    }
-	}
-    }
     // Reclaim this frame's expired slots before emitting. A full one-particle
     // glow otherwise rejects its replacement, then disappears for one frame.
     if (dt > 0.0f && m_hasControlPointOutputOperator) advanceRemapSlots (dt);
