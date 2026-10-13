@@ -6,6 +6,7 @@
 
 #include <functional>
 #include <memory>
+#include <map>
 #include <optional>
 #include <string>
 #include <unordered_map>
@@ -60,8 +61,33 @@ struct TextGlyphMetrics {
     float right; // hinted outline CBox xMax, relative to the glyph pen
 };
 
-/** Wrap at spaces, split oversized words on UTF-8 character boundaries, and
- * truncate to the authored row count with a width-fitting ellipsis if enabled. */
+struct TextShapedGlyph {
+    FT_Face face;
+    uint32_t index;
+    uint32_t code;
+    size_t cluster; // UTF-8 source offset, transported from the UTF-32 HB cluster
+    size_t runStart;
+    float advance;
+    float right; // hinted CBox xMax including the integer shaping offset
+    int xOffset;
+    int yOffset;
+    bool safeBreak;
+};
+
+struct TextShapedLine {
+    std::string text;
+    std::vector<TextShapedGlyph> glyphs;
+};
+
+std::vector<TextShapedGlyph> shapeTextLine (
+    const std::string& text, const std::function<FT_Face (uint32_t)>& fontForGlyph
+);
+std::vector<TextShapedLine> layoutShapedTextLines (
+    const std::string& text, const TextLayoutLimits& limits,
+    const std::function<std::vector<TextShapedGlyph> (const std::string&)>& shape, float spacing = 0.0f
+);
+
+/** Codepoint-metric adapter for callers without a font/shaping stage. */
 std::vector<std::string> layoutTextLines (
     const std::string& text, const TextLayoutLimits& limits, const std::function<TextGlyphMetrics (uint32_t)>& glyphMetrics,
     float spacing = 0.0f
@@ -182,7 +208,7 @@ private:
     GLsizei m_glyphVertexCount = 0;
     bool m_usingMsdf = false;
     bool m_lastMsdfRequest = false;
-    std::unordered_map<uint32_t, TextMsdfGlyph> m_msdfGlyphs;
+    std::map<std::pair<FT_Face, uint32_t>, TextMsdfGlyph> m_msdfGlyphs;
 
     GLint m_uMVP = -1;
     GLint m_uColor = -1;

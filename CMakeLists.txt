@@ -38,6 +38,8 @@ find_package(FFMPEG REQUIRED)
 find_package(PulseAudio REQUIRED)
 find_package(Freetype REQUIRED)
 find_package(Fontconfig REQUIRED)
+find_package(PkgConfig REQUIRED)
+pkg_check_modules(HARFBUZZ REQUIRED IMPORTED_TARGET harfbuzz)
 include(CMakeModules/PrivateMSDF.cmake)
 
 set(ENABLE_OPT OFF)
@@ -734,6 +736,7 @@ target_link_libraries (linux-wallpaperengine-lib PUBLIC
     Freetype::Freetype
     msdfgen::msdfgen
     Fontconfig::Fontconfig
+    PkgConfig::HARFBUZZ
     ${WAYLAND_LIBRARIES}
     ${X11_LIBRARIES}
     ${DBUS_LIBRARIES}
@@ -763,6 +766,7 @@ if (BUILD_TESTING)
         Freetype::Freetype
         msdfgen::msdfgen
         Fontconfig::Fontconfig
+        PkgConfig::HARFBUZZ
         ${WAYLAND_LIBRARIES}
         ${X11_LIBRARIES}
         ${DBUS_LIBRARIES}

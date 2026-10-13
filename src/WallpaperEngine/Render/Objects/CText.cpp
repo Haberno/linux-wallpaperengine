@@ -16,6 +16,8 @@
 #include FT_FREETYPE_H
 #include FT_GLYPH_H
 #include <fontconfig/fontconfig.h>
+#include <hb.h>
+#include <hb-ft.h>
 
 #include <glm/gtc/matrix_transform.hpp>
 #include <glm/gtc/type_ptr.hpp>
@@ -38,19 +40,6 @@
 using namespace WallpaperEngine::Render::Objects;
 
 namespace {
-TextGlyphMetrics measureTextGlyph (FT_Face face, const uint32_t code, const FT_Int32 advanceFlags) {
-    FT_Set_Transform (face, nullptr, nullptr);
-    if (FT_Load_Char (face, code, advanceFlags) != 0) return { 0.0f, 0.0f };
-    const float advance = static_cast<float> (face->glyph->advance.x >> 6);
-    if (FT_Load_Char (face, code, FT_LOAD_NO_BITMAP) != 0) return { advance, 0.0f };
-    FT_Glyph glyph;
-    if (FT_Get_Glyph (face->glyph, &glyph) != 0) return { advance, 0.0f };
-    FT_BBox bounds;
-    FT_Glyph_Get_CBox (glyph, FT_GLYPH_BBOX_PIXELS, &bounds);
-    FT_Done_Glyph (glyph);
-    return { advance, static_cast<float> (bounds.xMax) };
-}
-
 // Fall back to a system font if the authored embedded font cannot be loaded.
 const std::vector<std::string> kFontCandidates = {
     "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
@@ -205,104 +194,169 @@ uint32_t WallpaperEngine::Render::Objects::nextUtf8Codepoint (const std::string&
     return code;
 }
 
+std::vector<TextShapedGlyph> WallpaperEngine::Render::Objects::shapeTextLine (
+    const std::string& text, const std::function<FT_Face (uint32_t)>& fontForGlyph
+) {
+    std::vector<uint32_t> codes;
+    std::vector<size_t> offsets;
+    std::vector<FT_Face> faces;
+    for (size_t offset = 0; offset < text.size ();) {
+        offsets.push_back (offset);
+        const auto code = nextUtf8Codepoint (text, offset);
+        codes.push_back (code);
+        faces.push_back (fontForGlyph (code));
+    }
+    std::vector<TextShapedGlyph> glyphs;
+    for (size_t start = 0; start < codes.size ();) {
+        size_t end = start + 1;
+        while (end < codes.size () && faces[end] == faces[start]) end++;
+        const auto face = faces[start];
+        FT_Set_Transform (face, nullptr, nullptr);
+        hb_font_t* font = hb_ft_font_create (face, nullptr);
+        // The native hb-ft adapter uses unhinted advances; outline/bitmap loads
+        // below still retain their existing hinting.
+        hb_ft_font_set_load_flags (font, FT_LOAD_NO_HINTING);
+        hb_buffer_t* buffer = hb_buffer_create ();
+        hb_buffer_add_utf32 (buffer, codes.data () + start, end - start, 0, end - start);
+        hb_buffer_guess_segment_properties (buffer);
+        hb_shape (font, buffer, nullptr, 0);
+        unsigned int count;
+        const auto infos = hb_buffer_get_glyph_infos (buffer, &count);
+        const auto positions = hb_buffer_get_glyph_positions (buffer, nullptr);
+        for (unsigned int i = 0; i < count; i++) {
+            const auto source = start + infos[i].cluster;
+            const int xOffset = positions[i].x_offset >> 6;
+            const int yOffset = positions[i].y_offset >> 6;
+            float right = static_cast<float> (xOffset);
+            if (FT_Load_Glyph (face, infos[i].codepoint, FT_LOAD_NO_BITMAP) == 0) {
+                FT_Glyph glyph;
+                if (FT_Get_Glyph (face->glyph, &glyph) == 0) {
+                    FT_BBox bounds;
+                    FT_Glyph_Get_CBox (glyph, FT_GLYPH_BBOX_PIXELS, &bounds);
+                    FT_Done_Glyph (glyph);
+                    right += static_cast<float> (bounds.xMax);
+                }
+            }
+            glyphs.push_back ({ face, infos[i].codepoint, codes[source], offsets[source], offsets[start],
+                static_cast<float> (positions[i].x_advance >> 6), right, xOffset, yOffset,
+                (infos[i].mask & HB_GLYPH_FLAG_UNSAFE_TO_BREAK) == 0 });
+        }
+        hb_buffer_destroy (buffer);
+        hb_font_destroy (font);
+        start = end;
+    }
+    return glyphs;
+}
+
+std::vector<TextShapedLine> WallpaperEngine::Render::Objects::layoutShapedTextLines (
+    const std::string& text, const TextLayoutLimits& limits,
+    const std::function<std::vector<TextShapedGlyph> (const std::string&)>& shape, const float spacing
+) {
+    const auto whitespace = [] (uint32_t code) { return code == ' ' || code == '\t' || code == '\r'; };
+    std::vector<std::string> pending;
+    for (size_t paragraph = 0, end = 0; end <= text.size (); end++) {
+        if (end != text.size () && text[end] != '\n') continue;
+        size_t paragraphEnd = end;
+        if (paragraphEnd > paragraph && text[paragraphEnd - 1] == '\r') paragraphEnd--;
+        pending.push_back (text.substr (paragraph, paragraphEnd - paragraph));
+        paragraph = end + 1;
+    }
+    std::vector<TextShapedLine> lines;
+    for (size_t row = 0; row < pending.size ();) {
+        auto glyphs = shape (pending[row]);
+        // Source-cut wrapping is proven for forward horizontal clusters. Keep
+        // other output orders intact so an unsupported cut cannot repeat the row.
+        const bool forwardClusters = std::is_sorted (glyphs.begin (), glyphs.end (),
+            [] (const auto& first, const auto& second) { return first.cluster < second.cluster; });
+        float pen = 0.0f;
+        size_t stop = 0;
+        for (; stop < glyphs.size (); stop++) {
+            const auto& glyph = glyphs[stop];
+            if (forwardClusters && limits.width > 0.0f && stop > 0 && !whitespace (glyph.code)
+                && glyph.cluster != glyphs[stop - 1].cluster && pen + glyph.right > limits.width) break;
+            pen += glyph.advance + spacing;
+        }
+        if (stop < glyphs.size ()) {
+            size_t cut = glyphs[stop].cluster;
+            while (cut > 1 && whitespace (static_cast<unsigned char> (pending[row][cut]))) cut--;
+            for (size_t previous = cut; previous > 0; previous--) {
+                if (whitespace (static_cast<unsigned char> (pending[row][previous - 1]))) {
+                    cut = previous - 1;
+                    break;
+                }
+            }
+            size_t tail = cut;
+            while (tail < pending[row].size () && whitespace (static_cast<unsigned char> (pending[row][tail]))) tail++;
+            pending.insert (pending.begin () + row + 1, pending[row].substr (tail));
+            pending[row].resize (cut);
+            while (!pending[row].empty () && whitespace (static_cast<unsigned char> (pending[row].back ())))
+                pending[row].pop_back ();
+            cut = pending[row].size ();
+            glyphs.resize (stop); // the overflowing glyph was never accepted
+            size_t retained = glyphs.size ();
+            while (retained > 0 && glyphs[retained - 1].cluster >= cut) retained--;
+            bool safe = true;
+            if (retained > 0) {
+                const auto run = glyphs[retained - 1].runStart;
+                // Native ignores removed complete later runs. Within the last
+                // surviving run, the first popped output record supplies the flag.
+                for (size_t i = glyphs.size (); i > retained; i--)
+                    if (glyphs[i - 1].runStart == run) safe = glyphs[i - 1].safeBreak;
+            }
+            glyphs.resize (retained);
+            if (!glyphs.empty () && !safe) {
+                continue;
+            }
+        }
+        lines.push_back ({ pending[row], std::move (glyphs) });
+        row++;
+    }
+    if (limits.rows > 0 && lines.size () > limits.rows) {
+        lines.resize (limits.rows);
+        if (limits.ellipsis && !lines.back ().text.ends_with ("…")) {
+            auto& last = lines.back ();
+            const auto measure = [&] (const std::string& value) {
+                float pen = 0.0f, right = 0.0f;
+                for (const auto& glyph : shape (value)) {
+                    right = pen + glyph.right;
+                    pen += glyph.advance;
+                }
+                return right;
+            };
+            const std::string original = last.text;
+            while (!last.text.empty () && (whitespace (static_cast<unsigned char> (last.text.back ()))
+                || (limits.width > 0.0f && measure (last.text + "…") > limits.width))) {
+                size_t offset = last.text.size () - 1;
+                while (offset > 0 && (static_cast<unsigned char> (last.text[offset]) & 0xC0) == 0x80) offset--;
+                last.text.resize (offset);
+            }
+            if (last.text.empty () && !original.empty () && limits.width > 0.0f && measure ("…") > limits.width) {
+                last.text = original;
+            } else {
+                last.text += "…";
+                last.glyphs = shape (last.text);
+            }
+        }
+    }
+    return lines;
+}
+
 std::vector<std::string> WallpaperEngine::Render::Objects::layoutTextLines (
     const std::string& text, const TextLayoutLimits& limits, const std::function<TextGlyphMetrics (uint32_t)>& glyphMetrics,
     const float spacing
 ) {
-    struct Glyph {
-	size_t begin;
-	size_t end;
-	uint32_t code;
-	TextGlyphMetrics metrics;
+    const auto shape = [&] (const std::string& row) {
+        std::vector<TextShapedGlyph> glyphs;
+        for (size_t offset = 0; offset < row.size ();) {
+            const auto cluster = offset;
+            const auto code = nextUtf8Codepoint (row, offset);
+            const auto metrics = glyphMetrics (code);
+            glyphs.push_back ({ nullptr, code, code, cluster, 0, metrics.advance, metrics.right, 0, 0, true });
+        }
+        return glyphs;
     };
-    const auto whitespace = [] (uint32_t code) { return code == ' ' || code == '\t' || code == '\r'; };
     std::vector<std::string> lines;
-    for (size_t paragraph = 0, end = 0; end <= text.size (); end++) {
-	if (end != text.size () && text[end] != '\n') {
-	    continue;
-	}
-	size_t paragraphEnd = end;
-	if (paragraphEnd > paragraph && text[paragraphEnd - 1] == '\r') {
-	    paragraphEnd--;
-	}
-	std::vector<Glyph> glyphs;
-	for (size_t offset = paragraph; offset < paragraphEnd;) {
-	    const size_t begin = offset;
-	    const auto code = nextUtf8Codepoint (text, offset);
-	    glyphs.push_back ({ begin, offset, code, glyphMetrics (code) });
-	}
-	if (glyphs.empty ()) {
-	    lines.emplace_back ();
-	}
-	for (size_t start = 0; start < glyphs.size ();) {
-	    float width = 0.0f;
-	    size_t lastSpace = std::string::npos;
-	    size_t stop = start;
-	    for (; stop < glyphs.size (); stop++) {
-		// Always consume at least one glyph, even if it alone exceeds the limit.
-		if (limits.width > 0.0f && stop > start && !whitespace (glyphs[stop].code)
-		    && width + glyphs[stop].metrics.right > limits.width) {
-		    break;
-		}
-		width += glyphs[stop].metrics.advance + spacing;
-		if (whitespace (glyphs[stop].code)) {
-		    lastSpace = stop;
-		}
-	    }
-	    size_t next = stop;
-	    if (stop < glyphs.size () && !whitespace (glyphs[stop].code) && lastSpace != std::string::npos
-		&& lastSpace > start) {
-		stop = lastSpace;
-		while (stop > start && whitespace (glyphs[stop - 1].code)) {
-		    stop--;
-		}
-		if (stop == start) {
-		    stop = next;
-		} // preserve an explicitly indented row
-		else {
-		    next = lastSpace + 1;
-		}
-	    }
-	    lines.push_back (text.substr (glyphs[start].begin, glyphs[stop - 1].end - glyphs[start].begin));
-	    start = next;
-	    while (start < glyphs.size () && whitespace (glyphs[start].code)) {
-		start++;
-	    }
-	}
-	paragraph = end + 1;
-    }
-    if (limits.rows > 0 && lines.size () > limits.rows) {
-	lines.resize (limits.rows);
-	if (limits.ellipsis && !lines.back ().ends_with ("…")) {
-	    auto& last = lines.back ();
-	    const auto measure = [&] (const std::string& value) {
-		float pen = 0.0f;
-		float right = 0.0f;
-		for (size_t offset = 0; offset < value.size ();) {
-		    const auto glyph = glyphMetrics (nextUtf8Codepoint (value, offset));
-		    right = pen + glyph.right;
-		    pen += glyph.advance;
-		}
-		return right;
-	    };
-	    const std::string ellipsis = "…";
-	    const std::string original = last;
-	    while (!last.empty ()
-		   && (whitespace (static_cast<unsigned char> (last.back ()))
-		       || (limits.width > 0.0f && measure (last + ellipsis) > limits.width))) {
-		size_t offset = last.size () - 1;
-		while (offset > 0 && (static_cast<unsigned char> (last[offset]) & 0xC0) == 0x80) {
-		    offset--;
-		}
-		last.resize (offset);
-	    }
-	    if (last.empty () && !original.empty () && limits.width > 0.0f && measure (ellipsis) > limits.width) {
-		last = original;
-	    } else {
-		last += ellipsis;
-	    }
-	}
-    }
+    for (auto& line : layoutShapedTextLines (text, limits, shape, spacing)) lines.push_back (std::move (line.text));
     return lines;
 }
 
@@ -1219,23 +1273,18 @@ glm::vec2 CText::getSize () {
     const float lineHeight = static_cast<float> (m_ftFace->size->metrics.height >> 6) + spacing.y;
     const float ascender = static_cast<float> (m_ftFace->size->metrics.ascender >> 6);
     const float descender = static_cast<float> (m_ftFace->size->metrics.descender >> 6);
-    const auto loadGlyph = [this] (uint32_t code, FT_Int32 flags, FT_Vector delta = { 0, 0 }) -> FT_GlyphSlot {
-	const auto face = fontForGlyph (code);
-	FT_Set_Transform (face, nullptr, &delta);
-	return FT_Load_Char (face, code, flags) == 0 ? face->glyph : nullptr;
+    const auto loadGlyph = [] (const TextShapedGlyph& glyph, FT_Int32 flags, FT_Vector delta = { 0, 0 }) -> FT_GlyphSlot {
+	FT_Set_Transform (glyph.face, nullptr, &delta);
+	return FT_Load_Glyph (glyph.face, glyph.index, flags) == 0 ? glyph.face->glyph : nullptr;
     };
-    const auto lines = layoutTextLines (text, currentLayoutLimits (), [this] (uint32_t code) {
-	return measureTextGlyph (fontForGlyph (code), code, FT_LOAD_NO_HINTING);
+    const auto lines = layoutShapedTextLines (text, currentLayoutLimits (), [this] (const std::string& row) {
+	return shapeTextLine (row, [this] (uint32_t code) { return fontForGlyph (code); });
     }, spacing.x);
     std::vector<float> widths;
     float maxWidth = 0.0f;
     for (const auto& line : lines) {
 	float width = 0.0f;
-	for (size_t offset = 0; offset < line.size ();) {
-	    if (const auto slot = loadGlyph (nextUtf8Codepoint (line, offset), FT_LOAD_NO_HINTING)) {
-		width += static_cast<float> (slot->advance.x >> 6) + spacing.x;
-	    }
-	}
+        for (const auto& glyph : line.glyphs) width += glyph.advance + spacing.x;
 	widths.push_back (width);
 	maxWidth = std::max (maxWidth, width);
     }
@@ -1245,19 +1294,19 @@ glm::vec2 CText::getSize () {
 	    : m_text.alignment == "left" ? 0.0f : (maxWidth - widths[i]) * 0.5f;
 	if (m_text.alignment != "left" && m_text.alignment != "right" && spacing.x == 0.0f) pen = std::round (pen);
 	const float baseline = static_cast<float> (i) * lineHeight;
-	for (size_t offset = 0; offset < lines[i].size ();) {
+	for (const auto& glyph : lines[i].glyphs) {
+            const float x = pen + glyph.xOffset;
+            const float y = baseline - glyph.yOffset;
 	    const FT_Vector delta = {
-		static_cast<FT_Pos> (std::round ((pen - std::floor (pen)) * 64.0f)),
-		static_cast<FT_Pos> (std::round (-(baseline - std::floor (baseline)) * 64.0f)),
+		static_cast<FT_Pos> (std::round ((x - std::floor (x)) * 64.0f)),
+		static_cast<FT_Pos> (std::round (-(y - std::floor (y)) * 64.0f)),
 	    };
-	    const auto code = nextUtf8Codepoint (lines[i], offset);
-	    const auto advanceSlot = loadGlyph (code, FT_LOAD_NO_HINTING);
-	    const float advance = advanceSlot != nullptr ? static_cast<float> (advanceSlot->advance.x >> 6) + spacing.x : 0.0f;
-	    const auto slot = loadGlyph (code, FT_LOAD_RENDER, delta);
+	    const float advance = glyph.advance + spacing.x;
+	    const auto slot = loadGlyph (glyph, FT_LOAD_RENDER, delta);
 	    if (slot == nullptr) continue;
 	    if (slot->bitmap.width != 0 && slot->bitmap.rows != 0) {
-		const float left = std::floor (pen) + slot->bitmap_left;
-		const float top = std::floor (baseline) - slot->bitmap_top;
+		const float left = std::floor (x) + slot->bitmap_left;
+		const float top = std::floor (y) - slot->bitmap_top;
 		bounds.x = std::min (bounds.x, left);
 		bounds.y = std::min (bounds.y, -top - slot->bitmap.rows);
 		bounds.z = std::max (bounds.z, left + slot->bitmap.width);
@@ -1342,10 +1391,9 @@ void CText::rebuildTextureFrom (const std::string& text) {
     // Safe to call repeatedly: GL handles (texture, VAO, VBO) are reused when
     // already allocated, so dynamic/scripted text can regenerate the glyph
     // bitmap every time the rendered string changes without leaking.
-    const auto loadGlyph = [this] (uint32_t code, FT_Int32 flags, FT_Vector delta = { 0, 0 }) -> FT_GlyphSlot {
-	const auto face = fontForGlyph (code);
-	FT_Set_Transform (face, nullptr, &delta);
-	return FT_Load_Char (face, code, flags) == 0 ? face->glyph : nullptr;
+    const auto loadGlyph = [] (const TextShapedGlyph& glyph, FT_Int32 flags, FT_Vector delta = { 0, 0 }) -> FT_GlyphSlot {
+	FT_Set_Transform (glyph.face, nullptr, &delta);
+	return FT_Load_Glyph (glyph.face, glyph.index, flags) == 0 ? glyph.face->glyph : nullptr;
     };
     m_lastMsdfRequest = currentStyle ().msdf;
     m_usingMsdf = m_lastMsdfRequest && FT_IS_SCALABLE (m_ftFace) && !FT_HAS_COLOR (m_ftFace);
@@ -1355,7 +1403,7 @@ void CText::rebuildTextureFrom (const std::string& text) {
     struct GlyphPlacement { size_t image; glm::vec4 bounds; };
     std::vector<GlyphPlacement> glyphPlacements;
     std::vector<const TextMsdfGlyph*> glyphImages;
-    std::unordered_map<uint32_t, size_t> glyphImageIndices;
+    std::map<std::pair<FT_Face, uint32_t>, size_t> glyphImageIndices;
     m_lastSpacing = currentSpacing ();
     m_lastPadding = currentPadding ();
 
@@ -1368,26 +1416,20 @@ void CText::rebuildTextureFrom (const std::string& text) {
 
     m_lastLayoutLimits = currentLayoutLimits ();
     struct Line {
-	std::string text;
+        std::vector<TextShapedGlyph> glyphs;
 	float width = 0.0f;
 	float x = 0.0f;
     };
     std::vector<Line> lines;
-    for (auto& line : layoutTextLines (text, m_lastLayoutLimits, [this] (uint32_t code) {
-	     return measureTextGlyph (fontForGlyph (code), code, FT_LOAD_DEFAULT);
+    for (auto& line : layoutShapedTextLines (text, m_lastLayoutLimits, [this] (const std::string& row) {
+	     return shapeTextLine (row, [this] (uint32_t code) { return fontForGlyph (code); });
 	 }, m_lastSpacing.x)) {
-	lines.push_back ({ .text = std::move (line) });
+	lines.push_back ({ .glyphs = std::move (line.glyphs) });
     }
 
     float maxLineWidth = 0.0f;
     for (auto& line : lines) {
-	for (size_t offset = 0; offset < line.text.size ();) {
-	    const auto slot = loadGlyph (nextUtf8Codepoint (line.text, offset), FT_LOAD_RENDER);
-	    if (slot == nullptr) {
-		continue;
-	    }
-	    line.width += static_cast<float> (slot->advance.x >> 6) + m_lastSpacing.x;
-	}
+        for (const auto& glyph : line.glyphs) line.width += glyph.advance + m_lastSpacing.x;
 	maxLineWidth = std::max (maxLineWidth, line.width);
     }
 
@@ -1408,12 +1450,12 @@ void CText::rebuildTextureFrom (const std::string& text) {
     // FreeType translates scalable glyph outlines at 26.6 precision. Keep the
     // integer pen in the bitmap destination and apply its fractional part to the
     // outline, so measuring and rasterizing use identical subpixel ink bounds.
-    const auto loadPositionedGlyph = [&loadGlyph] (uint32_t code, float x, float y) {
+    const auto loadPositionedGlyph = [&loadGlyph] (const TextShapedGlyph& glyph, float x, float y) {
 	FT_Vector delta = {
 	    static_cast<FT_Pos> (std::round ((x - std::floor (x)) * 64.0f)),
 	    static_cast<FT_Pos> (std::round (-(y - std::floor (y)) * 64.0f)),
 	};
-	return loadGlyph (code, FT_LOAD_RENDER, delta);
+	return loadGlyph (glyph, FT_LOAD_RENDER, delta);
     };
 
     // Measure the actual bitmap bounds in a first-baseline coordinate system with +y down.
@@ -1429,28 +1471,29 @@ void CText::rebuildTextureFrom (const std::string& text) {
 	float penX = line.x;
 	const float baseline = static_cast<float> (i) * lineHeight;
 
-	for (size_t offset = 0; offset < line.text.size ();) {
-	    const auto code = nextUtf8Codepoint (line.text, offset);
-	    const auto slot = m_usingMsdf ? loadGlyph (code, FT_LOAD_NO_BITMAP)
-                : loadPositionedGlyph (code, penX, baseline);
+	for (const auto& glyph : line.glyphs) {
+            const float x = penX + glyph.xOffset;
+            const float y = baseline - glyph.yOffset;
+	    const auto slot = m_usingMsdf ? loadGlyph (glyph, FT_LOAD_NO_BITMAP)
+                : loadPositionedGlyph (glyph, x, y);
 	    if (slot == nullptr) {
 		continue;
 	    }
 
             if (m_usingMsdf) {
-                auto [imageIndex, firstUse] = glyphImageIndices.try_emplace (code, glyphImages.size ());
+                auto [imageIndex, firstUse] = glyphImageIndices.try_emplace (std::pair { glyph.face, glyph.index }, glyphImages.size ());
                 if (firstUse) {
-                    auto [cached, inserted] = m_msdfGlyphs.try_emplace (code);
+                    auto [cached, inserted] = m_msdfGlyphs.try_emplace (std::pair { glyph.face, glyph.index });
                     if (inserted) cached->second = generateTextMsdfGlyph (slot->face);
                     glyphImages.push_back (&cached->second);
                 }
                 const auto& image = *glyphImages[imageIndex->second];
                 if (!image.pixels.empty ()) {
                     const auto bounds = image.inkBounds;
-                    const float left = penX + bounds.x;
-                    const float top = baseline - bounds.w;
-                    const float right = penX + bounds.z;
-                    const float bottom = baseline - bounds.y;
+                    const float left = x + bounds.x;
+                    const float top = y - bounds.w;
+                    const float right = x + bounds.z;
+                    const float bottom = y - bounds.y;
                     inkLeft = std::min (inkLeft, static_cast<int> (std::floor (left)));
                     inkTop = std::min (inkTop, static_cast<int> (std::floor (top)));
                     inkRight = std::max (inkRight, static_cast<int> (std::ceil (right)));
@@ -1462,8 +1505,8 @@ void CText::rebuildTextureFrom (const std::string& text) {
             } else {
 	    const auto& bmp = slot->bitmap;
 	    if (bmp.width != 0 && bmp.rows != 0) {
-		const int glyphLeft = static_cast<int> (std::floor (penX)) + slot->bitmap_left;
-		const int glyphTop = static_cast<int> (std::floor (baseline)) - slot->bitmap_top;
+		const int glyphLeft = static_cast<int> (std::floor (x)) + slot->bitmap_left;
+		const int glyphTop = static_cast<int> (std::floor (y)) - slot->bitmap_top;
 		inkLeft = std::min (inkLeft, glyphLeft);
 		inkTop = std::min (inkTop, glyphTop);
 		inkRight = std::max (inkRight, glyphLeft + static_cast<int> (bmp.width));
@@ -1471,7 +1514,7 @@ void CText::rebuildTextureFrom (const std::string& text) {
 		hasInk = true;
 	    }
             }
-	    penX += static_cast<float> (slot->advance.x >> 6) + m_lastSpacing.x;
+	    penX += glyph.advance + m_lastSpacing.x;
 	}
     }
 
@@ -1500,15 +1543,17 @@ void CText::rebuildTextureFrom (const std::string& text) {
 	float penX = line.x;
 	const float baseline = static_cast<float> (i) * lineHeight;
 
-	for (size_t offset = 0; offset < line.text.size ();) {
-	    const auto slot = loadPositionedGlyph (nextUtf8Codepoint (line.text, offset), penX, baseline);
+	for (const auto& glyph : line.glyphs) {
+            const float x = penX + glyph.xOffset;
+            const float y = baseline - glyph.yOffset;
+	    const auto slot = loadPositionedGlyph (glyph, x, y);
 	    if (slot == nullptr) {
 		continue;
 	    }
 
 	    const auto& bmp = slot->bitmap;
-	    const int originX = static_cast<int> (std::floor (penX)) + slot->bitmap_left - x0;
-	    const int originY = static_cast<int> (std::floor (baseline)) - slot->bitmap_top - y0;
+	    const int originX = static_cast<int> (std::floor (x)) + slot->bitmap_left - x0;
+	    const int originY = static_cast<int> (std::floor (y)) - slot->bitmap_top - y0;
 
 	    for (unsigned int row = 0; row < bmp.rows; ++row) {
 		for (unsigned int col = 0; col < bmp.width; ++col) {
@@ -1526,7 +1571,7 @@ void CText::rebuildTextureFrom (const std::string& text) {
 		}
 	    }
 
-	    penX += static_cast<float> (slot->advance.x >> 6) + m_lastSpacing.x;
+	    penX += glyph.advance + m_lastSpacing.x;
 	}
     }
     }
