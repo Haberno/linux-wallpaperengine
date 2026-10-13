@@ -2741,6 +2741,8 @@ void CParticle::setupOperators () {
 	    func = createCollisionSphereOperator (*op->as<CollisionSphereOperator> ());
 	} else if (op->is<BoidsOperator> ()) {
 	    func = createBoidsOperator (*op->as<BoidsOperator> ());
+	} else if (op->is<CollisionBoundsOperator> ()) {
+	    func = createCollisionBoundsOperator (*op->as<CollisionBoundsOperator> ());
 	} else if (op->is<CapVelocityOperator> ()) {
 	    func = createCapVelocityOperator (*op->as<CapVelocityOperator> ());
 	} else if (op->is<ReduceMovementNearControlPointOperator> ()) {
@@ -3047,6 +3049,58 @@ OperatorFunc CParticle::createBoidsOperator (const BoidsOperator& op) {
             }
             // Write four lanes together; later batches read these updated velocities.
             for (uint32_t lane = 0; lane < 4; ++lane) particles[base + lane].velocity = result[lane];
+        }
+    };
+}
+
+std::array<glm::vec4, 4> WallpaperEngine::Render::Objects::calculateParticleBoundsPlanes (
+    const glm::ivec2& extent, const glm::mat4& worldToLocal
+) {
+    const glm::vec3 first (worldToLocal * glm::vec4 (0, 0, 0, 1));
+    const glm::vec3 last (worldToLocal * glm::vec4 (extent.x, -static_cast<float> (extent.y), 0, 1));
+    std::array<glm::vec4, 4> planes = {
+        glm::vec4 (1, 0, 0, 0), glm::vec4 (0, -1, 0, 0), glm::vec4 (-1, 0, 0, 0), glm::vec4 (0, 1, 0, 0)
+    };
+    for (size_t i = 0; i < planes.size (); ++i) {
+        planes[i] = glm::vec4 (glm::vec3 (worldToLocal * planes[i]), 0.0f);
+        planes[i].w = glm::dot (i < 2 ? first : last, glm::vec3 (planes[i]));
+    }
+    return planes;
+}
+
+void WallpaperEngine::Render::Objects::applyParticleBoundsCollision (
+    ParticleInstance& particle, const std::array<glm::vec4, 4>& planes, const float bounceFactor,
+    const ParticleCollisionBehavior behavior
+) {
+    // Native selects only the last violating plane, before modifying the position.
+    for (int i = 3; i >= 0; --i) {
+        const glm::vec3 normal (planes[i]);
+        if (!(glm::dot (particle.position, normal) < planes[i].w)) continue;
+        applyParticlePlaneCollision (particle, normal, planes[i].w, bounceFactor, behavior, false);
+        return;
+    }
+}
+
+OperatorFunc CParticle::createCollisionBoundsOperator (const CollisionBoundsOperator& op) {
+    const auto& projection = getScene ().getScene ().camera.projection;
+    if (projection.isAuto) {
+        sLog.out ("Warning: collisionbounds disabled for auto projection in particle ", m_particle.name,
+            "; native first-image sizing is not implemented");
+        return {};
+    }
+    const glm::ivec2 extent = projection.isPerspective ? glm::ivec2 (0) : glm::ivec2 (projection.width, projection.height);
+    const glm::mat4 flipY = glm::scale (glm::mat4 (1.0f), glm::vec3 (1.0f, -1.0f, 1.0f));
+    return [this, &op, extent, flipY] (
+        std::vector<ParticleInstance>& particles, uint32_t count, const std::vector<ControlPointData>&, float, float
+    ) {
+        const glm::mat4 worldToLocal = (m_particle.flags & 1) != 0 ? glm::mat4 (1.0f)
+            : glm::inverse (flipY * particleWorldMatrix () * flipY);
+        const auto planes = calculateParticleBoundsPlanes (extent, worldToLocal);
+        for (uint32_t i = 0; i < count; ++i) {
+            auto& particle = particles[i];
+            if (particle.shouldSimulate ()) applyParticleBoundsCollision (
+                particle, planes, op.bounceFactor->value->getFloat (), op.behavior
+            );
         }
     };
 }

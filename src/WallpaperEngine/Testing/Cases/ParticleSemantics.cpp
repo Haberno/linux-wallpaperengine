@@ -6063,3 +6063,111 @@ TEST_CASE ("sphere collisions use strict current interior and signed projection"
         CHECK (center.angularVelocity == glm::vec3 (0));
     }
 }
+
+TEST_CASE ("stock bounds collisions consume only native common fields", "[particle][collisionbounds]") {
+    WallpaperEngine::Data::Model::Project project {};
+    const auto object = WallpaperEngine::Data::Parsers::ObjectParser::parse (
+        WallpaperEngine::Data::JSON::JSON::parse (R"({"id":13,"particle":{"operator":[
+            {"name":"collisionbounds"},
+            {"name":"collisionbounds","collisionbehavior":"slide","bouncefactor":-2,"flags":3,"controlpoint":7,"plane":null,"size":"999 999"},
+            {"name":"collisionbounds","collisionbehavior":"stop"},
+            {"name":"collisionbounds","collisionbehavior":"delete"},
+            {"name":"collisionbounds","collisionbehavior":null,"bouncefactor":null}
+        ]}})"), project
+    );
+    const auto* particle = object->as<Particle> ();
+    REQUIRE (particle != nullptr);
+    REQUIRE (particle->operators.size () == 5);
+    const auto* defaults = particle->operators[0]->as<CollisionBoundsOperator> ();
+    REQUIRE (defaults != nullptr);
+    CHECK (defaults->behavior == ParticleCollisionBehavior::Bounce);
+    CHECK (defaults->bounceFactor->value->getFloat () == .5f);
+    const auto* slide = particle->operators[1]->as<CollisionBoundsOperator> ();
+    REQUIRE (slide != nullptr);
+    CHECK (slide->behavior == ParticleCollisionBehavior::Slide);
+    CHECK (slide->bounceFactor->value->getFloat () == -2);
+    CHECK (particle->operators[2]->as<CollisionBoundsOperator> ()->behavior == ParticleCollisionBehavior::Stop);
+    CHECK (particle->operators[3]->as<CollisionBoundsOperator> ()->behavior == ParticleCollisionBehavior::Delete);
+    const auto* nulls = particle->operators[4]->as<CollisionBoundsOperator> ();
+    CHECK (nulls->behavior == ParticleCollisionBehavior::Bounce);
+    CHECK (nulls->bounceFactor->value->getFloat () == 0);
+}
+
+TEST_CASE ("bounds collisions select the highest violating plane once", "[particle][collisionbounds]") {
+    using WallpaperEngine::Render::Objects::calculateParticleBoundsPlanes;
+    using WallpaperEngine::Render::Objects::applyParticleBoundsCollision;
+    const auto planes = calculateParticleBoundsPlanes ({ 10, 20 }, glm::mat4 (1.0f));
+    ParticleInstance original;
+    original.position = { -2, -22, 3 };
+    original.velocity = { 4, -6, 8 };
+    original.previousPosition = { 100, 100, 100 };
+    original.angularVelocity = { 7, -8, 9 };
+    original.rotation = { 1, 2, 3 };
+    original.age = 1;
+    original.lifetime = 9;
+    const struct { ParticleCollisionBehavior behavior; glm::vec3 velocity; } modes[] = {
+        { ParticleCollisionBehavior::Bounce, { 4, 3, 8 } },
+        { ParticleCollisionBehavior::Slide, { 4, 0, 8 } },
+        { ParticleCollisionBehavior::Stop, { 0, 0, 0 } },
+        { ParticleCollisionBehavior::Delete, { 4, -6, 8 } }
+    };
+    for (const auto& mode : modes) {
+        ParticleInstance particle = original;
+        applyParticleBoundsCollision (particle, planes, .5f, mode.behavior);
+        CHECK (particle.position == (mode.behavior == ParticleCollisionBehavior::Delete ? original.position : glm::vec3 (-2, -20, 3)));
+        CHECK (particle.velocity == mode.velocity);
+        CHECK (particle.age == (mode.behavior == ParticleCollisionBehavior::Delete ? 9 : 1));
+        CHECK (particle.lifetime == 9);
+        CHECK (particle.angularVelocity == original.angularVelocity);
+        CHECK (particle.rotation == original.rotation);
+        CHECK (particle.previousPosition == original.previousPosition);
+    }
+    const struct { glm::vec3 input; glm::vec3 position; glm::vec3 velocity; } corners[] = {
+        { { 12, 3, 3 }, { 10, 3, 3 }, { -2, -6, 8 } },
+        { { -2, 3, 3 }, { -2, 0, 3 }, { 4, 3, 8 } },
+        { { -2, -5, 3 }, { 0, -5, 3 }, { -2, -6, 8 } }
+    };
+    for (const auto& expected : corners) {
+        ParticleInstance particle = original;
+        particle.position = expected.input;
+        applyParticleBoundsCollision (particle, planes, .5f, ParticleCollisionBehavior::Bounce);
+        CHECK (particle.position == expected.position);
+        CHECK (particle.velocity == expected.velocity);
+    }
+    ParticleInstance edge = original;
+    edge.position = { 0, -20, 1234 };
+    applyParticleBoundsCollision (edge, planes, .5f, ParticleCollisionBehavior::Delete);
+    CHECK (edge.age == 1);
+    CHECK (edge.position == glm::vec3 (0, -20, 1234));
+    ParticleInstance zero = original;
+    zero.position = { 1, -1, 3 };
+    applyParticleBoundsCollision (zero, calculateParticleBoundsPlanes ({ 0, 0 }, glm::mat4 (1.0f)), .5f, ParticleCollisionBehavior::Bounce);
+    CHECK (zero.position == glm::vec3 (1, 0, 3));
+    CHECK (zero.velocity == glm::vec3 (4, 3, 8));
+}
+
+TEST_CASE ("bounds geometry uses the unnormalized inverse layer basis", "[particle][collisionbounds]") {
+    using WallpaperEngine::Render::Objects::calculateParticleBoundsPlanes;
+    using WallpaperEngine::Render::Objects::applyParticleBoundsCollision;
+    const glm::mat4 reflectedLayer = glm::translate (glm::mat4 (1.0f), glm::vec3 (2, -3, 0))
+        * glm::scale (glm::mat4 (1.0f), glm::vec3 (2, 1, 1));
+    const auto planes = calculateParticleBoundsPlanes ({ 10, 20 }, glm::inverse (reflectedLayer));
+    CHECK (planes[0] == glm::vec4 (.5f, 0, 0, -.5f));
+    CHECK (planes[1] == glm::vec4 (0, -1, 0, -3));
+    CHECK (planes[2] == glm::vec4 (-.5f, 0, 0, -2));
+    CHECK (planes[3] == glm::vec4 (0, 1, 0, -17));
+    ParticleInstance scaled;
+    scaled.position = { -2, 0, 0 };
+    scaled.velocity = { -4, -2, 0 };
+    applyParticleBoundsCollision (scaled, planes, .5f, ParticleCollisionBehavior::Bounce);
+    CHECK (scaled.position == glm::vec3 (-1.75f, 0, 0));
+    CHECK (scaled.velocity == glm::vec3 (-2.5f, -2, 0));
+    const auto stock = calculateParticleBoundsPlanes ({ 256, 256 },
+        glm::inverse (glm::translate (glm::mat4 (1.0f), glm::vec3 (128, -128, 0))));
+    ParticleInstance consumer;
+    consumer.position = { 0, 130, 0 };
+    consumer.velocity = { 0, 10, 0 };
+    applyParticleBoundsCollision (consumer, stock, .5f, ParticleCollisionBehavior::Bounce);
+    CHECK (consumer.position == glm::vec3 (0, 128, 0));
+    CHECK (consumer.velocity == glm::vec3 (0, -5, 0));
+}

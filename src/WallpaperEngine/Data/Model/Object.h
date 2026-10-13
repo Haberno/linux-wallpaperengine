@@ -551,6 +551,14 @@ public:
     uint32_t flags;
 };
 
+class CollisionBoundsOperator : public ParticleOperatorBase {
+public:
+    CollisionBoundsOperator (UserSettingUniquePtr bounceFactor, ParticleCollisionBehavior behavior) :
+        bounceFactor (std::move (bounceFactor)), behavior (behavior) { }
+    UserSettingUniquePtr bounceFactor;
+    ParticleCollisionBehavior behavior;
+};
+
 class CapVelocityOperator : public ParticleOperatorBase {
 public:
     CapVelocityOperator (UserSettingUniquePtr maxSpeed, glm::vec4 blendTimes) :

@@ -158,6 +158,15 @@ void applyParticleSphereCollision (
     ParticleCollisionBehavior behavior, bool stopRotation
 );
 
+[[nodiscard]] std::array<glm::vec4, 4> calculateParticleBoundsPlanes (
+    const glm::ivec2& extent, const glm::mat4& worldToLocal
+);
+
+void applyParticleBoundsCollision (
+    ParticleInstance& particle, const std::array<glm::vec4, 4>& planes, float bounceFactor,
+    ParticleCollisionBehavior behavior
+);
+
 void applyParticleAngularMovement (
     ParticleInstance& particle, const glm::vec3& force, float drag,
     float rawDelta, float forceDelta, float lifetimeWeight
@@ -312,6 +321,7 @@ protected:
     OperatorFunc createCollisionQuadOperator (const CollisionQuadOperator& op);
     OperatorFunc createCollisionSphereOperator (const CollisionSphereOperator& op);
     OperatorFunc createBoidsOperator (const BoidsOperator& op);
+    OperatorFunc createCollisionBoundsOperator (const CollisionBoundsOperator& op);
     OperatorFunc createCapVelocityOperator (const CapVelocityOperator& op);
     OperatorFunc createAngularMovementOperator (const AngularMovementOperator& op);
     OperatorFunc createAlphaFadeOperator (const AlphaFadeOperator& op);

@@ -1244,11 +1244,14 @@ ParticleOperatorUniquePtr ObjectParser::parseParticleOperator (const JSON& it, c
 	return std::make_unique<MovementOperator> (
 	    it.user ("drag", properties, 0.0f), it.user ("gravity", properties, glm::vec3 (0.0f))
 	);
-    } else if (name == "collisionplane" || name == "collisionquad") {
+    } else if (name == "collisionplane" || name == "collisionquad" || name == "collisionbounds") {
         const std::string behaviorName = it.optional<std::string> ("collisionbehavior", "bounce");
         const auto behavior = behaviorName == "slide" ? ParticleCollisionBehavior::Slide
             : behaviorName == "stop" ? ParticleCollisionBehavior::Stop
             : behaviorName == "delete" ? ParticleCollisionBehavior::Delete : ParticleCollisionBehavior::Bounce;
+        if (name == "collisionbounds") return std::make_unique<CollisionBoundsOperator> (
+            it.user ("bouncefactor", properties, it.contains ("bouncefactor") ? 0.0f : 0.5f), behavior
+        );
         const glm::vec3 plane = it.user ("plane", properties, it.contains ("plane") ? glm::vec3 (0.0f) : glm::vec3 (0.0f, 1.0f, 0.0f))->value->getVec3 ();
         if (name == "collisionquad") {
             const glm::vec3 normal = glm::normalize (plane);
