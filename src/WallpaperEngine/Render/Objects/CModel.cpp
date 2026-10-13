@@ -1031,7 +1031,7 @@ void CModel::animationControlsChanged (PropertyAnimation& animation) {
     m_poseTime = std::numeric_limits<double>::quiet_NaN ();
 }
 
-void CModel::updateAnimationPose () const {
+void CModel::updateAnimationPose (const bool stepPhysics) const {
     const auto& animationData = this->m_model.animationData;
     if (animationData.bones.empty ()) {
 	return;
@@ -1040,7 +1040,14 @@ void CModel::updateAnimationPose () const {
     std::vector<MdlActiveAnimation> activeAnimations;
     const double sceneTime = this->getScene ().getElapsedTime ();
     syncAnimationLayers ();
-    if (sceneTime == this->m_poseTime) {
+    const bool hasPhysics = std::ranges::any_of (animationData.bones,
+        [] (const auto& bone) { return bone.spring.has_value (); });
+    const auto frame = this->getScene ().getSceneFrame ();
+    const bool advancePhysics = hasPhysics && stepPhysics && m_physicsFrame != frame
+        && this->m_model.groupVisible->value->getBool () && this->isVisibleThroughParents ();
+    // Setup and lazy reads retain the current pose without consuming a physical update.
+    if (hasPhysics && !advancePhysics && !this->m_worldBones.empty ()) return;
+    if (sceneTime == this->m_poseTime && !advancePhysics) {
 	return;
     }
 
@@ -1075,7 +1082,17 @@ void CModel::updateAnimationPose () const {
             m_morphDirty = true;
         }
     }
-    auto pose = MdlAnimationEvaluator::evaluate (animationData, activeAnimations);
+    std::optional<MdlPhysicsStep> physics;
+    if (advancePhysics) {
+        physics.emplace (MdlPhysicsStep {
+            .state = this->m_physicsState,
+            .model = this->resolveWorldMatrix (),
+            .deltaTime = this->getScene ().getDeltaTime (),
+        });
+    }
+    auto pose = MdlAnimationEvaluator::evaluate (animationData, activeAnimations,
+        physics ? &*physics : nullptr);
+    if (advancePhysics) m_physicsFrame = frame;
     this->m_worldBones = std::move (pose.worldBones);
     this->m_skinBones = std::move (pose.skinBones);
     this->m_gpuSkinBones.resize (this->m_skinBones.size ());
@@ -1171,8 +1188,8 @@ void CModel::render (const RenderSortClass renderClass) { this->renderPasses (re
 
 void CModel::prepareRender () {
     syncModelDataMaterials ();
-    // Publish script-controlled poses after callbacks, including hidden attachment sources.
-    this->updateAnimationPose ();
+    // Physics advances here; other pose reads retain its scene-update result.
+    this->updateAnimationPose (true);
     // Material sorting may prepare an attached model before its parent.
     const Object* current = &this->m_model;
     for (int depth = 0; current->parent.has_value () && depth <= 32; ++depth) {

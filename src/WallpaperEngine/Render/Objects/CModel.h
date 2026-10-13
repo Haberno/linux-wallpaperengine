@@ -100,7 +100,7 @@ private:
     void syncModelDataMaterials ();
     void setupShadowProgram ();
     void renderPasses (std::optional<RenderSortClass> renderClass);
-    void updateAnimationPose () const;
+    void updateAnimationPose (bool stepPhysics = false) const;
     void updateMorphBuffers ();
     void syncAnimationLayers () const;
     [[nodiscard]] glm::mat4 resolveModelMatrix () const;
@@ -126,6 +126,8 @@ private:
     /** Packed affine matrices uploaded to the shader's mat4x3 g_Bones array. */
     mutable std::vector<glm::mat4x3> m_gpuSkinBones = {};
     mutable double m_poseTime = std::numeric_limits<double>::quiet_NaN ();
+    mutable Data::Model::MdlPhysicsState m_physicsState;
+    mutable std::optional<uint32_t> m_physicsFrame;
     mutable std::optional<Data::Model::MdlAnimationBounds> m_animationBounds;
     bool m_skinningEnabled = false;
     bool m_morphingEnabled = false;
