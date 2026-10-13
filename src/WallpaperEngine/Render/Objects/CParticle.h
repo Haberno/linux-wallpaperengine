@@ -492,6 +492,7 @@ private:
 
     double m_time { 0.0 };
     float m_simulationTime { 0.0f };
+    float m_frameSimulationDelta { 0.0f };
     float m_remapSystemTime = 0.0f;
     float m_remapLayerTime = 0.0f;
     float m_remapDelta = 0.0f;

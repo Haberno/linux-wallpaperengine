@@ -608,6 +608,7 @@ void CParticle::rebaseRenderTime (double offset) {
 }
 
 void CParticle::render () {
+    m_frameSimulationDelta = 0.0f;
     if (!m_initialized) {
 	return;
     }
@@ -643,15 +644,20 @@ void CParticle::render () {
     if (!(m_hasMutatingRemapInitializer || m_hasControlPointOutputOperator) || (dt > 0.0f && getInstanceOverride ().rate->value->getFloat () > 0.0f))
         updateControlPoints (dt);
 
-    if (dt > 0.0f) {
+    if (m_particleParent != nullptr) {
+	// Native dispatch gives children the parent's already rate-scaled interval,
+	// including systems acquired during the current frame's emission.
+	dt = m_particleParent->m_frameSimulationDelta;
+    } else if (dt > 0.0f) {
 	// Cap dt to prevent simulation instability
 	// Also provides more consistent behavior across different FPS
 	dt = std::min (dt, 0.1f);
 	dt = calculateParticleSimulationDelta (dt, getInstanceOverride ().rate->value->getFloat ());
-	if (dt > 0.0f) {
-	    m_simulationTime += dt;
-	    update (dt);
-	}
+    }
+    if (dt > 0.0f) {
+	m_frameSimulationDelta = dt;
+	m_simulationTime += dt;
+	update (dt);
     }
     // Render particles
     if (m_particleCount > 0 && m_particle.material) {
