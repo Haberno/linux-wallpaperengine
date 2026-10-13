@@ -1,6 +1,7 @@
 #include "CModel.h"
 #include "ModelAnimationVolume.h"
 #include "WallpaperEngine/Data/Model/MdlAnimationBounds.h"
+#include "WallpaperEngine/Render/Utils/NormalMatrix.h"
 
 #include <algorithm>
 #include <array>
@@ -9,7 +10,6 @@
 #include <ranges>
 #include <sstream>
 
-#include <glm/gtc/matrix_inverse.hpp>
 #include <glm/gtc/matrix_transform.hpp>
 #include <glm/gtc/type_ptr.hpp>
 
@@ -1130,24 +1130,12 @@ void CModel::updateMatrices () {
     }
     this->m_modelViewProjectionMatrix = this->m_viewProjectionMatrix * this->m_modelMatrix;
     this->m_modelViewProjectionMatrixInverse = glm::inverse (this->m_modelViewProjectionMatrix);
-    this->m_normalMatrix = glm::inverseTranspose (glm::mat3 (this->m_modelMatrix));
+    this->m_normalMatrix = Render::Utils::calculateNormalModelMatrix (this->m_modelMatrix);
     if (!perspective && camera.isOrthogonal ()) {
 	const float depth = glm::max (glm::abs (camera.getNearZ ()), glm::abs (camera.getFarZ ()));
 	this->m_eyePosition = glm::vec3 (0.0f, 0.0f, depth);
     } else if (!perspective) {
 	this->m_eyePosition = camera.getEye ();
-    }
-
-    // Wallpaper Engine's generic model shaders use the normal matrix to build
-    // the tangent basis but do not normalize its tangent/bitangent outputs.
-    // Keep the inverse-transpose orientation while removing object scale from
-    // each basis vector. Small authored model scales (commonly 0.01) otherwise
-    // magnify tangent-space normals by 100 and create clipped, noisy lighting.
-    for (int column = 0; column < 3; column++) {
-	const float length = glm::length (this->m_normalMatrix[column]);
-	if (length > 1e-6f) {
-	    this->m_normalMatrix[column] /= length;
-	}
     }
 }
 

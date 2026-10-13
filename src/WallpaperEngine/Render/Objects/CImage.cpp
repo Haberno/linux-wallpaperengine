@@ -11,7 +11,6 @@
 #include <sstream>
 
 #include <glm/glm.hpp>
-#include <glm/gtc/matrix_inverse.hpp>
 #include <glm/gtc/matrix_transform.hpp>
 #define GLM_ENABLE_EXPERIMENTAL
 #include <glm/gtx/rotate_vector.hpp>
@@ -28,6 +27,7 @@
 #include "WallpaperEngine/Data/Utils/MemoryStream.h"
 #include "WallpaperEngine/Logging/Log.h"
 #include "WallpaperEngine/Render/CTexture.h"
+#include "WallpaperEngine/Render/Utils/NormalMatrix.h"
 #include "WallpaperEngine/Scripting/ScriptEngine.h"
 
 using namespace WallpaperEngine;
@@ -2862,7 +2862,7 @@ auto CImage::calculatePerspectiveSceneMatrices (const glm::mat4& world, const gl
 	.model = world,
 	.viewProjection = viewProjection,
 	.modelViewProjection = viewProjection * world,
-	.normalModel = glm::inverseTranspose (glm::mat3 (world)),
+	.normalModel = Render::Utils::calculateNormalModelMatrix (world),
     };
 }
 

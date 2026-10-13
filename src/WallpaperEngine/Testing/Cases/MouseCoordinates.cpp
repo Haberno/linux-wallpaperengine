@@ -340,6 +340,36 @@ TEST_CASE ("Lit perspective images use the authored world transform") {
     CHECK (glm::length (glm::vec3 (matrices.model * localCorner) - glm::vec3 (world * localCorner)) < 1e-6f);
 }
 
+TEST_CASE ("Normal model bases preserve sheared model columns", "[normal-model-matrix]") {
+    // Native binds individually normalized model columns, rather than the
+    // inverse-transpose orientation. Values below use its one-step estimate.
+    glm::mat4 world (1.0f);
+    world[0] = glm::vec4 (2.0f, 0.0f, 0.0f, 0.0f);
+    world[1] = glm::vec4 (1.0f, 3.0f, 0.0f, 0.0f);
+    world[2] = glm::vec4 (0.0f, 0.0f, -4.0f, 0.0f);
+    world[3] = glm::vec4 (17.0f, -23.0f, 8.0f, 1.0f);
+    const glm::mat3 expected {
+        { 0.9983081222f, 0.0f, 0.0f },
+        { 0.3156852722f, 0.9470558167f, 0.0f },
+        { 0.0f, 0.0f, -0.9983081222f }
+    };
+    const auto matrices = CImage::calculatePerspectiveSceneMatrices (world, glm::mat4 (1.0f));
+    for (int column = 0; column < 3; ++column) {
+        for (int component = 0; component < 3; ++component) {
+            CHECK (matrices.normalModel[column][component]
+                == Catch::Approx (expected[column][component]).margin (0.000002f));
+        }
+    }
+    world[2] = glm::vec4 (0.0f);
+    const auto flattened = CImage::calculatePerspectiveSceneMatrices (world, glm::mat4 (1.0f));
+    for (int column = 0; column < 3; ++column) {
+        for (int component = 0; component < 3; ++component) {
+            CHECK (flattened.normalModel[column][component]
+                == Catch::Approx (column == 2 ? 0.0f : expected[column][component]).margin (0.000002f));
+        }
+    }
+}
+
 TEST_CASE ("Wallpaper Engine fog authoring values map to shader parameters") {
     const glm::vec4 distance = CScene::calculateFogParams (1.0f, 24.65f, 0.54f, 0.97f);
     CHECK (distance.x == 1.0f);
