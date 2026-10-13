@@ -59,16 +59,33 @@ PuppetClippingPlan WallpaperEngine::Render::Objects::buildPuppetClippingPlan (
 	    .descriptorIndex = descriptorIndex,
 	    .sourceRanges = descriptor.sources,
 	});
-	// Native derives parents from source containment, not overlapping targets.
-	if (!descriptor.sources.empty ()) {
-	    for (size_t other = 0; other < mesh.clippingDescriptors.size (); other++) {
-		if (other == descriptorIndex) continue;
-		const auto& targets = mesh.clippingDescriptors[other].targets;
-		plan.requiresComposition |= std::all_of (descriptor.sources.begin (), descriptor.sources.end (), [&] (auto source) {
-		    return std::find (targets.begin (), targets.end (), source) != targets.end ();
-		});
+    }
+
+    // Native resolves the graph incrementally and breaks only the current cycle edge.
+    std::vector<int32_t> parents (plan.masks.size (), -1);
+    for (size_t index = 0; index < plan.masks.size (); index++) {
+	const auto& sources = mesh.clippingDescriptors[index].sources;
+	if (sources.empty ()) continue;
+	for (size_t other = 0; other < plan.masks.size (); other++) {
+	    if (other == index) continue;
+	    const auto& targets = mesh.clippingDescriptors[other].targets;
+	    if (std::all_of (sources.begin (), sources.end (), [&] (auto source) {
+		return std::find (targets.begin (), targets.end (), source) != targets.end ();
+	    })) {
+		parents[index] = static_cast<int32_t> (other);
+		break;
 	    }
 	}
+	std::vector<bool> visited (parents.size ());
+	for (int32_t ancestor = static_cast<int32_t> (index); ancestor >= 0; ancestor = parents[ancestor]) {
+	    if (visited[ancestor]) { parents[index] = -1; break; }
+	    visited[ancestor] = true;
+	}
+    }
+    for (size_t index = 0; index < plan.masks.size (); index++) {
+	for (int32_t ancestor = parents[index]; ancestor >= 0; ancestor = parents[ancestor])
+	    plan.masks[index].ancestors.push_back (static_cast<size_t> (ancestor));
+	plan.requiresComposition |= !plan.masks[index].ancestors.empty ();
     }
 
     std::vector<uint32_t> ranges;
@@ -112,7 +129,7 @@ PuppetClippingPlan WallpaperEngine::Render::Objects::buildPuppetClippingPlan (
     const bool foreignRanges = std::any_of (mesh.drawRanges.begin (), mesh.drawRanges.end (), [submeshIndex] (const auto& range) {
 	return range.submeshIndex != submeshIndex;
     });
-    if (covered != submeshIndexCount || plan.requiresComposition || unsupported || foreignRanges) {
+    if (covered != submeshIndexCount || unsupported || foreignRanges) {
 	if (covered != submeshIndexCount)
 	    for (const auto& masks : rangeMasks) plan.requiresComposition |= masks.size () > 1;
 	if (rangeOrder && !rangeOrder->empty () && covered == submeshIndexCount) {
@@ -123,6 +140,7 @@ PuppetClippingPlan WallpaperEngine::Render::Objects::buildPuppetClippingPlan (
 		    appendDraw (plan, submeshIndex, range.firstIndex, range.indexCount, rangeMasks[rangeIndex]);
 	    }
 	}
+	plan.unsupportedComposition = plan.requiresComposition;
 	return plan;
     }
 
@@ -139,7 +157,7 @@ PuppetClippingPlan WallpaperEngine::Render::Objects::buildPuppetClippingPlan (
     for (size_t ordinal = 0; ordinal < orderedRanges.size (); ordinal++)
 	ordinals.at (orderedRanges[ordinal]) = static_cast<int32_t> (ordinal);
 
-    struct DescriptorOrder { int32_t minTarget = INT32_MAX, lastSource = -1; };
+    struct DescriptorOrder { int32_t minTarget = INT32_MAX, lastSource = -1, emissionOrdinal = -1; };
     std::vector<DescriptorOrder> descriptorOrder (plan.masks.size ());
     std::vector<size_t> descriptors (plan.masks.size ());
     std::iota (descriptors.begin (), descriptors.end (), 0u);
@@ -161,11 +179,18 @@ PuppetClippingPlan WallpaperEngine::Render::Objects::buildPuppetClippingPlan (
 		sources.push_back (range);
 	}
     }
+    for (size_t index = 0; index < plan.masks.size (); index++) {
+	auto& state = descriptorOrder[index];
+	state.emissionOrdinal = state.lastSource;
+	for (const auto ancestor : plan.masks[index].ancestors)
+	    state.emissionOrdinal = std::max (state.emissionOrdinal, descriptorOrder[ancestor].lastSource);
+    }
     std::stable_sort (descriptors.begin (), descriptors.end (), [&] (auto left, auto right) {
 	return descriptorOrder[left].minTarget < descriptorOrder[right].minTarget;
     });
 
     plan.draws.clear ();
+    std::vector<bool> emitted (plan.masks.size ());
     for (size_t ordinal = 0; ordinal < orderedRanges.size (); ordinal++) {
 	const uint32_t rangeIndex = orderedRanges[ordinal];
 	const auto& range = mesh.drawRanges.at (rangeIndex);
@@ -174,13 +199,25 @@ PuppetClippingPlan WallpaperEngine::Render::Objects::buildPuppetClippingPlan (
 	    appendDraw (plan, submeshIndex, range.firstIndex, range.indexCount, {});
 	// Native flushes ordinary geometry, then emits descriptors at their last source.
 	for (const size_t descriptorIndex : descriptors) {
-	    if (descriptorOrder[descriptorIndex].lastSource != static_cast<int32_t> (ordinal)) continue;
+	    if (descriptorOrder[descriptorIndex].emissionOrdinal != static_cast<int32_t> (ordinal)) continue;
+	    for (const auto ancestor : plan.masks[descriptorIndex].ancestors)
+		plan.unsupportedComposition |= !emitted[ancestor];
+	    emitted[descriptorIndex] = true;
 	    const auto& targets = mesh.clippingDescriptors[descriptorIndex].targets;
 	    for (const uint32_t targetIndex : orderedRanges) {
 		if (std::find (targets.begin (), targets.end (), targetIndex) == targets.end ()) continue;
 		const auto& target = mesh.drawRanges[targetIndex];
 		appendDraw (plan, submeshIndex, target.firstIndex, target.indexCount, { descriptorIndex });
 	    }
+	}
+    }
+    if (plan.unsupportedComposition) {
+	// Missing native source-group lookup would use group0. Retain an explicit
+	// un-clipped draw instead, including when animated ordering enters this case.
+	plan.draws.clear ();
+	for (const uint32_t rangeIndex : orderedRanges) {
+	    const auto& range = mesh.drawRanges[rangeIndex];
+	    appendDraw (plan, submeshIndex, range.firstIndex, range.indexCount, {});
 	}
     }
     return plan;

@@ -12,6 +12,8 @@ struct PuppetClipMask {
     size_t descriptorIndex = 0;
     /** Range-table entries drawn into the mask. */
     std::vector<uint32_t> sourceRanges;
+    /** Raw ancestor masks, nearest parent first. */
+    std::vector<size_t> ancestors;
 };
 
 struct PuppetClipDraw {
@@ -29,6 +31,8 @@ struct PuppetClippingPlan {
     std::vector<PuppetClipMask> masks;
     std::vector<PuppetClipDraw> draws;
     bool requiresComposition = false;
+    /** Incomplete or noncanonical composition retains the un-clipped fallback. */
+    bool unsupportedComposition = false;
 };
 
 /**

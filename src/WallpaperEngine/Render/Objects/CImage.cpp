@@ -1390,10 +1390,10 @@ bool CImage::setupPuppetClippingPasses (
     try {
 	const auto& mesh = *model.puppetMesh;
 	const auto plan = buildPuppetClippingPlan (mesh, 0, &this->m_puppetRangeOrder);
-	if (plan.requiresComposition) {
+	if (plan.unsupportedComposition) {
 	    sLog.error (
 		"Puppet clipping for ", *model.puppet,
-		" requires nested clipping composition; rendering the un-clipped body for now"
+		" has unsupported clipping composition ordering; rendering the un-clipped body for now"
 	    );
 	    return false;
 	}
@@ -1434,10 +1434,18 @@ bool CImage::setupPuppetClippingPasses (
 	}
 
 	const auto sceneSize = this->getScene ().getOutputSize ();
+	const auto maskSize = plan.requiresComposition ? glm::max (glm::uvec2 (sceneSize) / 2u, glm::uvec2 (2))
+	    : glm::uvec2 (sceneSize);
 	const std::string maskName = "_rt_puppetClipping_" + std::to_string (this->getId ());
 	this->m_puppetClippingFBO = this->create (
-	    maskName, TextureFormat_ARGB8888, TextureFlags_ClampUVs, 1.0f, sceneSize, sceneSize
+	    maskName, plan.requiresComposition ? TextureFormat_R8 : TextureFormat_ARGB8888,
+	    TextureFlags_ClampUVs, 1.0f, maskSize, maskSize
 	);
+	if (plan.requiresComposition) {
+	    this->m_puppetClippingIntermediateFBO = this->create (
+		maskName + "_intermediate", TextureFormat_R8, TextureFlags_ClampUVs, 1.0f, maskSize, maskSize
+	    );
+	}
 
 	this->m_materials.compatibilityMaterials.emplace_back (
 	    MaterialParser::load (this->getScene ().getScene ().project, "materials/util/clippingmaskimage4.json")
@@ -1497,6 +1505,35 @@ bool CImage::setupPuppetClippingPasses (
 	    );
 	}
 
+	if (plan.requiresComposition) {
+	    this->m_materials.compatibilityMaterials.emplace_back (
+		MaterialParser::load (this->getScene ().getScene ().project, "materials/util/flattexture.json")
+	    );
+	    auto* compose = new CPass (
+		*this, provider, **this->m_materials.compatibilityMaterials.back ()->passes.begin (),
+		std::nullopt, std::nullopt, std::nullopt
+	    );
+	    this->m_puppetClippingPasses.push_back (compose);
+	    this->m_puppetMaskComposePass = compose;
+	    compose->setDestination (this->m_puppetClippingFBO);
+	    compose->setInput (this->m_puppetClippingIntermediateFBO);
+	    compose->setPosition (this->getPassSpacePosition ());
+	    compose->setTexCoord (this->getTexCoordPass ());
+	    static const glm::mat4 identity (1.0f);
+	    static const float alpha = 1.0f;
+	    compose->setModelViewProjectionMatrix (&identity);
+	    compose->setModelViewProjectionMatrixInverse (&identity);
+	    compose->setModelMatrix (&identity);
+	    compose->setViewProjectionMatrix (&identity);
+	    compose->addUniform ("g_Alpha", &alpha);
+	    compose->setBlendEquation (GL_FUNC_ADD, GL_FUNC_ADD);
+	    compose->setGeometryCallback ({}, [] () {
+		// R8 sampling gives alpha=1, so this is the native red-mask product.
+		glBlendFuncSeparate (GL_DST_COLOR, GL_ONE_MINUS_SRC_ALPHA, GL_ONE, GL_ONE);
+		glDrawArrays (GL_TRIANGLES, 0, 6);
+	    }, {});
+	}
+
 	for (const bool clipped : { false, true }) {
 	    std::optional<std::reference_wrapper<const TextureMap>> binds = finalPass.getBinds ();
 	    ComboMap runtimeCombos;
@@ -1541,6 +1578,13 @@ bool CImage::setupPuppetClippingPasses (
 void CImage::updatePuppetClippingCommands (const PuppetClippingPlan& plan) {
     this->m_puppetClippingCommands.clear ();
     const auto& mesh = *this->getImage ().model->puppetMesh;
+    if (plan.unsupportedComposition) {
+	for (const auto& draw : plan.draws) this->m_puppetClippingCommands.push_back (PuppetClippingRenderCommand {
+	    .pass = this->m_puppetPlainPass,
+	    .range = { .firstIndex = draw.firstIndex, .indexCount = draw.indexCount },
+	});
+	return;
+    }
     for (size_t index = 0; index < plan.masks.size (); index++) {
 	auto& sources = this->m_puppetClippingSourceRanges[index];
 	sources.clear ();
@@ -1551,9 +1595,16 @@ void CImage::updatePuppetClippingCommands (const PuppetClippingPlan& plan) {
 	const bool clipped = !draw.masks.empty ();
 	if (clipped && activeMask != draw.masks.front ()) {
 	    activeMask = draw.masks.front ();
-	    this->m_puppetClippingCommands.push_back (PuppetClippingRenderCommand {
-		.buildsMask = true, .pass = this->m_puppetMaskPasses[activeMask],
-	    });
+	    const auto& ancestors = plan.masks[activeMask].ancestors;
+	    for (size_t factor = 0; factor <= ancestors.size (); factor++) {
+		const size_t mask = factor < ancestors.size () ? ancestors[factor] : activeMask;
+		this->m_puppetClippingCommands.push_back (PuppetClippingRenderCommand {
+		    .buildsMask = true, .intermediateMask = factor != 0, .pass = this->m_puppetMaskPasses[mask],
+		});
+		if (factor != 0) this->m_puppetClippingCommands.push_back (PuppetClippingRenderCommand {
+		    .pass = this->m_puppetMaskComposePass,
+		});
+	    }
 	}
 	this->m_puppetClippingCommands.push_back (PuppetClippingRenderCommand {
 	    .pass = clipped ? this->m_puppetClippedPass : this->m_puppetPlainPass,
@@ -1573,15 +1624,18 @@ void CImage::renderPuppetClipping () {
 	    const GLboolean scissorEnabled = glIsEnabled (GL_SCISSOR_TEST);
 	    glDisable (GL_SCISSOR_TEST);
 	    glColorMask (true, true, true, true);
-	    glBindFramebuffer (GL_FRAMEBUFFER, this->m_puppetClippingFBO->getFramebuffer ());
-	    glViewport (
-		0, 0, this->m_puppetClippingFBO->getRealWidth (), this->m_puppetClippingFBO->getRealHeight ()
-	    );
+	    const auto& target = command.intermediateMask ? this->m_puppetClippingIntermediateFBO
+		: this->m_puppetClippingFBO;
+	    command.pass->setDestination (target);
+	    glBindFramebuffer (GL_FRAMEBUFFER, target->getFramebuffer ());
+	    glViewport (0, 0, target->getRealWidth (), target->getRealHeight ());
 	    glClearColor (0.0f, 0.0f, 0.0f, 0.0f);
 	    glClear (GL_COLOR_BUFFER_BIT);
 	    if (scissorEnabled) {
 		glEnable (GL_SCISSOR_TEST);
 	    }
+	} else if (command.pass == this->m_puppetMaskComposePass) {
+	    glColorMask (true, true, true, true);
 	} else {
 	    this->m_puppetClippingDrawRange.front () = command.range;
 	    if (command.blending != BlendingMode_Unknown) command.pass->setBlendingMode (command.blending);
@@ -2164,7 +2218,8 @@ void CImage::updateFinalPassVisibility (const bool force) {
 	    );
 	    this->m_puppetFinalPassConfigured = true;
 	}
-	for (auto* clippingPass : m_puppetClippingPasses) clippingPass->setInput (route.input);
+	for (auto* clippingPass : m_puppetClippingPasses)
+	    if (clippingPass != this->m_puppetMaskComposePass) clippingPass->setInput (route.input);
 	if (!this->m_hasPuppetClipping) {
 	    this->setupPuppetGeometryCallback (pass, route.samplesSourceTexture);
 	}
@@ -2228,7 +2283,11 @@ void CImage::updateSceneTargets () const {
 	this->m_compositionFBO->resize (targetSize.x, targetSize.y);
     }
     if (this->m_puppetClippingFBO != nullptr) {
-	this->m_puppetClippingFBO->resize (targetSize.x, targetSize.y);
+	const auto maskSize = this->m_puppetClippingIntermediateFBO
+	    ? glm::max (targetSize / 2u, glm::uvec2 (2)) : targetSize;
+	this->m_puppetClippingFBO->resize (maskSize.x, maskSize.y);
+	if (this->m_puppetClippingIntermediateFBO)
+	    this->m_puppetClippingIntermediateFBO->resize (maskSize.x, maskSize.y);
     }
     if (sceneSized) {
 	this->m_mainFBO->resize (targetSize.x, targetSize.y);

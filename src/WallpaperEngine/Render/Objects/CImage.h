@@ -253,6 +253,7 @@ private:
 
     struct PuppetClippingRenderCommand {
 	bool buildsMask = false;
+	bool intermediateMask = false;
 	Effects::CPass* pass = nullptr;
 	WallpaperEngine::Data::Model::MdlDrawRange range;
 	WallpaperEngine::Data::Model::BlendingMode blending = WallpaperEngine::Data::Model::BlendingMode_Unknown;
@@ -261,12 +262,14 @@ private:
     std::vector<PuppetClippingRenderCommand> m_puppetClippingCommands = {};
     std::vector<Effects::CPass*> m_puppetMaskPasses;
     std::vector<std::vector<WallpaperEngine::Data::Model::MdlDrawRange>> m_puppetClippingSourceRanges;
+    Effects::CPass* m_puppetMaskComposePass = nullptr;
     Effects::CPass* m_puppetPlainPass = nullptr;
     Effects::CPass* m_puppetClippedPass = nullptr;
     std::vector<WallpaperEngine::Data::Model::MdlDrawRange> m_puppetClippingDrawRange { WallpaperEngine::Data::Model::MdlDrawRange {} };
     std::vector<std::unique_ptr<TextureMap>> m_puppetClippingBinds = {};
     std::vector<std::unique_ptr<glm::vec4>> m_puppetClippingRenderVars = {};
     std::shared_ptr<CFBO> m_puppetClippingFBO = nullptr;
+    std::shared_ptr<CFBO> m_puppetClippingIntermediateFBO = nullptr;
     bool m_hasPuppetClipping = false;
 
     glm::mat4 m_modelViewProjectionScreen = {};
