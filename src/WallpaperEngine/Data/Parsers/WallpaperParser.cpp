@@ -130,7 +130,9 @@ SceneUniquePtr WallpaperParser::parseScene (const JSON& file, Project& project) 
 	    if (!paths.empty ()) {
 		cameraPaths.push_back (CameraPathSource {
 		    .objectId = cur.optional<int> ("id"),
-		    .queueMode = queueMode (cur.optional<std::string> ("queuemode", "sequence")),
+		    .queueMode = queueMode (
+			cur.optional<std::string> ("queuemode", "random") == "sequential" ? "sequential" : "random"
+		    ),
 		    .paths = paths,
 		});
 	    }
