@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 3.12)
+cmake_minimum_required(VERSION 3.15)
 project(linux-wallpaperengine)
 
 # prevent installing to /usr by default so we don't bork anything
@@ -38,6 +38,7 @@ find_package(FFMPEG REQUIRED)
 find_package(PulseAudio REQUIRED)
 find_package(Freetype REQUIRED)
 find_package(Fontconfig REQUIRED)
+include(CMakeModules/PrivateMSDF.cmake)
 
 set(ENABLE_OPT OFF)
 set(SPIRV_CROSS_FORCE_PIC ON)
@@ -530,6 +531,8 @@ set(COMMON_SOURCES
     src/WallpaperEngine/Render/Objects/CParticle.cpp
     src/WallpaperEngine/Render/Objects/CText.h
     src/WallpaperEngine/Render/Objects/CText.cpp
+    src/WallpaperEngine/Render/Objects/TextStyle.cpp
+    src/WallpaperEngine/Render/Objects/TextMsdf.cpp
     src/WallpaperEngine/Render/Objects/CShape.h
     src/WallpaperEngine/Render/Objects/CShape.cpp
     src/WallpaperEngine/Render/Objects/CModel.h
@@ -682,6 +685,7 @@ if(BUILD_TESTING)
         src/WallpaperEngine/Testing/Cases/PlaylistRestoration.cpp
         src/WallpaperEngine/Testing/Cases/ScriptRuntime.cpp
         src/WallpaperEngine/Testing/Cases/Utf8Text.cpp
+        src/WallpaperEngine/Testing/Cases/TextStyle.cpp
         src/WallpaperEngine/Testing/Cases/JsonTolerance.cpp
         src/WallpaperEngine/Testing/Cases/SceneMsaaPolicy.cpp
         src/WallpaperEngine/Testing/Cases/EffectConditions.cpp
@@ -728,6 +732,7 @@ target_link_libraries (linux-wallpaperengine-lib PUBLIC
     ${MPV_LIBRARY}
     ${PULSEAUDIO_LIBRARY}
     Freetype::Freetype
+    msdfgen::msdfgen
     Fontconfig::Fontconfig
     ${WAYLAND_LIBRARIES}
     ${X11_LIBRARIES}
@@ -756,6 +761,7 @@ if (BUILD_TESTING)
         ${MPV_LIBRARY}
         ${PULSEAUDIO_LIBRARY}
         Freetype::Freetype
+        msdfgen::msdfgen
         Fontconfig::Fontconfig
         ${WAYLAND_LIBRARIES}
         ${X11_LIBRARIES}

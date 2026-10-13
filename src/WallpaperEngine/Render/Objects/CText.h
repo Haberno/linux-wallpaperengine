@@ -1,6 +1,8 @@
 #pragma once
 
 #include "Effects/EffectSwapCommand.h"
+#include "TextStyle.h"
+#include "TextMsdf.h"
 
 #include <functional>
 #include <memory>
@@ -125,6 +127,8 @@ private:
     void rebuildTextureFrom (const std::string& text);
     void buildShader ();
     void uploadQuadVertices ();
+    void drawGlyphs ();
+    TextStyleUniforms currentStyle () const;
 
     // setup() helpers (kept small to keep the setup flow linear).
     bool initFreeType ();
@@ -173,11 +177,21 @@ private:
     GLuint m_program = 0;
     GLuint m_vao = 0;
     GLuint m_vbo = 0;
+    GLuint m_glyphVbo = 0;
+    GLuint m_glyphVao = 0;
+    GLsizei m_glyphVertexCount = 0;
+    bool m_usingMsdf = false;
+    bool m_lastMsdfRequest = false;
+    std::unordered_map<uint32_t, TextMsdfGlyph> m_msdfGlyphs;
 
     GLint m_uMVP = -1;
     GLint m_uColor = -1;
     GLint m_uTexture = -1;
     GLint m_uSolid = -1;
+    GLint m_uMsdf = -1;
+    GLint m_uStyleFlags = -1;
+    GLint m_uRenderVars = -1;
+    GLint m_uTextureSize = -1;
 
     glm::ivec2 m_textureSize = { 0, 0 };
     glm::vec2 m_quadSize = { 0.0f, 0.0f };

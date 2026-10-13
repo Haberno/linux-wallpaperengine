@@ -1,12 +1,15 @@
 #include "CText.h"
+#include "TextMsdf.h"
 #include "WallpaperEngine/Render/Depth.h"
 #include "CImage.h"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <filesystem>
 #include <limits>
 #include <mutex>
+#include <stdexcept>
 #include <vector>
 
 #include <ft2build.h>
@@ -76,10 +79,48 @@ in vec2 vUV;
 uniform sampler2D uTexture;
 uniform vec4 uColor;
 uniform bool uSolid;
+uniform bool uMsdf;
+uniform ivec3 uStyleFlags;
+uniform vec4 uRenderVars[4];
+uniform vec2 uTextureSize;
 out vec4 FragColor;
+float distanceValue(vec3 channels) {
+    return max(min(channels.r,channels.g),min(max(channels.r,channels.g),channels.b))-.5;
+}
+float coverage(float distance, float threshold, float radius) {
+    if (uStyleFlags.y != 0 || uStyleFlags.z != 0) {
+        float halfWidth=max(radius,.5);
+        return smoothstep(-halfWidth,halfWidth,distance+threshold-.5);
+    }
+    return clamp(distance+threshold,0.,1.);
+}
 void main() {
-    float coverage = uSolid ? 1.0 : texture(uTexture, vUV).r;
-    FragColor = vec4(uColor.rgb, uColor.a * coverage);
+    if (uSolid) { FragColor=uColor; return; }
+    if (!uMsdf) { FragColor=vec4(uColor.rgb,uColor.a*texture(uTexture,vUV).r); return; }
+    float range=uRenderVars[0].x;
+    vec2 dx=dFdx(vUV),dy=dFdy(vUV);
+    float screenRange=max(.5*dot(vec2(range)/uTextureSize,vec2(1.)/sqrt(dx*dx+dy*dy)),1.);
+    bool blurred=uStyleFlags.y != 0;
+    float distance=distanceValue(texture(uTexture,vUV).rgb)*(blurred ? range : screenRange);
+    float width=uRenderVars[0].y*(blurred ? 1. : screenRange/range);
+    float radius=blurred ? uRenderVars[0].z : 0.;
+    float fill=coverage(distance,.5,radius);
+    float alpha=fill*uColor.a;
+    vec3 color=uColor.rgb;
+    if (uStyleFlags.x != 0) {
+        alpha=coverage(distance,.5+width,radius)*uColor.a;
+        color=mix(uRenderVars[1].xyz,color,fill);
+    }
+    if (uStyleFlags.z != 0) {
+        vec2 offset=vec2(uRenderVars[1].w,uRenderVars[2].w)/uTextureSize;
+        float shadowDistance=range*distanceValue(texture(uTexture,vUV-offset).rgb);
+        float threshold=.5+(uStyleFlags.x != 0 ? uRenderVars[0].y : 0.);
+        float shadowAlpha=clamp(uRenderVars[3].x*coverage(shadowDistance,threshold,uRenderVars[0].w),0.,1.)*uColor.a;
+        float combinedAlpha=alpha+shadowAlpha*(1.-alpha);
+        color=(color*alpha+uRenderVars[2].xyz*shadowAlpha*(1.-alpha))/max(combinedAlpha,1e-6);
+        alpha=combinedAlpha;
+    }
+    FragColor=vec4(color,alpha);
 }
 )glsl";
 
@@ -375,6 +416,17 @@ CText::CText (Wallpapers::CScene& scene, const Text& text) :
     this->registerProperty ("visible", *text.visible);
     this->registerProperty ("perspective", *text.perspective);
     this->registerProperty ("depthtest", *text.depthTest);
+    this->registerProperty ("msdf", *text.msdf);
+    this->registerProperty ("outline", *text.outline);
+    this->registerProperty ("outlinethickness", *text.outlineWidth);
+    this->registerProperty ("outlinecolor", *text.outlineColor);
+    this->registerProperty ("blur", *text.blur);
+    this->registerProperty ("blursize", *text.blurRadius);
+    this->registerProperty ("dropshadow", *text.dropShadow);
+    this->registerProperty ("dropshadowsize", *text.dropShadowRadius);
+    this->registerProperty ("dropshadowopacity", *text.dropShadowOpacity);
+    this->registerProperty ("dropshadowoffset", *text.dropShadowOffset);
+    this->registerProperty ("dropshadowcolor", *text.dropShadowColor);
     this->registerProperty ("pointSize", *text.pointSize);
     this->registerProperty ("text", *text.text);
     this->registerProperty ("spacing", *text.spacing);
@@ -411,6 +463,8 @@ CText::CText (Wallpapers::CScene& scene, const Text& text) :
 
 CText::~CText () {
     destroyEffectChain ();
+    if (m_glyphVbo != 0) glDeleteBuffers (1, &m_glyphVbo);
+    if (m_glyphVao != 0) glDeleteVertexArrays (1, &m_glyphVao);
     if (m_vbo != 0) {
 	glDeleteBuffers (1, &m_vbo);
     }
@@ -846,10 +900,7 @@ void CText::renderEffectChain (const glm::mat4& mvp, const float brightness, con
     glActiveTexture (GL_TEXTURE0);
     glBindTexture (GL_TEXTURE_2D, m_texture);
     glUniform1i (m_uTexture, 0);
-    ensureVao ();
-    glBindVertexArray (m_vao);
-    glDrawArrays (GL_TRIANGLES, 0, 6);
-    glBindVertexArray (0);
+    drawGlyphs ();
 
     // Named simulation targets persist between frames; only the working
     // compositing surface is reset here. Authored clear functions reset state.
@@ -1296,6 +1347,15 @@ void CText::rebuildTextureFrom (const std::string& text) {
 	FT_Set_Transform (face, nullptr, &delta);
 	return FT_Load_Char (face, code, flags) == 0 ? face->glyph : nullptr;
     };
+    m_lastMsdfRequest = currentStyle ().msdf;
+    m_usingMsdf = m_lastMsdfRequest && FT_IS_SCALABLE (m_ftFace) && !FT_HAS_COLOR (m_ftFace);
+    if (m_lastMsdfRequest && !m_usingMsdf) {
+        sLog.error ("CText: MSDF styles require a non-color outline font: ", m_text.name);
+    }
+    struct GlyphPlacement { size_t image; glm::vec4 bounds; };
+    std::vector<GlyphPlacement> glyphPlacements;
+    std::vector<const TextMsdfGlyph*> glyphImages;
+    std::unordered_map<uint32_t, size_t> glyphImageIndices;
     m_lastSpacing = currentSpacing ();
     m_lastPadding = currentPadding ();
 
@@ -1370,11 +1430,36 @@ void CText::rebuildTextureFrom (const std::string& text) {
 	const float baseline = static_cast<float> (i) * lineHeight;
 
 	for (size_t offset = 0; offset < line.text.size ();) {
-	    const auto slot = loadPositionedGlyph (nextUtf8Codepoint (line.text, offset), penX, baseline);
+	    const auto code = nextUtf8Codepoint (line.text, offset);
+	    const auto slot = m_usingMsdf ? loadGlyph (code, FT_LOAD_NO_BITMAP)
+                : loadPositionedGlyph (code, penX, baseline);
 	    if (slot == nullptr) {
 		continue;
 	    }
 
+            if (m_usingMsdf) {
+                auto [imageIndex, firstUse] = glyphImageIndices.try_emplace (code, glyphImages.size ());
+                if (firstUse) {
+                    auto [cached, inserted] = m_msdfGlyphs.try_emplace (code);
+                    if (inserted) cached->second = generateTextMsdfGlyph (slot->face);
+                    glyphImages.push_back (&cached->second);
+                }
+                const auto& image = *glyphImages[imageIndex->second];
+                if (!image.pixels.empty ()) {
+                    const auto bounds = image.inkBounds;
+                    const float left = penX + bounds.x;
+                    const float top = baseline - bounds.w;
+                    const float right = penX + bounds.z;
+                    const float bottom = baseline - bounds.y;
+                    inkLeft = std::min (inkLeft, static_cast<int> (std::floor (left)));
+                    inkTop = std::min (inkTop, static_cast<int> (std::floor (top)));
+                    inkRight = std::max (inkRight, static_cast<int> (std::ceil (right)));
+                    inkBottom = std::max (inkBottom, static_cast<int> (std::ceil (bottom)));
+                    hasInk = true;
+                    glyphPlacements.push_back ({ imageIndex->second,
+                        { left - image.margin, top - image.margin, right + image.margin, bottom + image.margin } });
+                }
+            } else {
 	    const auto& bmp = slot->bitmap;
 	    if (bmp.width != 0 && bmp.rows != 0) {
 		const int glyphLeft = static_cast<int> (std::floor (penX)) + slot->bitmap_left;
@@ -1385,6 +1470,7 @@ void CText::rebuildTextureFrom (const std::string& text) {
 		inkBottom = std::max (inkBottom, glyphTop + static_cast<int> (bmp.rows));
 		hasInk = true;
 	    }
+            }
 	    penX += static_cast<float> (slot->advance.x >> 6) + m_lastSpacing.x;
 	}
     }
@@ -1405,7 +1491,9 @@ void CText::rebuildTextureFrom (const std::string& text) {
     const int y0 = inkTop - kInkMargin;
     const int width = std::max (1, inkRight - inkLeft + kInkMargin * 2);
     const int height = std::max (1, inkBottom - inkTop + kInkMargin * 2);
-    std::vector<uint8_t> pixels (static_cast<size_t> (width) * height, 0);
+    std::vector<uint8_t> pixels (m_usingMsdf ? 0 : static_cast<size_t> (width) * height, 0);
+
+    if (!m_usingMsdf) {
 
     for (size_t i = 0; i < lines.size (); i++) {
 	const auto& line = lines[i];
@@ -1441,6 +1529,7 @@ void CText::rebuildTextureFrom (const std::string& text) {
 	    penX += static_cast<float> (slot->advance.x >> 6) + m_lastSpacing.x;
 	}
     }
+    }
     FT_Set_Transform (m_ftFace, nullptr, nullptr);
 
     const bool firstUpload = (m_texture == 0);
@@ -1449,7 +1538,38 @@ void CText::rebuildTextureFrom (const std::string& text) {
     }
     glBindTexture (GL_TEXTURE_2D, m_texture);
     glPixelStorei (GL_UNPACK_ALIGNMENT, 1);
-    glTexImage2D (GL_TEXTURE_2D, 0, GL_RED, width, height, 0, GL_RED, GL_UNSIGNED_BYTE, pixels.data ());
+    std::vector<glm::ivec2> atlasOrigins;
+    if (m_usingMsdf) {
+        GLint maximumSize;
+        glGetIntegerv (GL_MAX_TEXTURE_SIZE, &maximumSize);
+        int atlasWidth = std::min (1024, maximumSize);
+        for (const auto* image : glyphImages) atlasWidth = std::max (atlasWidth, image->width + 1);
+        int x = 0, y = 0, rowHeight = 0;
+        for (const auto* image : glyphImages) {
+            if (x + image->width + 1 > atlasWidth) { x = 0; y += rowHeight; rowHeight = 0; }
+            atlasOrigins.emplace_back (x, y);
+            x += image->width + 1;
+            rowHeight = std::max (rowHeight, image->height + 1);
+        }
+        const int atlasHeight = std::max (1, y + rowHeight);
+        if (atlasWidth > maximumSize || atlasHeight > maximumSize) {
+            throw std::runtime_error ("CText MSDF atlas exceeds maximum texture size");
+        }
+        std::vector<uint8_t> atlas (static_cast<size_t> (atlasWidth) * atlasHeight * 4, 0);
+        for (size_t i = 0; i < glyphImages.size (); ++i) {
+            const auto& image = *glyphImages[i];
+            const auto origin = atlasOrigins[i];
+            for (int row = 0; row < image.height; ++row) {
+                std::copy_n (image.pixels.data () + static_cast<size_t> (row) * image.width * 4, image.width * 4,
+                    atlas.data () + (static_cast<size_t> (origin.y + row) * atlasWidth + origin.x) * 4);
+            }
+        }
+        glTexImage2D (GL_TEXTURE_2D, 0, GL_RGBA8, atlasWidth, atlasHeight, 0, GL_RGBA, GL_UNSIGNED_BYTE, atlas.data ());
+        m_textureSize = { atlasWidth, atlasHeight };
+    } else {
+        glTexImage2D (GL_TEXTURE_2D, 0, GL_RED, width, height, 0, GL_RED, GL_UNSIGNED_BYTE, pixels.data ());
+        m_textureSize = { width, height };
+    }
     if (firstUpload) {
 	glTexParameteri (GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
 	glTexParameteri (GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
@@ -1457,7 +1577,6 @@ void CText::rebuildTextureFrom (const std::string& text) {
 	glTexParameteri (GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
     }
 
-    m_textureSize = { width, height };
     m_quadSize = { static_cast<float> (width), static_cast<float> (height) };
     const glm::vec4 glyphBounds = {
 	static_cast<float> (inkLeft),
@@ -1481,6 +1600,28 @@ void CText::rebuildTextureFrom (const std::string& text) {
     m_lastSizedText.reset ();
     m_lastRenderedText = text;
 
+    if (m_usingMsdf) {
+        const glm::vec2 placementOffset = m_quadOffset
+            - glm::vec2 (static_cast<float> (inkLeft + inkRight), static_cast<float> (inkTop + inkBottom)) * .5f;
+        std::vector<float> vertices;
+        for (const auto& placement : glyphPlacements) {
+            const auto& image = *glyphImages[placement.image];
+            const auto origin = atlasOrigins[placement.image];
+            const float u0 = static_cast<float> (origin.x) / m_textureSize.x;
+            const float v0 = static_cast<float> (origin.y) / m_textureSize.y;
+            const float u1 = static_cast<float> (origin.x + image.width) / m_textureSize.x;
+            const float v1 = static_cast<float> (origin.y + image.height) / m_textureSize.y;
+            const float left = placement.bounds.x + placementOffset.x, right = placement.bounds.z + placementOffset.x;
+            const float top = placement.bounds.y + placementOffset.y, bottom = placement.bounds.w + placementOffset.y;
+            const float quad[] = { left,top,u0,v0, right,top,u1,v0, right,bottom,u1,v1,
+                left,top,u0,v0, right,bottom,u1,v1, left,bottom,u0,v1 };
+            vertices.insert (vertices.end (), std::begin (quad), std::end (quad));
+        }
+        if (m_glyphVbo == 0) glGenBuffers (1, &m_glyphVbo);
+        glBindBuffer (GL_ARRAY_BUFFER, m_glyphVbo);
+        glBufferData (GL_ARRAY_BUFFER, vertices.size () * sizeof (float), vertices.data (), GL_DYNAMIC_DRAW);
+        m_glyphVertexCount = static_cast<GLsizei> (vertices.size () / 4);
+    }
     uploadQuadVertices ();
 }
 
@@ -1519,6 +1660,10 @@ void CText::buildShader () {
     m_uColor = glGetUniformLocation (m_program, "uColor");
     m_uTexture = glGetUniformLocation (m_program, "uTexture");
     m_uSolid = glGetUniformLocation (m_program, "uSolid");
+    m_uMsdf = glGetUniformLocation (m_program, "uMsdf");
+    m_uStyleFlags = glGetUniformLocation (m_program, "uStyleFlags");
+    m_uRenderVars = glGetUniformLocation (m_program, "uRenderVars");
+    m_uTextureSize = glGetUniformLocation (m_program, "uTextureSize");
 }
 
 void CText::uploadQuadVertices () {
@@ -1562,6 +1707,44 @@ void CText::ensureVao () {
     glVertexAttribPointer (0, 2, GL_FLOAT, GL_FALSE, 4 * sizeof (float), reinterpret_cast<void*> (0));
     glEnableVertexAttribArray (1);
     glVertexAttribPointer (1, 2, GL_FLOAT, GL_FALSE, 4 * sizeof (float), reinterpret_cast<void*> (2 * sizeof (float)));
+    glBindVertexArray (0);
+}
+
+TextStyleUniforms CText::currentStyle () const {
+    const auto time = getScene ().getElapsedTime ();
+    return computeTextStyleUniforms ({
+        .msdf = m_text.msdf->value->getBool (),
+        .outline = m_text.outline->value->getBool (),
+        .blur = m_text.blur->value->getBool (),
+        .shadow = m_text.dropShadow->value->getBool (),
+        .outlineWidth = m_text.outlineWidth->evaluateFloat (time),
+        .outlineColor = m_text.outlineColor->evaluateVec3 (time),
+        .blurRadius = m_text.blurRadius->evaluateFloat (time),
+        .shadowRadius = m_text.dropShadowRadius->evaluateFloat (time),
+        .shadowOpacity = m_text.dropShadowOpacity->evaluateFloat (time),
+        .shadowOffset = glm::vec2 (m_text.dropShadowOffset->evaluateVec3 (time)),
+        .shadowColor = m_text.dropShadowColor->evaluateVec3 (time),
+    }, m_text.pointSize->value->getFloat ());
+}
+
+void CText::drawGlyphs () {
+    if (m_usingMsdf) {
+        if (m_glyphVao == 0) {
+            glGenVertexArrays (1, &m_glyphVao);
+            glBindVertexArray (m_glyphVao);
+            glBindBuffer (GL_ARRAY_BUFFER, m_glyphVbo);
+            glEnableVertexAttribArray (0);
+            glVertexAttribPointer (0, 2, GL_FLOAT, GL_FALSE, 4 * sizeof (float), reinterpret_cast<void*> (0));
+            glEnableVertexAttribArray (1);
+            glVertexAttribPointer (1, 2, GL_FLOAT, GL_FALSE, 4 * sizeof (float), reinterpret_cast<void*> (2 * sizeof (float)));
+        }
+        glBindVertexArray (m_glyphVao);
+        glDrawArrays (GL_TRIANGLES, 0, m_glyphVertexCount);
+    } else {
+        ensureVao ();
+        glBindVertexArray (m_vao);
+        glDrawArrays (GL_TRIANGLES, 0, 6);
+    }
     glBindVertexArray (0);
 }
 
@@ -1619,6 +1802,7 @@ void CText::render () {
     const unsigned int fontSize = currentFontSize ();
     if (fontSize != m_lastFontSize) {
 	m_lastFontSize = fontSize;
+        m_msdfGlyphs.clear ();
 	FT_Set_Char_Size (m_ftFace, 0, m_lastFontSize, 300, 300);
 	for (const auto& [key, face] : m_fallbackFaces) {
 	    FT_Set_Char_Size (face, 0, m_lastFontSize, 300, 300);
@@ -1626,7 +1810,8 @@ void CText::render () {
 	rebuildTextureFrom (renderedText);
 	rebuiltGlyphs = true;
     } else if (renderedText != m_lastRenderedText || currentLayoutLimits () != m_lastLayoutLimits
-	       || currentSpacing () != m_lastSpacing || currentPadding () != m_lastPadding) {
+	       || currentSpacing () != m_lastSpacing || currentPadding () != m_lastPadding
+               || currentStyle ().msdf != m_lastMsdfRequest) {
 	rebuildTextureFrom (renderedText);
 	rebuiltGlyphs = true;
     }
@@ -1653,6 +1838,14 @@ void CText::render () {
     const bool compositeEffects = m_effectsEnabled
 	&& (!drawToScene || m_colorBlendPass != nullptr
 	    || std::ranges::any_of (m_text.effects, [] (const auto& effect) { return effect->visible->value->getBool (); }));
+
+    const auto style = currentStyle ();
+    const std::array<glm::vec4, 4> renderVars { style.renderVar0, style.renderVar1, style.renderVar2, style.renderVar3 };
+    glUseProgram (m_program);
+    glUniform1i (m_uMsdf, m_usingMsdf);
+    glUniform3i (m_uStyleFlags, style.enabled.x, style.enabled.y, style.enabled.z);
+    glUniform4fv (m_uRenderVars, 4, glm::value_ptr (renderVars[0]));
+    glUniform2f (m_uTextureSize, m_textureSize.x, m_textureSize.y);
 
     const glm::vec4 color = m_text.color->value->getVec4 ();
     const float alpha = m_text.alpha->evaluateFloat (getScene ().getElapsedTime ());
@@ -1711,10 +1904,7 @@ void CText::render () {
 	glBindTexture (GL_TEXTURE_2D, m_texture);
 	glUniform1i (m_uTexture, 0);
 
-	ensureVao ();
-	glBindVertexArray (m_vao);
-	glDrawArrays (GL_TRIANGLES, 0, 6);
-	glBindVertexArray (0);
+	drawGlyphs ();
         glColorMask (GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
 #if !NDEBUG
 	glPopDebugGroup ();
@@ -1776,10 +1966,7 @@ void CText::render () {
     glBindTexture (GL_TEXTURE_2D, m_texture);
     glUniform1i (m_uTexture, 0);
 
-    ensureVao ();
-    glBindVertexArray (m_vao);
-    glDrawArrays (GL_TRIANGLES, 0, 6);
-    glBindVertexArray (0);
+    drawGlyphs ();
     glColorMask (GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
 #if !NDEBUG
     glPopDebugGroup ();

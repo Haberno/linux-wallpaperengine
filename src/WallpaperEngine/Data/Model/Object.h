@@ -931,6 +931,17 @@ struct TextData {
     UserSettingUniquePtr text;
     /** Font reference from scene (e.g. "fonts/VCR_OSD_MONO.ttf" or "systemfont_arial") */
     std::string font;
+    UserSettingUniquePtr msdf;
+    UserSettingUniquePtr outline;
+    UserSettingUniquePtr outlineWidth;
+    UserSettingUniquePtr outlineColor;
+    UserSettingUniquePtr blur;
+    UserSettingUniquePtr blurRadius;
+    UserSettingUniquePtr dropShadow;
+    UserSettingUniquePtr dropShadowRadius;
+    UserSettingUniquePtr dropShadowOpacity;
+    UserSettingUniquePtr dropShadowOffset;
+    UserSettingUniquePtr dropShadowColor;
     /** Font size in points, optionally bound to a user setting or script */
     UserSettingUniquePtr pointSize;
     /** Serialized/editor layer size; native glyph placement is driven by font metrics */
