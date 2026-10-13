@@ -1330,7 +1330,12 @@ glm::vec3 CParticle::resolveEmitterOrigin (const glm::vec3& origin) const {
     return glm::determinant (basis) == 0.0f ? origin : glm::inverse (basis) * origin;
 }
 
-EmitterFunc CParticle::createBoxEmitter (const ParticleEmitter& emitter) {
+EmitterFunc CParticle::createBoxEmitter (const ParticleEmitter& definition) {
+    ParticleEmitter emitter = definition;
+    if (getScene ().getScene ().camera.projection.isPerspective) {
+	if (emitter.defaultDirections) emitter.directions = glm::vec3 (1.0f);
+	if (emitter.defaultDistanceMax) emitter.distanceMax = glm::vec3 (1.0f);
+    }
     includeControlPoint (emitter.controlPoint);
     DynamicValue* countOverride = getInstanceOverride ().count->value.get ();
 
@@ -1454,21 +1459,15 @@ EmitterFunc CParticle::createBoxEmitter (const ParticleEmitter& emitter) {
                 p.remapSlot = slot;
                 p.nativeSlotState = m_hasControlPointOutputOperator;
 
-		// Generate random position within box volume centered on origin
-		// This creates a centered box (or hollow box if distanceMin > 0)
+		// Generate random position with directions applied before the inner distance.
+		// Native preserves that distance when an axis direction has non-unit magnitude.
 		glm::vec3 randomPos;
 		for (int axis = 0; axis < 3; axis++) {
-		    float minDist = emitter.distanceMin[axis];
-		    float maxDist = emitter.distanceMax[axis];
-		    // Generate value in [minDist, maxDist]
-		    float dist = WallpaperEngine::Maths::randomFloat (m_rng, minDist, maxDist);
-		    // Randomly flip sign to center the distribution
-		    if (WallpaperEngine::Maths::randomFloat (m_rng, 0.0f, 1.0f) < 0.5f) {
-			dist = -dist;
-		    }
-		    randomPos[axis] = dist;
+		    const float sample = WallpaperEngine::Maths::randomFloat (m_rng, -1.0f, 1.0f)
+			* flippedDirections[axis];
+		    randomPos[axis] = glm::sign (sample) * (std::abs (sample)
+			* (emitter.distanceMax[axis] - emitter.distanceMin[axis]) + emitter.distanceMin[axis]);
 		}
-		randomPos *= flippedDirections;
 		if (controlPointIndex >= 0 && controlPointIndex < static_cast<int> (m_controlPoints.size ())
 		    && ((m_particle.flags & 1) != 0 || controlPointIndex != 0)) {
 		    // Only the sampled volume is oriented; the authored origin stays outside.

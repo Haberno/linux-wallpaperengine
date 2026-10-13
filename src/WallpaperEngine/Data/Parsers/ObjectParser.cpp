@@ -935,6 +935,9 @@ ParticleEmitter ObjectParser::parseParticleEmitter (const JSON& it) {
 	if (fieldIt == it.end ()) {
 	    return defaultValue;
 	}
+	if (name == "boxrandom" && fieldIt->is_null ()) {
+	    return glm::vec3 (0.0f);
+	}
 	if (fieldIt->is_string ()) {
 	    return it.optional (fieldName, defaultValue);
 	}
@@ -1004,6 +1007,8 @@ ParticleEmitter ObjectParser::parseParticleEmitter (const JSON& it) {
 	    .minPeriodicDuration = it.optional ("minperiodicduration", 2.0f),
 	    .maxPeriodicDuration = it.optional ("maxperiodicduration", 3.0f),
 	    .maxToEmitPerPeriod = it.optional ("maxtoemitperperiod", 0u),
+	    .defaultDirections = name == "boxrandom" && !it.contains ("directions"),
+	    .defaultDistanceMax = name == "boxrandom" && !it.contains ("distancemax"),
 	};
     } catch (nlohmann::json::exception& e) {
 	sLog.error ("Error parsing emitter: ", e.what ());

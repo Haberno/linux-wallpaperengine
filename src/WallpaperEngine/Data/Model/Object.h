@@ -246,6 +246,9 @@ struct ParticleEmitter {
     float minPeriodicDuration;
     float maxPeriodicDuration;
     uint32_t maxToEmitPerPeriod;
+    // Omitted box fields resolve against the scene projection when instantiated.
+    bool defaultDirections = false;
+    bool defaultDistanceMax = false;
 };
 
 /**
