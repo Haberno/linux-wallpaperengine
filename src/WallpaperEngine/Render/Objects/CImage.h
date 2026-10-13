@@ -255,10 +255,12 @@ private:
 	bool buildsMask = false;
 	Effects::CPass* pass = nullptr;
 	WallpaperEngine::Data::Model::MdlDrawRange range;
+	WallpaperEngine::Data::Model::BlendingMode blending = WallpaperEngine::Data::Model::BlendingMode_Unknown;
     };
     std::vector<Effects::CPass*> m_puppetClippingPasses = {};
     std::vector<PuppetClippingRenderCommand> m_puppetClippingCommands = {};
     std::vector<Effects::CPass*> m_puppetMaskPasses;
+    std::vector<std::vector<WallpaperEngine::Data::Model::MdlDrawRange>> m_puppetClippingSourceRanges;
     Effects::CPass* m_puppetPlainPass = nullptr;
     Effects::CPass* m_puppetClippedPass = nullptr;
     std::vector<WallpaperEngine::Data::Model::MdlDrawRange> m_puppetClippingDrawRange { WallpaperEngine::Data::Model::MdlDrawRange {} };

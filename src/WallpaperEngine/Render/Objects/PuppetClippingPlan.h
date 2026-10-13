@@ -20,7 +20,7 @@ struct PuppetClipDraw {
     uint32_t indexCount = 0;
     /**
      * Empty for an ordinary material draw. One entry selects a clipping mask.
-     * Multiple entries require the intermediate composition path.
+     * Multiple entries occur only in the preserved incomplete-table fallback.
      */
     std::vector<size_t> masks;
 };
@@ -33,8 +33,8 @@ struct PuppetClippingPlan {
 
 /**
  * Converts the serialized range/descriptor tables into ordered index-buffer spans.
- * Uncovered gaps are retained as ordinary draws, descriptors sharing one authored
- * mask are deduplicated, and adjacent spans with identical state are coalesced.
+ * Uncovered gaps are retained as ordinary draws. Descriptors sharing one authored
+ * mask retain separate descriptor draws, and adjacent spans with identical state are coalesced.
  */
 PuppetClippingPlan buildPuppetClippingPlan (
     const WallpaperEngine::Data::Model::MdlMesh& mesh, uint32_t submeshIndex,

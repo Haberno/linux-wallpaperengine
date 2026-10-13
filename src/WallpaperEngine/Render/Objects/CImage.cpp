@@ -1393,13 +1393,13 @@ bool CImage::setupPuppetClippingPasses (
 	if (plan.requiresComposition) {
 	    sLog.error (
 		"Puppet clipping for ", *model.puppet,
-		" requires the multi-mask composition path; rendering the un-clipped body for now"
+		" requires nested clipping composition; rendering the un-clipped body for now"
 	    );
 	    return false;
 	}
 	for (const auto& mask : plan.masks) {
 	    const auto& descriptor = mesh.clippingDescriptors[mask.descriptorIndex];
-	    if (descriptor.flags != 0) {
+	    if ((descriptor.flags & ~1u) != 0) {
 		sLog.error (
 		    "Puppet clipping for ", *model.puppet, " uses unsupported descriptor flags 0x", std::hex,
 		    descriptor.flags, std::dec, "; rendering the un-clipped body for now"
@@ -1445,6 +1445,7 @@ bool CImage::setupPuppetClippingPasses (
 	const auto& maskMaterial = *this->m_materials.compatibilityMaterials.back ();
 	const auto provider = std::make_shared<FBOProvider> (this);
 	this->m_puppetMaskPasses.reserve (plan.masks.size ());
+	this->m_puppetClippingSourceRanges.resize (plan.masks.size ());
 
 	const auto configurePass = [this, &input, &destination, projection, inverseProjection] (Effects::CPass& pass) {
 	    pass.setDestination (destination);
@@ -1491,12 +1492,9 @@ bool CImage::setupPuppetClippingPasses (
 	    this->m_puppetClippingRenderVars.emplace_back (std::make_unique<glm::vec4> (0.0f));
 	    pass->addUniform ("g_RenderVar0", this->m_puppetClippingRenderVars.back ().get ());
 
-	    std::vector<MdlDrawRange> sourceRanges;
-	    sourceRanges.reserve (mask.sourceRanges.size ());
-	    for (const uint32_t rangeIndex : mask.sourceRanges) {
-		sourceRanges.push_back (mesh.drawRanges[rangeIndex]);
-	    }
-	    this->setupPuppetRangeGeometryCallback (pass, samplesSourceTexture, sourceRanges);
+	    this->setupPuppetRangeGeometryCallback (
+		pass, samplesSourceTexture, {}, &this->m_puppetClippingSourceRanges[mask.descriptorIndex]
+	    );
 	}
 
 	for (const bool clipped : { false, true }) {
@@ -1542,6 +1540,12 @@ bool CImage::setupPuppetClippingPasses (
 
 void CImage::updatePuppetClippingCommands (const PuppetClippingPlan& plan) {
     this->m_puppetClippingCommands.clear ();
+    const auto& mesh = *this->getImage ().model->puppetMesh;
+    for (size_t index = 0; index < plan.masks.size (); index++) {
+	auto& sources = this->m_puppetClippingSourceRanges[index];
+	sources.clear ();
+	for (const uint32_t source : plan.masks[index].sourceRanges) sources.push_back (mesh.drawRanges[source]);
+    }
     size_t activeMask = std::numeric_limits<size_t>::max ();
     for (const auto& draw : plan.draws) {
 	const bool clipped = !draw.masks.empty ();
@@ -1554,6 +1558,8 @@ void CImage::updatePuppetClippingCommands (const PuppetClippingPlan& plan) {
 	this->m_puppetClippingCommands.push_back (PuppetClippingRenderCommand {
 	    .pass = clipped ? this->m_puppetClippedPass : this->m_puppetPlainPass,
 	    .range = { .firstIndex = draw.firstIndex, .indexCount = draw.indexCount },
+	    .blending = clipped ? ((mesh.clippingDescriptors[plan.masks[draw.masks.front ()].descriptorIndex].flags & 1)
+		? BlendingMode_Additive : BlendingMode_Translucent) : BlendingMode_Unknown,
 	});
     }
 }
@@ -1578,6 +1584,7 @@ void CImage::renderPuppetClipping () {
 	    }
 	} else {
 	    this->m_puppetClippingDrawRange.front () = command.range;
+	    if (command.blending != BlendingMode_Unknown) command.pass->setBlendingMode (command.blending);
 	    // Scene alpha is owned by the wallpaper compositor, but an isolated
 	    // composition surface needs child alpha so its parent can blend the group.
 	    glColorMask (

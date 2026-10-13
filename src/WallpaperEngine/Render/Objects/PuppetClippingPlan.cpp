@@ -9,13 +9,6 @@ using namespace WallpaperEngine::Data::Model;
 using namespace WallpaperEngine::Render::Objects;
 
 namespace {
-bool sameMask (
-    const MdlClippingDescriptor& left, const MdlClippingDescriptor& right
-) {
-    return left.opaqueId == right.opaqueId && left.maskAsset == right.maskAsset && left.flags == right.flags
-	&& left.sources == right.sources;
-}
-
 void appendDraw (
     PuppetClippingPlan& plan, const uint32_t submeshIndex, const uint32_t firstIndex, const uint32_t indexCount,
     const std::vector<size_t>& masks
@@ -50,45 +43,31 @@ PuppetClippingPlan WallpaperEngine::Render::Objects::buildPuppetClippingPlan (
     }
 
     PuppetClippingPlan plan;
-    std::vector<size_t> descriptorMasks (mesh.clippingDescriptors.size ());
-
+    std::vector<std::vector<size_t>> rangeMasks (mesh.drawRanges.size ());
     for (size_t descriptorIndex = 0; descriptorIndex < mesh.clippingDescriptors.size (); descriptorIndex++) {
 	const auto& descriptor = mesh.clippingDescriptors[descriptorIndex];
 	for (const uint32_t source : descriptor.sources) {
-	    if (source >= mesh.drawRanges.size ()) {
+	    if (source >= mesh.drawRanges.size ())
 		throw std::invalid_argument ("puppet clipping plan references a missing source range");
-	    }
 	}
-	const auto existing = std::find_if (
-	    plan.masks.begin (), plan.masks.end (), [&mesh, &descriptor] (const PuppetClipMask& mask) {
-		return sameMask (mesh.clippingDescriptors[mask.descriptorIndex], descriptor);
-	    }
-	);
-
-	if (existing != plan.masks.end ()) {
-	    descriptorMasks[descriptorIndex] = static_cast<size_t> (existing - plan.masks.begin ());
-	    continue;
+	for (const uint32_t target : descriptor.targets) {
+	    if (target >= mesh.drawRanges.size ())
+		throw std::invalid_argument ("puppet clipping plan references a missing target range");
+	    rangeMasks[target].push_back (descriptorIndex);
 	}
-
-	descriptorMasks[descriptorIndex] = plan.masks.size ();
 	plan.masks.push_back (PuppetClipMask {
 	    .descriptorIndex = descriptorIndex,
 	    .sourceRanges = descriptor.sources,
 	});
-    }
-
-    std::vector<std::vector<size_t>> rangeMasks (mesh.drawRanges.size ());
-    for (size_t descriptorIndex = 0; descriptorIndex < mesh.clippingDescriptors.size (); descriptorIndex++) {
-	for (const uint32_t target : mesh.clippingDescriptors[descriptorIndex].targets) {
-	    if (target >= rangeMasks.size ()) {
-		throw std::invalid_argument ("puppet clipping plan references a missing target range");
+	// Native derives parents from source containment, not overlapping targets.
+	if (!descriptor.sources.empty ()) {
+	    for (size_t other = 0; other < mesh.clippingDescriptors.size (); other++) {
+		if (other == descriptorIndex) continue;
+		const auto& targets = mesh.clippingDescriptors[other].targets;
+		plan.requiresComposition |= std::all_of (descriptor.sources.begin (), descriptor.sources.end (), [&] (auto source) {
+		    return std::find (targets.begin (), targets.end (), source) != targets.end ();
+		});
 	    }
-	    auto& masks = rangeMasks[target];
-	    const size_t mask = descriptorMasks[descriptorIndex];
-	    if (std::find (masks.begin (), masks.end (), mask) == masks.end ()) {
-		masks.push_back (mask);
-	    }
-	    plan.requiresComposition |= masks.size () > 1;
 	}
     }
 
@@ -124,16 +103,84 @@ PuppetClippingPlan WallpaperEngine::Render::Objects::buildPuppetClippingPlan (
 	);
     }
 
-    // Native rewrites a complete authored partition. For incomplete tables,
-    // preserve the existing gap-filling route rather than discard geometry.
+    // Preserve the existing gap-filling route for incomplete authored tables.
     size_t covered = 0;
     for (const auto index : ranges) covered += mesh.drawRanges[index].indexCount;
-    if (rangeOrder && !rangeOrder->empty () && covered == submeshIndexCount) {
-	plan.draws.clear ();
-	for (const uint32_t rangeIndex : *rangeOrder) {
-	    const auto& range = mesh.drawRanges.at (rangeIndex);
-	    if (range.submeshIndex == submeshIndex)
-		appendDraw (plan, submeshIndex, range.firstIndex, range.indexCount, rangeMasks[rangeIndex]);
+    const bool unsupported = std::any_of (mesh.clippingDescriptors.begin (), mesh.clippingDescriptors.end (), [] (const auto& descriptor) {
+	return (descriptor.flags & ~1u) != 0;
+    });
+    const bool foreignRanges = std::any_of (mesh.drawRanges.begin (), mesh.drawRanges.end (), [submeshIndex] (const auto& range) {
+	return range.submeshIndex != submeshIndex;
+    });
+    if (covered != submeshIndexCount || plan.requiresComposition || unsupported || foreignRanges) {
+	if (covered != submeshIndexCount)
+	    for (const auto& masks : rangeMasks) plan.requiresComposition |= masks.size () > 1;
+	if (rangeOrder && !rangeOrder->empty () && covered == submeshIndexCount) {
+	    plan.draws.clear ();
+	    for (const uint32_t rangeIndex : *rangeOrder) {
+		const auto& range = mesh.drawRanges.at (rangeIndex);
+		if (range.submeshIndex == submeshIndex)
+		    appendDraw (plan, submeshIndex, range.firstIndex, range.indexCount, rangeMasks[rangeIndex]);
+	    }
+	}
+	return plan;
+    }
+
+    std::vector<uint32_t> orderedRanges;
+    if (rangeOrder && !rangeOrder->empty ()) orderedRanges = *rangeOrder;
+    else {
+	for (uint32_t index = 0; index < mesh.drawRanges.size (); index++)
+	    if (mesh.drawRanges[index].submeshIndex == submeshIndex) orderedRanges.push_back (index);
+	std::stable_sort (orderedRanges.begin (), orderedRanges.end (), [&] (auto left, auto right) {
+	    return mesh.drawRanges[left].firstIndex < mesh.drawRanges[right].firstIndex;
+	});
+    }
+    std::vector<int32_t> ordinals (mesh.drawRanges.size (), -1);
+    for (size_t ordinal = 0; ordinal < orderedRanges.size (); ordinal++)
+	ordinals.at (orderedRanges[ordinal]) = static_cast<int32_t> (ordinal);
+
+    struct DescriptorOrder { int32_t minTarget = INT32_MAX, lastSource = -1; };
+    std::vector<DescriptorOrder> descriptorOrder (plan.masks.size ());
+    std::vector<size_t> descriptors (plan.masks.size ());
+    std::iota (descriptors.begin (), descriptors.end (), 0u);
+    for (size_t index = 0; index < plan.masks.size (); index++) {
+	const auto& descriptor = mesh.clippingDescriptors[index];
+	auto& state = descriptorOrder[index];
+	int32_t firstSource = INT32_MAX;
+	for (auto target : descriptor.targets) state.minTarget = std::min (state.minTarget, ordinals[target]);
+	for (auto source : descriptor.sources) {
+	    firstSource = std::min (firstSource, ordinals[source]);
+	    state.lastSource = std::max (state.lastSource, ordinals[source]);
+	}
+	// Native spans the ordered source endpoints, excluding this descriptor's targets.
+	auto& sources = plan.masks[index].sourceRanges;
+	sources.clear ();
+	for (int32_t ordinal = firstSource; ordinal <= state.lastSource; ordinal++) {
+	    const uint32_t range = orderedRanges[ordinal];
+	    if (std::find (descriptor.targets.begin (), descriptor.targets.end (), range) == descriptor.targets.end ())
+		sources.push_back (range);
+	}
+    }
+    std::stable_sort (descriptors.begin (), descriptors.end (), [&] (auto left, auto right) {
+	return descriptorOrder[left].minTarget < descriptorOrder[right].minTarget;
+    });
+
+    plan.draws.clear ();
+    for (size_t ordinal = 0; ordinal < orderedRanges.size (); ordinal++) {
+	const uint32_t rangeIndex = orderedRanges[ordinal];
+	const auto& range = mesh.drawRanges.at (rangeIndex);
+	if (range.submeshIndex != submeshIndex) continue;
+	if (rangeMasks[rangeIndex].empty ())
+	    appendDraw (plan, submeshIndex, range.firstIndex, range.indexCount, {});
+	// Native flushes ordinary geometry, then emits descriptors at their last source.
+	for (const size_t descriptorIndex : descriptors) {
+	    if (descriptorOrder[descriptorIndex].lastSource != static_cast<int32_t> (ordinal)) continue;
+	    const auto& targets = mesh.clippingDescriptors[descriptorIndex].targets;
+	    for (const uint32_t targetIndex : orderedRanges) {
+		if (std::find (targets.begin (), targets.end (), targetIndex) == targets.end ()) continue;
+		const auto& target = mesh.drawRanges[targetIndex];
+		appendDraw (plan, submeshIndex, target.firstIndex, target.indexCount, { descriptorIndex });
+	    }
 	}
     }
     return plan;
