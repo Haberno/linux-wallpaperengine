@@ -393,7 +393,7 @@ private:
 	std::vector<size_t> remaining;
 	CameraPathPlayback playback;
     };
-    /** Hidden cameras retain their queue and playhead until selected again. */
+    /** Nonselected sources retain independent queues; hidden sources park. */
     std::map<const CameraPathSource*, CameraPathSourceState> m_cameraPathSourceStates;
     std::optional<size_t> m_activeCameraPathIndex = std::nullopt;
     std::vector<size_t> m_remainingCameraPaths;

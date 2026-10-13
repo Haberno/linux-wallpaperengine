@@ -971,7 +971,7 @@ void CScene::renderFrame (const glm::ivec4& viewport) {
     // resting eye/orientation rather than the editor's top-level viewport.
     this->updateCameraObject ();
 
-    // Advance the active path before scripts read cursorWorldPosition and before
+    // Advance visible paths before scripts read cursorWorldPosition and before
     // any object renders. Script-driven camera visibility from the previous tick
     // selects the source, matching the normal one-frame property update cadence.
     this->updateCameraPath (glm::max (0.0f, this->getDeltaTime ()));
@@ -1689,13 +1689,45 @@ CScene::advanceCameraPath (const CameraPath& path, const CameraPathPlayback curr
 
 void CScene::updateCameraPath (const float deltaTime) {
     const CameraPathSource* source = this->findActiveCameraPathSource ();
-    if (source != this->m_activeCameraPathSource) {
-	if (this->m_activeCameraPathSource != nullptr) {
-	    this->m_cameraPathSourceStates[this->m_activeCameraPathSource] = {
-		this->m_activeCameraPathIndex, std::move (this->m_remainingCameraPaths),
-		{ this->m_cameraPathElapsed, this->m_cameraPathState }
-	    };
+    if (this->m_activeCameraPathSource != nullptr) {
+	this->m_cameraPathSourceStates[this->m_activeCameraPathSource] = {
+	    this->m_activeCameraPathIndex, std::move (this->m_remainingCameraPaths),
+	    { this->m_cameraPathElapsed, this->m_cameraPathState }
+	};
+    }
+
+    // Every visible camera samples its queue before the final visible camera
+    // supplies the view. Legacy scene paths advance only as the selected fallback.
+    for (const CameraPathSource& candidate : this->getScene ().camera.paths) {
+	if (candidate.paths.empty ()) continue;
+	if (candidate.objectId.has_value ()) {
+	    const CObject* object = this->getObject (*candidate.objectId);
+	    if (object == nullptr || !object->getObject ().groupVisible->value->getBool ()
+		|| !object->isVisibleThroughParents ()) {
+		continue;
+	    }
+	} else if (&candidate != source) {
+	    continue;
 	}
+
+	auto& state = this->m_cameraPathSourceStates[&candidate];
+	if (!state.index.has_value ()) {
+	    state.index = chooseCameraPathIndex (
+		std::nullopt, candidate.paths.size (), candidate.queueMode, state.remaining,
+		[this] { return this->m_cameraPathRandom (); }
+	    );
+	}
+	state.playback = advanceCameraPath (candidate.paths[*state.index], state.playback, deltaTime);
+	if ((state.playback.state & CameraPathFinished) != 0) {
+	    state.playback = { 0.0f, 0 };
+	    state.index = chooseCameraPathIndex (
+		state.index, candidate.paths.size (), candidate.queueMode, state.remaining,
+		[this] { return this->m_cameraPathRandom (); }
+	    );
+	}
+    }
+
+    if (source != this->m_activeCameraPathSource) {
 	this->m_activeCameraPathSource = source;
 	this->m_activeCameraPathIndex = std::nullopt;
 	this->m_remainingCameraPaths.clear ();
@@ -1705,39 +1737,15 @@ void CScene::updateCameraPath (const float deltaTime) {
 	    this->m_camera->resetTransform ();
 	    return;
 	}
-	const auto retained = this->m_cameraPathSourceStates.find (source);
-	if (retained != this->m_cameraPathSourceStates.end ()) {
-	    this->m_activeCameraPathIndex = retained->second.index;
-	    this->m_remainingCameraPaths = std::move (retained->second.remaining);
-	    this->m_cameraPathElapsed = retained->second.playback.elapsed;
-	    this->m_cameraPathState = retained->second.playback.state;
-	    this->m_cameraPathSourceStates.erase (retained);
-	} else {
-	    this->m_activeCameraPathIndex = chooseCameraPathIndex (
-		std::nullopt, source->paths.size (), source->queueMode, this->m_remainingCameraPaths,
-		[this] { return this->m_cameraPathRandom (); }
-	    );
-	}
     }
 
-    if (source == nullptr || source->paths.empty () || !this->m_activeCameraPathIndex.has_value ()) {
-	return;
-    }
-
-    const CameraPathPlayback playback = advanceCameraPath (
-	source->paths[*this->m_activeCameraPathIndex], { this->m_cameraPathElapsed, this->m_cameraPathState },
-	deltaTime
-    );
-    this->m_cameraPathElapsed = playback.elapsed;
-    this->m_cameraPathState = playback.state;
-    if ((this->m_cameraPathState & CameraPathFinished) != 0) {
-	this->m_cameraPathState = 0;
-	this->m_cameraPathElapsed = 0.0f;
-	this->m_activeCameraPathIndex = chooseCameraPathIndex (
-	    this->m_activeCameraPathIndex, source->paths.size (), source->queueMode, this->m_remainingCameraPaths,
-	    [this] { return this->m_cameraPathRandom (); }
-	);
-    }
+    if (source == nullptr || source->paths.empty ()) return;
+    auto& state = this->m_cameraPathSourceStates.at (source);
+    this->m_activeCameraPathIndex = state.index;
+    this->m_remainingCameraPaths = std::move (state.remaining);
+    this->m_cameraPathElapsed = state.playback.elapsed;
+    this->m_cameraPathState = state.playback.state;
+    this->m_cameraPathSourceStates.erase (source);
 
     const CameraPath& path = source->paths[*this->m_activeCameraPathIndex];
     const CameraTransform transform = path.evaluate (this->m_cameraPathElapsed, this->m_camera->getDefaultTransform ());
