@@ -1690,6 +1690,12 @@ CScene::advanceCameraPath (const CameraPath& path, const CameraPathPlayback curr
 void CScene::updateCameraPath (const float deltaTime) {
     const CameraPathSource* source = this->findActiveCameraPathSource ();
     if (source != this->m_activeCameraPathSource) {
+	if (this->m_activeCameraPathSource != nullptr) {
+	    this->m_cameraPathSourceStates[this->m_activeCameraPathSource] = {
+		this->m_activeCameraPathIndex, std::move (this->m_remainingCameraPaths),
+		{ this->m_cameraPathElapsed, this->m_cameraPathState }
+	    };
+	}
 	this->m_activeCameraPathSource = source;
 	this->m_activeCameraPathIndex = std::nullopt;
 	this->m_remainingCameraPaths.clear ();
@@ -1699,10 +1705,19 @@ void CScene::updateCameraPath (const float deltaTime) {
 	    this->m_camera->resetTransform ();
 	    return;
 	}
-	this->m_activeCameraPathIndex = chooseCameraPathIndex (
-	    std::nullopt, source->paths.size (), source->queueMode, this->m_remainingCameraPaths,
-	    [this] { return this->m_cameraPathRandom (); }
-	);
+	const auto retained = this->m_cameraPathSourceStates.find (source);
+	if (retained != this->m_cameraPathSourceStates.end ()) {
+	    this->m_activeCameraPathIndex = retained->second.index;
+	    this->m_remainingCameraPaths = std::move (retained->second.remaining);
+	    this->m_cameraPathElapsed = retained->second.playback.elapsed;
+	    this->m_cameraPathState = retained->second.playback.state;
+	    this->m_cameraPathSourceStates.erase (retained);
+	} else {
+	    this->m_activeCameraPathIndex = chooseCameraPathIndex (
+		std::nullopt, source->paths.size (), source->queueMode, this->m_remainingCameraPaths,
+		[this] { return this->m_cameraPathRandom (); }
+	    );
+	}
     }
 
     if (source == nullptr || source->paths.empty () || !this->m_activeCameraPathIndex.has_value ()) {

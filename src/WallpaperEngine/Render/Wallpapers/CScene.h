@@ -387,6 +387,13 @@ private:
     double m_sceneElapsedTime = 0.0;
     double m_sceneTime = 0.0;
     const CameraPathSource* m_activeCameraPathSource = nullptr;
+    struct CameraPathSourceState {
+	std::optional<size_t> index;
+	std::vector<size_t> remaining;
+	CameraPathPlayback playback;
+    };
+    /** Hidden cameras retain their queue and playhead until selected again. */
+    std::map<const CameraPathSource*, CameraPathSourceState> m_cameraPathSourceStates;
     std::optional<size_t> m_activeCameraPathIndex = std::nullopt;
     std::vector<size_t> m_remainingCameraPaths;
     float m_cameraPathElapsed = 0.0f;
