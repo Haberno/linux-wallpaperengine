@@ -5828,3 +5828,118 @@ TEST_CASE ("plane collisions use native current-position responses and strict bo
     CHECK (scaledPlane.position == glm::vec3 (3, 1, 7));
     CHECK (scaledPlane.velocity.y == Catch::Approx (58));
 }
+
+TEST_CASE ("stock quad collisions retain normalized bases and native null fields", "[particle][collisionquad]") {
+    WallpaperEngine::Data::Model::Project project {};
+    const auto object = WallpaperEngine::Data::Parsers::ObjectParser::parse (
+        WallpaperEngine::Data::JSON::JSON::parse (R"({"id":9,"particle":{"operator":[
+            {"name":"collisionquad","collisionbehavior":"slide","origin":"0 -100 0","size":"100 100"},
+            {"name":"collisionquad"},
+            {"name":"collisionquad","plane":"0 2 0","forward":"0 1 2","flags":3,"controlpoint":11},
+            {"name":"collisionquad","plane":null,"forward":null,"origin":null,"size":null,"bouncefactor":null},
+            {"name":"collisionquad","plane":"0 1 0","forward":"0 2 0"}
+        ]}})"), project
+    );
+    const auto* particle = object->as<Particle> ();
+    REQUIRE (particle != nullptr);
+    REQUIRE (particle->operators.size () == 5);
+    const auto* stock = particle->operators[0]->as<CollisionQuadOperator> ();
+    REQUIRE (stock != nullptr);
+    CHECK (stock->origin->value->getVec3 () == glm::vec3 (0, -100, 0));
+    CHECK (stock->size->value->getVec2 () == glm::vec2 (100));
+    CHECK (stock->behavior == ParticleCollisionBehavior::Slide);
+    const auto* defaults = particle->operators[1]->as<CollisionQuadOperator> ();
+    REQUIRE (defaults != nullptr);
+    CHECK (defaults->plane == glm::vec3 (0, 1, 0));
+    CHECK (defaults->right == glm::vec3 (1, 0, 0));
+    CHECK (defaults->forward == glm::vec3 (0, 0, 1));
+    CHECK (defaults->origin == nullptr);
+    CHECK (defaults->size == nullptr);
+    CHECK (defaults->bounceFactor->value->getFloat () == .5f);
+    CHECK (defaults->behavior == ParticleCollisionBehavior::Bounce);
+    CHECK (defaults->flags == 0);
+    CHECK (defaults->controlPoint == 0);
+    const auto* oblique = particle->operators[2]->as<CollisionQuadOperator> ();
+    REQUIRE (oblique != nullptr);
+    CHECK (oblique->plane == glm::vec3 (0, 1, 0));
+    CHECK (oblique->right == glm::vec3 (1, 0, 0));
+    CHECK (oblique->forward == glm::vec3 (0, 0, 1));
+    CHECK (oblique->flags == 3);
+    CHECK (oblique->controlPoint == 7);
+    const auto* nulls = particle->operators[3]->as<CollisionQuadOperator> ();
+    REQUIRE (nulls != nullptr);
+    CHECK (nulls->origin->value->getVec3 () == glm::vec3 (0));
+    CHECK (nulls->size->value->getVec2 () == glm::vec2 (0));
+    CHECK (nulls->bounceFactor->value->getFloat () == 0);
+    CHECK (std::isnan (nulls->plane.x));
+    CHECK (std::isnan (nulls->right.x));
+    CHECK (std::isnan (particle->operators[4]->as<CollisionQuadOperator> ()->forward.x));
+}
+
+TEST_CASE ("quad collisions use one-way crossing and current finite bounds", "[particle][collisionquad]") {
+    using WallpaperEngine::Render::Objects::applyParticleQuadCollision;
+    ParticleInstance original;
+    original.position = { 2, -4, 4 };
+    original.previousPosition = { 2, 1, 4 };
+    original.velocity = { 6, -8, 10 };
+    original.rotation = { 4, 5, 6 };
+    original.angularVelocity = { 1, 2, 3 };
+    original.age = 1;
+    original.lifetime = 7;
+    const glm::vec3 origin (1, -2, 3), plane (0, 1, 0), right (1, 0, 0), forward (0, 0, 1);
+    const struct { ParticleCollisionBehavior behavior; glm::vec3 velocity; } modes[] = {
+        { ParticleCollisionBehavior::Bounce, { 6, 2, 10 } },
+        { ParticleCollisionBehavior::Slide, { 6, 0, 10 } },
+        { ParticleCollisionBehavior::Stop, { 0, 0, 0 } },
+        { ParticleCollisionBehavior::Delete, { 6, -8, 10 } }
+    };
+    for (const auto& mode : modes) for (const bool stopRotation : { false, true }) {
+        ParticleInstance particle = original;
+        applyParticleQuadCollision (particle, origin, plane, right, forward, { 4, 3 }, .25f, mode.behavior, stopRotation);
+        CHECK (particle.position.x == 2);
+        CHECK (particle.position.y == Catch::Approx (mode.behavior == ParticleCollisionBehavior::Delete ? -4 : -1.9f));
+        CHECK (particle.position.z == 4);
+        CHECK (particle.velocity == mode.velocity);
+        CHECK (particle.age == (mode.behavior == ParticleCollisionBehavior::Delete ? 7 : 1));
+        CHECK (particle.angularVelocity == (stopRotation ? glm::vec3 (0) : original.angularVelocity));
+        CHECK (particle.rotation == original.rotation);
+        CHECK (particle.previousPosition == original.previousPosition);
+    }
+    for (const glm::vec3 miss : { glm::vec3 (5, -4, 4), glm::vec3 (-3, -4, 4),
+                                 glm::vec3 (2, -4, 6), glm::vec3 (2, -4, 0), glm::vec3 (6, -4, 4) }) {
+        ParticleInstance particle = original;
+        particle.position = miss;
+        applyParticleQuadCollision (particle, origin, plane, right, forward, { 4, 3 }, .25f, ParticleCollisionBehavior::Delete, true);
+        CHECK (particle.age == 1);
+        CHECK (particle.position == miss);
+        CHECK (particle.angularVelocity == original.angularVelocity);
+    }
+    for (const float previousY : { -2.0f, -3.0f }) {
+        ParticleInstance particle = original;
+        particle.previousPosition.y = previousY;
+        applyParticleQuadCollision (particle, origin, plane, right, forward, { 4, 3 }, .25f, ParticleCollisionBehavior::Bounce, true);
+        CHECK (particle.position == original.position);
+        CHECK (particle.velocity == original.velocity);
+        CHECK (particle.angularVelocity == original.angularVelocity);
+    }
+    ParticleInstance equality = original;
+    equality.position.y = -2;
+    applyParticleQuadCollision (equality, origin, plane, right, forward, { 4, 3 }, .25f, ParticleCollisionBehavior::Bounce, false);
+    CHECK (equality.position.y == -2);
+    CHECK (equality.velocity.y == 2);
+    ParticleInstance endpoint = original;
+    endpoint.previousPosition.x = -19;
+    endpoint.position.x = 4.9f;
+    endpoint.velocity.y = 8;
+    applyParticleQuadCollision (endpoint, origin, plane, right, forward, { 4, 3 }, .25f, ParticleCollisionBehavior::Bounce, false);
+    CHECK (endpoint.position.y == Catch::Approx (-1.9f));
+    CHECK (endpoint.velocity.y == -2);
+    ParticleInstance scaled = original;
+    applyParticleQuadCollision (scaled, origin, { 0, 2, 0 }, right, forward, { 4, 3 }, .25f, ParticleCollisionBehavior::Bounce, false);
+    CHECK (scaled.position.y == Catch::Approx (4.4f));
+    CHECK (scaled.velocity.y == 32);
+    ParticleInstance scaledBounds = original;
+    scaledBounds.position.z = 4.6f;
+    applyParticleQuadCollision (scaledBounds, origin, plane, right, { 0, 0, 2 }, { 4, 3 }, .25f, ParticleCollisionBehavior::Delete, false);
+    CHECK (scaledBounds.age == 1);
+}

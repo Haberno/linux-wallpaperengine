@@ -497,6 +497,26 @@ public:
     uint32_t controlPoint;
 };
 
+class CollisionQuadOperator : public ParticleOperatorBase {
+public:
+    CollisionQuadOperator (
+        glm::vec3 plane, glm::vec3 right, glm::vec3 forward, UserSettingUniquePtr origin,
+        UserSettingUniquePtr size, UserSettingUniquePtr bounceFactor,
+        ParticleCollisionBehavior behavior, uint32_t flags, uint32_t controlPoint
+    ) : plane (plane), right (right), forward (forward), origin (std::move (origin)), size (std::move (size)),
+        bounceFactor (std::move (bounceFactor)), behavior (behavior), flags (flags), controlPoint (controlPoint) { }
+    glm::vec3 plane;
+    glm::vec3 right;
+    glm::vec3 forward;
+    /** Omitted origin and size use the scene's native 2D/3D defaults. */
+    UserSettingUniquePtr origin;
+    UserSettingUniquePtr size;
+    UserSettingUniquePtr bounceFactor;
+    ParticleCollisionBehavior behavior;
+    uint32_t flags;
+    uint32_t controlPoint;
+};
+
 class CapVelocityOperator : public ParticleOperatorBase {
 public:
     CapVelocityOperator (UserSettingUniquePtr maxSpeed, glm::vec4 blendTimes) :

@@ -147,6 +147,12 @@ void applyParticlePlaneCollision (
     ParticleCollisionBehavior behavior, bool stopRotation
 );
 
+void applyParticleQuadCollision (
+    ParticleInstance& particle, const glm::vec3& origin, const glm::vec3& plane,
+    const glm::vec3& right, const glm::vec3& forward, const glm::vec2& halfSize, float bounceFactor,
+    ParticleCollisionBehavior behavior, bool stopRotation
+);
+
 void applyParticleAngularMovement (
     ParticleInstance& particle, const glm::vec3& force, float drag,
     float rawDelta, float forceDelta, float lifetimeWeight
@@ -298,6 +304,7 @@ protected:
     OperatorFunc createMaintainDistanceToControlPointOperator (const MaintainDistanceToControlPointOperator& op);
     OperatorFunc createMaintainDistanceBetweenControlPointsOperator (const MaintainDistanceBetweenControlPointsOperator& op);
     OperatorFunc createCollisionPlaneOperator (const CollisionPlaneOperator& op);
+    OperatorFunc createCollisionQuadOperator (const CollisionQuadOperator& op);
     OperatorFunc createCapVelocityOperator (const CapVelocityOperator& op);
     OperatorFunc createAngularMovementOperator (const AngularMovementOperator& op);
     OperatorFunc createAlphaFadeOperator (const AlphaFadeOperator& op);

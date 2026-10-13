@@ -1244,12 +1244,25 @@ ParticleOperatorUniquePtr ObjectParser::parseParticleOperator (const JSON& it, c
 	return std::make_unique<MovementOperator> (
 	    it.user ("drag", properties, 0.0f), it.user ("gravity", properties, glm::vec3 (0.0f))
 	);
-    } else if (name == "collisionplane") {
+    } else if (name == "collisionplane" || name == "collisionquad") {
         const std::string behaviorName = it.optional<std::string> ("collisionbehavior", "bounce");
         const auto behavior = behaviorName == "slide" ? ParticleCollisionBehavior::Slide
             : behaviorName == "stop" ? ParticleCollisionBehavior::Stop
             : behaviorName == "delete" ? ParticleCollisionBehavior::Delete : ParticleCollisionBehavior::Bounce;
         const glm::vec3 plane = it.user ("plane", properties, it.contains ("plane") ? glm::vec3 (0.0f) : glm::vec3 (0.0f, 1.0f, 0.0f))->value->getVec3 ();
+        if (name == "collisionquad") {
+            const glm::vec3 normal = glm::normalize (plane);
+            const glm::vec3 forward = glm::normalize (it.user ("forward", properties,
+                it.contains ("forward") ? glm::vec3 (0.0f) : glm::vec3 (0.0f, 0.0f, 1.0f))->value->getVec3 ());
+            const glm::vec3 right = glm::normalize (glm::cross (normal, forward));
+            return std::make_unique<CollisionQuadOperator> (
+                normal, right, glm::normalize (glm::cross (right, normal)),
+                it.contains ("origin") ? it.user ("origin", properties, glm::vec3 (0.0f)) : nullptr,
+                it.contains ("size") ? it.user ("size", properties, glm::vec2 (0.0f)) : nullptr,
+                it.user ("bouncefactor", properties, it.contains ("bouncefactor") ? 0.0f : 0.5f), behavior,
+                it.optional ("flags", 0u), std::min (static_cast<uint32_t> (it.optional ("controlpoint", 0)), 7u)
+            );
+        }
         return std::make_unique<CollisionPlaneOperator> (
             glm::normalize (plane), it.contains ("distance") ? it.user ("distance", properties, 0.0f) : nullptr,
             it.user ("bouncefactor", properties, it.contains ("bouncefactor") ? 0.0f : 0.5f), behavior, it.optional ("flags", 0u),

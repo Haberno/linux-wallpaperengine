@@ -2723,6 +2723,8 @@ void CParticle::setupOperators () {
 	    func = createMovementOperator (*op->as<MovementOperator> ());
 	} else if (op->is<CollisionPlaneOperator> ()) {
 	    func = createCollisionPlaneOperator (*op->as<CollisionPlaneOperator> ());
+	} else if (op->is<CollisionQuadOperator> ()) {
+	    func = createCollisionQuadOperator (*op->as<CollisionQuadOperator> ());
 	} else if (op->is<CapVelocityOperator> ()) {
 	    func = createCapVelocityOperator (*op->as<CapVelocityOperator> ());
 	} else if (op->is<ReduceMovementNearControlPointOperator> ()) {
@@ -2843,6 +2845,64 @@ OperatorFunc CParticle::createCollisionPlaneOperator (const CollisionPlaneOperat
             auto& particle = particles[i];
             if (particle.shouldSimulate ()) applyParticlePlaneCollision (
                 particle, currentPlane, distance, bounceFactor, op.behavior, (op.flags & 2) != 0
+            );
+        }
+    };
+}
+
+void WallpaperEngine::Render::Objects::applyParticleQuadCollision (
+    ParticleInstance& particle, const glm::vec3& origin, const glm::vec3& plane,
+    const glm::vec3& right, const glm::vec3& forward, const glm::vec2& halfSize, const float bounceFactor,
+    const ParticleCollisionBehavior behavior, const bool stopRotation
+) {
+    const glm::vec3 relative = particle.position - origin;
+    const float projection = glm::dot (relative, plane);
+    // Native quad tests a one-way crossing and the current endpoint's strict bounds.
+    if (!(glm::dot (particle.previousPosition - origin, plane) > 0.0f && projection <= 0.0f
+          && std::abs (glm::dot (relative, forward)) < halfSize.y
+          && std::abs (glm::dot (relative, right)) < halfSize.x)) return;
+    if (behavior == ParticleCollisionBehavior::Delete) {
+        particle.age = particle.lifetime;
+    } else {
+        particle.position -= plane * (1.05f * projection);
+        if (behavior == ParticleCollisionBehavior::Stop) particle.velocity = glm::vec3 (0.0f);
+        else {
+            const float response = behavior == ParticleCollisionBehavior::Slide ? 1.0f : 1.0f + bounceFactor;
+            particle.velocity -= plane * (response * glm::dot (particle.velocity, plane));
+        }
+    }
+    if (stopRotation) particle.angularVelocity = glm::vec3 (0.0f);
+}
+
+OperatorFunc CParticle::createCollisionQuadOperator (const CollisionQuadOperator& op) {
+    includeControlPoint (op.controlPoint);
+    const bool perspective = getScene ().getScene ().camera.projection.isPerspective;
+    const glm::vec3 defaultOrigin = perspective ? glm::vec3 (0.0f) : glm::vec3 (0.0f, -150.0f, 0.0f);
+    const glm::vec2 defaultSize = perspective ? glm::vec2 (1.0f) : glm::vec2 (200.0f);
+    const glm::vec3 flipY (1.0f, -1.0f, 1.0f);
+    return [this, &op, defaultOrigin, defaultSize, flipY] (
+        std::vector<ParticleInstance>& particles, uint32_t count,
+        const std::vector<ControlPointData>& controlPoints, float, float
+    ) {
+        glm::vec3 origin = (op.origin ? op.origin->value->getVec3 () : defaultOrigin) * flipY;
+        glm::vec3 plane = op.plane * flipY;
+        glm::vec3 right = op.right * flipY;
+        glm::vec3 forward = op.forward * flipY;
+        if ((op.flags & 1) != 0) {
+            const auto& point = controlPoints[op.controlPoint];
+            const glm::mat3 basis = (m_particle.flags & 1) != 0
+                ? glm::mat3 (m_controlPointTransform) * point.orientation : point.orientation;
+            origin = point.position;
+            plane = basis * plane;
+            right = basis * right;
+            forward = basis * forward;
+        }
+        const glm::vec2 halfSize = (op.size ? op.size->value->getVec2 () : defaultSize) * 0.5f;
+        for (uint32_t i = 0; i < count; ++i) {
+            auto& particle = particles[i];
+            if (particle.shouldSimulate ()) applyParticleQuadCollision (
+                particle, origin, plane, right, forward, halfSize, op.bounceFactor->value->getFloat (),
+                op.behavior, (op.flags & 2) != 0
             );
         }
     };
