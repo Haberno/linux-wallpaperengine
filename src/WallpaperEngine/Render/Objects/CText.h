@@ -53,10 +53,16 @@ struct TextLayoutLimits {
     bool operator== (const TextLayoutLimits&) const = default;
 };
 
+struct TextGlyphMetrics {
+    float advance;
+    float right; // hinted outline CBox xMax, relative to the glyph pen
+};
+
 /** Wrap at spaces, split oversized words on UTF-8 character boundaries, and
  * truncate to the authored row count with a width-fitting ellipsis if enabled. */
 std::vector<std::string> layoutTextLines (
-    const std::string& text, const TextLayoutLimits& limits, const std::function<float (uint32_t)>& glyphAdvance
+    const std::string& text, const TextLayoutLimits& limits, const std::function<TextGlyphMetrics (uint32_t)>& glyphMetrics,
+    float spacing = 0.0f
 );
 
 /**

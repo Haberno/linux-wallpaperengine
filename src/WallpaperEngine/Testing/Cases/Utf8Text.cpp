@@ -9,6 +9,7 @@ using WallpaperEngine::Render::Objects::computeTextAlignmentOffset;
 using WallpaperEngine::Render::Objects::computeTextEffectLayout;
 using WallpaperEngine::Render::Objects::layoutTextLines;
 using WallpaperEngine::Render::Objects::nextUtf8Codepoint;
+using WallpaperEngine::Render::Objects::TextGlyphMetrics;
 
 TEST_CASE ("text spacing defaults to zero and preserves signed fractional pixels", "[text][spacing]") {
     const WallpaperEngine::Data::Model::Project project {};
@@ -54,25 +55,42 @@ TEST_CASE ("text spacing retains scripts and samples both animation channels", "
 
 TEST_CASE ("text wrapping retains fractional glyph advances", "[text][spacing]") {
     REQUIRE (
-	layoutTextLines ("abc", { .width = 30.5f }, [] (uint32_t) { return 10.25f; })
+	layoutTextLines ("abc", { .width = 30.5f }, [] (uint32_t) { return TextGlyphMetrics { 10.25f, 10.25f }; })
 	== std::vector<std::string> { "ab", "c" }
     );
     REQUIRE (
-	layoutTextLines ("abc", { .width = 29.0f }, [] (uint32_t) { return 9.75f; })
+	layoutTextLines ("abc", { .width = 29.0f }, [] (uint32_t) { return TextGlyphMetrics { 9.75f, 9.75f }; })
 	== std::vector<std::string> { "ab", "c" }
+    );
+}
+
+TEST_CASE ("text width uses signed pen and right ink bounds", "[text][spacing]") {
+    const auto inset = [] (uint32_t) { return TextGlyphMetrics { 10, 8 }; };
+    REQUIRE (layoutTextLines ("AB", { .width = 21 }, inset, 3) == std::vector<std::string> { "AB" });
+    REQUIRE (layoutTextLines ("AB", { .width = 20 }, inset, 3) == std::vector<std::string> { "A", "B" });
+    REQUIRE (layoutTextLines ("AB", { .width = 14 }, inset, -4) == std::vector<std::string> { "AB" });
+    REQUIRE (layoutTextLines ("AB  ", { .width = 18 }, inset) == std::vector<std::string> { "AB  " });
+    REQUIRE (
+	layoutTextLines ("AB", { .width = 20 }, [] (uint32_t code) {
+	    return TextGlyphMetrics { 10, code == 'B' ? 14.0f : 8.0f };
+	})
+	== std::vector<std::string> { "A", "B" }
     );
 }
 
 TEST_CASE ("text ellipsis fitting retains fractional glyph advances", "[text][spacing]") {
     REQUIRE (
 	layoutTextLines ("abc\ndef", { .width = 36.0f, .rows = 1, .ellipsis = true },
-	    [] (uint32_t code) { return code == '.' ? 2.5f : 10.5f; })
-	== std::vector<std::string> { "ab..." }
+	    [] (uint32_t code) {
+		const float advance = code == 0x2026 ? 7.5f : 10.5f;
+		return TextGlyphMetrics { advance, advance };
+	    })
+	== std::vector<std::string> { "ab…" }
     );
 }
 
 TEST_CASE ("text width wraps words and narrow vertical dates without splitting UTF-8") {
-    const auto advance = [] (uint32_t) { return 10; };
+    const auto advance = [] (uint32_t) { return TextGlyphMetrics { 10, 10 }; };
     REQUIRE (
 	layoutTextLines ("Wed\n9/Sep/2026", { .width = 10 }, advance)
 	== std::vector<std::string> { "W", "e", "d", "9", "/", "S", "e", "p", "/", "2", "0", "2", "6" }
@@ -90,14 +108,25 @@ TEST_CASE ("text width wraps words and narrow vertical dates without splitting U
 }
 
 TEST_CASE ("text row limits truncate with a width-fitting ellipsis only when needed") {
-    const auto advance = [] (uint32_t code) { return code == '.' ? 2 : 10; };
+    const auto advance = [] (uint32_t code) {
+	const float advance = code == 0x2026 ? 6 : code == '.' ? 2 : 10;
+	return TextGlyphMetrics { advance, advance };
+    };
     REQUIRE (
 	layoutTextLines ("Code therapy w / R...", { .width = 120, .rows = 1, .ellipsis = true }, advance)
-	== std::vector<std::string> { "Code therap..." }
+	== std::vector<std::string> { "Code therap…" }
     );
     REQUIRE (
 	layoutTextLines ("é画😀\nmore", { .width = 30, .rows = 1, .ellipsis = true }, advance)
-	== std::vector<std::string> { "é画..." }
+	== std::vector<std::string> { "é画…" }
+    );
+    REQUIRE (
+	layoutTextLines ("é\nmore", { .width = 1, .rows = 1, .ellipsis = true }, advance)
+	== std::vector<std::string> { "é" }
+    );
+    REQUIRE (
+	layoutTextLines ("abc…\ndef", { .rows = 1, .ellipsis = true }, advance)
+	== std::vector<std::string> { "abc…" }
     );
     REQUIRE (layoutTextLines ("abc\ndef", { .rows = 1 }, advance) == std::vector<std::string> { "abc" });
     REQUIRE (

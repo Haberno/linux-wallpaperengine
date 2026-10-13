@@ -11,6 +11,7 @@
 
 #include <ft2build.h>
 #include FT_FREETYPE_H
+#include FT_GLYPH_H
 #include <fontconfig/fontconfig.h>
 
 #include <glm/gtc/matrix_transform.hpp>
@@ -34,6 +35,19 @@
 using namespace WallpaperEngine::Render::Objects;
 
 namespace {
+TextGlyphMetrics measureTextGlyph (FT_Face face, const uint32_t code, const FT_Int32 advanceFlags) {
+    FT_Set_Transform (face, nullptr, nullptr);
+    if (FT_Load_Char (face, code, advanceFlags) != 0) return { 0.0f, 0.0f };
+    const float advance = static_cast<float> (face->glyph->advance.x >> 6);
+    if (FT_Load_Char (face, code, FT_LOAD_NO_BITMAP) != 0) return { advance, 0.0f };
+    FT_Glyph glyph;
+    if (FT_Get_Glyph (face->glyph, &glyph) != 0) return { advance, 0.0f };
+    FT_BBox bounds;
+    FT_Glyph_Get_CBox (glyph, FT_GLYPH_BBOX_PIXELS, &bounds);
+    FT_Done_Glyph (glyph);
+    return { advance, static_cast<float> (bounds.xMax) };
+}
+
 // Fall back to a system font if the authored embedded font cannot be loaded.
 const std::vector<std::string> kFontCandidates = {
     "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
@@ -151,15 +165,16 @@ uint32_t WallpaperEngine::Render::Objects::nextUtf8Codepoint (const std::string&
 }
 
 std::vector<std::string> WallpaperEngine::Render::Objects::layoutTextLines (
-    const std::string& text, const TextLayoutLimits& limits, const std::function<float (uint32_t)>& glyphAdvance
+    const std::string& text, const TextLayoutLimits& limits, const std::function<TextGlyphMetrics (uint32_t)>& glyphMetrics,
+    const float spacing
 ) {
     struct Glyph {
 	size_t begin;
 	size_t end;
 	uint32_t code;
-	float advance;
+	TextGlyphMetrics metrics;
     };
-    const auto whitespace = [] (uint32_t code) { return code == ' ' || code == '\t'; };
+    const auto whitespace = [] (uint32_t code) { return code == ' ' || code == '\t' || code == '\r'; };
     std::vector<std::string> lines;
     for (size_t paragraph = 0, end = 0; end <= text.size (); end++) {
 	if (end != text.size () && text[end] != '\n') {
@@ -173,7 +188,7 @@ std::vector<std::string> WallpaperEngine::Render::Objects::layoutTextLines (
 	for (size_t offset = paragraph; offset < paragraphEnd;) {
 	    const size_t begin = offset;
 	    const auto code = nextUtf8Codepoint (text, offset);
-	    glyphs.push_back ({ begin, offset, code, glyphAdvance (code) });
+	    glyphs.push_back ({ begin, offset, code, glyphMetrics (code) });
 	}
 	if (glyphs.empty ()) {
 	    lines.emplace_back ();
@@ -184,10 +199,11 @@ std::vector<std::string> WallpaperEngine::Render::Objects::layoutTextLines (
 	    size_t stop = start;
 	    for (; stop < glyphs.size (); stop++) {
 		// Always consume at least one glyph, even if it alone exceeds the limit.
-		if (limits.width > 0.0f && stop > start && width + glyphs[stop].advance > limits.width) {
+		if (limits.width > 0.0f && stop > start && !whitespace (glyphs[stop].code)
+		    && width + glyphs[stop].metrics.right > limits.width) {
 		    break;
 		}
-		width += glyphs[stop].advance;
+		width += glyphs[stop].metrics.advance + spacing;
 		if (whitespace (glyphs[stop].code)) {
 		    lastSpace = stop;
 		}
@@ -216,29 +232,34 @@ std::vector<std::string> WallpaperEngine::Render::Objects::layoutTextLines (
     }
     if (limits.rows > 0 && lines.size () > limits.rows) {
 	lines.resize (limits.rows);
-	if (limits.ellipsis) {
+	if (limits.ellipsis && !lines.back ().ends_with ("…")) {
 	    auto& last = lines.back ();
 	    const auto measure = [&] (const std::string& value) {
-		float width = 0.0f;
+		float pen = 0.0f;
+		float right = 0.0f;
 		for (size_t offset = 0; offset < value.size ();) {
-		    width += glyphAdvance (nextUtf8Codepoint (value, offset));
+		    const auto glyph = glyphMetrics (nextUtf8Codepoint (value, offset));
+		    right = pen + glyph.right;
+		    pen += glyph.advance;
 		}
-		return width;
+		return right;
 	    };
-	    std::string dots = "...";
-	    while (limits.width > 0.0f && dots.size () > 1 && measure (dots) > limits.width) {
-		dots.pop_back ();
-	    }
+	    const std::string ellipsis = "…";
+	    const std::string original = last;
 	    while (!last.empty ()
 		   && (whitespace (static_cast<unsigned char> (last.back ()))
-		       || (limits.width > 0.0f && measure (last) + measure (dots) > limits.width))) {
+		       || (limits.width > 0.0f && measure (last + ellipsis) > limits.width))) {
 		size_t offset = last.size () - 1;
 		while (offset > 0 && (static_cast<unsigned char> (last[offset]) & 0xC0) == 0x80) {
 		    offset--;
 		}
 		last.resize (offset);
 	    }
-	    last += dots;
+	    if (last.empty () && !original.empty () && limits.width > 0.0f && measure (ellipsis) > limits.width) {
+		last = original;
+	    } else {
+		last += ellipsis;
+	    }
 	}
     }
     return lines;
@@ -1152,10 +1173,9 @@ glm::vec2 CText::getSize () {
 	FT_Set_Transform (face, nullptr, &delta);
 	return FT_Load_Char (face, code, flags) == 0 ? face->glyph : nullptr;
     };
-    const auto lines = layoutTextLines (text, currentLayoutLimits (), [&loadGlyph, &spacing] (uint32_t code) {
-	const auto slot = loadGlyph (code, FT_LOAD_NO_HINTING);
-	return slot != nullptr ? static_cast<float> (slot->advance.x >> 6) + spacing.x : 0.0f;
-    });
+    const auto lines = layoutTextLines (text, currentLayoutLimits (), [this] (uint32_t code) {
+	return measureTextGlyph (fontForGlyph (code), code, FT_LOAD_NO_HINTING);
+    }, spacing.x);
     std::vector<float> widths;
     float maxWidth = 0.0f;
     for (const auto& line : lines) {
@@ -1293,10 +1313,9 @@ void CText::rebuildTextureFrom (const std::string& text) {
 	float x = 0.0f;
     };
     std::vector<Line> lines;
-    for (auto& line : layoutTextLines (text, m_lastLayoutLimits, [this, &loadGlyph] (uint32_t code) {
-	     const auto slot = loadGlyph (code, FT_LOAD_DEFAULT);
-	     return slot != nullptr ? static_cast<float> (slot->advance.x >> 6) + m_lastSpacing.x : 0.0f;
-	 })) {
+    for (auto& line : layoutTextLines (text, m_lastLayoutLimits, [this] (uint32_t code) {
+	     return measureTextGlyph (fontForGlyph (code), code, FT_LOAD_DEFAULT);
+	 }, m_lastSpacing.x)) {
 	lines.push_back ({ .text = std::move (line) });
     }
 
