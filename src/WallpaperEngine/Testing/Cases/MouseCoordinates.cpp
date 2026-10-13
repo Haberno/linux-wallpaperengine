@@ -394,13 +394,52 @@ TEST_CASE ("Wallpaper Engine camera path startup fade envelope") {
     CHECK (CScene::calculateCameraFadeAlpha (1.0f, 0.0f) == 0.0f);
 }
 
-TEST_CASE ("Camera path queue selection supports sequence and no-repeat random") {
-    CHECK (CScene::chooseCameraPathIndex (std::nullopt, 3, "sequence", 2) == 0);
-    CHECK (CScene::chooseCameraPathIndex (0, 3, "sequence", 2) == 1);
-    CHECK (CScene::chooseCameraPathIndex (2, 3, "sequence", 2) == 0);
-    CHECK (CScene::chooseCameraPathIndex (std::nullopt, 3, "random", 5) == 2);
-    CHECK (CScene::chooseCameraPathIndex (1, 3, "random", 1) == 2);
-    CHECK (CScene::chooseCameraPathIndex (2, 3, "random", 1) == 1);
+TEST_CASE ("Camera path queues exhaust random pools with native bounded draws", "[camera][random-queue]") {
+    std::vector<size_t> remaining;
+    size_t consumed = 0;
+    const auto unusedRandom = [&consumed] { ++consumed; return 1U; };
+    SECTION ("Sequential and empty queues do not consume random values") {
+	CHECK (CScene::chooseCameraPathIndex (std::nullopt, 0, "random", remaining, unusedRandom) == 0);
+	CHECK (CScene::chooseCameraPathIndex (std::nullopt, 3, "sequence", remaining, unusedRandom) == 0);
+	CHECK (CScene::chooseCameraPathIndex (0, 3, "sequence", remaining, unusedRandom) == 1);
+	CHECK (CScene::chooseCameraPathIndex (2, 3, "sequential", remaining, unusedRandom) == 0);
+	CHECK (consumed == 0);
+    }
+    SECTION ("Each pool plays every shot before refill without an immediate repeat") {
+	const std::vector<uint32_t> words { 1, 1, 1, 0xffffffffU, 0xffffffffU, 0xffffffffU };
+	const auto nextRandom = [&] { REQUIRE (consumed < words.size ()); return words[consumed++]; };
+	std::optional<size_t> current;
+	for (const size_t expected : { 0U, 1U, 2U, 0U, 2U, 1U }) {
+	    current = CScene::chooseCameraPathIndex (current, 3, "random", remaining, nextRandom);
+	    CHECK (*current == expected);
+	}
+	CHECK (consumed == words.size ());
+    }
+    SECTION ("Multiply-high selection retains the order of remaining shots") {
+	const std::vector<uint32_t> words { 0x40000000U, 0xffffffffU, 0x80000000U, 1 };
+	const auto nextRandom = [&] { REQUIRE (consumed < words.size ()); return words[consumed++]; };
+	std::optional<size_t> current;
+	for (const size_t expected : { 1U, 3U, 2U, 0U }) {
+	    current = CScene::chooseCameraPathIndex (current, 4, "random", remaining, nextRandom);
+	    CHECK (*current == expected);
+	}
+	CHECK (consumed == words.size ());
+    }
+    SECTION ("Rejected low products retry without selecting a shot") {
+	const std::vector<uint32_t> words { 0, 1, 0xffffffffU, 1 };
+	const auto nextRandom = [&] { REQUIRE (consumed < words.size ()); return words[consumed++]; };
+	std::optional<size_t> current;
+	for (const size_t expected : { 0U, 2U, 1U }) {
+	    current = CScene::chooseCameraPathIndex (current, 3, "random", remaining, nextRandom);
+	    CHECK (*current == expected);
+	}
+	CHECK (consumed == words.size ());
+    }
+    SECTION ("A single shot repeats and still consumes a draw") {
+	CHECK (CScene::chooseCameraPathIndex (std::nullopt, 1, "random", remaining, unusedRandom) == 0);
+	CHECK (CScene::chooseCameraPathIndex (0, 1, "random", remaining, unusedRandom) == 0);
+	CHECK (consumed == 2);
+    }
 }
 
 TEST_CASE ("Camera object transform follows its world-space parent rig") {

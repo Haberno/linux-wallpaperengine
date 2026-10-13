@@ -151,7 +151,8 @@ public:
     calculateFogParams (float start, float end, float startDensity, float endDensity);
     [[nodiscard]] static float calculateCameraFadeAlpha (float elapsedTime, float duration);
     [[nodiscard]] static size_t chooseCameraPathIndex (
-	std::optional<size_t> current, size_t count, const std::string& queueMode, uint32_t randomValue
+	std::optional<size_t> current, size_t count, const std::string& queueMode,
+	std::vector<size_t>& remaining, const std::function<uint32_t ()>& nextRandom
     );
 
     /** Playhead of the shot currently on screen. `state` carries the runtime
@@ -387,6 +388,7 @@ private:
     double m_sceneTime = 0.0;
     const CameraPathSource* m_activeCameraPathSource = nullptr;
     std::optional<size_t> m_activeCameraPathIndex = std::nullopt;
+    std::vector<size_t> m_remainingCameraPaths;
     float m_cameraPathElapsed = 0.0f;
     /** Runtime playback bits for the active shot (reversed/finished). */
     uint32_t m_cameraPathState = 0;

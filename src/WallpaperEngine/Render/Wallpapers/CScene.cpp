@@ -1422,24 +1422,36 @@ float CScene::getSceneFadeAlpha () const {
 
 size_t CScene::chooseCameraPathIndex (
     const std::optional<size_t> current, const size_t count, const std::string& queueMode,
-    const uint32_t randomValue
+    std::vector<size_t>& remaining, const std::function<uint32_t ()>& nextRandom
 ) {
-    if (count <= 1) {
+    if (count == 0) {
 	return 0;
     }
     if (queueMode != "random") {
 	return current.has_value () ? (*current + 1) % count : 0;
     }
-    if (!current.has_value ()) {
-	return randomValue % count;
+    if (remaining.empty ()) {
+	remaining.resize (count);
+	std::iota (remaining.begin (), remaining.end (), 0);
     }
 
-    // Random queues do not immediately repeat the shot that just ended.
-    size_t candidate = randomValue % (count - 1);
-    if (candidate >= *current) {
-	candidate++;
+    // Native uses multiply-high selection with rejection, rather than remainder.
+    const uint32_t range = static_cast<uint32_t> (remaining.size ());
+    const uint32_t threshold = (0U - range) % range;
+    uint64_t product;
+    do {
+	product = static_cast<uint64_t> (nextRandom ()) * range;
+    } while (static_cast<uint32_t> (product) < threshold);
+    size_t slot = product >> 32;
+
+    // At a refill boundary native skips a repeated shot by advancing the slot;
+    // it neither removes the previous shot from the pool nor draws again.
+    if (remaining.size () > 1 && current.has_value () && remaining[slot] == *current) {
+	slot = (slot + 1) % remaining.size ();
     }
-    return candidate;
+    const size_t selected = remaining[slot];
+    remaining.erase (remaining.begin () + static_cast<std::ptrdiff_t> (slot));
+    return selected;
 }
 
 std::vector<size_t>
@@ -1680,6 +1692,7 @@ void CScene::updateCameraPath (const float deltaTime) {
     if (source != this->m_activeCameraPathSource) {
 	this->m_activeCameraPathSource = source;
 	this->m_activeCameraPathIndex = std::nullopt;
+	this->m_remainingCameraPaths.clear ();
 	this->m_cameraPathElapsed = 0.0f;
 	this->m_cameraPathState = 0;
 	if (source == nullptr || source->paths.empty ()) {
@@ -1687,7 +1700,8 @@ void CScene::updateCameraPath (const float deltaTime) {
 	    return;
 	}
 	this->m_activeCameraPathIndex = chooseCameraPathIndex (
-	    std::nullopt, source->paths.size (), source->queueMode, this->m_cameraPathRandom ()
+	    std::nullopt, source->paths.size (), source->queueMode, this->m_remainingCameraPaths,
+	    [this] { return this->m_cameraPathRandom (); }
 	);
     }
 
@@ -1705,7 +1719,8 @@ void CScene::updateCameraPath (const float deltaTime) {
 	this->m_cameraPathState = 0;
 	this->m_cameraPathElapsed = 0.0f;
 	this->m_activeCameraPathIndex = chooseCameraPathIndex (
-	    this->m_activeCameraPathIndex, source->paths.size (), source->queueMode, this->m_cameraPathRandom ()
+	    this->m_activeCameraPathIndex, source->paths.size (), source->queueMode, this->m_remainingCameraPaths,
+	    [this] { return this->m_cameraPathRandom (); }
 	);
     }
 
