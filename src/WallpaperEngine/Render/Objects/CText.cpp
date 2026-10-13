@@ -330,7 +330,7 @@ std::vector<TextShapedLine> WallpaperEngine::Render::Objects::layoutShapedTextLi
                 while (offset > 0 && (static_cast<unsigned char> (last.text[offset]) & 0xC0) == 0x80) offset--;
                 last.text.resize (offset);
             }
-            if (last.text.empty () && !original.empty () && limits.width > 0.0f && measure ("…") > limits.width) {
+            if (last.text.empty () && !original.empty ()) {
                 last.text = original;
             } else {
                 last.text += "…";
