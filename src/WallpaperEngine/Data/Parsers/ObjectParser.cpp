@@ -978,6 +978,14 @@ ParticleEmitter ObjectParser::parseParticleEmitter (const JSON& it) {
 	return defaultValue;
     };
 
+    auto parseOffset = [&] (const char* fieldName) -> std::optional<glm::vec3> {
+	WallpaperEngine::Data::Utils::JsonTelemetry::recordAccess (fieldName);
+	const auto fieldIt = it.find (fieldName);
+	if (name != "layerimage" || fieldIt == it.end ()) return std::nullopt;
+	if (fieldIt->is_string () && fieldIt->get<std::string> ().empty ()) return glm::vec3 (0.0f);
+	return parseVec3 (fieldName, glm::vec3 (0.0f));
+    };
+
     auto parseIVec3 = [&] (const char* fieldName, const glm::ivec3& defaultValue) -> glm::ivec3 {
 	WallpaperEngine::Data::Utils::JsonTelemetry::recordAccess (fieldName);
 	const auto fieldIt = it.find (fieldName);
@@ -1035,6 +1043,8 @@ ParticleEmitter ObjectParser::parseParticleEmitter (const JSON& it) {
 	    .maxToEmitPerPeriod = it.optional ("maxtoemitperperiod", 0u),
 	    .defaultDirections = name == "boxrandom" && !it.contains ("directions"),
 	    .defaultDistanceMax = name == "boxrandom" && !it.contains ("distancemax"),
+	    .offsetMin = parseOffset ("offsetmin"),
+	    .offsetMax = parseOffset ("offsetmax"),
 	};
     } catch (nlohmann::json::exception& e) {
 	sLog.error ("Error parsing emitter: ", e.what ());

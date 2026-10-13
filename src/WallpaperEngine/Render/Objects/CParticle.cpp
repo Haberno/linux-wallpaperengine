@@ -1652,8 +1652,16 @@ bool CParticle::updateLayerImageCache (LayerImageCache& cache) {
 }
 
 EmitterFunc CParticle::createLayerImageEmitter (const ParticleEmitter& emitter, const uint32_t imageIndex) {
-    // Refresh, motion inheritance, masks and random offsets remain separate paths.
-    if (emitter.flags != 0 && emitter.flags != 65536) return {};
+    // Refresh, motion inheritance and masks remain separate paths.
+    if ((emitter.flags & ~(65536u | 524288u)) != 0) return {};
+    const bool perspective = getScene ().getScene ().camera.projection.isPerspective;
+    const glm::vec3 offsetMin = emitter.offsetMin.value_or (
+	perspective ? glm::vec3 (0.0f) : glm::vec3 (-5.0f, -5.0f, 0.0f)
+    );
+    const glm::vec3 offsetMax = emitter.offsetMax.value_or (
+	perspective ? glm::vec3 (0.0f) : glm::vec3 (5.0f, 5.0f, 0.0f)
+    );
+    const glm::vec3 offsetSpan = offsetMax - offsetMin;
     auto cache = std::make_shared<LayerImageCache> ();
     const ObjectDependency* binding = nullptr;
     for (const auto& dependency : m_particle.typedDependencies) {
@@ -1665,7 +1673,7 @@ EmitterFunc CParticle::createLayerImageEmitter (const ParticleEmitter& emitter, 
     cache->source = dynamic_cast<const CImage*> (getScene ().getObject (cache->sourceId));
     if (!cache->source) return {};
     DynamicValue* countOverride = getInstanceOverride ().count->value.get ();
-    return [this, emitter, cache, countOverride, emissionTimer = 0.0f,
+    return [this, emitter, cache, countOverride, offsetMin, offsetSpan, emissionTimer = 0.0f,
 	    delayTimer = emitter.delay, durationTimer = 0.0f, remaining = emitter.instantaneous]
 	(std::vector<ParticleInstance>& particles, uint32_t& count, float dt, uint32_t burst) mutable {
 	const Data::Utils::ScopeGuard pending ([&] {
@@ -1711,7 +1719,16 @@ EmitterFunc CParticle::createLayerImageEmitter (const ParticleEmitter& emitter, 
 	    p.remapSlot = slot;
 	    p.nativeSlotState = usesNativeParticleSlots ();
 	    const auto& sample = cache->samples[select (m_rng)];
-	    p.position = glm::vec3 (sourceToBirth * glm::vec4 (sample.x, -sample.y, 0.0f, 1.0f));
+	    glm::vec3 position (sample.x, -sample.y, 0.0f);
+	    if ((emitter.flags & 524288) != 0) {
+		// Offsets share the native sample basis and precede the source transform.
+		for (int axis = 0; axis < 3; ++axis) {
+		    float offset = WallpaperEngine::Maths::randomFloat (m_rng, 0.0f, 1.0f) * offsetSpan[axis];
+		    offset += offsetMin[axis];
+		    position[axis] += offset;
+		}
+	    }
+	    p.position = glm::vec3 (sourceToBirth * glm::vec4 (position, 1.0f));
 	    p.previousPosition = p.position;
 	    p.velocity = glm::vec3 (0.0f);
 	    p.acceleration = glm::vec3 (0.0f);

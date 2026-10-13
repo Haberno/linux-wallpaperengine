@@ -258,6 +258,9 @@ struct ParticleEmitter {
     // Omitted box fields resolve against the scene projection when instantiated.
     bool defaultDirections = false;
     bool defaultDistanceMax = false;
+    // Missing image offset bounds resolve against the actual scene projection.
+    std::optional<glm::vec3> offsetMin;
+    std::optional<glm::vec3> offsetMax;
 };
 
 /**
