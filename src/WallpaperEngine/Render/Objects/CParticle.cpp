@@ -611,13 +611,16 @@ void CParticle::render () {
     // the interval; float timestamps lose individual frames after long uptimes.
     float dt = advanceParticleRenderTime (getScene ().getFrameRenderTime (), m_time);
 
+    // Native callback births already exist before the next age pass. Consume
+    // their saved point state before this frame moves points or reclaims slots.
+    if (m_pendingEmission > 0) update (0.0f);
+
     // Control-point motion uses elapsed frame time, before simulation rate and
     // the physics stability cap. Mutating owners retain native current/previous
     // state while held; their resolver runs only at a positive simulation step.
     if (!(m_hasMutatingRemapInitializer || m_hasControlPointOutputOperator) || (dt > 0.0f && getInstanceOverride ().rate->value->getFloat () > 0.0f))
         updateControlPoints (dt);
 
-    bool simulated = false;
     if (dt > 0.0f) {
 	// Cap dt to prevent simulation instability
 	// Also provides more consistent behavior across different FPS
@@ -626,12 +629,8 @@ void CParticle::render () {
 	if (dt > 0.0f) {
 	    m_simulationTime += dt;
 	    update (dt);
-	    simulated = true;
 	}
     }
-    // Script bursts run initializers even while particle integration is held.
-    if (!simulated && m_pendingEmission > 0) update (0.0f);
-
     // Render particles
     if (m_particleCount > 0 && m_particle.material) {
 	// Scene alpha belongs to the compositor, just as for image/model draws.
