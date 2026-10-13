@@ -142,6 +142,11 @@ void applyParticleAttractionDeletion (
     ParticleInstance& particle, const glm::vec3& center, float radius
 );
 
+void applyParticlePlaneCollision (
+    ParticleInstance& particle, const glm::vec3& plane, float distance, float bounceFactor,
+    ParticleCollisionBehavior behavior, bool stopRotation
+);
+
 void applyParticleAngularMovement (
     ParticleInstance& particle, const glm::vec3& force, float drag,
     float rawDelta, float forceDelta, float lifetimeWeight
@@ -292,6 +297,7 @@ protected:
     OperatorFunc createReduceMovementNearControlPointOperator (const ReduceMovementNearControlPointOperator& op);
     OperatorFunc createMaintainDistanceToControlPointOperator (const MaintainDistanceToControlPointOperator& op);
     OperatorFunc createMaintainDistanceBetweenControlPointsOperator (const MaintainDistanceBetweenControlPointsOperator& op);
+    OperatorFunc createCollisionPlaneOperator (const CollisionPlaneOperator& op);
     OperatorFunc createCapVelocityOperator (const CapVelocityOperator& op);
     OperatorFunc createAngularMovementOperator (const AngularMovementOperator& op);
     OperatorFunc createAlphaFadeOperator (const AlphaFadeOperator& op);

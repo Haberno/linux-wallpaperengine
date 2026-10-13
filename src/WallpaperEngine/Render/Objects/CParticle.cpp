@@ -2721,6 +2721,8 @@ void CParticle::setupOperators () {
 	    func = createInheritEventColorOperator (*op->as<InheritEventColorOperator> ());
 	} else if (op->is<MovementOperator> ()) {
 	    func = createMovementOperator (*op->as<MovementOperator> ());
+	} else if (op->is<CollisionPlaneOperator> ()) {
+	    func = createCollisionPlaneOperator (*op->as<CollisionPlaneOperator> ());
 	} else if (op->is<CapVelocityOperator> ()) {
 	    func = createCapVelocityOperator (*op->as<CapVelocityOperator> ());
 	} else if (op->is<ReduceMovementNearControlPointOperator> ()) {
@@ -2794,6 +2796,55 @@ OperatorFunc CParticle::createMovementOperator (const MovementOperator& op) {
 
 	    p.velocity *= 1.0f - std::min (drag * forceDt, 1.0f - std::numeric_limits<float>::epsilon ());
 	}
+    };
+}
+
+void WallpaperEngine::Render::Objects::applyParticlePlaneCollision (
+    ParticleInstance& particle, const glm::vec3& plane, const float distance, const float bounceFactor,
+    const ParticleCollisionBehavior behavior, const bool stopRotation
+) {
+    const float projection = glm::dot (particle.position, plane);
+    // Native opcode 21 tests only the current position, with a strict boundary.
+    if (!(projection < distance)) return;
+    if (behavior == ParticleCollisionBehavior::Delete) {
+        particle.age = particle.lifetime;
+    } else {
+        particle.position -= plane * (projection - distance);
+        if (behavior == ParticleCollisionBehavior::Stop) particle.velocity = glm::vec3 (0.0f);
+        else {
+            const float response = behavior == ParticleCollisionBehavior::Slide ? 1.0f : 1.0f + bounceFactor;
+            particle.velocity -= plane * (response * glm::dot (particle.velocity, plane));
+        }
+    }
+    if (stopRotation) particle.angularVelocity = glm::vec3 (0.0f);
+}
+
+OperatorFunc CParticle::createCollisionPlaneOperator (const CollisionPlaneOperator& op) {
+    includeControlPoint (op.controlPoint);
+    const float defaultDistance = getScene ().getScene ().camera.projection.isPerspective ? 0.0f : -150.0f;
+    glm::vec3 plane = op.plane;
+    plane.y = -plane.y;
+    return [this, &op, plane, defaultDistance] (
+        std::vector<ParticleInstance>& particles, uint32_t count,
+        const std::vector<ControlPointData>& controlPoints, float, float
+    ) {
+        glm::vec3 currentPlane = plane;
+        float distance = op.distance ? op.distance->value->getFloat () : defaultDistance;
+        if ((op.flags & 1) != 0) {
+            const auto& point = controlPoints[op.controlPoint];
+            const glm::mat3 basis = (m_particle.flags & 1) != 0
+                ? glm::mat3 (m_controlPointTransform) * point.orientation : point.orientation;
+            // Native transforms the normalized authored plane without normalizing again.
+            currentPlane = basis * plane;
+            distance = glm::dot (currentPlane, point.position);
+        }
+        const float bounceFactor = op.bounceFactor->value->getFloat ();
+        for (uint32_t i = 0; i < count; ++i) {
+            auto& particle = particles[i];
+            if (particle.shouldSimulate ()) applyParticlePlaneCollision (
+                particle, currentPlane, distance, bounceFactor, op.behavior, (op.flags & 2) != 0
+            );
+        }
     };
 }
 

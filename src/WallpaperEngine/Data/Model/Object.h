@@ -479,6 +479,24 @@ public:
     UserSettingUniquePtr gravity;
 };
 
+enum class ParticleCollisionBehavior { Bounce, Slide, Stop, Delete };
+
+class CollisionPlaneOperator : public ParticleOperatorBase {
+public:
+    CollisionPlaneOperator (
+        glm::vec3 plane, UserSettingUniquePtr distance, UserSettingUniquePtr bounceFactor,
+        ParticleCollisionBehavior behavior, uint32_t flags, uint32_t controlPoint
+    ) : plane (plane), distance (std::move (distance)), bounceFactor (std::move (bounceFactor)),
+        behavior (behavior), flags (flags), controlPoint (controlPoint) { }
+    glm::vec3 plane;
+    /** Omitted distance uses the scene's native 2D/3D default. */
+    UserSettingUniquePtr distance;
+    UserSettingUniquePtr bounceFactor;
+    ParticleCollisionBehavior behavior;
+    uint32_t flags;
+    uint32_t controlPoint;
+};
+
 class CapVelocityOperator : public ParticleOperatorBase {
 public:
     CapVelocityOperator (UserSettingUniquePtr maxSpeed, glm::vec4 blendTimes) :

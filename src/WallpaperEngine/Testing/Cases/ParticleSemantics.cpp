@@ -5737,3 +5737,94 @@ TEST_CASE ("ordinary CP output preserves native XYZ arithmetic and blended chann
             CHECK (destination == points[2].position);
         }
 }
+
+TEST_CASE ("stock plane collision operator survives particle parsing", "[particle][collision]") {
+    WallpaperEngine::Data::Model::Project project {};
+    const auto object = WallpaperEngine::Data::Parsers::ObjectParser::parse (
+        WallpaperEngine::Data::JSON::JSON::parse (R"({"id":8,"particle":{"operator":[
+            {"name":"collisionplane","bouncefactor":0.69999999,"distance":-200},
+            {"name":"collisionplane"},
+            {"name":"collisionplane","plane":"0 3 4","collisionbehavior":"slide","flags":3,"controlpoint":999},
+            {"name":"collisionplane","collisionbehavior":"stop"},
+            {"name":"collisionplane","collisionbehavior":"delete"},
+            {"name":"collisionplane","collisionbehavior":"unknown","plane":"0 0 0"},
+            {"name":"collisionplane","plane":null,"bouncefactor":null,"distance":null}
+        ]}})"), project
+    );
+    const auto* particle = object->as<Particle> ();
+    REQUIRE (particle != nullptr);
+    REQUIRE (particle->operators.size () == 7);
+    const ParticleCollisionBehavior behaviors[] = { ParticleCollisionBehavior::Bounce, ParticleCollisionBehavior::Bounce,
+        ParticleCollisionBehavior::Slide, ParticleCollisionBehavior::Stop, ParticleCollisionBehavior::Delete,
+        ParticleCollisionBehavior::Bounce, ParticleCollisionBehavior::Bounce };
+    for (size_t i = 0; i < particle->operators.size (); ++i) {
+        const auto* op = particle->operators[i]->as<CollisionPlaneOperator> ();
+        REQUIRE (op != nullptr);
+        CHECK (op->behavior == behaviors[i]);
+    }
+    const auto* stock = particle->operators[0]->as<CollisionPlaneOperator> ();
+    CHECK (stock->plane == glm::vec3 (0, 1, 0));
+    CHECK (stock->distance->value->getFloat () == -200);
+    CHECK (stock->bounceFactor->value->getFloat () == Catch::Approx (.7f));
+    const auto* defaults = particle->operators[1]->as<CollisionPlaneOperator> ();
+    CHECK (defaults->distance == nullptr);
+    CHECK (defaults->bounceFactor->value->getFloat () == .5f);
+    CHECK (defaults->controlPoint == 0);
+    CHECK (defaults->flags == 0);
+    const auto* authored = particle->operators[2]->as<CollisionPlaneOperator> ();
+    CHECK (authored->plane == glm::vec3 (0, .6f, .8f));
+    CHECK (authored->controlPoint == 7);
+    CHECK (authored->flags == 3);
+    CHECK (std::isnan (particle->operators[5]->as<CollisionPlaneOperator> ()->plane.x));
+    const auto* nulls = particle->operators[6]->as<CollisionPlaneOperator> ();
+    CHECK (std::isnan (nulls->plane.x));
+    CHECK (nulls->bounceFactor->value->getFloat () == 0);
+    CHECK (nulls->distance->value->getFloat () == 0);
+}
+
+TEST_CASE ("plane collisions use native current-position responses and strict boundaries", "[particle][collision]") {
+    using WallpaperEngine::Render::Objects::applyParticlePlaneCollision;
+    ParticleInstance original;
+    original.position = { 3, -5, 7 };
+    original.previousPosition = { 3, -1, 7 };
+    original.velocity = { 4, -10, 6 };
+    original.rotation = { 1, 2, 3 };
+    original.angularVelocity = { 7, 8, 9 };
+    original.age = .25f;
+    original.lifetime = 2;
+    const struct { ParticleCollisionBehavior behavior; glm::vec3 velocity; } cases[] = {
+        { ParticleCollisionBehavior::Bounce, { 4, 7, 6 } },
+        { ParticleCollisionBehavior::Slide, { 4, 0, 6 } },
+        { ParticleCollisionBehavior::Stop, { 0, 0, 0 } },
+        { ParticleCollisionBehavior::Delete, { 4, -10, 6 } }
+    };
+    for (const auto& value : cases) {
+        ParticleInstance particle = original;
+        applyParticlePlaneCollision (particle, { 0, 1, 0 }, -2, .7f, value.behavior, true);
+        CHECK (particle.position == (value.behavior == ParticleCollisionBehavior::Delete ? original.position : glm::vec3 (3, -2, 7)));
+        CHECK (particle.velocity.x == value.velocity.x);
+        CHECK (particle.velocity.y == Catch::Approx (value.velocity.y));
+        CHECK (particle.velocity.z == value.velocity.z);
+        CHECK (particle.age == (value.behavior == ParticleCollisionBehavior::Delete ? 2.0f : .25f));
+        CHECK (particle.angularVelocity == glm::vec3 (0));
+        CHECK (particle.rotation == original.rotation);
+        CHECK (particle.previousPosition == original.previousPosition);
+    }
+    ParticleInstance boundary = original;
+    boundary.position.y = -2;
+    boundary.previousPosition.y = -9;
+    applyParticlePlaneCollision (boundary, { 0, 1, 0 }, -2, .7f, ParticleCollisionBehavior::Bounce, true);
+    CHECK (boundary.position.y == -2);
+    CHECK (boundary.velocity == original.velocity);
+    CHECK (boundary.angularVelocity == original.angularVelocity);
+    ParticleInstance outward = original;
+    outward.velocity.y = 10;
+    applyParticlePlaneCollision (outward, { 0, 1, 0 }, -2, .7f, ParticleCollisionBehavior::Bounce, false);
+    CHECK (outward.velocity.y == Catch::Approx (-7));
+    CHECK (outward.angularVelocity == original.angularVelocity);
+    ParticleInstance scaledPlane = original;
+    scaledPlane.position.y = -3;
+    applyParticlePlaneCollision (scaledPlane, { 0, 2, 0 }, -4, .7f, ParticleCollisionBehavior::Bounce, false);
+    CHECK (scaledPlane.position == glm::vec3 (3, 1, 7));
+    CHECK (scaledPlane.velocity.y == Catch::Approx (58));
+}
