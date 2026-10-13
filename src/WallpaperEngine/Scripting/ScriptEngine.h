@@ -107,9 +107,8 @@ public:
     void queueScript (const std::string& key, DynamicValue& currentValue, ScriptableObject& object,
         bool deferInitialization = false);
 
-    /** Queue a script-backed scene setting such as fog color. Scene settings have
-     * thisScene/engine globals but intentionally no thisLayer object. */
-    void queueSceneScript (const std::string& key, DynamicValue& currentValue);
+    /** Register a scene setting and queue its script with a scene property owner. */
+    void queueSceneScript (const std::string& property, const UserSetting& setting);
 
     /** Run init/first-update after the scene has registered every authored layer. */
     void initializeQueuedScripts (ScriptableObject* target = nullptr);
@@ -195,7 +194,7 @@ public:
 private:
     JSValue call (JSValue module, int argc, JSValueConst argv[], const char* name);
     void queueScript (const std::string& key, DynamicValue& currentValue, ScriptableObject* object,
-        bool deferInitialization = false);
+        bool deferInitialization = false, const std::string& sceneProperty = {});
     void callLifecycleHook (const std::string& key, LoadedModule& module, const char* hook);
     void initializeModule (const std::string& key, LoadedModule& module);
     void dispatchScreenResize ();

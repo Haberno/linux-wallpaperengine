@@ -1430,7 +1430,16 @@ void CPass::setupUniforms () {
     const auto& recorder = this->m_renderable.getScene ().getAudioContext ().getRecorder ();
 
     // lighting variables
-    this->addUniform ("g_LightAmbientColor", &sceneData.colors.ambient->value->getVec3 ());
+    const auto& ambient = *sceneData.colors.ambient;
+    m_animatedUniforms.erase ("g_LightAmbientColor");
+    if (ambient.animation != nullptr) {
+        auto [entry, inserted] = m_animatedUniforms.emplace ("g_LightAmbientColor", AnimatedUniform {
+            .setting = &ambient, .sampled = std::make_unique<DynamicValue> (*ambient.value)
+        });
+        this->addUniform ("g_LightAmbientColor", &entry->second.sampled->getVec3 ());
+    } else {
+        this->addUniform ("g_LightAmbientColor", &ambient.value->getVec3 ());
+    }
     this->addUniform ("g_LightSkylightColor", &sceneData.colors.skylight->value->getVec3 ());
     this->addUniform ("g_EyePosition", &scene.getCamera ().getEye ());
 

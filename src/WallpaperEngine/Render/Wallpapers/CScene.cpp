@@ -1316,7 +1316,7 @@ CScene::calculateFogParams (const float start, const float end, const float star
 
 void CScene::registerFogScripts () {
     const auto queue = [this] (const std::string& key, const UserSettingUniquePtr& setting) {
-	this->m_scriptEngine->queueSceneScript (key + "_scene", *setting->value);
+	this->m_scriptEngine->queueSceneScript (key, *setting);
     };
     const auto queueLayer = [&queue] (const std::string& prefix, const SceneData::Fog::Layer& layer) {
 	queue (prefix, layer.enabled);

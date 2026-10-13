@@ -1,5 +1,8 @@
 #pragma once
 #include "quickjs.h"
+#include "WallpaperEngine/Data/Model/UserSetting.h"
+#include <string>
+#include <vector>
 
 namespace WallpaperEngine::Render::Wallpapers {
 class CScene;
@@ -16,6 +19,9 @@ public:
     JSValue getInstance () const { return m_instance; }
     ScriptEngine& getEngine () const { return m_engine; }
     JSValue makeModelDataHandle (uint32_t token);
+    void registerPropertyAnimation (const std::string& property, const Data::Model::UserSetting& setting);
+    Data::Model::PropertyAnimation* findPropertyAnimation (const std::string& name) const;
+    JSValue makePropertyOwner (const std::string& property);
 
 private:
     Render::Wallpapers::CScene& m_scene;
@@ -25,5 +31,6 @@ private:
     JSClassID m_modelDataClassId = 0;
     JSClassDef m_definition;
     JSValue m_instance;
+    std::vector<std::pair<std::string, const Data::Model::UserSetting*>> m_propertyAnimations;
 };
 }

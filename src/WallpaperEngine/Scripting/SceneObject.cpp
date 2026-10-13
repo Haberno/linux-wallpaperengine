@@ -17,6 +17,107 @@ SceneObject* get_opaque (JSValueConst this_val) {
     return static_cast<SceneObject*> (JS_GetAnyOpaque (this_val, &classId));
 }
 
+enum SceneAnimationCommand {
+    SceneAnimation_Play, SceneAnimation_Pause, SceneAnimation_Stop, SceneAnimation_IsPlaying,
+    SceneAnimation_GetFrame, SceneAnimation_SetFrame, SceneAnimation_GetRate, SceneAnimation_SetRate,
+    SceneAnimation_GetFps, SceneAnimation_GetFrameCount, SceneAnimation_GetDuration
+};
+
+static JSValue scene_animation_command (
+    JSContext* ctx, JSValueConst, int argc, JSValueConst* argv, int magic, JSValueConst* data
+) {
+    auto* owner = get_opaque (data[0]);
+    const char* name = JS_ToCString (ctx, data[1]);
+    if (name == nullptr) return JS_EXCEPTION;
+    auto* animation = owner->findPropertyAnimation (name);
+    JS_FreeCString (ctx, name);
+    if (animation == nullptr) return JS_UNDEFINED;
+    const double time = owner->getScene ().getElapsedTime ();
+    double value = 0.0;
+    switch (magic) {
+        case SceneAnimation_Play: animation->play (time); break;
+        case SceneAnimation_Pause: animation->pause (time); break;
+        case SceneAnimation_Stop: animation->stop (time); break;
+        case SceneAnimation_IsPlaying: return JS_NewBool (ctx, animation->isPlaying (time));
+        case SceneAnimation_GetFrame: return JS_NewFloat64 (ctx, animation->frameAt (time));
+        case SceneAnimation_GetRate: return JS_NewFloat64 (ctx, animation->rate);
+        case SceneAnimation_GetFps: return JS_NewFloat64 (ctx, animation->fps);
+        case SceneAnimation_GetFrameCount: return JS_NewFloat64 (ctx, animation->length);
+        case SceneAnimation_GetDuration:
+            return JS_NewFloat64 (ctx, animation->fps > 0.0f ? animation->length / animation->fps : 0.0f);
+        case SceneAnimation_SetFrame:
+        case SceneAnimation_SetRate:
+            if (argc < 1 || JS_ToFloat64 (ctx, &value, argv[0]) < 0 || !std::isfinite (value)) {
+                return JS_ThrowTypeError (ctx, "Animation frame/rate expects a finite number");
+            }
+            if (magic == SceneAnimation_SetFrame) animation->setFrame (static_cast<float> (value), time);
+            else animation->setRate (static_cast<float> (value), time);
+            break;
+    }
+    return JS_UNDEFINED;
+}
+
+static JSValue scene_property_get_animation (
+    JSContext* ctx, JSValueConst, int argc, JSValueConst* argv, int, JSValueConst* data
+) {
+    JSValueConst nameValue = argc > 0 && !JS_IsUndefined (argv[0]) ? argv[0] : data[1];
+    const char* name = JS_ToCString (ctx, nameValue);
+    if (name == nullptr) return JS_EXCEPTION;
+    const bool empty = name[0] == '\0';
+    JS_FreeCString (ctx, name);
+    if (empty) nameValue = data[1];
+    name = JS_ToCString (ctx, nameValue);
+    if (name == nullptr) return JS_EXCEPTION;
+    const bool found = get_opaque (data[0])->findPropertyAnimation (name) != nullptr;
+    JS_FreeCString (ctx, name);
+    if (!found) return JS_UNDEFINED;
+    JSValue animationData[] = { data[0], nameValue };
+    JSValue result = JS_NewObject (ctx);
+    const auto method = [&] (const char* key, int command, int length = 0) {
+        JS_SetPropertyStr (ctx, result, key,
+            JS_NewCFunctionData (ctx, scene_animation_command, length, command, 2, animationData));
+    };
+    method ("play", SceneAnimation_Play);
+    method ("pause", SceneAnimation_Pause);
+    method ("stop", SceneAnimation_Stop);
+    method ("isPlaying", SceneAnimation_IsPlaying);
+    method ("getFrame", SceneAnimation_GetFrame);
+    method ("setFrame", SceneAnimation_SetFrame, 1);
+    for (const auto& [field, command] : std::initializer_list<std::pair<const char*, int>> {
+        { "rate", SceneAnimation_GetRate }, { "fps", SceneAnimation_GetFps },
+        { "frameCount", SceneAnimation_GetFrameCount }, { "duration", SceneAnimation_GetDuration } }) {
+        const JSAtom atom = JS_NewAtom (ctx, field);
+        JS_DefinePropertyGetSet (ctx, result, atom,
+            JS_NewCFunctionData (ctx, scene_animation_command, 0, command, 2, animationData),
+            command == SceneAnimation_GetRate
+                ? JS_NewCFunctionData (ctx, scene_animation_command, 1, SceneAnimation_SetRate, 2, animationData)
+                : JS_UNDEFINED, JS_PROP_ENUMERABLE);
+        JS_FreeAtom (ctx, atom);
+    }
+    return result;
+}
+
+void SceneObject::registerPropertyAnimation (const std::string& property, const UserSetting& setting) {
+    if (setting.animation != nullptr) m_propertyAnimations.emplace_back (property, &setting);
+}
+
+PropertyAnimation* SceneObject::findPropertyAnimation (const std::string& name) const {
+    for (const auto& [property, setting] : m_propertyAnimations) {
+        if (property == name || setting->animation->name == name) return setting->animation.get ();
+    }
+    return nullptr;
+}
+
+JSValue SceneObject::makePropertyOwner (const std::string& property) {
+    auto* ctx = m_engine.getContext ();
+    JSValue data[] = { m_instance, JS_NewString (ctx, property.c_str ()) };
+    JSValue result = JS_NewObject (ctx);
+    JS_SetPropertyStr (ctx, result, "getAnimation",
+        JS_NewCFunctionData (ctx, scene_property_get_animation, 1, 0, 2, data));
+    JS_FreeValue (ctx, data[1]);
+    return result;
+}
+
 JSValue get_bloom (JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
     auto* container = get_opaque (this_val);
 

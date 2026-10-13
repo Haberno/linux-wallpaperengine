@@ -810,11 +810,13 @@ void ScriptEngine::queueScript (const std::string& key, DynamicValue& currentVal
     this->queueScript (key, currentValue, &object, deferInitialization);
 }
 
-void ScriptEngine::queueSceneScript (const std::string& key, DynamicValue& currentValue) {
-    this->queueScript (key, currentValue, nullptr);
+void ScriptEngine::queueSceneScript (const std::string& property, const UserSetting& setting) {
+    this->m_sceneObject->registerPropertyAnimation (property, setting);
+    this->queueScript (property + "_scene", *setting.value, nullptr, false, property);
 }
 
-void ScriptEngine::queueScript (const std::string& key, DynamicValue& currentValue, ScriptableObject* object, bool deferInitialization) {
+void ScriptEngine::queueScript (const std::string& key, DynamicValue& currentValue, ScriptableObject* object,
+    bool deferInitialization, const std::string& sceneProperty) {
     const auto source = currentValue.getScriptSource ();
 
     static const bool traceScripts = std::getenv ("WPE_SCRIPT_TRACE") != nullptr;
@@ -842,6 +844,8 @@ void ScriptEngine::queueScript (const std::string& key, DynamicValue& currentVal
 
     JSValue layer = object == nullptr ? JS_UNDEFINED : this->m_adapters.object->instantiate (*object);
     JS_SetPropertyStr (this->m_context, this->m_globalThis, "__propScriptLayer", layer);
+    JS_SetPropertyStr (this->m_context, this->m_globalThis, "__propScriptSceneOwner",
+        object == nullptr ? this->m_sceneObject->makePropertyOwner (sceneProperty) : JS_UNDEFINED);
     std::string animationScope;
     std::string propertyName;
     bool propertyAnimated = false;
@@ -885,11 +889,11 @@ void ScriptEngine::queueScript (const std::string& key, DynamicValue& currentVal
 	    // to the owner while thisObject resolves animation names within its pass.
 	    << "  var __animationScope = globalThis.__propScriptAnimationScope;\n"
 	    << "  var __propertyName = globalThis.__propScriptPropertyName;\n"
-	    << "  var thisObject = (__animationScope || globalThis.__propScriptPropertyAnimated || __propertyName.indexOf('_fx') >= 0) ? new Proxy(thisLayer, { get: function(target, key) {\n"
+	    << "  var thisObject = globalThis.__propScriptSceneOwner || ((__animationScope || globalThis.__propScriptPropertyAnimated || __propertyName.indexOf('_fx') >= 0) ? new Proxy(thisLayer, { get: function(target, key) {\n"
 	    << "    if (key === 'getAnimation') return function(name) { return target.getAnimation(name === undefined ? __propertyName : __animationScope + name); };\n"
 	    << "    var result = Reflect.get(target, key, target);\n"
 	    << "    return typeof result === 'function' ? result.bind(target) : result;\n"
-	    << "  } }) : thisLayer;\n"
+	    << "  } }) : thisLayer);\n"
 	    // WE's scriptProperties builder doubles as the values object (scripts read
 	    // scriptProperties.<name> without calling finish()), so the shim collects slider
 	    // defaults straight onto the object it returns, seeded values winning
