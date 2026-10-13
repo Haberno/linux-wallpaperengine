@@ -542,6 +542,14 @@ public:
     uint32_t controlPoint;
 };
 
+class CollisionModelOperator : public ParticleOperatorBase {
+public:
+    CollisionModelOperator (float bounceFactor, ParticleCollisionBehavior behavior) :
+        bounceFactor (bounceFactor), behavior (behavior) { }
+    float bounceFactor;
+    ParticleCollisionBehavior behavior;
+};
+
 class BoidsOperator : public ParticleOperatorBase {
 public:
     BoidsOperator (

@@ -180,6 +180,25 @@ void applyParticleBoundsCollision (
     ParticleCollisionBehavior behavior
 );
 
+struct ParticleModelCapsule {
+    glm::vec3 origin;
+    glm::vec3 direction;
+    float length;
+    float radius;
+};
+
+[[nodiscard]] std::optional<int> resolveParticleModelCollisionDependency (
+    const std::vector<ObjectDependency>& dependencies, uint32_t index
+);
+[[nodiscard]] glm::mat4 calculateParticleModelCollisionSpace (const glm::mat4& ownerWorld, bool worldSpace);
+[[nodiscard]] ParticleModelCapsule calculateParticleModelCapsule (
+    const glm::vec3& halfExtents, const glm::vec3& center, const glm::mat4& transform, bool boneHitBox = false
+);
+void applyParticleModelCollision (
+    ParticleInstance& particle, const std::vector<ParticleModelCapsule>& capsules,
+    float bounceFactor, ParticleCollisionBehavior behavior
+);
+
 void applyParticleAngularMovement (
     ParticleInstance& particle, const glm::vec3& force, float drag,
     float rawDelta, float forceDelta, float lifetimeWeight
@@ -342,6 +361,7 @@ protected:
     OperatorFunc createCollisionPlaneOperator (const CollisionPlaneOperator& op);
     OperatorFunc createCollisionQuadOperator (const CollisionQuadOperator& op);
     OperatorFunc createCollisionSphereOperator (const CollisionSphereOperator& op);
+    OperatorFunc createCollisionModelOperator (const CollisionModelOperator& op, uint32_t dependencyIndex);
     OperatorFunc createBoidsOperator (const BoidsOperator& op);
     OperatorFunc createCollisionBoundsOperator (const CollisionBoundsOperator& op);
     OperatorFunc createCapVelocityOperator (const CapVelocityOperator& op);
@@ -436,7 +456,9 @@ private:
     bool m_hasControlPointOutputOperator { false };
     bool m_hasBoidsOperator { false };
     uint32_t m_boidsSlotExtent { 0 };
-    bool usesNativeParticleSlots () const { return m_hasControlPointOutputOperator || m_hasBoidsOperator; }
+    bool m_hasModelCollisionOperator { false };
+    bool usesRoundedParticleSlots () const { return m_hasBoidsOperator || m_hasModelCollisionOperator; }
+    bool usesNativeParticleSlots () const { return m_hasControlPointOutputOperator || usesRoundedParticleSlots (); }
     void advanceRemapSlots (float dt);
     uint32_t acquireRemapSlot ();
     void synchronizeRemapSlots ();

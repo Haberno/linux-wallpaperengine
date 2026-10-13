@@ -6171,3 +6171,150 @@ TEST_CASE ("bounds geometry uses the unnormalized inverse layer basis", "[partic
     CHECK (consumer.position == glm::vec3 (0, 128, 0));
     CHECK (consumer.velocity == glm::vec3 (0, -5, 0));
 }
+
+TEST_CASE ("stock model collision retains native response defaults and typed dependency", "[particle][collisionmodel]") {
+    using namespace WallpaperEngine::Data::Model;
+    Project project {};
+    const auto object = WallpaperEngine::Data::Parsers::ObjectParser::parse (
+        WallpaperEngine::Data::JSON::JSON::parse (R"({"id":23,"dependencies":[
+            {"id":25,"index":0,"type":"emitterimage"},{"id":24,"index":0,"type":"collisionmodel"}
+        ],"particle":{"operator":[
+            {"id":9,"name":"collisionmodel","flags":2,"controlpoint":7},
+            {"name":"collisionmodel","collisionbehavior":"slide","bouncefactor":null},
+            {"name":"collisionmodel","collisionbehavior":"stop","bouncefactor":-2},
+            {"name":"collisionmodel","collisionbehavior":"delete"},
+            {"name":"collisionmodel","collisionbehavior":"unknown"}
+        ]}})"), project
+    );
+    const auto* particle = object->as<Particle> ();
+    REQUIRE (particle);
+    REQUIRE (particle->operators.size () == 5);
+    const ParticleCollisionBehavior behaviors[] = { ParticleCollisionBehavior::Bounce, ParticleCollisionBehavior::Slide,
+        ParticleCollisionBehavior::Stop, ParticleCollisionBehavior::Delete, ParticleCollisionBehavior::Bounce };
+    const float factors[] = { .5f, 0, -2, .5f, .5f };
+    for (size_t i = 0; i < 5; ++i) {
+        const auto* op = particle->operators[i]->as<CollisionModelOperator> ();
+        REQUIRE (op);
+        CHECK (op->behavior == behaviors[i]);
+        CHECK (op->bounceFactor == factors[i]);
+    }
+    REQUIRE (particle->typedDependencies.size () == 2);
+    CHECK (particle->typedDependencies[1].id == 24);
+    CHECK (particle->typedDependencies[1].type == "collisionmodel");
+    CHECK (particle->typedDependencies[1].index == 0);
+    using WallpaperEngine::Render::Objects::resolveParticleModelCollisionDependency;
+    const std::vector<ObjectDependency> dependencies {
+        {11,0,"collisionmodel",""}, {12,0,"emitterimage",""}, {13,1,"collisionmodel",""},
+        {14,0,"collisionmodel",""}, {0,0,"collisionmodel",""}
+    };
+    CHECK (resolveParticleModelCollisionDependency (dependencies, 0) == 14);
+    CHECK (resolveParticleModelCollisionDependency (dependencies, 1) == 13);
+    CHECK_FALSE (resolveParticleModelCollisionDependency (dependencies, 2));
+    CHECK_FALSE (resolveParticleModelCollisionDependency ({{0,0,"collisionmodel",""}}, 0));
+}
+
+TEST_CASE ("model capsules preserve current owner target and bone transform order", "[particle][collisionmodel]") {
+    using namespace WallpaperEngine::Render::Objects;
+    const glm::mat4 identity (1.0f);
+    const auto quarterTurn = glm::rotate (identity, glm::half_pi<float> (), glm::vec3 (0,0,1));
+    const auto target = glm::translate (identity, glm::vec3 (10,20,30)) * quarterTurn
+        * glm::scale (identity, glm::vec3 (2,3,4));
+    const auto owner = glm::translate (identity, glm::vec3 (4,6,8)) * quarterTurn
+        * glm::scale (identity, glm::vec3 (2,1,2));
+    const auto bone = glm::translate (identity, glm::vec3 (1,2,3)) * quarterTurn;
+    const auto local = glm::translate (identity, glm::vec3 (4,5,6));
+    const auto checkVector = [] (const glm::vec3& actual, const glm::vec3& expected) {
+        for (int i=0; i<3; ++i) CHECK (actual[i] == Catch::Approx (expected[i]).margin (.00002f));
+    };
+    // Hand-derived native composition oracles retained by the independent transform reviewer.
+    for (const bool world : {true, false}) {
+        const auto space = calculateParticleModelCollisionSpace (owner, world);
+        const auto capsule = calculateParticleModelCapsule ({2,5,3}, {1,2,3}, space * target);
+        checkVector (capsule.origin, world ? glm::vec3 (10,-22,42) : glm::vec3 (8,6,17));
+        checkVector (capsule.origin + capsule.direction * capsule.length,
+            world ? glm::vec3 (-2,-22,42) : glm::vec3 (8,-6,17));
+        checkVector (capsule.direction, world ? glm::vec3 (-1,0,0) : glm::vec3 (0,-1,0));
+        CHECK (capsule.length == Catch::Approx (12));
+        CHECK (capsule.radius == Catch::Approx (world ? 12 : 6));
+        const auto posed = calculateParticleModelCapsule ({2,5,3}, {0,0,0}, space * target * bone * local, true);
+        checkVector (posed.origin, world ? glm::vec3 (-8,-16,66) : glm::vec3 (5,-12,29));
+        checkVector (posed.origin + posed.direction * posed.length,
+            world ? glm::vec3 (-8,-8,66) : glm::vec3 (1,-12,29));
+        checkVector (posed.direction, world ? glm::vec3 (0,1,0) : glm::vec3 (-1,0,0));
+        CHECK (posed.length == Catch::Approx (world ? 8 : 4));
+        CHECK (posed.radius == Catch::Approx (world ? 12 : 6));
+    }
+    const auto tied = calculateParticleModelCapsule ({3,3,5}, {0,0,0}, glm::scale (identity, glm::vec3 (10,2,1)));
+    CHECK (tied.radius == 6); // Native radial Y tie; transformed X would incorrectly yield30.
+    CHECK (tied.length == 4);
+    const auto selected = calculateParticleModelCapsule ({2,5,3}, {0,0,0}, glm::scale (identity, glm::vec3 (100,2,7)));
+    CHECK (selected.radius == 21); // Native selects radial Z before scale, rather than scaled X200.
+    const auto tiny = calculateParticleModelCapsule ({.01f,.01f,.01f}, {0,0,0}, identity, true);
+    CHECK (tiny.radius == 0);
+    CHECK (tiny.length == 0);
+    checkVector (tiny.direction, {0,1,0});
+    const glm::vec3 minimum (-99.99990844726562f,-100,-100);
+    const glm::vec3 maximum (99.99996948242188f,100,99.99993133544922f);
+    const glm::vec3 half = (maximum - minimum) * .5f;
+    const auto stock = calculateParticleModelCapsule (half, minimum + half, identity);
+    CHECK (stock.origin.x == .000030517578125f);
+    CHECK (stock.origin.y == -.000030517578125f);
+    CHECK (stock.origin.z == -.000030517578125f);
+    CHECK (stock.length == .00006103515625f);
+    CHECK (stock.radius == 99.99996948242188f);
+}
+
+TEST_CASE ("model collision uses last strict capsule and native response without angular mutation", "[particle][collisionmodel]") {
+    using namespace WallpaperEngine::Render::Objects;
+    using WallpaperEngine::Data::Model::ParticleCollisionBehavior;
+    const std::vector<ParticleModelCapsule> capsules { calculateParticleModelCapsule ({5,3,2}, {0,0,0}, glm::mat4 (1)) };
+    for (const auto behavior : { ParticleCollisionBehavior::Bounce, ParticleCollisionBehavior::Slide,
+        ParticleCollisionBehavior::Stop, ParticleCollisionBehavior::Delete }) {
+        ParticleInstance particle;
+        particle.position = {0,1,0}; particle.velocity = {1,-2,3}; particle.angularVelocity = {4,5,6};
+        particle.age = 1; particle.lifetime = 7;
+        applyParticleModelCollision (particle, capsules, .5f, behavior);
+        CHECK (particle.angularVelocity == glm::vec3 (4,5,6));
+        if (behavior == ParticleCollisionBehavior::Delete) {
+            CHECK (particle.position == glm::vec3 (0,1,0));
+            CHECK (particle.velocity == glm::vec3 (1,-2,3));
+            CHECK (particle.age == 7);
+        } else {
+            CHECK (particle.position.y == Catch::Approx (3).margin (.003f)); // Unrefined RSQRT estimate.
+            CHECK (particle.age == 1);
+            if (behavior == ParticleCollisionBehavior::Stop) CHECK (particle.velocity == glm::vec3 (0));
+            else {
+                CHECK (particle.velocity.x == 1);
+                CHECK (particle.velocity.z == 3);
+                CHECK (particle.velocity.y == Catch::Approx (behavior == ParticleCollisionBehavior::Bounce ? 1 : 0).margin (.003f));
+            }
+        }
+    }
+    ParticleInstance boundary;
+    boundary.position = {0,3,0}; boundary.velocity = {1,2,3};
+    applyParticleModelCollision (boundary, capsules, .5f, ParticleCollisionBehavior::Bounce);
+    CHECK (boundary.position == glm::vec3 (0,3,0));
+    CHECK (boundary.velocity == glm::vec3 (1,2,3));
+    ParticleInstance outward;
+    outward.position = {0,1,0}; outward.velocity = {0,2,0};
+    applyParticleModelCollision (outward, capsules, .5f, ParticleCollisionBehavior::Bounce);
+    CHECK (outward.velocity.y == Catch::Approx (-1).margin (.003f));
+    auto overlapping = capsules;
+    overlapping.push_back (calculateParticleModelCapsule ({2,2,2}, {0,2,0}, glm::mat4 (1)));
+    ParticleInstance last;
+    last.position = {0,1,0};
+    applyParticleModelCollision (last, overlapping, .5f, ParticleCollisionBehavior::Stop);
+    CHECK (last.position.y == Catch::Approx (0).margin (.003f));
+    ParticleInstance center;
+    center.position = {0,0,0}; center.velocity = {1,2,3};
+    applyParticleModelCollision (center, capsules, .5f, ParticleCollisionBehavior::Stop);
+    CHECK (std::isnan (center.position.x));
+    CHECK (std::isnan (center.position.y));
+    CHECK (std::isnan (center.position.z));
+    CHECK (center.velocity == glm::vec3 (0));
+    center.position = {0,0,0}; center.velocity = {1,2,3}; center.lifetime = 7;
+    applyParticleModelCollision (center, capsules, .5f, ParticleCollisionBehavior::Delete);
+    CHECK (center.position == glm::vec3 (0));
+    CHECK (center.velocity == glm::vec3 (1,2,3));
+    CHECK (center.age == 7);
+}

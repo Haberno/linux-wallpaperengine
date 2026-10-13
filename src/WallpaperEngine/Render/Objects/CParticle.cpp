@@ -1,5 +1,7 @@
 #include "CParticle.h"
 #include "WallpaperEngine/Render/Objects/CImage.h"
+#include "CModel.h"
+
 #include "WallpaperEngine/Render/Depth.h"
 
 #include "WallpaperEngine/Data/Model/Property.h"
@@ -741,7 +743,7 @@ void CParticle::clearParticles (const bool stopEmission) {
     if (stopEmission) m_emitting = false;
     m_remapSystemTime = 0.0f;
     m_particleCount = 0;
-    if (m_hasBoidsOperator) {
+    if (usesRoundedParticleSlots ()) {
         // Native stop clears lifetime/extent while retaining position and velocity planes.
         for (auto& slot : m_remapSlots) { slot.lifetime = 0.0f; slot.alive = false; }
         m_boidsSlotExtent = 0;
@@ -1111,9 +1113,9 @@ void CParticle::update (float dt) {
     const float operatorDt = dt / static_cast<float> (substeps);
     if (usesNativeParticleSlots ()) synchronizeRemapSlots ();
     auto& simulatedParticles = usesNativeParticleSlots () ? m_remapSlots : m_particles;
-    const uint32_t simulatedCount = m_hasBoidsOperator ? (m_boidsSlotExtent + 3u) & ~3u
+    const uint32_t simulatedCount = usesRoundedParticleSlots () ? (m_boidsSlotExtent + 3u) & ~3u
         : m_hasControlPointOutputOperator ? m_remapSlots.size () : m_particleCount;
-    const uint32_t restoredCount = m_hasBoidsOperator ? m_boidsSlotExtent : simulatedCount;
+    const uint32_t restoredCount = usesRoundedParticleSlots () ? m_boidsSlotExtent : simulatedCount;
     for (int step = 0; step < substeps; ++step) {
 	// Each native dispatch restores birth color/alpha/size before operators.
 	for (uint32_t i = 0; i < restoredCount; ++i) {
@@ -1148,7 +1150,7 @@ void CParticle::update (float dt) {
 
 void CParticle::advanceRemapSlots (const float dt) {
     synchronizeRemapSlots ();
-    const size_t extent = m_hasBoidsOperator ? (m_boidsSlotExtent + 3u) & ~3u : m_remapSlots.size ();
+    const size_t extent = usesRoundedParticleSlots () ? (m_boidsSlotExtent + 3u) & ~3u : m_remapSlots.size ();
     for (size_t index = 0; index < extent; ++index) {
         auto& slot = m_remapSlots[index];
         slot.age += dt;
@@ -1168,7 +1170,7 @@ void CParticle::advanceRemapSlots (const float dt) {
 
 uint32_t CParticle::acquireRemapSlot () {
     if (m_remapNativeCount >= m_maxParticles) return m_maxParticles;
-    const uint32_t extent = m_hasBoidsOperator ? m_boidsSlotExtent : m_remapSlots.size ();
+    const uint32_t extent = usesRoundedParticleSlots () ? m_boidsSlotExtent : m_remapSlots.size ();
     for (uint32_t index = m_remapAllocationCursor; index < extent; ++index) {
         if (m_remapSlots[index].lifetime == 0.0f) {
             m_remapAllocationCursor = index + 1;
@@ -1178,7 +1180,7 @@ uint32_t CParticle::acquireRemapSlot () {
     }
     if (extent == m_maxParticles) return m_maxParticles;
     const uint32_t index = extent;
-    if (m_hasBoidsOperator) ++m_boidsSlotExtent;
+    if (usesRoundedParticleSlots ()) ++m_boidsSlotExtent;
     else {
         m_remapSlots.emplace_back ();
         m_remapSlots.back ().lifetime = 0.0f;
@@ -2926,6 +2928,7 @@ void WallpaperEngine::Render::Objects::applyParticleDistanceConstraint (
 }
 
 void CParticle::setupOperators () {
+    uint32_t collisionModelIndex = 0;
     for (const auto& op : m_particle.operators) {
 	if (!op) {
 	    continue;
@@ -2945,6 +2948,8 @@ void CParticle::setupOperators () {
 	    func = createCollisionQuadOperator (*op->as<CollisionQuadOperator> ());
 	} else if (op->is<CollisionSphereOperator> ()) {
 	    func = createCollisionSphereOperator (*op->as<CollisionSphereOperator> ());
+	} else if (op->is<CollisionModelOperator> ()) {
+            func = createCollisionModelOperator (*op->as<CollisionModelOperator> (), collisionModelIndex++);
 	} else if (op->is<BoidsOperator> ()) {
 	    func = createBoidsOperator (*op->as<BoidsOperator> ());
 	} else if (op->is<CollisionBoundsOperator> ()) {
@@ -3014,7 +3019,7 @@ OperatorFunc CParticle::createMovementOperator (const MovementOperator& op) {
 	    }
 
 	    // Native snapshots each movement operator's start for swept attraction deletion.
-	    if (!m_hasBoidsOperator || i < m_boidsSlotExtent) p.previousPosition = p.position;
+	    if (!usesRoundedParticleSlots () || i < m_boidsSlotExtent) p.previousPosition = p.position;
 	    // Native movement applies gravity before advancing position, then drag.
 	    // Otherwise a large drag*dt discards every frame's force without motion.
 	    p.velocity += gravity * dt * speed;
@@ -3185,6 +3190,137 @@ static float particleBoidsReciprocal (const float value) {
 #else
     return 1.0f / value;
 #endif
+}
+
+std::optional<int> WallpaperEngine::Render::Objects::resolveParticleModelCollisionDependency (
+    const std::vector<ObjectDependency>& dependencies, const uint32_t index
+) {
+    std::optional<int> sourceId;
+    for (const auto& dependency : dependencies)
+        if (dependency.type == "collisionmodel" && dependency.index == index && dependency.id != 0)
+            sourceId = dependency.id;
+    return sourceId;
+}
+
+glm::mat4 WallpaperEngine::Render::Objects::calculateParticleModelCollisionSpace (
+    const glm::mat4& ownerWorld, const bool worldSpace
+) {
+    const glm::mat4 flipY = glm::scale (glm::mat4 (1.0f), glm::vec3 (1.0f, -1.0f, 1.0f));
+    return worldSpace ? flipY : flipY * glm::inverse (ownerWorld);
+}
+
+ParticleModelCapsule WallpaperEngine::Render::Objects::calculateParticleModelCapsule (
+    const glm::vec3& halfExtents, const glm::vec3& center, const glm::mat4& transform, const bool boneHitBox
+) {
+    glm::vec3 axis (0.0f, 1.0f, 0.0f), radial (0.0f);
+    float halfSegment = 0.0f;
+    if (!boneHitBox || glm::dot (halfExtents, halfExtents) >= 0.01f) {
+        // Native chooses axes before applying scale; the original X/Y loser wins radial ties.
+        const glm::vec3 x (halfExtents.x, 0.0f, 0.0f), y (0.0f, halfExtents.y, 0.0f), z (0.0f, 0.0f, halfExtents.z);
+        const bool longestX = halfExtents.x * halfExtents.x >= halfExtents.y * halfExtents.y;
+        glm::vec3 longest = longestX ? x : y;
+        const glm::vec3 firstRadial = longestX ? y : x;
+        glm::vec3 secondRadial = z;
+        if (halfExtents.z * halfExtents.z > glm::dot (longest, longest)) {
+            secondRadial = longest;
+            longest = z;
+        }
+        radial = glm::dot (secondRadial, secondRadial) > glm::dot (firstRadial, firstRadial)
+            ? secondRadial : firstRadial;
+        const float longestExtent = (longest.x + longest.y) + longest.z;
+        axis = longest / longestExtent;
+        halfSegment = longestExtent - ((radial.x + radial.y) + radial.z);
+    }
+    const glm::mat3 basis (transform);
+    const glm::vec3 transformedCenter (transform * glm::vec4 (center, 1.0f));
+    const glm::vec3 a = transformedCenter + basis * (-axis * halfSegment);
+    const glm::vec3 b = transformedCenter + basis * (axis * halfSegment);
+    return { a, glm::normalize (basis * axis), glm::length (b - a), glm::length (basis * radial) };
+}
+
+void WallpaperEngine::Render::Objects::applyParticleModelCollision (
+    ParticleInstance& particle, const std::vector<ParticleModelCapsule>& capsules, const float bounceFactor,
+    const ParticleCollisionBehavior behavior
+) {
+    glm::vec3 normal (0.0f);
+    float penetration = 0.0f;
+    bool hit = false;
+    for (const auto& capsule : capsules) {
+        const glm::vec3 relative = particle.position - capsule.origin;
+        const float projection = (relative.y * capsule.direction.y + relative.x * capsule.direction.x)
+            + relative.z * capsule.direction.z;
+        // MAXPS then MINPS select the second operand on unordered inputs.
+        const float lower = projection > 0.0f ? projection : 0.0f;
+        const float t = lower < capsule.length ? lower : capsule.length;
+        const glm::vec3 delta = particle.position - (capsule.origin + capsule.direction * t);
+        const float squared = (delta.y * delta.y + delta.x * delta.x) + delta.z * delta.z;
+        if (!(squared < capsule.radius * capsule.radius)) continue;
+        hit = true;
+        if (behavior == ParticleCollisionBehavior::Delete) break;
+        const float inverseLength = particleRemapInverseLength (squared);
+        normal = delta * inverseLength;
+        penetration = squared * inverseLength - capsule.radius;
+    }
+    if (!hit) return;
+    if (behavior == ParticleCollisionBehavior::Delete) {
+        particle.age = particle.lifetime;
+        return;
+    }
+    // All tests use the original position; the last intersecting capsule supplies the response.
+    particle.position -= normal * penetration;
+    if (behavior == ParticleCollisionBehavior::Stop) particle.velocity = glm::vec3 (0.0f);
+    else {
+        const float projection = (particle.velocity.y * normal.y + particle.velocity.x * normal.x)
+            + particle.velocity.z * normal.z;
+        if (behavior == ParticleCollisionBehavior::Slide) particle.velocity -= normal * projection;
+        else particle.velocity += normal * ((-1.0f - bounceFactor) * projection);
+    }
+}
+
+OperatorFunc CParticle::createCollisionModelOperator (const CollisionModelOperator& op, const uint32_t dependencyIndex) {
+    // Model collision uses the same rounded high-water backing as boids, including inactive/padded lanes.
+    if (!usesRoundedParticleSlots ()) {
+        m_remapSlots.resize ((m_maxParticles + 3u) & ~3u);
+        for (auto& slot : m_remapSlots) { slot.lifetime = 0.0f; slot.nativeSlotState = true; }
+    }
+    m_hasModelCollisionOperator = true;
+    const auto dependency = resolveParticleModelCollisionDependency (m_particle.typedDependencies, dependencyIndex);
+    if (!dependency) return {};
+    const int sourceId = *dependency;
+    return [this, sourceId, bounceFactor = op.bounceFactor, behavior = op.behavior] (
+        std::vector<ParticleInstance>& particles, uint32_t count,
+        const std::vector<ControlPointData>&, float, float
+    ) {
+        // Resolve the live object before dereferencing it: script destroyLayer can remove a target.
+        const auto* target = dynamic_cast<const CModel*> (getScene ().getObject (sourceId));
+        if (!target) return;
+        const auto& model = target->getModel ();
+        const auto& hitBoxes = model.animationData.hitBoxes;
+        const glm::mat4 simulation = calculateParticleModelCollisionSpace (particleWorldMatrix (), (m_particle.flags & 1) != 0);
+        std::vector<ParticleModelCapsule> capsules;
+        if (hitBoxes.empty ()) {
+            const auto& mesh = model.mesh;
+            if (!(mesh.boundingBoxMin.x < mesh.boundingBoxMax.x)) return;
+            const glm::vec3 halfExtents = (mesh.boundingBoxMax - mesh.boundingBoxMin) * 0.5f;
+            capsules.push_back (calculateParticleModelCapsule (
+                halfExtents, mesh.boundingBoxMin + halfExtents, simulation * target->resolveWorldMatrix ()
+            ));
+        } else {
+            capsules.reserve (hitBoxes.size ());
+            for (size_t index = 0; index < hitBoxes.size (); ++index) {
+                const auto bone = target->getBoneTransform (index);
+                if (!bone) continue;
+                capsules.push_back (calculateParticleModelCapsule (
+                    hitBoxes[index].halfExtents, glm::vec3 (0.0f), simulation * *bone * hitBoxes[index].local, true
+                ));
+            }
+        }
+        const uint32_t divisor = m_boidsSlotExtent / 10000u + 1u;
+        for (uint32_t base = 4u * (getScene ().getSceneFrame () % divisor); base < count; base += 4u * divisor)
+            for (uint32_t lane = 0; lane < 4u; ++lane)
+                applyParticleModelCollision (particles[base + lane], capsules, bounceFactor, behavior);
+    };
+
 }
 
 OperatorFunc CParticle::createBoidsOperator (const BoidsOperator& op) {
