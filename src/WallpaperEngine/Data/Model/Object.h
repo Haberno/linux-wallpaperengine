@@ -517,6 +517,22 @@ public:
     uint32_t controlPoint;
 };
 
+class CollisionSphereOperator : public ParticleOperatorBase {
+public:
+    CollisionSphereOperator (
+        UserSettingUniquePtr origin, UserSettingUniquePtr radius, UserSettingUniquePtr bounceFactor,
+        ParticleCollisionBehavior behavior, uint32_t flags, uint32_t controlPoint
+    ) : origin (std::move (origin)), radius (std::move (radius)), bounceFactor (std::move (bounceFactor)),
+        behavior (behavior), flags (flags), controlPoint (controlPoint) { }
+    /** Omitted origin and radius use the scene's native 2D/3D defaults. */
+    UserSettingUniquePtr origin;
+    UserSettingUniquePtr radius;
+    UserSettingUniquePtr bounceFactor;
+    ParticleCollisionBehavior behavior;
+    uint32_t flags;
+    uint32_t controlPoint;
+};
+
 class CapVelocityOperator : public ParticleOperatorBase {
 public:
     CapVelocityOperator (UserSettingUniquePtr maxSpeed, glm::vec4 blendTimes) :

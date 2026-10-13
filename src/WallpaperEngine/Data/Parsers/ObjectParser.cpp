@@ -1268,6 +1268,17 @@ ParticleOperatorUniquePtr ObjectParser::parseParticleOperator (const JSON& it, c
             it.user ("bouncefactor", properties, it.contains ("bouncefactor") ? 0.0f : 0.5f), behavior, it.optional ("flags", 0u),
             std::min (static_cast<uint32_t> (it.optional ("controlpoint", 0)), 7u)
         );
+    } else if (name == "collisionsphere") {
+        const std::string behaviorName = it.optional<std::string> ("collisionbehavior", "bounce");
+        const auto behavior = behaviorName == "slide" ? ParticleCollisionBehavior::Slide
+            : behaviorName == "stop" ? ParticleCollisionBehavior::Stop
+            : behaviorName == "delete" ? ParticleCollisionBehavior::Delete : ParticleCollisionBehavior::Bounce;
+        return std::make_unique<CollisionSphereOperator> (
+            it.contains ("origin") ? it.user ("origin", properties, glm::vec3 (0.0f)) : nullptr,
+            it.contains ("radius") ? it.user ("radius", properties, 0.0f) : nullptr,
+            it.user ("bouncefactor", properties, it.contains ("bouncefactor") ? 0.0f : 0.5f), behavior,
+            it.optional ("flags", 0u), std::min (static_cast<uint32_t> (it.optional ("controlpoint", 0)), 7u)
+        );
     } else if (name == "capvelocity") {
 	return std::make_unique<CapVelocityOperator> (
 	    it.optional ("maxspeed") ? it.user ("maxspeed", properties) : nullptr,

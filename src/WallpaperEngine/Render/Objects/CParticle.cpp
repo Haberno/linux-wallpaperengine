@@ -2725,6 +2725,8 @@ void CParticle::setupOperators () {
 	    func = createCollisionPlaneOperator (*op->as<CollisionPlaneOperator> ());
 	} else if (op->is<CollisionQuadOperator> ()) {
 	    func = createCollisionQuadOperator (*op->as<CollisionQuadOperator> ());
+	} else if (op->is<CollisionSphereOperator> ()) {
+	    func = createCollisionSphereOperator (*op->as<CollisionSphereOperator> ());
 	} else if (op->is<CapVelocityOperator> ()) {
 	    func = createCapVelocityOperator (*op->as<CapVelocityOperator> ());
 	} else if (op->is<ReduceMovementNearControlPointOperator> ()) {
@@ -2903,6 +2905,53 @@ OperatorFunc CParticle::createCollisionQuadOperator (const CollisionQuadOperator
             if (particle.shouldSimulate ()) applyParticleQuadCollision (
                 particle, origin, plane, right, forward, halfSize, op.bounceFactor->value->getFloat (),
                 op.behavior, (op.flags & 2) != 0
+            );
+        }
+    };
+}
+
+void WallpaperEngine::Render::Objects::applyParticleSphereCollision (
+    ParticleInstance& particle, const glm::vec3& origin, const float radius, const float bounceFactor,
+    const ParticleCollisionBehavior behavior, const bool stopRotation
+) {
+    const glm::vec3 relative = particle.position - origin;
+    const float squared = (relative.y * relative.y + relative.x * relative.x) + relative.z * relative.z;
+    // Native opcode 22 tests the current strict interior, including signed radii.
+    if (!(squared < radius * radius)) return;
+    if (behavior == ParticleCollisionBehavior::Delete) {
+        particle.age = particle.lifetime;
+    } else {
+        const float inverseLength = particleRemapInverseLength (squared);
+        const glm::vec3 normal = relative * inverseLength;
+        particle.position -= normal * (squared * inverseLength - radius);
+        if (behavior == ParticleCollisionBehavior::Stop) particle.velocity = glm::vec3 (0.0f);
+        else {
+            const float projection = (particle.velocity.y * normal.y + particle.velocity.x * normal.x)
+                + particle.velocity.z * normal.z;
+            const float response = behavior == ParticleCollisionBehavior::Slide ? 1.0f : 1.0f + bounceFactor;
+            particle.velocity -= normal * (response * projection);
+        }
+    }
+    if (stopRotation) particle.angularVelocity = glm::vec3 (0.0f);
+}
+
+OperatorFunc CParticle::createCollisionSphereOperator (const CollisionSphereOperator& op) {
+    includeControlPoint (op.controlPoint);
+    const bool perspective = getScene ().getScene ().camera.projection.isPerspective;
+    const glm::vec3 defaultOrigin = perspective ? glm::vec3 (0.0f) : glm::vec3 (0.0f, -200.0f, 0.0f);
+    const float defaultRadius = perspective ? 1.0f : 50.0f;
+    return [&op, defaultOrigin, defaultRadius] (
+        std::vector<ParticleInstance>& particles, uint32_t count,
+        const std::vector<ControlPointData>& controlPoints, float, float
+    ) {
+        const glm::vec3 origin = (op.flags & 1) != 0 ? controlPoints[op.controlPoint].position
+            : (op.origin ? op.origin->value->getVec3 () : defaultOrigin) * glm::vec3 (1.0f, -1.0f, 1.0f);
+        const float radius = op.radius ? op.radius->value->getFloat () : defaultRadius;
+        const float bounceFactor = op.bounceFactor->value->getFloat ();
+        for (uint32_t i = 0; i < count; ++i) {
+            auto& particle = particles[i];
+            if (particle.shouldSimulate ()) applyParticleSphereCollision (
+                particle, origin, radius, bounceFactor, op.behavior, (op.flags & 2) != 0
             );
         }
     };

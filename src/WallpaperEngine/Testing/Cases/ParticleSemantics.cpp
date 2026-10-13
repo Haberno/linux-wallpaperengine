@@ -5943,3 +5943,123 @@ TEST_CASE ("quad collisions use one-way crossing and current finite bounds", "[p
     applyParticleQuadCollision (scaledBounds, origin, plane, right, { 0, 0, 2 }, { 4, 3 }, .25f, ParticleCollisionBehavior::Delete, false);
     CHECK (scaledBounds.age == 1);
 }
+
+TEST_CASE ("stock sphere collisions retain native authored and null fields", "[particle][collisionsphere]") {
+    WallpaperEngine::Data::Model::Project project {};
+    const auto object = WallpaperEngine::Data::Parsers::ObjectParser::parse (
+        WallpaperEngine::Data::JSON::JSON::parse (R"({"id":9,"particle":{"operator":[
+            {"name":"collisionsphere","collisionbehavior":"slide","origin":"0 -100 0"},
+            {"name":"collisionsphere"},
+            {"name":"collisionsphere","origin":"1 -2 3","radius":-10,"bouncefactor":0.25,"collisionbehavior":"stop","flags":3,"controlpoint":999},
+            {"name":"collisionsphere","origin":null,"radius":null,"bouncefactor":null,"collisionbehavior":null,"flags":null,"controlpoint":null},
+            {"name":"collisionsphere","collisionbehavior":"delete","controlpoint":-1},
+            {"name":"collisionsphere","collisionbehavior":"unknown"}
+        ]}})"), project
+    );
+    const auto* particle = object->as<Particle> ();
+    REQUIRE (particle != nullptr);
+    REQUIRE (particle->operators.size () == 6);
+    for (const auto& op : particle->operators) REQUIRE (op->is<CollisionSphereOperator> ());
+    const auto* stock = particle->operators[0]->as<CollisionSphereOperator> ();
+    CHECK (stock->origin->value->getVec3 () == glm::vec3 (0, -100, 0));
+    CHECK (stock->radius == nullptr);
+    CHECK (stock->behavior == ParticleCollisionBehavior::Slide);
+    const auto* defaults = particle->operators[1]->as<CollisionSphereOperator> ();
+    CHECK (defaults->origin == nullptr);
+    CHECK (defaults->radius == nullptr);
+    CHECK (defaults->bounceFactor->value->getFloat () == .5f);
+    CHECK (defaults->behavior == ParticleCollisionBehavior::Bounce);
+    CHECK (defaults->flags == 0);
+    CHECK (defaults->controlPoint == 0);
+    const auto* authored = particle->operators[2]->as<CollisionSphereOperator> ();
+    CHECK (authored->origin->value->getVec3 () == glm::vec3 (1, -2, 3));
+    CHECK (authored->radius->value->getFloat () == -10);
+    CHECK (authored->bounceFactor->value->getFloat () == .25f);
+    CHECK (authored->behavior == ParticleCollisionBehavior::Stop);
+    CHECK (authored->flags == 3);
+    CHECK (authored->controlPoint == 7);
+    const auto* nulls = particle->operators[3]->as<CollisionSphereOperator> ();
+    CHECK (nulls->origin->value->getVec3 () == glm::vec3 (0));
+    CHECK (nulls->radius->value->getFloat () == 0);
+    CHECK (nulls->bounceFactor->value->getFloat () == 0);
+    CHECK (nulls->behavior == ParticleCollisionBehavior::Bounce);
+    CHECK (nulls->flags == 0);
+    CHECK (nulls->controlPoint == 0);
+    CHECK (particle->operators[4]->as<CollisionSphereOperator> ()->behavior == ParticleCollisionBehavior::Delete);
+    CHECK (particle->operators[4]->as<CollisionSphereOperator> ()->controlPoint == 7);
+    CHECK (particle->operators[5]->as<CollisionSphereOperator> ()->behavior == ParticleCollisionBehavior::Bounce);
+}
+
+TEST_CASE ("sphere collisions use strict current interior and signed projection", "[particle][collisionsphere]") {
+    using WallpaperEngine::Render::Objects::applyParticleSphereCollision;
+    const glm::vec3 origin (1, -2, 3);
+    ParticleInstance original;
+    original.position = { 4, 2, 3 };
+    original.previousPosition = origin;
+    original.velocity = { 5, -10, 2 };
+    original.rotation = { 4, 5, 6 };
+    original.angularVelocity = { 1, 2, 3 };
+    original.age = 1;
+    original.lifetime = 7;
+    const struct { ParticleCollisionBehavior behavior; glm::vec3 velocity; } modes[] = {
+        { ParticleCollisionBehavior::Bounce, { 8.75f, -5, 2 } },
+        { ParticleCollisionBehavior::Slide, { 8, -6, 2 } },
+        { ParticleCollisionBehavior::Stop, { 0, 0, 0 } },
+        { ParticleCollisionBehavior::Delete, { 5, -10, 2 } }
+    };
+    for (const auto& mode : modes) for (const bool stopRotation : { false, true }) {
+        ParticleInstance particle = original;
+        applyParticleSphereCollision (particle, origin, 10, .25f, mode.behavior, stopRotation);
+        // Native RSQRTPS is approximate; these independent literals use the finite equations.
+        CHECK (particle.position.x == Catch::Approx (mode.behavior == ParticleCollisionBehavior::Delete ? 4 : 7).margin (.01f));
+        CHECK (particle.position.y == Catch::Approx (mode.behavior == ParticleCollisionBehavior::Delete ? 2 : 6).margin (.01f));
+        CHECK (particle.position.z == 3);
+        CHECK (particle.velocity.x == Catch::Approx (mode.velocity.x).margin (.01f));
+        CHECK (particle.velocity.y == Catch::Approx (mode.velocity.y).margin (.01f));
+        CHECK (particle.velocity.z == mode.velocity.z);
+        CHECK (particle.age == (mode.behavior == ParticleCollisionBehavior::Delete ? 7 : 1));
+        CHECK (particle.angularVelocity == (stopRotation ? glm::vec3 (0) : original.angularVelocity));
+        CHECK (particle.rotation == original.rotation);
+        CHECK (particle.previousPosition == original.previousPosition);
+    }
+    ParticleInstance boundary = original;
+    boundary.position = origin + glm::vec3 (6, 8, 0);
+    applyParticleSphereCollision (boundary, origin, 10, .25f, ParticleCollisionBehavior::Delete, true);
+    CHECK (boundary.position == origin + glm::vec3 (6, 8, 0));
+    CHECK (boundary.velocity == original.velocity);
+    CHECK (boundary.age == 1);
+    CHECK (boundary.angularVelocity == original.angularVelocity);
+    ParticleInstance negative = original;
+    applyParticleSphereCollision (negative, origin, -10, .25f, ParticleCollisionBehavior::Bounce, false);
+    CHECK (negative.position.x == Catch::Approx (-5).margin (.01f));
+    CHECK (negative.position.y == Catch::Approx (-10).margin (.01f));
+    CHECK (negative.position.z == 3);
+    CHECK (negative.velocity.x == Catch::Approx (8.75f).margin (.01f));
+    ParticleInstance outward = original;
+    outward.velocity = { 3, 4, 0 };
+    applyParticleSphereCollision (outward, origin, 10, .25f, ParticleCollisionBehavior::Bounce, false);
+    CHECK (outward.velocity.x == Catch::Approx (-.75f).margin (.01f));
+    CHECK (outward.velocity.y == Catch::Approx (-1).margin (.01f));
+    for (const auto& mode : modes) {
+        ParticleInstance center = original;
+        center.position = origin;
+        applyParticleSphereCollision (center, origin, 0, .25f, mode.behavior, true);
+        CHECK (center.position == origin);
+        CHECK (center.velocity == original.velocity);
+        CHECK (center.age == 1);
+        CHECK (center.angularVelocity == original.angularVelocity);
+        applyParticleSphereCollision (center, origin, 10, .25f, mode.behavior, true);
+        if (mode.behavior == ParticleCollisionBehavior::Delete) {
+            CHECK (center.position == origin);
+            CHECK (center.velocity == original.velocity);
+            CHECK (center.age == 7);
+        } else {
+            CHECK (std::isnan (center.position.x));
+            CHECK (std::isnan (center.position.y));
+            CHECK (std::isnan (center.position.z));
+            if (mode.behavior == ParticleCollisionBehavior::Stop) CHECK (center.velocity == glm::vec3 (0));
+            else CHECK (std::isnan (center.velocity.x));
+        }
+        CHECK (center.angularVelocity == glm::vec3 (0));
+    }
+}
