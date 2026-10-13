@@ -721,7 +721,11 @@ void CParticle::clearParticles (const bool stopEmission) {
     if (stopEmission) m_emitting = false;
     m_remapSystemTime = 0.0f;
     m_particleCount = 0;
-    m_remapSlots.clear ();
+    if (m_hasBoidsOperator) {
+        // Native stop clears lifetime/extent while retaining position and velocity planes.
+        for (auto& slot : m_remapSlots) { slot.lifetime = 0.0f; slot.alive = false; }
+        m_boidsSlotExtent = 0;
+    } else m_remapSlots.clear ();
     m_remapAllocationCursor = 0;
     m_remapNativeCount = 0;
     m_retiredParticleCount = 0;
@@ -746,7 +750,7 @@ void CParticle::updateRemapClocks (const float frameDelta, const bool visible) {
     if (m_particleParent == nullptr) {
         // Native hidden-live clearing resets the layer and permanent systems,
         // while an already empty hidden layer retains its layer clock.
-        if (!visible && (m_hasControlPointOutputOperator ? m_remapNativeCount : m_particleCount) != 0) {
+        if (!visible && (usesNativeParticleSlots () ? m_remapNativeCount : m_particleCount) != 0) {
             m_remapLayerTime = 0.0f;
             clearParticles (false);
         }
@@ -1008,11 +1012,11 @@ void CParticle::updateControlPoints (const float frameTime, const bool refreshOn
 void CParticle::update (float dt) {
     // Reclaim this frame's expired slots before emitting. A full one-particle
     // glow otherwise rejects its replacement, then disappears for one frame.
-    if (dt > 0.0f && m_hasControlPointOutputOperator) advanceRemapSlots (dt);
+    if (dt > 0.0f && usesNativeParticleSlots ()) advanceRemapSlots (dt);
     uint32_t writeIdx = 0;
     for (uint32_t readIdx = 0; dt > 0.0f && readIdx < m_particleCount; ++readIdx) {
 	auto& particle = m_particles[readIdx];
-        if (m_hasControlPointOutputOperator) {
+        if (usesNativeParticleSlots ()) {
             const auto& slot = m_remapSlots[particle.remapSlot];
             if (slot.serial != particle.serial) continue;
             particle.age = slot.age;
@@ -1023,7 +1027,7 @@ void CParticle::update (float dt) {
 	if (particle.isAlive ()) {
 	    if (writeIdx != readIdx) m_particles[writeIdx] = std::move (particle);
 	    ++writeIdx;
-	} else if (!m_hasControlPointOutputOperator) {
+	} else if (!usesNativeParticleSlots ()) {
 	    ++m_retiredParticleCount;
 	    // Death bursts keep the last simulated tip before this slot is reused.
 	    for (auto& child : m_followChildren) {
@@ -1085,12 +1089,14 @@ void CParticle::update (float dt) {
     const int fps = getScene ().getContext ().getApp ().getContext ().settings.render.maximumFPS;
     const int substeps = fps >= 1 && fps <= 20 ? 2 : 1;
     const float operatorDt = dt / static_cast<float> (substeps);
-    if (m_hasControlPointOutputOperator) synchronizeRemapSlots ();
-    auto& simulatedParticles = m_hasControlPointOutputOperator ? m_remapSlots : m_particles;
-    const uint32_t simulatedCount = m_hasControlPointOutputOperator ? m_remapSlots.size () : m_particleCount;
+    if (usesNativeParticleSlots ()) synchronizeRemapSlots ();
+    auto& simulatedParticles = usesNativeParticleSlots () ? m_remapSlots : m_particles;
+    const uint32_t simulatedCount = m_hasBoidsOperator ? (m_boidsSlotExtent + 3u) & ~3u
+        : m_hasControlPointOutputOperator ? m_remapSlots.size () : m_particleCount;
+    const uint32_t restoredCount = m_hasBoidsOperator ? m_boidsSlotExtent : simulatedCount;
     for (int step = 0; step < substeps; ++step) {
 	// Each native dispatch restores birth color/alpha/size before operators.
-	for (uint32_t i = 0; i < simulatedCount; ++i) {
+	for (uint32_t i = 0; i < restoredCount; ++i) {
 	    if (m_hasColorOperators) simulatedParticles[i].color = simulatedParticles[i].initial.color;
 	    if (m_hasAlphaOperators) simulatedParticles[i].alpha = simulatedParticles[i].initial.alpha;
 	    simulatedParticles[i].size = simulatedParticles[i].initial.size;
@@ -1106,7 +1112,7 @@ void CParticle::update (float dt) {
 	}
     }
 
-    if (m_hasControlPointOutputOperator) publishRemapSlots ();
+    if (usesNativeParticleSlots ()) publishRemapSlots ();
 
     updateRopeTrailHistory (dt);
     updateFollowChildren (firstNewParticle);
@@ -1122,7 +1128,9 @@ void CParticle::update (float dt) {
 
 void CParticle::advanceRemapSlots (const float dt) {
     synchronizeRemapSlots ();
-    for (auto& slot : m_remapSlots) {
+    const size_t extent = m_hasBoidsOperator ? (m_boidsSlotExtent + 3u) & ~3u : m_remapSlots.size ();
+    for (size_t index = 0; index < extent; ++index) {
+        auto& slot = m_remapSlots[index];
         slot.age += dt;
         if (slot.lifetime != 0.0f && slot.lifetime < slot.age) {
             slot.lifetime = 0.0f;
@@ -1140,17 +1148,21 @@ void CParticle::advanceRemapSlots (const float dt) {
 
 uint32_t CParticle::acquireRemapSlot () {
     if (m_remapNativeCount >= m_maxParticles) return m_maxParticles;
-    for (uint32_t index = m_remapAllocationCursor; index < m_remapSlots.size (); ++index) {
+    const uint32_t extent = m_hasBoidsOperator ? m_boidsSlotExtent : m_remapSlots.size ();
+    for (uint32_t index = m_remapAllocationCursor; index < extent; ++index) {
         if (m_remapSlots[index].lifetime == 0.0f) {
             m_remapAllocationCursor = index + 1;
             ++m_remapNativeCount;
             return index;
         }
     }
-    if (m_remapSlots.size () == m_maxParticles) return m_maxParticles;
-    const uint32_t index = m_remapSlots.size ();
-    m_remapSlots.emplace_back ();
-    m_remapSlots.back ().lifetime = 0.0f;
+    if (extent == m_maxParticles) return m_maxParticles;
+    const uint32_t index = extent;
+    if (m_hasBoidsOperator) ++m_boidsSlotExtent;
+    else {
+        m_remapSlots.emplace_back ();
+        m_remapSlots.back ().lifetime = 0.0f;
+    }
     m_remapAllocationCursor = index + 1;
     ++m_remapNativeCount;
     return index;
@@ -1186,7 +1198,7 @@ void CParticle::publishRemapSlots () {
 void CParticle::finalizeParticleBirths (const uint32_t firstNewParticle, const uint32_t firstManual) {
     for (uint32_t i = firstNewParticle; i < m_particleCount; ++i) {
         m_particles[i].serial = ++m_nextParticleSerial;
-        if (m_hasControlPointOutputOperator)
+        if (usesNativeParticleSlots ())
             m_remapSlots[m_particles[i].remapSlot].serial = m_particles[i].serial;
     }
     if ((m_particle.flags & 1) == 0) return;
@@ -1447,11 +1459,11 @@ EmitterFunc CParticle::createBoxEmitter (const ParticleEmitter& definition) {
             }
 	    // Native caches the origin before the birth loop; initializers may mutate it.
 	    for (uint32_t i = 0; i < toEmit && count < particles.size (); i++) {
-                const uint32_t slot = m_hasControlPointOutputOperator ? acquireRemapSlot () : 0;
-                if (m_hasControlPointOutputOperator && slot == m_maxParticles) break;
+                const uint32_t slot = usesNativeParticleSlots () ? acquireRemapSlot () : 0;
+                if (usesNativeParticleSlots () && slot == m_maxParticles) break;
 		auto& p = particles[count];
                 p.remapSlot = slot;
-                p.nativeSlotState = m_hasControlPointOutputOperator;
+                p.nativeSlotState = usesNativeParticleSlots ();
 
 		// Generate random position with directions applied before the inner distance.
 		// Native preserves that distance when an axis direction has non-unit magnitude.
@@ -1516,7 +1528,7 @@ EmitterFunc CParticle::createBoxEmitter (const ParticleEmitter& definition) {
 		    init (p);
 		}
 
-                if (m_hasControlPointOutputOperator) m_remapSlots[slot] = p;
+                if (usesNativeParticleSlots ()) m_remapSlots[slot] = p;
 		count++;
 	    }
 	};
@@ -1629,11 +1641,11 @@ EmitterFunc CParticle::createSphereEmitter (const ParticleEmitter& emitter) {
             }
 	    // Native caches the origin before the birth loop; initializers may mutate it.
 	    for (uint32_t i = 0; i < toEmit && count < particles.size (); i++) {
-                const uint32_t slot = m_hasControlPointOutputOperator ? acquireRemapSlot () : 0;
-                if (m_hasControlPointOutputOperator && slot == m_maxParticles) break;
+                const uint32_t slot = usesNativeParticleSlots () ? acquireRemapSlot () : 0;
+                if (usesNativeParticleSlots () && slot == m_maxParticles) break;
 		auto& p = particles[count];
                 p.remapSlot = slot;
-                p.nativeSlotState = m_hasControlPointOutputOperator;
+                p.nativeSlotState = usesNativeParticleSlots ();
 	    // Spawn at random position on ellipsoid surface
 	    glm::vec3 randomPos;
 
@@ -1742,7 +1754,7 @@ EmitterFunc CParticle::createSphereEmitter (const ParticleEmitter& emitter) {
 		init (p);
 	    }
 
-            if (m_hasControlPointOutputOperator) m_remapSlots[slot] = p;
+            if (usesNativeParticleSlots ()) m_remapSlots[slot] = p;
 	    count++;
 	}
     };
@@ -2727,6 +2739,8 @@ void CParticle::setupOperators () {
 	    func = createCollisionQuadOperator (*op->as<CollisionQuadOperator> ());
 	} else if (op->is<CollisionSphereOperator> ()) {
 	    func = createCollisionSphereOperator (*op->as<CollisionSphereOperator> ());
+	} else if (op->is<BoidsOperator> ()) {
+	    func = createBoidsOperator (*op->as<BoidsOperator> ());
 	} else if (op->is<CapVelocityOperator> ()) {
 	    func = createCapVelocityOperator (*op->as<CapVelocityOperator> ());
 	} else if (op->is<ReduceMovementNearControlPointOperator> ()) {
@@ -2792,7 +2806,7 @@ OperatorFunc CParticle::createMovementOperator (const MovementOperator& op) {
 	    }
 
 	    // Native snapshots each movement operator's start for swept attraction deletion.
-	    p.previousPosition = p.position;
+	    if (!m_hasBoidsOperator || i < m_boidsSlotExtent) p.previousPosition = p.position;
 	    // Native movement applies gravity before advancing position, then drag.
 	    // Otherwise a large drag*dt discards every frame's force without motion.
 	    p.velocity += gravity * dt * speed;
@@ -2953,6 +2967,86 @@ OperatorFunc CParticle::createCollisionSphereOperator (const CollisionSphereOper
             if (particle.shouldSimulate ()) applyParticleSphereCollision (
                 particle, origin, radius, bounceFactor, op.behavior, (op.flags & 2) != 0
             );
+        }
+    };
+}
+
+static float particleBoidsReciprocal (const float value) {
+#if defined(__SSE__)
+    return _mm_cvtss_f32 (_mm_rcp_ss (_mm_set_ss (value)));
+#else
+    return 1.0f / value;
+#endif
+}
+
+OperatorFunc CParticle::createBoidsOperator (const BoidsOperator& op) {
+    if (!m_hasBoidsOperator) {
+        m_hasBoidsOperator = true;
+        m_remapSlots.resize ((m_maxParticles + 3u) & ~3u);
+        for (auto& slot : m_remapSlots) {
+            slot.lifetime = 0.0f;
+            slot.nativeSlotState = true;
+        }
+    }
+    const bool perspective = getScene ().getScene ().camera.projection.isPerspective;
+    const float separationThreshold = op.separationThreshold.value_or (perspective ? 0.02f : 20.0f);
+    const float neighborThreshold = op.neighborThreshold.value_or (perspective ? 0.2f : 50.0f);
+    const float maxSpeed = op.maxSpeed.value_or (perspective ? 1.0f : 500.0f);
+    return [this, op, separationThreshold, neighborThreshold, maxSpeed] (
+        std::vector<ParticleInstance>& particles, uint32_t,
+        const std::vector<ControlPointData>&, float, float dt
+    ) {
+        const uint32_t count = m_boidsSlotExtent;
+        const uint32_t stride = count / 200u + 1u;
+        const uint32_t frame = getScene ().getSceneFrame ();
+        const float forceDt = dt * std::pow (std::min (0.025f / getScene ().getDeltaTime (), 1.0f), 0.7f);
+        const float separationFactor = (float (stride) * op.separationFactor) * forceDt;
+        const float alignmentFactor = (float (stride) * op.alignmentFactor) * forceDt;
+        const float cohesionFactor = (float (stride) * op.cohesionFactor) * forceDt;
+        for (uint32_t base = 4u * (frame % stride); base < count; base += 4u * stride) {
+            std::array<glm::vec3, 4> separation {}, position {}, velocity {}, result {};
+            std::array<uint32_t, 4> separationCount {}, neighborCount {};
+            for (uint32_t neighbor = 4u * ((frame + base) % stride); neighbor < count; neighbor += 4u * stride) {
+                for (uint32_t rotation = 0; rotation < 4; ++rotation) {
+                    for (uint32_t lane = 0; lane < 4; ++lane) {
+                        // Native rotates coordinates/velocity while retaining this unrotated lane mask.
+                        if (particles[neighbor + lane].lifetime == 0.0f) continue;
+                        const auto& other = particles[neighbor + ((lane - rotation) & 3u)];
+                        const glm::vec3 delta = particles[base + lane].position - other.position;
+                        const float squared = glm::dot (delta, delta);
+                        if (squared == 0.0f) continue;
+                        const float inverseDistance = particleRemapInverseLength (squared);
+                        const float distance = squared * inverseDistance;
+                        if (distance < separationThreshold) {
+                            separation[lane] += delta * (separationThreshold * inverseDistance - 1.0f);
+                            ++separationCount[lane];
+                        }
+                        if (distance < neighborThreshold) {
+                            position[lane] += other.position;
+                            velocity[lane] += other.velocity;
+                            ++neighborCount[lane];
+                        }
+                    }
+                }
+            }
+            for (uint32_t lane = 0; lane < 4; ++lane) {
+                const auto& particle = particles[base + lane];
+                const float neighborInverse = neighborCount[lane] != 0
+                    ? particleBoidsReciprocal (float (neighborCount[lane])) : 0.0f;
+                glm::vec3 delta (0.0f);
+                if (neighborCount[lane] != 0) delta = (velocity[lane] * neighborInverse - particle.velocity)
+                    * alignmentFactor;
+                if (separationCount[lane] != 0) delta += separation[lane]
+                    * (particleBoidsReciprocal (float (separationCount[lane])) * separationFactor);
+                if (neighborCount[lane] != 0) delta += (position[lane] * neighborInverse - particle.position)
+                    * cohesionFactor;
+                result[lane] = particle.velocity + delta;
+                const float squared = glm::dot (result[lane], result[lane]);
+                if ((op.flags & 1) != 0 && squared > std::max (glm::dot (particle.velocity, particle.velocity), maxSpeed * maxSpeed))
+                    result[lane] *= maxSpeed * particleRemapInverseLength (squared);
+            }
+            // Write four lanes together; later batches read these updated velocities.
+            for (uint32_t lane = 0; lane < 4; ++lane) particles[base + lane].velocity = result[lane];
         }
     };
 }

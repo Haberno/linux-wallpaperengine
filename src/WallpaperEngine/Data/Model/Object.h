@@ -533,6 +533,24 @@ public:
     uint32_t controlPoint;
 };
 
+class BoidsOperator : public ParticleOperatorBase {
+public:
+    BoidsOperator (
+        std::optional<float> separationThreshold, std::optional<float> neighborThreshold,
+        std::optional<float> maxSpeed, float separationFactor, float alignmentFactor,
+        float cohesionFactor, uint32_t flags
+    ) : separationThreshold (separationThreshold), neighborThreshold (neighborThreshold), maxSpeed (maxSpeed),
+        separationFactor (separationFactor), alignmentFactor (alignmentFactor), cohesionFactor (cohesionFactor),
+        flags (flags) { }
+    std::optional<float> separationThreshold;
+    std::optional<float> neighborThreshold;
+    std::optional<float> maxSpeed;
+    float separationFactor;
+    float alignmentFactor;
+    float cohesionFactor;
+    uint32_t flags;
+};
+
 class CapVelocityOperator : public ParticleOperatorBase {
 public:
     CapVelocityOperator (UserSettingUniquePtr maxSpeed, glm::vec4 blendTimes) :

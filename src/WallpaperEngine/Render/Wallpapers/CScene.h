@@ -119,6 +119,7 @@ public:
     [[nodiscard]] float getTime () const;
     /** Scene-relative timestamp for subtracting animation intervals before narrowing. */
     [[nodiscard]] double getElapsedTime () const { return this->m_sceneElapsedTime; }
+    [[nodiscard]] uint32_t getSceneFrame () const { return this->m_sceneFrame; }
     [[nodiscard]] float getDeltaTime () const;
     [[nodiscard]] float getPreviousDeltaTime () const { return m_previousSceneDeltaTime; }
     [[nodiscard]] float getFps () const;

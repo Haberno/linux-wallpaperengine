@@ -311,6 +311,7 @@ protected:
     OperatorFunc createCollisionPlaneOperator (const CollisionPlaneOperator& op);
     OperatorFunc createCollisionQuadOperator (const CollisionQuadOperator& op);
     OperatorFunc createCollisionSphereOperator (const CollisionSphereOperator& op);
+    OperatorFunc createBoidsOperator (const BoidsOperator& op);
     OperatorFunc createCapVelocityOperator (const CapVelocityOperator& op);
     OperatorFunc createAngularMovementOperator (const AngularMovementOperator& op);
     OperatorFunc createAlphaFadeOperator (const AlphaFadeOperator& op);
@@ -401,6 +402,9 @@ private:
     uint32_t m_remapAllocationCursor { 0 };
     uint32_t m_remapNativeCount { 0 };
     bool m_hasControlPointOutputOperator { false };
+    bool m_hasBoidsOperator { false };
+    uint32_t m_boidsSlotExtent { 0 };
+    bool usesNativeParticleSlots () const { return m_hasControlPointOutputOperator || m_hasBoidsOperator; }
     void advanceRemapSlots (float dt);
     uint32_t acquireRemapSlot ();
     void synchronizeRemapSlots ();

@@ -1279,6 +1279,16 @@ ParticleOperatorUniquePtr ObjectParser::parseParticleOperator (const JSON& it, c
             it.user ("bouncefactor", properties, it.contains ("bouncefactor") ? 0.0f : 0.5f), behavior,
             it.optional ("flags", 0u), std::min (static_cast<uint32_t> (it.optional ("controlpoint", 0)), 7u)
         );
+    } else if (name == "boids") {
+        return std::make_unique<BoidsOperator> (
+            it.contains ("separationthreshold") ? std::optional<float> (it.optional ("separationthreshold", 0.0f)) : std::nullopt,
+            it.contains ("neighborthreshold") ? std::optional<float> (it.optional ("neighborthreshold", 0.0f)) : std::nullopt,
+            it.contains ("maxspeed") ? std::optional<float> (it.optional ("maxspeed", 0.0f)) : std::nullopt,
+            it.optional ("separationfactor", it.contains ("separationfactor") ? 0.0f : 15.0f),
+            it.optional ("alignmentfactor", it.contains ("alignmentfactor") ? 0.0f : 1.0f),
+            it.optional ("cohesionfactor", it.contains ("cohesionfactor") ? 0.0f : 2.0f),
+            it.optional ("flags", it.contains ("flags") ? 0u : 1u)
+        );
     } else if (name == "capvelocity") {
 	return std::make_unique<CapVelocityOperator> (
 	    it.optional ("maxspeed") ? it.user ("maxspeed", properties) : nullptr,
