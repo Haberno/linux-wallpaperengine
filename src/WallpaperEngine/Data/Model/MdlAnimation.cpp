@@ -835,7 +835,7 @@ float wrapAngle (const float angle) {
 }
 
 /**
- * One spring bone step from native 1401fdf90, returning the local physics transform that
+ * One spring/rigid bone step from native 1401fdf90, returning the local physics transform that
  * follows the animated bone. `animatedWorld` already carries the parent's physics.
  */
 glm::mat4 stepSpring (
@@ -874,7 +874,8 @@ glm::mat4 stepSpring (
 	const float degree = glm::radians (1.0f);
 	auto& velocity = state.angularVelocity;
 	velocity *= glm::slerp (identity, follow, std::min (drag * spring.rotationInertia * degree, 1.0f));
-	velocity *= glm::slerp (identity, glm::quat (-state.angles), std::min (spring.rotationStiffness * degree * dt, 1.0f));
+	if (!spring.rigid)
+	    velocity *= glm::slerp (identity, glm::quat (-state.angles), std::min (spring.rotationStiffness * degree * dt, 1.0f));
 	if (spring.limitTorque) {
 	    // Native limits the three quaternion ratios, not Euler angles or total rotation.
 	    const glm::vec3 ratios = glm::vec3 (velocity.x, velocity.y, velocity.z) / velocity.w;
@@ -892,13 +893,16 @@ glm::mat4 stepSpring (
 	glm::extractEulerAngleZYX (
 	    glm::mat4 (glm::mat3_cast (step) * glm::mat3_cast (glm::quat (state.angles))), angles.z, angles.y, angles.x
 	);
-	for (int axis = 0; axis < 3; axis++) angles[axis] = spring.rotationAxes[axis] ? wrapAngle (angles[axis]) : 0.0f;
+	if (!spring.rigid)
+	    for (int axis = 0; axis < 3; axis++) angles[axis] = spring.rotationAxes[axis] ? wrapAngle (angles[axis]) : 0.0f;
 	if (spring.limitAngles) {
 	    const glm::vec3 limited = glm::clamp (angles, spring.minAngles, spring.maxAngles);
 	    // A clamped rotation also stops the velocity pushing against the limit.
 	    velocity = glm::conjugate (glm::quat (angles - limited)) * velocity;
 	    angles = limited;
 	}
+	if (spring.rigid)
+	    for (int axis = 0; axis < 3; axis++) if (!spring.rotationAxes[axis]) angles[axis] = 0.0f;
 	state.angles = angles;
 	velocity = glm::slerp (velocity, identity, std::min (dt * spring.rotationFriction, 1.0f));
     }
@@ -906,7 +910,7 @@ glm::mat4 stepSpring (
     if (spring.translation) {
 	auto& offset = state.offset;
 	offset -= (position + offset - glm::vec3 (previous[3])) * spring.translationInertia;
-	state.velocity -= dt * spring.translationStiffness * offset;
+	if (!spring.rigid) state.velocity -= dt * spring.translationStiffness * offset;
 	offset += dt * state.velocity;
 	for (int axis = 0; axis < 3; axis++) {
 	    const glm::vec3 direction (current[axis]);

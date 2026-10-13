@@ -12,8 +12,9 @@
 #include "PropertyAnimation.h"
 
 namespace WallpaperEngine::Data::Model {
-/** MDLS "spring physics" bone constraint (se), as read by native 140265c30. */
+/** MDLS spring/rigid physics bone constraint (se/re), as read by native 140265c30. */
 struct MdlBoneSpring {
+    bool rigid = false; // re; native prioritizes rigid when se and re are both enabled.
     bool rotation = false; // r
     bool translation = false; // t
     float rotationStiffness = 0.0f; // rs

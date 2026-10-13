@@ -913,7 +913,9 @@ TEST_CASE ("MDLS spring bone constraints parse the native physics keys", "[mdl][
     CHECK (bone.maxAngles.z == Catch::Approx (0.25f));
     CHECK (bone.rotationAxes == glm::bvec3 (false, false, true));
     CHECK (bone.translationAxes == glm::bvec3 (true));
-    CHECK_FALSE (parsed.bones[1].spring.has_value ()); // rigid physics is not simulated
+    REQUIRE (parsed.bones[1].spring.has_value ());
+    CHECK (parsed.bones[1].spring->rigid);
+    CHECK_FALSE (bone.rigid);
 }
 
 TEST_CASE ("Spring bones lag behind layer motion and settle back", "[mdl][animation][physics]") {
@@ -2747,4 +2749,75 @@ TEST_CASE ("Ordinary dependency groups preserve owner-time worlds", "[mdl][anima
     CHECK (syntheticState.ropePoints.empty ());
     CHECK (syntheticPose.worldBones[1][3].x == Catch::Approx (0).margin (1e-5f));
     CHECK (syntheticPose.worldBones[1][3].y == Catch::Approx (10).margin (1e-5f));
+}
+
+TEST_CASE ("MDLS rigid mode preserves native admission and priority", "[mdl][rigid]") {
+    const std::vector<std::string> metadata {
+        R"({"se":false,"re":true,"r":true})",
+        R"({"se":true,"re":true,"r":true})",
+        R"({"se":true,"re":false,"r":true})",
+        R"({"se":false,"re":false,"r":true})",
+        R"({"se":false,"re":true,"r":false,"t":false})",
+        R"({"se":false,"re":true,"r":false,"t":true})"
+    };
+    std::vector<char> bytes;
+    appendMarker (bytes, "MDLS0002");
+    const size_t endOffset = bytes.size ();
+    appendValue<uint32_t> (bytes, 0);
+    appendValue<uint32_t> (bytes, metadata.size ());
+    for (const auto& value : metadata) {
+        appendString (bytes, "bone");
+        appendValue<uint32_t> (bytes, 1);
+        appendValue<int32_t> (bytes, -1);
+        appendValue<uint32_t> (bytes, 64);
+        appendMatrix (bytes, glm::mat4 (1));
+        appendString (bytes, value);
+    }
+    patchU32 (bytes, endOffset, bytes.size ());
+    const auto parsed = MdlAnimationParser::parse (bytes, "rigid.mdl");
+    REQUIRE (parsed.bones.size () == metadata.size ());
+    for (const size_t index : { 0u, 1u, 2u, 5u }) REQUIRE (parsed.bones[index].spring.has_value ());
+    CHECK (parsed.bones[0].spring->rigid);
+    CHECK (parsed.bones[1].spring->rigid);
+    CHECK_FALSE (parsed.bones[2].spring->rigid);
+    CHECK_FALSE (parsed.bones[3].spring);
+    CHECK_FALSE (parsed.bones[4].spring);
+    CHECK (parsed.bones[5].spring->translation);
+}
+
+TEST_CASE ("Rigid bones omit stiffness and clamp before disabled rotation axes", "[mdl][rigid]") {
+    for (const bool rigid : { false, true }) {
+        CAPTURE (rigid);
+        MdlAnimationData data;
+        data.bones = { { .spring = MdlBoneSpring { .rigid = rigid, .rotation = true,
+            .rotationStiffness = 10000, .tip = { 100, 0, 0 } } } };
+        MdlPhysicsState state;
+        state.bones.resize (1);
+        state.bones[0].angles.z = .4f;
+        state.previousWorld = { glm::mat4_cast (glm::quat (state.bones[0].angles)) };
+        MdlPhysicsStep physics { .state = state, .deltaTime = 1 / 60.0f };
+        const auto rotation = MdlAnimationEvaluator::evaluate (data, {}, &physics);
+        const float expectedAngle = rigid ? .4f : 0.0f;
+        CHECK (state.bones[0].angles.z == Catch::Approx (expectedAngle).margin (.000001f));
+        CHECK (rotation.worldBones[0][0].y == Catch::Approx (std::sin (expectedAngle)).margin (.000001f));
+
+        data.bones[0].spring = MdlBoneSpring { .rigid = rigid, .translation = true, .translationStiffness = 120 };
+        state = { .bones = std::vector<MdlPhysicsState::Bone> (1),
+            .previousWorld = { glm::translate (glm::mat4 (1), glm::vec3 (3, 0, 0)) } };
+        state.bones[0].offset.x = 3;
+        const auto translation = MdlAnimationEvaluator::evaluate (data, {}, &physics);
+        CHECK (state.bones[0].offset.x == Catch::Approx (rigid ? 3 : 2.9f));
+        CHECK (state.bones[0].velocity.x == Catch::Approx (rigid ? 0 : -6));
+        CHECK (translation.worldBones[0][3].x == Catch::Approx (rigid ? 3 : 2.9f));
+
+        data.bones[0].spring = MdlBoneSpring { .rigid = rigid, .rotation = true, .tip = { 100, 0, 0 },
+            .limitAngles = true, .minAngles = { .2f, -1, -1 }, .maxAngles = { .3f, 1, 1 },
+            .rotationAxes = { false, true, true } };
+        state = { .bones = std::vector<MdlPhysicsState::Bone> (1) };
+        state.bones[0].angles.x = .4f;
+        state.previousWorld = { glm::mat4_cast (glm::quat (state.bones[0].angles)) };
+        static_cast<void> (MdlAnimationEvaluator::evaluate (data, {}, &physics));
+        CHECK (state.bones[0].angles.x == Catch::Approx (rigid ? 0 : .2f));
+        CHECK (state.bones[0].angularVelocity.x == Catch::Approx (rigid ? -std::sin (.05f) : std::sin (.1f)).margin (.000001f));
+    }
 }

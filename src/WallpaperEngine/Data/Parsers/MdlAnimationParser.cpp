@@ -45,7 +45,7 @@ std::string readString (const std::vector<char>& data, size_t& offset, const siz
     return value;
 }
 
-/** Spring bone settings, following native 140265c30's key handling. */
+/** Spring/rigid bone settings, following native 140265c30's key handling. */
 std::optional<WallpaperEngine::Data::Model::MdlBoneSpring> parseSpring (const nlohmann::json& constraints) {
     const auto flag = [&] (const char* key) {
 	const auto value = constraints.find (key);
@@ -72,9 +72,9 @@ std::optional<WallpaperEngine::Data::Model::MdlBoneSpring> parseSpring (const nl
 	return glm::bvec3 (flag (x), flag (y), flag (z));
     };
 
-    // ponytail: spring mode only; rigid ("re") physics has its own native branch and is not simulated.
-    if (!flag ("se") || flag ("re") || !(flag ("r") || flag ("t"))) return std::nullopt;
+    if (!(flag ("se") || flag ("re")) || !(flag ("r") || flag ("t"))) return std::nullopt;
     return WallpaperEngine::Data::Model::MdlBoneSpring {
+	.rigid = flag ("re"),
 	.rotation = flag ("r"),
 	.translation = flag ("t"),
 	.rotationStiffness = number ("rs", 0.0f),
