@@ -42,6 +42,8 @@ public:
     void render ();
     /** Refresh initialized user-image materials, including currently hidden passes. */
     bool updateUserTextures ();
+    /** Bind the current standard albedo provider/frame for an alpha-cutout shadow draw. */
+    bool bindAlbedoTexture ();
     /** Cold authored dependencies needed when an initialized selection is cleared. */
     void collectUserTextureFallbacks (std::set<std::string>& names) const;
 

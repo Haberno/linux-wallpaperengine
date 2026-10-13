@@ -9,6 +9,7 @@
 #include <numeric>
 #include <ranges>
 #include <sstream>
+#include <tuple>
 
 #include <glm/gtc/matrix_transform.hpp>
 #include <glm/gtc/type_ptr.hpp>
@@ -542,10 +543,12 @@ void CModel::setupMaterialPasses (const std::vector<const Material*>& materials)
     for (size_t submeshIndex = 0; submeshIndex < materials.size (); ++submeshIndex) {
 	const auto& material = materials[submeshIndex];
 	const auto opaquePass = std::find_if (material->passes.begin (), material->passes.end (), [] (const auto& pass) {
-	    return pass->blending == BlendingMode_Normal;
+	    return pass->blending == BlendingMode_Normal
+		|| (pass->blending == BlendingMode_AlphaToCoverage && pass->shader == "generic4");
 	});
 	m_submeshes[submeshIndex].castsShadow = opaquePass != material->passes.end ();
 	m_submeshes[submeshIndex].shadowCulling = m_submeshes[submeshIndex].castsShadow && (*opaquePass)->cullmode == CullingMode_Normal;
+	m_submeshes[submeshIndex].shadowAlphaPass = nullptr;
 
 	for (const auto& cur : materials[submeshIndex]->passes) {
 	    ComboMap runtimeCombos;
@@ -588,6 +591,10 @@ void CModel::setupMaterialPasses (const std::vector<const Material*>& materials)
 		);
 	    }
 	    this->setupGeometryCallback (pass.get (), submeshIndex);
+	    if (opaquePass != material->passes.end () && cur.get () == opaquePass->get ()
+		&& cur->blending == BlendingMode_AlphaToCoverage) {
+		m_submeshes[submeshIndex].shadowAlphaPass = pass.get ();
+	    }
 
 	    this->m_passes.push_back (pass.release ());
 	    this->getScene ().loadingCheckpoint ();
@@ -673,7 +680,7 @@ void CModel::syncModelDataMaterials () {
     auto previousClasses = std::move (m_renderSortClasses);
     auto previousPasses = std::move (m_passes);
     std::vector<SubmeshBuffers> previousSubmeshes;
-    std::vector<std::pair<bool, bool>> previousShadow;
+    std::vector<std::tuple<bool, bool, Effects::CPass*>> previousShadow;
     if (structureChanged) {
         previousSubmeshes = std::move (m_submeshes);
         m_submeshes.resize (materials.size ());
@@ -687,7 +694,8 @@ void CModel::syncModelDataMaterials () {
             buffers.indexCount = shape.input.indexWidth == 0 ? 0 : static_cast<GLsizei> (shape.input.indices.size () / shape.input.indexWidth);
         }
     } else {
-        for (const auto& buffers : m_submeshes) previousShadow.emplace_back (buffers.castsShadow, buffers.shadowCulling);
+        for (const auto& buffers : m_submeshes)
+            previousShadow.emplace_back (buffers.castsShadow, buffers.shadowCulling, buffers.shadowAlphaPass);
     }
     try {
         if (materials.empty () || m_materials.empty () || materials[0] != m_materials[0]) {
@@ -706,8 +714,9 @@ void CModel::syncModelDataMaterials () {
             m_submeshes = std::move (previousSubmeshes);
         } else {
             for (size_t index = 0; index < m_submeshes.size (); ++index) {
-                m_submeshes[index].castsShadow = previousShadow[index].first;
-                m_submeshes[index].shadowCulling = previousShadow[index].second;
+                m_submeshes[index].castsShadow = std::get<0> (previousShadow[index]);
+                m_submeshes[index].shadowCulling = std::get<1> (previousShadow[index]);
+                m_submeshes[index].shadowAlphaPass = std::get<2> (previousShadow[index]);
             }
         }
         m_texture = previousTexture;
@@ -761,7 +770,9 @@ std::vector<size_t> CModel::calculatePassRenderPermutation (const std::vector<Bl
 void CModel::setupShadowProgram () {
     std::ostringstream vertex;
     vertex << "#version 330 core\n"
-	      "layout(location = 0) in vec3 a_Position;\n";
+	      "layout(location = 0) in vec3 a_Position;\n"
+	      "layout(location = 3) in vec2 a_TexCoord;\n"
+	      "out vec2 v_TexCoord;\n";
     if (this->m_skinningEnabled) {
 	vertex << "layout(location = 1) in uvec4 a_BlendIndices;\n"
 		  "layout(location = 2) in vec4 a_BlendWeights;\n"
@@ -770,6 +781,7 @@ void CModel::setupShadowProgram () {
     vertex << "uniform mat4 u_LightViewProjection;\n"
 	      "uniform mat4 u_Model;\n"
 	      "void main() {\n"
+	      "    v_TexCoord = a_TexCoord;\n"
 	      "    vec3 localPosition = a_Position;\n";
     if (this->m_skinningEnabled) {
 	vertex << "    mat4x3 skin = u_Bones[a_BlendIndices.x] * a_BlendWeights.x\n"
@@ -781,7 +793,17 @@ void CModel::setupShadowProgram () {
     vertex << "    gl_Position = u_LightViewProjection * u_Model * vec4(localPosition, 1.0);\n"
 	      "}\n";
 
-    static const std::string fragment = "#version 330 core\nvoid main() {}\n";
+    static const std::string fragment = "#version 330 core\n"
+	"uniform bool u_AlphaToCoverage;\n"
+	"uniform sampler2D u_Albedo;\n"
+	"in vec2 v_TexCoord;\n"
+	"void main() {\n"
+	"    if (u_AlphaToCoverage) {\n"
+	"        float alpha = texture(u_Albedo, v_TexCoord).a;\n"
+	"        float coverage = (alpha - 0.5) / max(fwidth(alpha), 0.0001) + 0.5;\n"
+	"        if (coverage < 0.5) discard;\n"
+	"    }\n"
+	"}\n";
     std::shared_ptr<Shaders::ShaderProgramCache::SharingGroup> group;
     this->m_shadowProgram = this->getScene ().getContext ().getShaderProgramCache ().interfaceProgram (
 	vertex.str (), fragment, group
@@ -794,6 +816,8 @@ void CModel::setupShadowProgram () {
     this->m_shadowLightViewProjection = glGetUniformLocation (this->m_shadowProgram->id, "u_LightViewProjection");
     this->m_shadowModel = glGetUniformLocation (this->m_shadowProgram->id, "u_Model");
     this->m_shadowBones = glGetUniformLocation (this->m_shadowProgram->id, "u_Bones");
+    this->m_shadowAlbedo = glGetUniformLocation (this->m_shadowProgram->id, "u_Albedo");
+    this->m_shadowAlphaToCoverage = glGetUniformLocation (this->m_shadowProgram->id, "u_AlphaToCoverage");
 }
 
 void CModel::setupGeometryCallback (Effects::CPass* pass, size_t submeshIndex) {
@@ -1218,12 +1242,15 @@ void CModel::renderShadow (const glm::mat4& lightViewProjection) {
 	return;
     }
 
+    // The atlas has one depth sample; cutout coverage is handled by the fragment discard.
+    glDisable (GL_SAMPLE_ALPHA_TO_COVERAGE);
     // Every depth draw uploads its full layout, so the query program is safe as a fallback.
     glUseProgram (this->m_sharedShadowProgram ? this->m_sharedShadowProgram->id : this->m_shadowProgram->id);
     glUniformMatrix4fv (
 	this->m_shadowLightViewProjection, 1, GL_FALSE, glm::value_ptr (lightViewProjection)
     );
     glUniformMatrix4fv (this->m_shadowModel, 1, GL_FALSE, glm::value_ptr (this->m_modelMatrix));
+    glUniform1i (this->m_shadowAlbedo, 0);
     if (this->m_skinningEnabled && this->m_shadowBones >= 0 && !this->m_gpuSkinBones.empty ()) {
 	glUniformMatrix4x3fv (
 	    this->m_shadowBones, static_cast<GLsizei> (this->m_gpuSkinBones.size ()), GL_FALSE,
@@ -1240,6 +1267,8 @@ void CModel::renderShadow (const glm::mat4& lightViewProjection) {
 	    || layout.positionOffset == MdlMesh::AttributeAbsent) {
 	    continue;
 	}
+	glUniform1i (this->m_shadowAlphaToCoverage, buffers.shadowAlphaPass != nullptr);
+	if (buffers.shadowAlphaPass != nullptr && !buffers.shadowAlphaPass->bindAlbedoTexture ()) continue;
 	if (buffers.shadowCulling) {
 	    glEnable (GL_CULL_FACE);
 	} else {
@@ -1257,6 +1286,12 @@ void CModel::renderShadow (const glm::mat4& lightViewProjection) {
 	    glBindBuffer (GL_ARRAY_BUFFER, buffers.vertexBuffer);
 	    glEnableVertexAttribArray (0);
 	    glVertexAttribPointer (0, 3, GL_FLOAT, GL_FALSE, stride, reinterpret_cast<void*> (layout.positionOffset));
+	    if (layout.uvOffset != MdlMesh::AttributeAbsent) {
+		glEnableVertexAttribArray (3);
+		glVertexAttribPointer (3, 2, GL_FLOAT, GL_FALSE, stride, reinterpret_cast<void*> (layout.uvOffset));
+	    } else {
+		glDisableVertexAttribArray (3);
+	    }
 	    if (this->m_skinningEnabled) {
 		glEnableVertexAttribArray (1);
 		glVertexAttribIPointer (

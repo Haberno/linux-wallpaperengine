@@ -89,6 +89,7 @@ private:
 	uint32_t shadowVertexTag = 0;
 	bool castsShadow = false;
 	bool shadowCulling = false;
+	Effects::CPass* shadowAlphaPass = nullptr;
         std::vector<float> morphVertices;
     };
 
@@ -152,6 +153,8 @@ private:
     GLint m_shadowLightViewProjection = -1;
     GLint m_shadowModel = -1;
     GLint m_shadowBones = -1;
+    GLint m_shadowAlbedo = -1;
+    GLint m_shadowAlphaToCoverage = -1;
     bool m_initialized = false;
 
     /** model objects carry no per-object tint/alpha; materials do that via constants */

@@ -284,6 +284,14 @@ void CPass::setupRenderTexture () {
     }
 }
 
+bool CPass::bindAlbedoTexture () {
+    const auto texture = this->resolveTexture0 ();
+    if (texture == nullptr || !texture->isReady ()) return false;
+    const auto animation = this->resolveTextureAnimationState (texture);
+    this->bindTextureUnit (0, texture, animation.currentTexture);
+    return true;
+}
+
 std::shared_ptr<const TextureProvider> CPass::resolveTexture0 () {
     auto texture0 = this->resolveTexture (this->m_input, 0, this->m_input);
     const auto it = this->m_textures.find (0);
