@@ -10,6 +10,8 @@
 #include <limits>
 #include <glm/gtc/matrix_transform.hpp>
 #include "WallpaperEngine/Data/Parsers/ObjectParser.h"
+#include "WallpaperEngine/Data/Parsers/WallpaperParser.h"
+#include "WallpaperEngine/Render/Wallpapers/CScene.h"
 #include "WallpaperEngine/FileSystem/Container.h"
 #include "WallpaperEngine/Render/Utils/NoiseUtils.h"
 
@@ -6317,4 +6319,83 @@ TEST_CASE ("model collision uses last strict capsule and native response without
     CHECK (center.position == glm::vec3 (0));
     CHECK (center.velocity == glm::vec3 (1,2,3));
     CHECK (center.age == 7);
+}
+
+TEST_CASE ("static AUTO bounds choose and recenter the first image before framing", "[particle][collisionbounds-auto]") {
+    using namespace WallpaperEngine::Data::Model;
+    using WallpaperEngine::Data::JSON::JSON;
+    using WallpaperEngine::Render::Wallpapers::CScene;
+    auto filesystem = std::make_unique<WallpaperEngine::FileSystem::Container> ();
+    filesystem->getVFS ().add ("scene.json", R"({
+        "camera":{"center":"0 0 -1","eye":"0 0 0","up":"0 1 0"},
+        "general":{"orthogonalprojection":{"auto":true}},"objects":[
+          {"id":1,"name":"parent","origin":"0 0 0"},
+          {"id":10,"image":"models/image.json","parent":1,"visible":false,
+           "size":"10.75 20.5","origin":"777 999 7","scale":"2 3 1"},
+          {"id":20,"image":"models/image.json","size":"200 300","origin":"0 0 0"},
+          {"id":30,"particle":"particles/probe.json","parent":10,"origin":"3 4 0"}
+        ]})");
+    filesystem->getVFS ().add ("models/image.json", R"({"material":"materials/image.json"})");
+    filesystem->getVFS ().add ("materials/image.json", R"({"passes":[{"shader":"copy"}]})");
+    filesystem->getVFS ().add ("particles/probe.json", R"({"operator":[{"name":"collisionbounds"}]})");
+    auto* files = filesystem.get ();
+    Project project {};
+    project.type = Project::Type_Scene;
+    project.assetLocator = std::make_unique<WallpaperEngine::Assets::AssetLocator> (std::move (filesystem));
+    auto wallpaper = WallpaperEngine::Data::Parsers::WallpaperParser::parse (JSON ("scene.json"), project);
+    auto* scene = wallpaper->as<Scene> ();
+    auto* first = scene->objects[1]->as<Image> ();
+
+    SECTION ("hidden first image defines float canvas, integer bounds and inherited origin") {
+        const auto size = CScene::prepareStaticAutoCollisionBounds (*scene);
+        REQUIRE (size.has_value ());
+        CHECK (size->x == 10.75f);
+        CHECK (size->y == 20.5f);
+        CHECK (glm::ivec2 (*size) == glm::ivec2 (10, 20));
+        CHECK_FALSE (first->visible->value->getBool ());
+        CHECK (first->origin->value->getVec3 () == glm::vec3 (5.375f, 10.25f, 0));
+        CHECK (first->parent == 1);
+        CHECK (first->scale->value->getVec3 () == glm::vec3 (2, 3, 1));
+        const glm::mat4 owner = glm::translate (glm::mat4 (1), first->origin->value->getVec3 ())
+            * glm::scale (glm::mat4 (1), first->scale->value->getVec3 ())
+            * glm::translate (glm::mat4 (1), scene->objects[3]->origin->value->getVec3 ());
+        CHECK (glm::vec3 (owner[3]) == glm::vec3 (11.375f, 22.25f, 0));
+        CHECK (scene->objects[2]->origin->value->getVec3 () == glm::vec3 (0));
+    }
+    SECTION ("no image starts the collision snapshot at zero") {
+        scene->objects.erase (scene->objects.begin () + 1, scene->objects.begin () + 3);
+        const auto size = CScene::prepareStaticAutoCollisionBounds (*scene);
+        REQUIRE (size.has_value ());
+        CHECK (*size == glm::vec2 (0));
+    }
+    SECTION ("unsupported first image does not use a later ordinary image") {
+        first->model->autosize = true;
+        CHECK_FALSE (CScene::prepareStaticAutoCollisionBounds (*scene).has_value ());
+        CHECK (first->origin->value->getVec3 () == glm::vec3 (777, 999, 7));
+    }
+    SECTION ("size wrappers and origin timelines remain unsupported") {
+        first->initialConfiguration = R"({"size":{"value":"10.75 20.5"}})";
+        CHECK_FALSE (CScene::prepareStaticAutoCollisionBounds (*scene).has_value ());
+        first->initialConfiguration = R"({"size":"10.75 20.5"})";
+        first->origin->animation = std::make_unique<PropertyAnimation> ();
+        CHECK_FALSE (CScene::prepareStaticAutoCollisionBounds (*scene).has_value ());
+    }
+    SECTION ("resolved external material and particle scripts block static admission") {
+        auto setting = WallpaperEngine::Data::Builders::UserSettingBuilder::fromValue (1.0f);
+        setting->value->setScriptSource ("export function update(value){return value;}");
+        first->model->material->passes.front ()->constants.emplace ("probe", std::move (setting));
+        CHECK_FALSE (CScene::prepareStaticAutoCollisionBounds (*scene).has_value ());
+        first->model->material->passes.front ()->constants.clear ();
+        files->getVFS ().add ("particles/probe.json", R"({"operator":[],"alpha":{"script":"external"}})");
+        CHECK_FALSE (CScene::prepareStaticAutoCollisionBounds (*scene).has_value ());
+    }
+    SECTION ("actual scene parser preserves the general script exclusion") {
+        files->getVFS ().add ("scene.json", R"({
+          "camera":{"center":"0 0 -1","eye":"0 0 0","up":"0 1 0"},
+          "general":{"orthogonalprojection":{"auto":true},"bloom":{"value":false,"script":"general"}},
+          "objects":[{"id":30,"particle":"particles/probe.json"}]})");
+        const auto scripted = WallpaperEngine::Data::Parsers::WallpaperParser::parse (JSON ("scene.json"), project);
+        CHECK (scripted->as<Scene> ()->hasPropertyScripts);
+        CHECK_FALSE (CScene::prepareStaticAutoCollisionBounds (*scripted->as<Scene> ()).has_value ());
+    }
 }

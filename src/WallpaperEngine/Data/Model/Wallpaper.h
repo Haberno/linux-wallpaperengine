@@ -47,6 +47,8 @@ struct SceneData {
     bool hdr = false;
     /** Native MSAA admission is any authored, non-null top-level model layer. */
     bool hasModelLayer = false;
+    /** Conservative static AUTO admission also excludes general/property scripts. */
+    bool hasPropertyScripts = false;
     /** Automatically order blended 3D models from back to front. */
     bool transparentSorting;
     /** Preserve an explicitly authored layer order instead of automatic depth sorting. */

@@ -104,6 +104,11 @@ public:
     [[nodiscard]] int getWidth () const override;
     [[nodiscard]] int getHeight () const override;
     [[nodiscard]] const glm::vec2& getOutputSize () const;
+    /** Static admitted AUTO bounds use a constructor snapshot, never output/camera extents. */
+    [[nodiscard]] const std::optional<glm::ivec2>& getAutoCollisionBoundsExtent () const {
+        return m_autoCollisionBoundsExtent;
+    }
+    [[nodiscard]] static std::optional<glm::vec2> prepareStaticAutoCollisionBounds (const Scene& scene);
     /** Previous completed scene, before bloom; allocated only when a material requests it. */
     [[nodiscard]] std::shared_ptr<CFBO> getMipMappedFramebuffer ();
     /** Retain hidden layer outputs referenced by material/shader texture inputs. */
@@ -345,6 +350,7 @@ private:
     std::unique_ptr<Scripting::ScriptEngine> m_scriptEngine;
     std::unique_ptr<Camera> m_camera;
     glm::vec2 m_outputSize = { 1, 1 };
+    std::optional<glm::ivec2> m_autoCollisionBoundsExtent;
     std::shared_ptr<CFBO> m_mipMappedFramebuffer;
     void updateOutputSize (const glm::ivec4& viewport);
     bool m_hdrEnabled = false;

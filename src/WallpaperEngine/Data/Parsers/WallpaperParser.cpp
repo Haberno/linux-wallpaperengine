@@ -147,6 +147,7 @@ SceneUniquePtr WallpaperParser::parseScene (const JSON& file, Project& project) 
             .version = scene.optional ("version", 0),
             .hdr = general.optional ("hdr", false),
             .hasModelLayer = hasModelLayer,
+            .hasPropertyScripts = scene.dump ().find ("\"script\":") != std::string::npos,
             .transparentSorting = general.optional ("transparentsorting", false),
             .customSortOrder = general.optional ("customsortorder", false),
             .clearEnabled = general.user ("clearenabled", properties, true),

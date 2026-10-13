@@ -28,6 +28,7 @@
 #include <cmath>
 #include <functional>
 #include <fstream>
+#include <limits>
 #include <numeric>
 #include <ranges>
 
@@ -79,8 +80,13 @@ CScene::CScene (
 	height = this->m_outputSize.y;
     }
 
-    // detect size if the orthogonal project is auto
-    if (!isPerspective && scene->camera.projection.isAuto) {
+    const auto autoBoundsSize = prepareStaticAutoCollisionBounds (*scene);
+    if (autoBoundsSize) m_autoCollisionBoundsExtent = glm::ivec2 (*autoBoundsSize);
+    if (autoBoundsSize && autoBoundsSize->x > 0.0f && autoBoundsSize->y > 0.0f) {
+        width = autoBoundsSize->x;
+        height = autoBoundsSize->y;
+    // Unsupported AUTO scenes and the image-less display keep their existing fallback.
+    } else if (!isPerspective && scene->camera.projection.isAuto) {
 	glm::vec2 maxExtent = { 0.0f, 0.0f };
 
 	for (const auto& object : scene->objects) {
@@ -2050,6 +2056,60 @@ const Scene& CScene::getScene () const { return *this->getWallpaperData ().as<Sc
 int CScene::getWidth () const { return this->m_camera->getWidth (); }
 
 int CScene::getHeight () const { return this->m_camera->getHeight (); }
+
+std::optional<glm::vec2> CScene::prepareStaticAutoCollisionBounds (const Scene& scene) {
+    if (!scene.camera.projection.isAuto || scene.camera.projection.isPerspective || scene.hasPropertyScripts)
+        return std::nullopt;
+    const bool hasBounds = std::ranges::any_of (scene.objects, [] (const auto& object) {
+        if (!object->template is<Particle> ()) return false;
+        const auto* particle = object->template as<Particle> ();
+        return std::ranges::any_of (particle->operators, [] (const auto& op) {
+            return op->template is<CollisionBoundsOperator> ();
+        });
+    });
+    if (!hasBounds) return std::nullopt;
+    const auto materialScripts = [] (const Material* material) {
+        return material && std::ranges::any_of (material->passes, [] (const auto& pass) {
+            return std::ranges::any_of (pass->constants, [] (const auto& constant) {
+                return constant.second->value->getScriptSource ().has_value ();
+            });
+        });
+    };
+    const Image* firstImage = nullptr;
+    for (const auto& object : scene.objects) {
+        if (object->is<Image> ()) {
+            const auto* image = object->as<Image> ();
+            if (!image->effects.empty () || materialScripts (image->model->material.get ())) return std::nullopt;
+            if (!firstImage) firstImage = image;
+        } else if (object->is<Particle> ()) {
+            const auto* particle = object->as<Particle> ();
+            if (!particle->children.empty () || materialScripts (particle->material ? particle->material->material.get () : nullptr))
+                return std::nullopt;
+            if (!particle->particleFile.empty ()) {
+                const auto definition = WallpaperEngine::Data::JSON::parseCompatible (
+                    scene.project.assetLocator->readString (particle->particleFile), particle->particleFile
+                );
+                if (definition.dump ().find ("\"script\":") != std::string::npos) return std::nullopt;
+            }
+        } else if (object->is<Model3D> () || (object->is<Text> () && !object->as<Text> ()->effects.empty ())) {
+            return std::nullopt;
+        }
+    }
+    // Native initializes the collision context to zero and holds it when no image exists.
+    if (!firstImage) return glm::vec2 (0.0f);
+    const auto& image = *firstImage;
+    if (image.model->fullscreen || image.model->autosize || image.model->passthrough || image.attachment
+        || image.origin->property || image.origin->animation || image.origin->value->getScriptSource ()) return std::nullopt;
+    const auto configuration = JSON::parse (image.initialConfiguration);
+    const auto size = configuration.find ("size");
+    if (size == configuration.end () || (!size->is_string () && !size->is_array ())) return std::nullopt;
+    const float integerLimit = static_cast<float> (std::numeric_limits<int>::max ());
+    if (!std::isfinite (image.size.x) || !std::isfinite (image.size.y) || image.size.x <= 0.0f || image.size.y <= 0.0f
+        || image.size.x >= integerLimit || image.size.y >= integerLimit) return std::nullopt;
+    // Recenter LOCAL origin before any descendants resolve through the normal parent chain.
+    image.origin->value->update (glm::vec3 (image.size * .5f, 0.0f), DynamicValue::UpdateSource::Initialization);
+    return image.size;
+}
 
 float CScene::getTime () const { return static_cast<float> (this->m_sceneTime); }
 

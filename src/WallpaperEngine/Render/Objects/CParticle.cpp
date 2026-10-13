@@ -3448,12 +3448,13 @@ void WallpaperEngine::Render::Objects::applyParticleBoundsCollision (
 
 OperatorFunc CParticle::createCollisionBoundsOperator (const CollisionBoundsOperator& op) {
     const auto& projection = getScene ().getScene ().camera.projection;
-    if (projection.isAuto) {
+    if (projection.isAuto && !getScene ().getAutoCollisionBoundsExtent ()) {
         sLog.out ("Warning: collisionbounds disabled for auto projection in particle ", m_particle.name,
             "; native first-image sizing is not implemented");
         return {};
     }
-    const glm::ivec2 extent = projection.isPerspective ? glm::ivec2 (0) : glm::ivec2 (projection.width, projection.height);
+    const glm::ivec2 extent = projection.isAuto ? *getScene ().getAutoCollisionBoundsExtent ()
+        : projection.isPerspective ? glm::ivec2 (0) : glm::ivec2 (projection.width, projection.height);
     const glm::mat4 flipY = glm::scale (glm::mat4 (1.0f), glm::vec3 (1.0f, -1.0f, 1.0f));
     return [this, &op, extent, flipY] (
         std::vector<ParticleInstance>& particles, uint32_t count, const std::vector<ControlPointData>&, float, float
