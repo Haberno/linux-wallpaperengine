@@ -76,6 +76,7 @@ ObjectData ObjectParser::parseBase (const JSON& it, const Project& project) {
 	};
     }
 
+    basedata.typedDependencies = parseTypedDependencies (it);
     basedata.initialConfiguration = it.dump ();
     basedata.disablePropagation = it.optional ("disablepropagation", false);
 
@@ -163,14 +164,28 @@ std::vector<int> ObjectParser::parseDependencies (const JSON& it) {
 	    result.push_back (cur);
 	} else if (cur.is_object ()) {
 	    // newer scenes author entries as {"id": 104, "index": 0, "type": "collisionmodel"}
-	    // instead of a bare object id. only the id matters here, dependencies are just a
-	    // creation-order list
+	    // instead of a bare object id. Retain IDs for creation/render ordering;
+	    // typed bindings retain their type and index separately
 	    if (const auto id = cur.optional<int> ("id"); id.has_value ()) {
 		result.push_back (*id);
 	    }
 	}
     }
 
+    return result;
+}
+
+std::vector<ObjectDependency> ObjectParser::parseTypedDependencies (const JSON& it) {
+    const auto dependencies = it.find ("dependencies");
+    std::vector<ObjectDependency> result;
+    if (dependencies == it.end () || !dependencies->is_array ()) return result;
+    for (const auto& dependency : *dependencies) {
+	if (!dependency.is_object ()) continue;
+	const auto type = dependency.optional<std::string> ("type");
+	const auto id = dependency.optional<int> ("id");
+	const auto index = dependency.optional<uint32_t> ("index");
+	if (id && index && type) result.push_back ({ *id, *index, *type, dependency.optional ("mask", std::string ()) });
+    }
     return result;
 }
 
@@ -1004,7 +1019,7 @@ ParticleEmitter ObjectParser::parseParticleEmitter (const JSON& it) {
 	    .speedMax = it.optional ("speedmax", 0.0f),
 	    .rate = it.optional ("rate", 10.0f),
 	    .controlPoint = static_cast<int> (std::min (it.optional ("controlpoint", 0u), 7u)),
-	    .flags = it.optional ("flags", 0u),
+	    .flags = it.contains ("flags") ? it.optional ("flags", 0u) : name == "layerimage" ? 65536u : 0u,
 	    .cone = it.optional ("cone", 0.0f),
 	    .delay = it.optional ("delay", 0.0f),
 	    .duration = it.optional ("duration", 0.0f),

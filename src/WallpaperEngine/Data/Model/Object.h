@@ -22,6 +22,13 @@
 namespace WallpaperEngine::Data::Model {
 using namespace WallpaperEngine::Data::Utils;
 
+struct ObjectDependency {
+    int id;
+    uint32_t index;
+    std::string type;
+    std::string mask;
+};
+
 struct ObjectData {
     int id;
     std::string name;
@@ -45,6 +52,8 @@ struct ObjectData {
     bool disablePropagation = false;
     /** Cameras retain a generic data object but never admit volumetric draws. */
     bool cameraLayer = false;
+    /** Typed runtime bindings retain their authored dependency index. */
+    std::vector<ObjectDependency> typedDependencies;
 };
 
 /**

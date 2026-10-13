@@ -22,6 +22,18 @@ using namespace WallpaperEngine::Data::Model;
 
 namespace WallpaperEngine::Render::Objects {
 
+class CImage;
+
+struct ParticleLayerImageSample {
+    int16_t x;
+    int16_t y;
+    std::array<uint8_t, 3> color;
+};
+
+[[nodiscard]] std::vector<ParticleLayerImageSample> buildParticleLayerImageSamples (
+    const std::vector<uint8_t>& rgba, glm::uvec2 extent, glm::uvec2 sourceExtent
+);
+
 constexpr uint32_t DEFAULT_MAX_PARTICLES = 1000;
 
 [[nodiscard]] float advanceParticleRenderTime (double currentTime, double& previousTime);
@@ -97,6 +109,7 @@ struct ParticleInstance {
 
     // Visual properties
     glm::vec3 color { 1.0f };
+    glm::vec3 emitterColor { 1.0f }; // Working RGB before birth initializers.
     float alpha { 1.0f };
     float size { 20.0f };
 
@@ -287,6 +300,15 @@ protected:
     [[nodiscard]] glm::vec3 resolveEmitterOrigin (const glm::vec3& origin) const;
     EmitterFunc createBoxEmitter (const ParticleEmitter& emitter);
     EmitterFunc createSphereEmitter (const ParticleEmitter& emitter);
+    EmitterFunc createLayerImageEmitter (const ParticleEmitter& emitter, uint32_t imageIndex);
+    struct LayerImageCache {
+	const CImage* source = nullptr;
+	int sourceId = -1;
+	glm::uvec2 extent { 0 };
+	bool ready = false;
+	std::vector<ParticleLayerImageSample> samples;
+    };
+    bool updateLayerImageCache (LayerImageCache& cache);
 
     // Initializer creators
     [[nodiscard]] glm::vec3 remapLayerOrigin () const;

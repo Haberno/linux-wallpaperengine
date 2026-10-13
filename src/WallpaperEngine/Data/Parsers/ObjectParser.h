@@ -39,6 +39,7 @@ public:
 
 private:
     static std::vector<int> parseDependencies (const JSON& it);
+    static std::vector<ObjectDependency> parseTypedDependencies (const JSON& it);
     static SoundUniquePtr parseSound (const JSON& it, const Project& project, ObjectData base);
     static ImageUniquePtr
     parseImage (const JSON& it, const Project& project, ObjectData base, const std::string& image);

@@ -1,4 +1,5 @@
 #include "CParticle.h"
+#include "WallpaperEngine/Render/Objects/CImage.h"
 #include "WallpaperEngine/Render/Depth.h"
 
 #include "WallpaperEngine/Data/Model/Property.h"
@@ -36,6 +37,25 @@ float WallpaperEngine::Render::Objects::calculateParticleSimulationDelta (const 
 
 float WallpaperEngine::Render::Objects::calculateParticleEmissionRate (const float emitterRate, const float count) {
     return glm::max (emitterRate, 0.0f) * glm::max (count, 0.0f);
+}
+
+std::vector<ParticleLayerImageSample> WallpaperEngine::Render::Objects::buildParticleLayerImageSamples (
+    const std::vector<uint8_t>& rgba, const glm::uvec2 extent, const glm::uvec2 sourceExtent
+) {
+    std::vector<ParticleLayerImageSample> samples;
+    const float scale = static_cast<float> (sourceExtent.x) / extent.x;
+    for (uint32_t x = 0; x < extent.x; ++x) {
+	for (uint32_t y = 0; y < extent.y; ++y) {
+	    const size_t pixel = (static_cast<size_t> (y) * extent.x + x) * 4;
+	    if (rgba[pixel + 3] < 127) continue;
+	    samples.push_back ({
+		static_cast<int16_t> (scale * x - static_cast<float> (sourceExtent.x / 2) + scale * 0.5f),
+		static_cast<int16_t> (scale * y - static_cast<float> (sourceExtent.y / 2) + scale * 0.5f),
+		{ rgba[pixel], rgba[pixel + 1], rgba[pixel + 2] }
+	    });
+	}
+    }
+    return samples;
 }
 
 float WallpaperEngine::Render::Objects::calculateParticleLifetime (
@@ -1224,7 +1244,7 @@ void CParticle::finishManualParticleBirths (const uint32_t firstNewParticle) {
 	    particle.size = 0.5f;
 	    // Native separates working alpha/color only when an operator needs it.
 	    if (m_hasAlphaOperators) particle.alpha = getInstanceOverride ().alpha->value->getFloat ();
-	    if (m_hasColorOperators) particle.color = m_instanceColor;
+	    if (m_hasColorOperators) particle.color = particle.emitterColor;
 	}
 	updateFollowChildren (firstNewParticle);
 }
@@ -1305,6 +1325,7 @@ const glm::vec3& CParticle::getCompositeColor () const { return getColor (); }
 
 void CParticle::setupEmitters () {
     m_pendingEmitterCount = 0;
+    uint32_t imageIndex = 0;
     for (const auto& emitter : m_particle.emitters) {
 	EmitterFunc func;
 
@@ -1312,6 +1333,8 @@ void CParticle::setupEmitters () {
 	    func = createBoxEmitter (emitter);
 	} else if (emitter.name == "sphererandom") {
 	    func = createSphereEmitter (emitter);
+	} else if (emitter.name == "layerimage") {
+	    func = createLayerImageEmitter (emitter, imageIndex++);
 	} else {
 	    sLog.out ("Unknown emitter type: ", emitter.name);
 	    continue;
@@ -1505,6 +1528,7 @@ EmitterFunc CParticle::createBoxEmitter (const ParticleEmitter& definition) {
 		p.angularAcceleration = glm::vec3 (0.0f);
 
 		p.color = m_instanceColor;
+		p.emitterColor = p.color;
 		p.alpha = 1.0f * getInstanceOverride ().alpha->value->getFloat ();
 		p.size = 0.5f;
 		p.lifetime = 1.0f;
@@ -1532,6 +1556,188 @@ EmitterFunc CParticle::createBoxEmitter (const ParticleEmitter& definition) {
 		count++;
 	    }
 	};
+}
+
+bool CParticle::updateLayerImageCache (LayerImageCache& cache) {
+    const auto* sourceLayer = dynamic_cast<const CImage*> (getScene ().getObject (cache.sourceId));
+    if (sourceLayer != cache.source) return false;
+    const auto& image = cache.source->getImage ();
+    const auto texture = cache.source->getTexture ();
+    // The first slice is an ordinary static textured layer. Other native source
+    // types and dynamic cache refresh have separate sampling contracts.
+    if (!texture || !texture->isReady () || texture->isAnimated ()
+	|| (texture->getFlags () & (TextureFlags_Video | TextureFlags_Volume)) != 0 || !image.model
+	|| image.model->solidlayer || image.model->fullscreen || image.model->passthrough
+	|| image.model->puppet || cache.source->isCompositionLayer () || !image.effects.empty ()) return false;
+    const auto source = cache.source->find ("_rt_imageLayerComposite_" + std::to_string (image.id) + "_a");
+    if (!source || !source->isReady ()
+	|| (source->getFlags () & (TextureFlags_NoInterpolation | TextureFlags_ClampUVs | TextureFlags_ClampUVsBorder))
+	    != TextureFlags_ClampUVs) return false;
+    const glm::uvec2 extent (source->getRealWidth (), source->getRealHeight ());
+    if (extent.x > 3840 || extent.y > 2160) return false;
+    if (cache.ready) return cache.extent == extent && !cache.samples.empty ();
+
+    GLint drawFramebuffer, readFramebuffer, viewport[4], vao, program, arrayBuffer;
+    GLint packBuffer, packAlignment, packRowLength, packSkipRows, packSkipPixels;
+    GLint activeTexture, texture0, sampler0;
+    glGetIntegerv (GL_DRAW_FRAMEBUFFER_BINDING, &drawFramebuffer);
+    glGetIntegerv (GL_READ_FRAMEBUFFER_BINDING, &readFramebuffer);
+    glGetIntegerv (GL_VIEWPORT, viewport);
+    glGetIntegerv (GL_VERTEX_ARRAY_BINDING, &vao);
+    glGetIntegerv (GL_CURRENT_PROGRAM, &program);
+    glGetIntegerv (GL_ARRAY_BUFFER_BINDING, &arrayBuffer);
+    glGetIntegerv (GL_PIXEL_PACK_BUFFER_BINDING, &packBuffer);
+    glGetIntegerv (GL_PACK_ALIGNMENT, &packAlignment);
+    glGetIntegerv (GL_PACK_ROW_LENGTH, &packRowLength);
+    glGetIntegerv (GL_PACK_SKIP_ROWS, &packSkipRows);
+    glGetIntegerv (GL_PACK_SKIP_PIXELS, &packSkipPixels);
+    glGetIntegerv (GL_ACTIVE_TEXTURE, &activeTexture);
+    glActiveTexture (GL_TEXTURE0);
+    glGetIntegerv (GL_TEXTURE_BINDING_2D, &texture0);
+    glGetIntegeri_v (GL_SAMPLER_BINDING, 0, &sampler0);
+    const GLboolean scissor = glIsEnabled (GL_SCISSOR_TEST);
+    const Data::Utils::ScopeGuard restore ([&] {
+	glBindFramebuffer (GL_DRAW_FRAMEBUFFER, drawFramebuffer);
+	glBindFramebuffer (GL_READ_FRAMEBUFFER, readFramebuffer);
+	glViewport (viewport[0], viewport[1], viewport[2], viewport[3]);
+	glBindVertexArray (vao);
+	glUseProgram (program);
+	glBindBuffer (GL_ARRAY_BUFFER, arrayBuffer);
+	glBindBuffer (GL_PIXEL_PACK_BUFFER, packBuffer);
+	glPixelStorei (GL_PACK_ALIGNMENT, packAlignment);
+	glPixelStorei (GL_PACK_ROW_LENGTH, packRowLength);
+	glPixelStorei (GL_PACK_SKIP_ROWS, packSkipRows);
+	glPixelStorei (GL_PACK_SKIP_PIXELS, packSkipPixels);
+	glActiveTexture (GL_TEXTURE0);
+	glBindTexture (GL_TEXTURE_2D, texture0);
+	glBindSampler (0, sampler0);
+	glActiveTexture (activeTexture);
+	if (scissor) glEnable (GL_SCISSOR_TEST);
+    });
+    glDisable (GL_SCISSOR_TEST);
+    glBindSampler (0, 0);
+    const glm::uvec2 stagingExtent = glm::max (extent / 4u, glm::uvec2 (2));
+    auto staging = std::make_shared<CFBO> (
+	"_rt_layerImageSamples_" + std::to_string (getId ()), TextureFormat_ARGB8888,
+	TextureFlags_NoFlags, 1.0f, stagingExtent.x, stagingExtent.y, stagingExtent.x, stagingExtent.y
+    );
+    MaterialPass material {
+	.blending = BlendingMode_Normal, .cullmode = CullingMode_Disable,
+	.depthtest = DepthtestMode_Disabled, .depthwrite = DepthwriteMode_Disabled,
+	.shader = "downsample_quarter", .combos = { { "WRITEALPHA", 1 }, { "OPACITYMASK", 0 } }
+    };
+    const TextureMap binds { { 0, "previous" } };
+    Effects::CPass pass (*this, std::make_shared<FBOProvider> (this), material,
+	std::nullopt, std::cref (binds), std::nullopt, {}, true);
+    pass.setInput (source);
+    pass.setDestination (staging);
+    pass.setPosition (cache.source->getPassSpacePosition ());
+    pass.setTexCoord (cache.source->getTexCoordPass ());
+    pass.initialize ();
+    pass.render ();
+    glBindFramebuffer (GL_READ_FRAMEBUFFER, staging->getFramebuffer ());
+    glBindBuffer (GL_PIXEL_PACK_BUFFER, 0);
+    glPixelStorei (GL_PACK_ALIGNMENT, 1);
+    glPixelStorei (GL_PACK_ROW_LENGTH, 0);
+    glPixelStorei (GL_PACK_SKIP_ROWS, 0);
+    glPixelStorei (GL_PACK_SKIP_PIXELS, 0);
+    std::vector<uint8_t> pixels (static_cast<size_t> (stagingExtent.x) * stagingExtent.y * 4);
+    glReadPixels (0, 0, stagingExtent.x, stagingExtent.y, GL_RGBA, GL_UNSIGNED_BYTE, pixels.data ());
+    cache.samples = buildParticleLayerImageSamples (pixels, stagingExtent, extent);
+    cache.extent = extent;
+    cache.ready = true;
+    return !cache.samples.empty ();
+}
+
+EmitterFunc CParticle::createLayerImageEmitter (const ParticleEmitter& emitter, const uint32_t imageIndex) {
+    // Refresh, motion inheritance, masks and random offsets remain separate paths.
+    if (emitter.flags != 0 && emitter.flags != 65536) return {};
+    auto cache = std::make_shared<LayerImageCache> ();
+    const ObjectDependency* binding = nullptr;
+    for (const auto& dependency : m_particle.typedDependencies) {
+	if (dependency.id != 0 && dependency.type == "emitterimage" && dependency.index == imageIndex)
+	    binding = &dependency;
+    }
+    if (!binding || !binding->mask.empty ()) return {};
+    cache->sourceId = binding->id;
+    cache->source = dynamic_cast<const CImage*> (getScene ().getObject (cache->sourceId));
+    if (!cache->source) return {};
+    DynamicValue* countOverride = getInstanceOverride ().count->value.get ();
+    return [this, emitter, cache, countOverride, emissionTimer = 0.0f,
+	    delayTimer = emitter.delay, durationTimer = 0.0f, remaining = emitter.instantaneous]
+	(std::vector<ParticleInstance>& particles, uint32_t& count, float dt, uint32_t burst) mutable {
+	const Data::Utils::ScopeGuard pending ([&] {
+	    if (burst == 0 && (emitter.duration <= 0.0f || durationTimer < emitter.duration)
+		&& (remaining > 0 || emitter.rate > 0.0f)) ++m_pendingEmitterCount;
+	});
+	uint32_t toEmit = count < particles.size () ? burst : 0;
+	if (delayTimer > 0.0f) {
+	    delayTimer -= dt;
+	} else if (emitter.duration <= 0.0f || durationTimer < emitter.duration) {
+	    if (emitter.duration > 0.0f) durationTimer += dt;
+	    if (count >= particles.size ()) return;
+	    toEmit += remaining;
+	    remaining = 0;
+	    const auto& recorder = getScene ().getAudioContext ().getRecorder ();
+	    const float response = calculateParticleAudioResponse (
+		recorder.audio16Left, recorder.audio16Right, emitter.audioProcessingMode,
+		emitter.audioProcessingBounds, emitter.audioProcessingExponent,
+		emitter.audioProcessingFrequencyStart, emitter.audioProcessingFrequencyEnd
+	    );
+	    const float multiplier = (m_particle.flags & 32) != 0 ? 1.0f : countOverride->getFloat ();
+	    emissionTimer += dt * calculateParticleEmissionRate (emitter.rate, multiplier) * response;
+	    const uint32_t rateCount = emissionTimer >= 1.0f ? static_cast<uint32_t> (emissionTimer) : 0;
+	    // Native consumes requested instantaneous/manual births as well as the
+	    // rate floor before cache availability or pool capacity suppress births.
+	    emissionTimer -= static_cast<float> (rateCount) + static_cast<float> (toEmit);
+	    toEmit += rateCount;
+	}
+	if (toEmit == 0 || count >= particles.size () || !updateLayerImageCache (*cache)) return;
+	const glm::mat4 flipY = glm::scale (glm::mat4 (1.0f), glm::vec3 (1.0f, -1.0f, 1.0f));
+	const glm::mat4 birth = m_initializingManualEmission ? m_pendingBirthTransform
+	    : flipY * particleWorldMatrix () * flipY;
+	if (glm::determinant (birth) == 0.0f) return;
+	// Keep the fork's initializer-local birth representation. Common finalization
+	// reapplies birth for world particles, yielding the native source world point.
+	const glm::mat4 sourceToBirth = glm::inverse (birth)
+	    * flipY * cache->source->resolveLayerModelMatrix ();
+	std::uniform_int_distribution<size_t> select (0, cache->samples.size () - 1);
+	for (uint32_t i = 0; i < toEmit && count < particles.size (); ++i) {
+	    const uint32_t slot = usesNativeParticleSlots () ? acquireRemapSlot () : 0;
+	    if (usesNativeParticleSlots () && slot == m_maxParticles) break;
+	    auto& p = particles[count];
+	    p.remapSlot = slot;
+	    p.nativeSlotState = usesNativeParticleSlots ();
+	    const auto& sample = cache->samples[select (m_rng)];
+	    p.position = glm::vec3 (sourceToBirth * glm::vec4 (sample.x, -sample.y, 0.0f, 1.0f));
+	    p.previousPosition = p.position;
+	    p.velocity = glm::vec3 (0.0f);
+	    p.acceleration = glm::vec3 (0.0f);
+	    p.rotation = glm::vec3 (0.0f);
+	    p.angularVelocity = glm::vec3 (0.0f);
+	    p.angularAcceleration = glm::vec3 (0.0f);
+	    p.color = m_instanceColor;
+	    if ((emitter.flags & 65536) != 0)
+		p.color *= glm::vec3 (sample.color[0], sample.color[1], sample.color[2]) / 255.0f;
+	    p.emitterColor = p.color;
+	    p.alpha = getInstanceOverride ().alpha->value->getFloat ();
+	    p.size = 0.5f;
+	    p.lifetime = 1.0f;
+	    p.age = 0.0f;
+	    p.alive = true;
+	    p.initial.color = p.color;
+	    p.initial.alpha = p.alpha;
+	    p.initial.size = p.size;
+	    p.initial.lifetime = p.lifetime;
+	    p.oscillationRandom = m_particle.animationMode == "randomframe"
+		? WallpaperEngine::Maths::randomFloat (m_rng, 0.0f, 1.0f) : -1.0f;
+	    p.trailHistory.clear ();
+	    p.trailLastFrameValid = false;
+	    for (auto& init : m_initializers) init (p);
+	    if (usesNativeParticleSlots ()) m_remapSlots[slot] = p;
+	    ++count;
+	}
+    };
 }
 
 EmitterFunc CParticle::createSphereEmitter (const ParticleEmitter& emitter) {
@@ -1732,6 +1938,7 @@ EmitterFunc CParticle::createSphereEmitter (const ParticleEmitter& emitter) {
 	    p.angularAcceleration = glm::vec3 (0.0f);
 
 	    p.color = m_instanceColor;
+	    p.emitterColor = p.color;
 	    p.alpha = 1.0f * getInstanceOverride ().alpha->value->getFloat ();
 	    p.size = 0.5f;
 	    p.lifetime = 1.0f;
