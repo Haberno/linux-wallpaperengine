@@ -94,13 +94,13 @@ void PlaybackRecorder::setRawSpectrum (const float* left, const float* right, co
 	const int first = band * 2;
 	this->audio32Left[band] = std::max (this->audio64Left[first], this->audio64Left[first + 1]);
 	this->audio32Right[band] = std::max (this->audio64Right[first], this->audio64Right[first + 1]);
-	this->audio32Average[band] = (this->audio32Left[band] + this->audio32Right[band]) * 0.5f;
+	this->audio32Average[band] = std::max (this->audio64Average[first], this->audio64Average[first + 1]);
     }
     for (int band = 0; band < 16; band++) {
 	const int first = band * 4;
 	this->audio16Left[band] = *std::max_element (this->audio64Left + first, this->audio64Left + first + 4);
 	this->audio16Right[band] = *std::max_element (this->audio64Right + first, this->audio64Right + first + 4);
-	this->audio16Average[band] = (this->audio16Left[band] + this->audio16Right[band]) * 0.5f;
+	this->audio16Average[band] = std::max (this->audio32Average[band * 2], this->audio32Average[band * 2 + 1]);
     }
 }
 

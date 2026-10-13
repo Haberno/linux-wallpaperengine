@@ -159,3 +159,43 @@ TEST_CASE ("scene normalization restarts its envelope when audio returns after s
     REQUIRE (recorder.audio64Left[37] < 0.05f);
     REQUIRE (recorder.audio64Right[37] == 0.0f);
 }
+
+TEST_CASE ("reduced scene Average pools stereo pairs before frequency groups") {
+    PlaybackRecorder recorder;
+    std::array<float, 64> left {};
+    std::array<float, 64> right {};
+    left[0] = 1.0f;
+    right[1] = 1.0f;
+    left[8] = 1.0f;
+    right[11] = 1.0f;
+    left[20] = right[20] = 1.0f;
+    left[32] = 1.0f;
+
+    // Saturated interpolation and slew make these processed peaks exactly one.
+    recorder.setRawSpectrum (left.data (), right.data (), 0.05f);
+
+    // Separate left/right peaks must not combine into a stronger Average band.
+    REQUIRE (recorder.audio64Average[0] == Catch::Approx (0.5f));
+    REQUIRE (recorder.audio64Average[1] == Catch::Approx (0.5f));
+    REQUIRE (recorder.audio32Left[0] == Catch::Approx (1.0f));
+    REQUIRE (recorder.audio32Right[0] == Catch::Approx (1.0f));
+    REQUIRE (recorder.audio32Average[0] == Catch::Approx (0.5f));
+    REQUIRE (recorder.audio16Average[0] == Catch::Approx (0.5f));
+
+    // The 16-band reduction also spans peaks in different 32-band groups.
+    REQUIRE (recorder.audio32Average[4] == Catch::Approx (0.5f));
+    REQUIRE (recorder.audio32Average[5] == Catch::Approx (0.5f));
+    REQUIRE (recorder.audio16Left[2] == Catch::Approx (1.0f));
+    REQUIRE (recorder.audio16Right[2] == Catch::Approx (1.0f));
+    REQUIRE (recorder.audio16Average[2] == Catch::Approx (0.5f));
+
+    // Coincident stereo peaks, one-channel peaks and silence retain their levels.
+    REQUIRE (recorder.audio32Average[10] == Catch::Approx (1.0f));
+    REQUIRE (recorder.audio16Average[5] == Catch::Approx (1.0f));
+    REQUIRE (recorder.audio32Average[16] == Catch::Approx (0.5f));
+    REQUIRE (recorder.audio16Average[8] == Catch::Approx (0.5f));
+    REQUIRE (recorder.audio32Average[8] == 0.0f);
+    REQUIRE (recorder.audio16Average[4] == 0.0f);
+    REQUIRE (recorder.rawAudio64Left[0] == left[0]);
+    REQUIRE (recorder.rawAudio64Right[11] == right[11]);
+}
