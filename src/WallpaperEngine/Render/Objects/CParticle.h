@@ -520,7 +520,6 @@ private:
     bool m_ropeUVSmoothing { true }; // rope only
     bool m_ropeFadeAlpha { false };
     bool m_ropeFadeSize { false };
-    bool m_uniformLifetimes { false }; // true when lifetime min==max (enables UV smoothing)
     float m_ropeHistoryTimer { 0.0f };
 
     // Per-vertex float counts for different renderer types

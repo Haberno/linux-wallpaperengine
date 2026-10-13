@@ -2281,7 +2281,6 @@ void CParticle::setupInitializers () {
 		const float minimum = lifeInit.min->value->getFloat ();
 		m_ropeMeanLifetime = minimum + 0.5f * (lifeInit.max->value->getFloat () - minimum);
 	    }
-	    m_uniformLifetimes = (lifeInit.min->value->getFloat () == lifeInit.max->value->getFloat ());
 	    func = createLifetimeRandomInitializer (lifeInit);
 	} else if (initializer->is<VelocityRandomInitializer> ()) {
 	    func = createVelocityRandomInitializer (*initializer->as<VelocityRandomInitializer> ());
@@ -4622,9 +4621,10 @@ void CParticle::renderRope () {
     uint32_t vertexIndex = 0;
     uint32_t indexOffset = 0;
     const uint32_t totalSubSegments = totalPoints - 1;
-    const float uvScale = (m_ropeUVScale > 0.0f) ? m_ropeUVScale : 1.0f;
-    float trailLength = static_cast<float> (totalSubSegments) / uvScale + 1.0f;
-    if (m_ropeUVScrolling) {
+    const float reciprocalUVScale = m_ropeUVScale == 0.0f ? 1.0f : 1.0f / m_ropeUVScale;
+    float nativeLength = static_cast<float> (aliveCount) * reciprocalUVScale;
+    float scrollOffset = 0.0f;
+    if (m_ropeUVScrolling || m_ropeUVSmoothing) {
 	const auto& settings = getInstanceOverride ();
 	const float lifetime = m_ropeMeanLifetime * settings.lifetime->value->getFloat ();
 	const float rate = m_ropeEmitterRate * settings.count->value->getFloat ();
@@ -4635,33 +4635,22 @@ void CParticle::renderRope () {
 	    );
 	    predictedRate = std::min (rate, static_cast<float> (fps));
 	}
-	const float reciprocalUVScale = m_ropeUVScale == 0.0f ? 1.0f : 1.0f / m_ropeUVScale;
-	const float nativeLength = (predictedRate * lifetime - 1.0f) * reciprocalUVScale;
-	// Native packs this length before the stock shader subtracts one. Preserve
-	// that consumed denominator while converting to our sub-segment units.
-	trailLength = (nativeLength - 1.0f) * subdivision + 1.0f;
-    }
-
-    // UV smoothing: distribute UV proportional to arc length instead of uniform index.
-    // Per wiki: only when all particle lifetimes match and scrolling is disabled.
-    const bool useSmoothing = m_ropeUVSmoothing && m_uniformLifetimes && !m_ropeUVScrolling;
-    std::vector<float> cumulativeArcLength;
-    float totalArcLength = 0.0f;
-
-    if (useSmoothing) {
-	cumulativeArcLength.resize (totalPoints, 0.0f);
-	for (uint32_t i = 1; i < totalPoints; i++) {
-	    totalArcLength += glm::distance (splinePositions[i], splinePositions[i - 1]);
-	    cumulativeArcLength[i] = totalArcLength;
+	const float predictedCount = predictedRate * lifetime;
+	if (m_ropeUVScrolling) {
+	    nativeLength = (predictedCount - 1.0f) * reciprocalUVScale;
+	    scrollOffset = static_cast<float> (m_retiredParticleCount);
+	} else if (predictedCount > 0.0f && static_cast<float> (aliveCount) >= predictedCount - 1.0f) {
+	    nativeLength = (predictedCount - 1.0f) * reciprocalUVScale;
+	    if (aliveCount > 2) {
+		// Native smoothing follows the oldest particle's remaining interval.
+		scrollOffset = glm::clamp ((lifetime - m_particles[0].age) / (1.0f / predictedRate), 0.0f, 1.0f)
+		    - 1.0f;
+	    }
 	}
     }
-
-    // Native ordinary-rope scrolling advances by retired particles. Convert its
-    // particle ordinal to the sub-segment units used by our interpolated mesh.
-    float scrollOffset = 0.0f;
-    if (m_ropeUVScrolling) {
-	scrollOffset = static_cast<float> (m_retiredParticleCount) * subdivision;
-    }
+    // Preserve the stock shader's W-1 denominator and phase in sub-segment units.
+    const float trailLength = (nativeLength - 1.0f) * subdivision + 1.0f;
+    scrollOffset *= subdivision;
 
     for (uint32_t s = 0; s < totalSubSegments; s++) {
 	const glm::vec3& posStart = splinePositions[s];
@@ -4676,14 +4665,7 @@ void CParticle::renderRope () {
 	const glm::vec3& posAfter = (s + 2 < totalPoints) ? splinePositions[s + 2] : posEnd;
 
 	// Compute trailPosition for UV mapping
-	float trailPosition;
-	if (useSmoothing && totalArcLength > 0.0f) {
-	    // Arc-length parameterization: map cumulative distance to sub-segment space
-	    trailPosition = cumulativeArcLength[s] / totalArcLength * static_cast<float> (totalSubSegments);
-	} else {
-	    trailPosition = static_cast<float> (s);
-	}
-	trailPosition += scrollOffset;
+	const float trailPosition = static_cast<float> (s) + scrollOffset;
 
 	auto addRopeVertex = [&] (float uvX, float uvY) {
 	    const uint32_t base = vertexIndex * ROPE_FLOATS_PER_VERTEX;
