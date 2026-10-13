@@ -172,6 +172,54 @@ glm::mat4 CLight::calculateSpotShadowViewProjection (
 	* glm::lookAt (origin, origin + forward, up);
 }
 
+glm::mat4 CLight::getDirectionalShadowProjection (
+    const glm::vec3& cameraEye, const glm::mat4& cameraView, const int cascade, const int shadowResolution
+) const {
+    return calculateDirectionalShadowProjection (
+        cameraEye, cameraView, resolveLightMatrix (), m_light.cascadeDistances, cascade, shadowResolution,
+        getScene ().getCamera ().isOrthogonal ()
+    );
+}
+
+glm::mat4 CLight::calculateDirectionalShadowProjection (
+    const glm::vec3& cameraEye, const glm::mat4& cameraView, const glm::mat4& lightWorld,
+    const glm::vec3& cascadeDistances, const int cascade, const int shadowResolution, const bool orthographic
+) {
+    const float width = cascadeDistances[cascade];
+    const float depth = cascade < 2 ? 4.0f * cascadeDistances.y
+        : std::max (1.5f * cascadeDistances.z, 4.0f * cascadeDistances.y);
+    const glm::vec3 lightX = glm::vec3 (glm::normalize (lightWorld[0]));
+    const glm::vec3 forward (-cameraView[0][2], -cameraView[1][2], -cameraView[2][2]);
+    glm::vec3 center = cameraEye + (forward - 0.5f * glm::dot (forward, lightX) * lightX) * (width * 0.5f);
+    if (orthographic) center.z = 0.0f;
+    const glm::vec3 authoredY (lightWorld[1]), authoredZ (lightWorld[2]);
+    const float texel = width / static_cast<float> (shadowResolution);
+    // Both native remainders use the original center and unnormalized authored axes.
+    const float offsetY = std::fmod (glm::dot (authoredY, center), texel);
+    const float offsetZ = std::fmod (glm::dot (authoredZ, center), texel);
+    center -= authoredY * offsetY;
+    center -= authoredZ * offsetZ;
+
+    const auto normalize = [] (const glm::vec3& axis) {
+        const float squaredLength = glm::dot (axis, axis);
+        float inverse = std::bit_cast<float> (0x5f375a86u - (std::bit_cast<uint32_t> (squaredLength) >> 1));
+        inverse *= 1.5f - squaredLength * 0.5f * inverse * inverse;
+        return axis * inverse;
+    };
+    const glm::vec3 right = normalize (authoredZ), up = normalize (authoredY);
+    const glm::vec3 back = normalize (-glm::vec3 (lightWorld[0]));
+    const glm::mat4 view (
+        glm::vec4 (right.x, up.x, back.x, 0), glm::vec4 (right.y, up.y, back.y, 0),
+        glm::vec4 (right.z, up.z, back.z, 0),
+        glm::vec4 (-glm::dot (right, center), -glm::dot (up, center), -glm::dot (back, center), 1)
+    );
+    glm::mat4 projection (1.0f);
+    projection[0][0] = projection[1][1] = 2.0f / width;
+    projection[2][2] = 1.0f / depth;
+    projection[3][2] = 0.5f;
+    return projection * view;
+}
+
 glm::mat4 CLight::calculateDirectionalShadowViewProjection (
     const glm::vec3& cameraEye, const glm::vec3& cameraCenter, const glm::vec3& cameraUp,
     const float fieldOfViewDegrees, const float aspectRatio, const float zoom, const float nearDistance,

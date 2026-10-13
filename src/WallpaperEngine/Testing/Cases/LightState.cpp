@@ -329,3 +329,33 @@ TEST_CASE ("Reverse directional cascades preserve XY fitting and reverse finite 
         CHECK (b.z < b.w);
     }
 }
+
+TEST_CASE ("Directional shadow fitting retains native widths and authored basis snapping", "[lighting][directional-fit]") {
+    const glm::vec3 eye (10, .375f, -.625f);
+    const glm::mat4 cameraView = glm::lookAt (eye, eye + glm::vec3 (-1, 0, 0), glm::vec3 (0, 1, 0));
+    const struct { glm::mat4 world; glm::vec3 snapped; glm::vec4 expected; } cases[] = {
+        { glm::mat4 (1), { 9, 0, -.5f }, { .4991540611f, .4991540611f, .4376057386f, 1 } },
+        { glm::mat4 (glm::vec4 (2, 0, 0, 0), glm::vec4 (0, 0, 3, 0), glm::vec4 (0, -4, 0, 0),
+                     glm::vec4 (123, 456, 789, 1)),
+          { 9, .375f, .5f }, { -.4991540611f, .4994291663f, .4376057386f, 1 } }
+    };
+    for (const auto& value : cases) {
+        const glm::mat4 projection = CLight::calculateDirectionalShadowProjection (
+            eye, cameraView, value.world, { 4, 4, 10 }, 0, 8);
+        const glm::vec4 clip = projection * glm::vec4 (value.snapped + glm::vec3 (1), 1);
+        const glm::vec4 center = projection * glm::vec4 (value.snapped, 1);
+        for (int component = 0; component < 4; ++component) {
+            // Literal oracle supplied independently from native equations, not this implementation.
+            CHECK (clip[component] == Catch::Approx (value.expected[component]).margin (0.000001f));
+            CHECK (center[component] == Catch::Approx (glm::vec4 (0, 0, .5f, 1)[component]).margin (0.000001f));
+        }
+    }
+    const float scales[] = { .4991540611f, .9983081222f, .1996616244f };
+    const float depthScales[] = { -.1247885153f, -.1247885153f, -.0665538748f };
+    for (int cascade = 0; cascade < 3; ++cascade) {
+        const auto projection = CLight::calculateDirectionalShadowProjection (
+            eye, cameraView, glm::mat4 (1), { 4, 2, 10 }, cascade, 8);
+        CHECK (projection[2][0] == Catch::Approx (scales[cascade]).margin (0.000001f));
+        CHECK (projection[0][2] == Catch::Approx (depthScales[cascade]).margin (0.000001f));
+    }
+}

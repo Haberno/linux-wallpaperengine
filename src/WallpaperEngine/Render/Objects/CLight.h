@@ -45,6 +45,14 @@ public:
     [[nodiscard]] static glm::mat4 calculateSpotShadowViewProjection (
 	const glm::vec3& origin, const glm::vec3& direction, float outerDegrees, float radius
     );
+    /** Native square cascade using the current camera and full authored light basis. */
+    [[nodiscard]] glm::mat4 getDirectionalShadowProjection (
+        const glm::vec3& cameraEye, const glm::mat4& cameraView, int cascade, int shadowResolution
+    ) const;
+    [[nodiscard]] static glm::mat4 calculateDirectionalShadowProjection (
+        const glm::vec3& cameraEye, const glm::mat4& cameraView, const glm::mat4& lightWorld,
+        const glm::vec3& cascadeDistances, int cascade, int shadowResolution, bool orthographic = false
+    );
     /** Stable orthographic light-space matrix enclosing a nested camera-frustum cascade. */
     [[nodiscard]] static glm::mat4 calculateDirectionalShadowViewProjection (
 	const glm::vec3& cameraEye, const glm::vec3& cameraCenter, const glm::vec3& cameraUp,

@@ -1870,14 +1870,18 @@ void CScene::updateLightState () {
 
 		for (int cascade = 0; cascade < 3; cascade++) {
 		    const int feature = features[cascade];
-		    // Perspective framing uses FOV alone; orthographic zoom must not shrink shadow coverage.
-		    this->m_lights.shadowMatrices[feature]
-			= Objects::CLight::calculateDirectionalShadowViewProjection (
-			    camera.getEye (), camera.getCenter (), camera.getUp (), camera.getFov (),
-			    camera.getWidth () / std::max (camera.getHeight (), 1.0f), 1.0f, cameraNear,
-			    cascadeFar[cascade], light->getWorldDirection (),
-			    this->m_lights.shadowViewports[feature].z, reverseDepth
-			);
+                if (reverseDepth) {
+                    this->m_lights.shadowMatrices[feature] = light->getDirectionalShadowProjection (
+                        camera.getEye (), camera.getLookAt (), cascade, this->m_lights.shadowViewports[feature].z
+                    );
+                } else {
+                    // Retain conventional fitting without applying orthographic zoom to perspective coverage.
+                    this->m_lights.shadowMatrices[feature] = Objects::CLight::calculateDirectionalShadowViewProjection (
+                        camera.getEye (), camera.getCenter (), camera.getUp (), camera.getFov (),
+                        camera.getWidth () / std::max (camera.getHeight (), 1.0f), 1.0f, cameraNear,
+                        cascadeFar[cascade], light->getWorldDirection (), this->m_lights.shadowViewports[feature].z
+                    );
+                }
 		    this->m_lights.shadowFeatureEnabled[feature] = enabled;
 		}
 	    }
